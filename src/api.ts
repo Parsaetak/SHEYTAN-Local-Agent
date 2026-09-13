@@ -103,7 +103,11 @@ export interface ModelsResponse {
 
 export interface ToolInfo {
   name: string;
+  // v1.1.7: concise one-line description for the Options UI.
   description?: string;
+  // v1.1.7: the full model-facing operational spec (never rendered in the
+  // main Options list — kept for tooltips/debugging surfaces).
+  detail?: string;
   enabled?: boolean;
 }
 
@@ -178,6 +182,10 @@ export interface RuntimeConfig {
 
   gpuAutoOffload: boolean;
   engineCompat: number;
+  // v1.1.7: why the engine last settled above compatibility level 0
+  // (backend-managed; surfaced in Settings → Performance → Engine).
+  engineCompatReason?: string;
+  engineCompatAt?: string;
   flashAttention: boolean;
   cacheReuse: number;
   ubatchSize: number;
@@ -549,6 +557,103 @@ export interface ChatMessage {
   at?: string;
 }
 
+// v1.1.7 — live performance, log viewer and connection diagnostics.
+
+export interface CompatInfo {
+  level: number;
+  name: string;
+  optimised: boolean;
+  reason?: string;
+  recordedAt?: string;
+  changes?: string[];
+}
+
+export interface EnginePerfAPI {
+  hasSample: boolean;
+  genTokPerSec?: number;
+  promptTokPerSec?: number;
+  ttftSeconds?: number;
+  promptTokens?: number;
+  tokens?: number;
+  samplesAvailable: number;
+}
+
+export interface PerfSnapshot {
+  generatedAt: string;
+  cpuPercent?: number | null;
+  gpuPercent?: number | null;
+  ram?: {
+    totalBytes: number;
+    availableBytes: number;
+    usedBytes: number;
+    usedPercent: number;
+  } | null;
+  vram?: {
+    totalMb: number;
+    usedMb: number;
+    percent?: number;
+    source: string;
+  } | null;
+  backend: string;
+  engineState: string;
+  model?: string;
+  compat: CompatInfo;
+  generation: EnginePerfAPI;
+  context?: {
+    usedTokens: number;
+    total: number;
+    percent?: number;
+    source?: string;
+  } | null;
+  recommended?: RecommendedSettings | null;
+}
+
+export interface RecommendedSettings {
+  threads: number;
+  threadsBatch: number;
+  gpuLayers: number;
+  gpuAutoOffload: boolean;
+  flashAttention: boolean;
+  flashAttnState: string;
+  ubatchSize: number;
+  cacheReuse: number;
+  context: number;
+  notes?: string[];
+}
+
+export interface LogEntry {
+  index: number;
+  time: string;
+  level: string;
+  category: string;
+  message: string;
+  raw: string;
+}
+
+export interface LogsResponse {
+  entries: LogEntry[];
+  limit: number;
+}
+
+export type NetDiagState =
+  | "Excellent"
+  | "Good"
+  | "Unstable"
+  | "Slow"
+  | "Offline";
+
+export interface NetDiagResult {
+  state: NetDiagState;
+  reason?: string;
+  latencyMs?: number;
+  latency2Ms?: number;
+  dnsOk: boolean;
+  httpsOk: boolean;
+  endpointOk: boolean;
+  checkedAt: string;
+  totalMs: number;
+}
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
 const RESEARCH_TIMEOUT_MS = 30_000;
@@ -850,6 +955,23 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     });
+  },
+
+  // v1.1.7: compact live performance snapshot (real measurements only;
+  // unavailable values arrive null and render as N/A).
+  perf(): Promise<PerfSnapshot> {
+    return request<PerfSnapshot>("/perf");
+  },
+
+  // v1.1.7: recent, parsed, REDACTED app-log entries (bounded server-side).
+  logs(limit = 512): Promise<LogsResponse> {
+    return request<LogsResponse>(`/logs?limit=${limit}`);
+  },
+
+  // v1.1.7: one bounded connection diagnosis (no retries, never a gate —
+  // SHEYTAN is local-first).
+  netcheck(): Promise<NetDiagResult> {
+    return request<NetDiagResult>("/netcheck", undefined, 20_000);
   },
 
   lab(): Promise<LabListResponse> {

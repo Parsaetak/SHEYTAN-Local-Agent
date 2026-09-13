@@ -628,6 +628,19 @@ func (c *Client) StreamChatDetailed(ctx context.Context, req *ChatRequest, onEve
                         return onEvent(ev)
                 })
                 perf = tr.stats()
+                // v1.1.7: remember what a REAL generation measured so the
+                // Settings → Performance view shows honest tok/s and TTFT.
+                if lastErr == nil && (perf.Tokens > 0 || perf.PromptTokens > 0) {
+                        recordPerfSample(PerfSample{
+                                At:           time.Now(),
+                                Model:        req.Model,
+                                PromptTokens: perf.PromptTokens,
+                                Tokens:       perf.Tokens,
+                                TokensPerSec: perf.TokensPerSec,
+                                TTFTMs:       int64(perf.TTFTMs),
+                                WallMs:       int64(perf.WallMs),
+                        })
+                }
                 // Retry only when nothing was emitted yet (retrying mid-stream
                 // would duplicate content the caller already saw).
                 if lastErr == nil || emitted {

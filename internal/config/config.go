@@ -17,7 +17,7 @@ import (
 
 const (
         AppName     = "SHEYTAN-Local-Agent"
-        AppVersion  = "1.1.6"
+        AppVersion  = "1.1.7"
         AppCodename = "Zeta"
 )
 
@@ -156,6 +156,16 @@ type Config struct {
         // Local engine tuning.
         GPUAutoOffload bool   `json:"gpuAutoOffload" yaml:"gpuAutoOffload"`
         EngineCompat   int    `json:"engineCompat" yaml:"engineCompat"`
+        // v1.1.7: WHY the engine last settled above compatibility level 0.
+        // Recorded when a boot succeeds at level > 0, cleared when it
+        // succeeds at level 0, and surfaced through /api/perf so the UI can
+        // explain the downgrade instead of hiding it.
+        EngineCompatReason string `json:"engineCompatReason,omitempty" yaml:"engineCompatReason,omitempty"`
+        // v1.1.7: RFC3339 time the compatibility reason was recorded. The
+        // retry-up gate compares it against the capability profile's
+        // VerifiedAt so a repaired profile earns exactly one bounded
+        // full-speed retry instead of a rediscovery attempt every boot.
+        EngineCompatAt string `json:"engineCompatAt,omitempty" yaml:"engineCompatAt,omitempty"`
         FlashAttention bool   `json:"flashAttention" yaml:"flashAttention"`
         CacheReuse     int    `json:"cacheReuse" yaml:"cacheReuse"`
         UBatchSize     int    `json:"ubatchSize" yaml:"ubatchSize"`

@@ -334,6 +334,12 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("/api/research", s.handleResearch)
         mux.HandleFunc("/api/models/open-folder", s.handleModelsFolder)
 
+        // v1.1.7: compact live performance, in-app logs and connection
+        // diagnostics — read-only surfaces over existing infrastructure.
+        mux.HandleFunc("/api/perf", s.handlePerf)
+        mux.HandleFunc("/api/logs", s.handleLogs)
+        mux.HandleFunc("/api/netcheck", s.handleNetcheck)
+
         // WebSocket: real-time agent activity for a session
         mux.HandleFunc("/ws/activity", s.handleActivityWS)
 
@@ -926,9 +932,20 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
         out := make([]map[string]any, 0)
 
         for _, t := range s.orch.Tools() {
+                // v1.1.7: the Options UI shows the SHORT one-line description;
+                // the full operational spec (used by the model) stays in
+                // `detail` — documented, not duplicated, never truncated.
+                short, full := t.Description(), t.Description()
+                if sd, ok := any(t).(interface {
+                        ShortDescription() string
+                }); ok {
+                        short = sd.ShortDescription()
+                }
+
                 out = append(out, map[string]any{
                         "name":        t.Name(),
-                        "description": t.Description(),
+                        "description": short,
+                        "detail":      full,
                 })
         }
 

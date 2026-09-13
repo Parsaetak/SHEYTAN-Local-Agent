@@ -99,6 +99,20 @@ missing features):
 - The Lab command policy is lexical (denylists + env pinning), not a
   kernel-level sandbox.
 
+## I.8b — v1.1.7 surfaces: compatibility transparency, live telemetry, in-app diagnostics (IMPLEMENTED + TESTED)
+
+v1.1.7 does not change any architecture — it makes the EXISTING runtime
+visible and honest where it previously was silent. Verified rows:
+
+| Surface | Package(s) | Status | Notes |
+|---|---|---|---|
+| Compatibility-mode reason + bounded retry-up | `internal/llm` (`capability.go` `shouldRetryFullSpeed`/`compatReasonFromError`, `llama.go` boot ladder), `internal/config` (`engineCompatReason`/`engineCompatAt`) | IMPLEMENTED + TESTED | the boot records WHY the ladder descended (classified kind + offending option); the retry-up gate fires only when the reason is option-class AND a verified capability profile postdates the recorded downgrade AND the level-0 profile passes `argProblems`; a failed non-option retry stamps a fresh downgrade time which re-blocks the gate until the profile changes again — no rediscovery loops, no extra restarts in the common path |
+| Live performance snapshot `GET /api/perf` | `internal/api` (`perf.go`, `perf_windows.go`, `perf_linux.go`, `perf_other.go`), `internal/llm` (`perftracker.go`, client hook) | IMPLEMENTED + TESTED | real measurements only: CPU % via `GetSystemTimes`/`/proc/stat` deltas, RAM via `GlobalMemoryStatusEx`/`meminfo`, GPU/VRAM via `nvidia-smi` when installed, prompt tok/s + decode tok/s + TTFT from the streaming client's `tokenTimer` recorded into a bounded 16-sample ring, context usage from the last generation vs the verified window, backend/model/engine state, the active `CompatInfo` and hardware+model+capability-derived recommendations. Unmeasurable values are omitted (UI renders N/A) — never fabricated. No new telemetry pipeline |
+| In-app log surface `GET /api/logs` | `internal/api` (`logs.go`), `internal/logging` (`RecentParsed`) | IMPLEMENTED + TESTED | reads ONLY the existing app-log ring (512-line cap — bounded memory by construction); entries are parsed (time/level/category/message) and REDACTED before leaving the process; `redact()` gained inline scrubbing (quoted `apiKey/token/…` values, Bearer tokens, `sk-…` prefixes) so secrets typed mid-sentence never render |
+| Connection diagnostics `GET /api/netcheck` | `internal/netcheck` (`Diagnose`, `classifyDiag`), `internal/api` | IMPLEMENTED + TESTED | ONE bounded check per call: OS DNS resolution, two timed HTTPS samples (the first includes TLS handshake — only warm-path degradation flags "Unstable"), second-endpoint reachability, plus the existing multi-strategy probe as an honest fallback for proxied machines; maps to Excellent/Good/Unstable/Slow/Offline with the first meaningful failure reason; informational only, never a gate |
+| Options UI sections, option metadata, tooltips | `src/SettingsPanel.tsx`, `src/SettingsPerformance.tsx`, `src/settings-shared.tsx`, `src/settings.css` | IMPLEMENTED | same card system/theme/scroll architecture; six tabs (General/Performance/Generation/Tools/Network/Logs); delayed 400 ms CSS tooltips (1–2 sentences); `Supported/Unsupported/Recommended/Restart required` chips on engine options; the restart-after-save condition now covers every engine-affecting key (speed settings previously saved but left inert until a manual restart) |
+| Concise tool labels | `internal/tools/shortdesc.go`, `internal/research/tool.go`, `internal/lab/tool.go`, `internal/memory/memory.go`, `/api/tools` | IMPLEMENTED | one-line `ShortDescription` per tool for the Options UI; the FULL `Description()` remains the model-facing operational spec (removing it would strip the JSON action syntax the agent needs); `/api/tools` carries both (`description` short, `detail` full) |
+
 ## I.9 — The SHEYTAN Native AI Engine architecture (v1.1.5Z, IMPLEMENTED foundation + model loading)
 
 The target engine stack is now wired at the foundation level:

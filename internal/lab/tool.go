@@ -124,6 +124,12 @@ func (t *Tool) Name() string {
         return "coding_lab"
 }
 
+// ShortDescription is the one-line UI label (v1.1.7). The full Description
+// remains the model-facing spec.
+func (t *Tool) ShortDescription() string {
+        return "Run isolated engineering tasks in a disposable workspace."
+}
+
 // Description implements the agent.Tool interface.
 func (t *Tool) Description() string {
         return `Use the isolated Coding Lab to work on a local code project.

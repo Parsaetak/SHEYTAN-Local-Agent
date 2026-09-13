@@ -487,47 +487,142 @@ func (s *LlamaServer) startLocked() error {
                         startLevel = 0
                 }
 
+                // v1.1.7: boot-start snapshot of the persisted compat level
+                // so the success path can tell a fresh descent (stamp the
+                // reason) from a routine re-boot at the same level (leave
+                // the stamp alone — re-stamping every boot would keep
+                // re-blocking the retry-up gate below forever).
+                persistedLevel := cfg.EngineCompat
+
                 var lastErr error
+                var lastReason string
+                retryAttempted := false
+
+                // persistBootOutcome records the final active configuration:
+                // the compatibility level, WHY it is above full speed (when
+                // it is), and the verified capability profile. The reason
+                // stamp is refreshed only when the level actually changed or
+                // a full-speed retry was attempted this boot.
+                persistBootOutcome := func(level int, reason string) {
+                        stamp := level != persistedLevel || retryAttempted
+
+                        if cur := s.src.Load(); cur.EngineCompat != level || stamp {
+                                next := s.src.Update(func(c *config.Config) {
+                                        c.EngineCompat = level
+
+                                        if level > 0 {
+                                                c.EngineCompatReason = reason
+                                                c.EngineCompatAt = time.Now().UTC().Format(time.RFC3339)
+                                        } else {
+                                                c.EngineCompatReason = ""
+                                                c.EngineCompatAt = ""
+                                        }
+                                })
+
+                                if err := config.Save(
+                                        next.ConfigPath(),
+                                        next,
+                                ); err != nil {
+                                        s.logf("persist engine compat: %v", err)
+                                }
+                        }
+
+                        // Phase 7: persist the capability profile ONLY
+                        // after a verified successful startup, including any
+                        // surgical repairs applied along the way.
+                        s.mu.Lock()
+                        effective := s.caps
+                        s.mu.Unlock()
+                        s.persistVerifiedCaps(cfg, effective)
+                }
+
+                // v1.1.7 bounded full-speed retry-up: when the ONLY recorded
+                // reason for the persisted compatibility level is an option
+                // rejection, and the now-verified capability profile
+                // postdates that record and validates the level-0 profile,
+                // give full speed ONE chance before resuming the ladder.
+                // See shouldRetryFullSpeed for the exact gate.
+                if startLevel > 0 {
+                        level0Args := s.buildArgsWithCaps(cfg, modelPath, 0, caps)
+
+                        if retry, why := shouldRetryFullSpeed(cfg, caps, level0Args); retry {
+                                retryAttempted = true
+
+                                s.logf(
+                                        "capability profile changed since the compatibility downgrade (%s) — retrying the full-speed profile once",
+                                        why,
+                                )
+                                logging.Default().Info("engine",
+                                        "retrying full-speed launch (compat 0) before the persisted level %d — recorded reason %q no longer applies to the verified capability profile",
+                                        startLevel, why)
+
+                                if err := s.launchWithRepair(cfg, binPath, modelPath, 0, caps); err == nil {
+                                        persistBootOutcome(0, "")
+
+                                        s.logf("full-speed profile restored — compatibility mode no longer required")
+
+                                        logging.Default().Info("engine",
+                                                "engine restored to the full-speed profile (compat 0) for %s",
+                                                filepath.Base(modelPath))
+
+                                        s.mu.Lock()
+                                        s.restarts = 0
+                                        s.stopping = false
+                                        s.startedAt = time.Now()
+                                        s.mu.Unlock()
+
+                                        s.setState(StateReady)
+                                        return nil
+                                }
+
+                                // Remember WHY the retry failed so a successful
+                                // boot further down the ladder records an honest
+                                // reason instead of an empty one.
+                                lastReason = compatReasonFromError(err)
+
+                                logging.Default().Warn("engine",
+                                        "full-speed retry failed (%v) — resuming the compatibility ladder at level %d",
+                                        err, startLevel)
+                                s.logf("full-speed retry failed — resuming at compatibility level %d", startLevel)
+                        }
+                }
 
                 for pass := 0; pass < 2; pass++ {
                         for level := startLevel; level <= engineCompatMax; level++ {
                                 err := s.launchWithRepair(cfg, binPath, modelPath, level, caps)
 
                                 if err == nil {
-                                        if cur := s.src.Load(); cur.EngineCompat != level {
-                                                next := s.src.Update(func(c *config.Config) {
-                                                        c.EngineCompat = level
-                                                })
-
-                                                if err := config.Save(
-                                                        next.ConfigPath(),
-                                                        next,
-                                                ); err != nil {
-                                                        s.logf("persist engine compat: %v", err)
-                                                }
+                                        // Never overwrite a recorded reason with an
+                                        // empty one (a boot that succeeds at the
+                                        // persisted level without any new failure
+                                        // has no fresh reason of its own).
+                                        reasonForPersist := lastReason
+                                        if reasonForPersist == "" {
+                                                reasonForPersist = cfg.EngineCompatReason
                                         }
 
-                                        // Phase 7: persist the capability profile ONLY
-                                        // after a verified successful startup, including any
-                                        // surgical repairs applied along the way.
-                                        s.mu.Lock()
-                                        effective := s.caps
-                                        s.mu.Unlock()
-                                        s.persistVerifiedCaps(cfg, effective)
+                                        persistBootOutcome(level, reasonForPersist)
 
                                         if level > 0 {
+                                                why := lastReason
+                                                if why == "" {
+                                                        why = "reason unrecorded"
+                                                }
+
                                                 s.logf(
-                                                        "engine started in compatibility mode %d (%s) — some speed flags disabled",
+                                                        "engine started in compatibility mode %d (%s) — some speed flags disabled (recorded reason: %s)",
                                                         level,
                                                         compatLevelName(level),
+                                                        why,
                                                 )
 
                                                 logging.Default().Warn(
                                                         "engine",
-                                                        "started in compatibility mode %d (%s) for %s",
+                                                        "started in compatibility mode %d (%s) for %s — recorded reason: %s",
                                                         level,
                                                         compatLevelName(level),
                                                         filepath.Base(modelPath),
+                                                        why,
                                                 )
                                         }
 
@@ -543,6 +638,7 @@ func (s *LlamaServer) startLocked() error {
                                 }
 
                                 lastErr = err
+                                lastReason = compatReasonFromError(err)
 
                                 logging.Default().Error(
                                         "engine",

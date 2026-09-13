@@ -1,6 +1,6 @@
 {
   "index.html": {
-    "file": "assets/index-CYXnT1iu.js",
+    "file": "assets/index-BRJmDjjc.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -13,11 +13,11 @@
       "src/SettingsPanel.tsx"
     ],
     "css": [
-      "assets/index-CGpAJs8d.css"
+      "assets/index-Bvpcz4Hd.css"
     ]
   },
   "src/AgentBody.tsx": {
-    "file": "assets/AgentBody-BrHAHBrt.js",
+    "file": "assets/AgentBody-CfUf-j4_.js",
     "name": "AgentBody",
     "src": "src/AgentBody.tsx",
     "isDynamicEntry": true,
@@ -26,7 +26,7 @@
     ]
   },
   "src/AgentHeader.tsx": {
-    "file": "assets/AgentHeader-DYauJI0M.js",
+    "file": "assets/AgentHeader-xOezjwpD.js",
     "name": "AgentHeader",
     "src": "src/AgentHeader.tsx",
     "isDynamicEntry": true,
@@ -35,7 +35,7 @@
     ]
   },
   "src/AgentSidebar.tsx": {
-    "file": "assets/AgentSidebar-Z4xMVYOX.js",
+    "file": "assets/AgentSidebar-BbRpID3s.js",
     "name": "AgentSidebar",
     "src": "src/AgentSidebar.tsx",
     "isDynamicEntry": true,
@@ -44,7 +44,7 @@
     ]
   },
   "src/LabPanel.tsx": {
-    "file": "assets/LabPanel-CTYxjiVu.js",
+    "file": "assets/LabPanel-rshNNsid.js",
     "name": "LabPanel",
     "src": "src/LabPanel.tsx",
     "isDynamicEntry": true,
@@ -53,7 +53,7 @@
     ]
   },
   "src/ResearchPanel.tsx": {
-    "file": "assets/ResearchPanel-0ysC4-Du.js",
+    "file": "assets/ResearchPanel-CfWYT8Pb.js",
     "name": "ResearchPanel",
     "src": "src/ResearchPanel.tsx",
     "isDynamicEntry": true,
@@ -62,7 +62,7 @@
     ]
   },
   "src/SettingsPanel.tsx": {
-    "file": "assets/SettingsPanel-eCjIM-UC.js",
+    "file": "assets/SettingsPanel-BgejwQSw.js",
     "name": "SettingsPanel",
     "src": "src/SettingsPanel.tsx",
     "isDynamicEntry": true,

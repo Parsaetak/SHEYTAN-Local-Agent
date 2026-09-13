@@ -1,37 +1,73 @@
-# UPDATE.md — v1.1.6-zeta Stabilisation & Context Control Replacement Package
+# UPDATE.md — v1.1.7 Options, Capability Truth, Telemetry & Diagnostics Replacement Package
 
-**Release:** `v1.1.6-zeta` (codename Zeta, stabilisation) · **Base:** `main @ a1cfb5d0bdb5382b8c69b5587891f5edf4d96ddb` (`1.1.6`)
+**Release:** `v1.1.7` (codename Zeta) · **Base:** `main @ dd49eed` (`1.1.6Z`)
 **Date:** 2026-09-13
 
 This package is a COMPLETE REPLACEMENT of the repository state. Apply it by
 replacing the whole tree (or, file-by-file, by following the exact map
 below). Every path is relative to the repository root.
 
-This phase fixes the Linux CI deadlock in `internal/improve` at its source,
-closes the context-overflow path architecturally (per-session and per-agent
-context policies, model/engine-aware resolution, resource-aware guards, full
-per-turn telemetry, wire-request context truthfulness), upgrades the startup
-and first-use experience, ships the SHEYTAN icon/theme/branding layer, and
-fixes Settings scrolling — without regressing any existing subsystem
-(managed llama.cpp lifecycle, native C++ engine, backend router, Coding Lab,
-project intelligence, research, memory, recall, context cache, Continuum,
-skills, toolsets, MCP, browser/computer tooling, verification, reliability,
-safe editing, sandbox, security controls, streaming, Wails embedding,
-API/WebSocket contracts).
+This release makes the existing runtime understandable and honest without
+rebuilding anything: the repeated "started in compatibility mode 2 (no
+speed flags)" defect is fixed at its source (persisted downgrade levels
+now record a reason and earn ONE bounded full-speed retry when the
+verified capability profile moves on), the Options experience is
+restructured into scannable sections with plain-language tooltips and
+capability-aware engine options, the tool list is one concise line per
+tool, a compact live performance surface reports ONLY real measurements
+(N/A otherwise), recommended settings are derived from detected hardware +
+model + capability and applied only explicitly, a simple before/after
+observation covers performance-option changes, connection diagnostics map
+to Excellent/Good/Unstable/Slow/Offline with the first meaningful failure
+reason, and the existing logs are exposed in-app with live tail, filters,
+search, copy and a non-destructive clear-view — over the SAME logging
+system, the SAME config copy-on-write, the SAME engine lifecycle and the
+SAME telemetry inputs. No architecture was rebuilt; no experimental
+subsystem was added; nothing was claimed that was not measured.
+
+No full manual runtime/Windows acceptance phase is required for this
+release; verification is the focused automated suite listed at the bottom
+(all executed and green).
 
 ---
 
 ## 1. DELETE
 
+Stale Vite bundles superseded by the regenerated embedded build. These
+files existed in the base tree and are NOT shipped in this package; the
+new hashed set is referenced by `web/static/index.html`.
+
 | Path | Why |
 |---|---|
-| `web/static/assets/AgentBody-2-br3YvV.js`, `AgentBody-cofMEBW6.js`, `AgentHeader-B8b76u9o.js`, `AgentHeader-BE0L2Nf8.js`, `AgentSidebar-DJaBwMC5.js`, `AgentSidebar-crN0VbUz.js`, `LabPanel-BPBo4Rq7.js`, `LabPanel-CW_A6EcB.js`, `ResearchPanel-DyeLdq3-.js`, `ResearchPanel-Qeb2hrAX.js`, `SettingsPanel-C5Hpkvys.js`, `SettingsPanel-g7g40a_x.js`, `index-C1xyllm1.js`, `index-OiRp_Wkd.js`, `index-n0UF0DI4.css` | stale Vite bundles; the regenerated embedded build produces the hashed set actually referenced by `web/static/index.html` |
+| `web/static/assets/AgentBody-2-br3YvV.js` | stale bundle (superseded by `AgentBody-CfUf-j4_.js`) |
+| `web/static/assets/AgentBody-BrHAHBrt.js` | stale bundle |
+| `web/static/assets/AgentBody-cofMEBW6.js` | stale bundle |
+| `web/static/assets/AgentHeader-B8b76u9o.js` | stale bundle (superseded by `AgentHeader-xOezjwpD.js`) |
+| `web/static/assets/AgentHeader-BE0L2Nf8.js` | stale bundle |
+| `web/static/assets/AgentHeader-DYauJI0M.js` | stale bundle |
+| `web/static/assets/AgentSidebar-DJaBwMC5.js` | stale bundle (superseded by `AgentSidebar-BbRpID3s.js`) |
+| `web/static/assets/AgentSidebar-Z4xMVYOX.js` | stale bundle |
+| `web/static/assets/AgentSidebar-crN0VbUz.js` | stale bundle |
+| `web/static/assets/LabPanel-BPBo4Rq7.js` | stale bundle (superseded by `LabPanel-rshNNsid.js`) |
+| `web/static/assets/LabPanel-CTYxjiVu.js` | stale bundle |
+| `web/static/assets/LabPanel-CW_A6EcB.js` | stale bundle |
+| `web/static/assets/ResearchPanel-0ysC4-Du.js` | stale bundle (superseded by `ResearchPanel-CfWYT8Pb.js`) |
+| `web/static/assets/ResearchPanel-DyeLdq3-.js` | stale bundle |
+| `web/static/assets/ResearchPanel-Qeb2hrAX.js` | stale bundle |
+| `web/static/assets/SettingsPanel-C5Hpkvys.js` | stale bundle (superseded by `SettingsPanel-BgejwQSw.js`) |
+| `web/static/assets/SettingsPanel-eCjIM-UC.js` | stale bundle |
+| `web/static/assets/SettingsPanel-g7g40a_x.js` | stale bundle |
+| `web/static/assets/index-C1xyllm1.js` | stale bundle (superseded by `index-BRJmDjjc.js`) |
+| `web/static/assets/index-CGpAJs8d.css` | stale bundle (superseded by `index-Bvpcz4Hd.css`) |
+| `web/static/assets/index-CYXnT1iu.js` | stale bundle |
+| `web/static/assets/index-OiRp_Wkd.js` | stale bundle |
+| `web/static/assets/index-n0UF0DI4.css` | stale bundle |
 
 ## 2. REPLACE
 
 | Path | Why |
 |---|---|
-| `UPDATE.md` | this change map (Phase 7 map superseded) |
+| `UPDATE.md` | this change map (v1.1.6-zeta map superseded) |
 | `REPLACEMENT-MANIFEST.txt` | regenerated for this tree |
 | `REPLACEMENT-SHA256.txt` | regenerated for this tree |
 
@@ -39,106 +75,140 @@ API/WebSocket contracts).
 
 | Path | Why |
 |---|---|
-| `internal/improve/improve.go` | **P0 FIX (CI deadlock):** `Load()` split into the locking public method and a `loadLocked()` private reader; `Propose()`, `RecordAttempt()` and `Active()` use `loadLocked()` under the already-held mutex — the recursive `sync.Mutex` acquisition (Lock → Load → Lock) that hung `TestProposeRequiresCompleteDefinition` for 10 minutes is gone; load/save errors are now propagated instead of swallowed |
-| `internal/improve/improve_test.go` | **P0 regression tests:** `TestProposeCompletesImmediately`, `TestRecordAttemptCompletesImmediately` (watchdog-guarded), `TestConcurrentStoreAccess` (8 writers × 12 attempts + concurrent readers, race-safe, no lost updates), `TestPersistenceRoundTrip`, `TestEvidenceBounded`, `TestStoreBoundedToMaxTactics` |
-| `internal/sessions/sessions.go` | **Context policies (§4):** `sessions.Context.ContextTokens` — the per-chat context-window policy persisted with the session (0 = inherit global); Chat A = 8K, Chat B = 32K, Chat C = 16K are independent and restored on switch |
-| `internal/llm/modelcaps.go` | **Context resolution (§3/§4):** `EffectiveContext` gains `Requested`/`SessionPolicy`; new `ResolveSessionContext` — effective = min(session policy, global configured, model GGUF max, engine-verified window), floored at 1024, every clamp recorded in `Reasons` |
-| `internal/llm/llama.go` | **Readiness (§11):** `EngineContextLimit()` (verified `/props` window while the subprocess is alive; 0 when dead so a stale window can never clamp the next plan), `VerifiedReady()` (alive + `/health` 200 + serving model verified) |
-| `internal/llm/client.go` | **Wire truthfulness (§2):** `BuildChatRequestWithOptions` — the request's `n_ctx` carries the SAME effective context the planner validated, never a second, larger global number |
-| `internal/llm/resources.go` | **NEW.** Resource protection (§8): `AssessContextResource` (weights + KV-cache + runtime overhead vs RAM/VRAM → `safe` / `caution` / `unsupported` with a user-facing reason), `KVCacheBytes` estimator (layers × embedding × KV quant from the GGUF card), `ContextOptions` 4K…128K selector ladder with per-rung verdicts and model/engine clamp flags |
-| `internal/llm/resources_test.go` | **NEW.** Tests: session-context inheritance/narrowing/clamps/floor, resource unsupported/safe/unknown-RAM classification, selector ladder correctness |
-| `internal/agent/orchestrator.go` | **Overflow architecture (§2/§7):** `RunDetailed` accepts `RunOption`s; `WithSessionContext` applies the per-chat policy to plan, gates and request; extended per-turn telemetry (requested/effective/modelMax/engineMax/session policy, per-section token split incl. system/tools/recall/attachments/history/current-task/output-reserve/safety-reserve, elided/compressed, `overflowPrevented`); the structured `context plan:` log block BEFORE the engine call; `compactToolResults` now also returns tokens freed; `ContextSafetyMargin` exported so the API layer reports the same figure |
-| `internal/agent/preflight_test.go` | updated for `compactToolResults`' second return value (tokens freed) |
-| `internal/ctxtelemetry/ctxtelemetry.go` | **Telemetry (§7):** `TurnRecord` gains `contextRequested/contextEffective/contextModelMax/contextEngineMax/sessionContext`, the per-section split (`tokensSystem…tokensSafetyReserve`, `tokensCurrentTask`), `tokensElided/tokensCompressed`, `rolloverTriggered`, `overflowPrevented` |
-| `internal/multiagent/context.go` | **NEW.** Per-agent context policies (§5): `ContextPolicy{requestedContext, minimumContext, maximumContext, outputReserve}` per role (planner 16K, coder 32K, researcher 8K, critic 12K, summarizer 8K, …), `ResolveAgentContext` (agent override → session/global → model max → engine window, role minimum honored only within hard limits), logged one line per consult |
-| `internal/multiagent/context_test.go` | **NEW.** Policy table + resolution tests (base clamp, model-max wins, inherit, floor-vs-hard-limit) |
-| `internal/multiagent/multiagent.go` | planner/critic/summarizer requests carry their resolved context (`NumCtx`); `ModelLimitsFn` seam for the runtime wiring |
-| `internal/multiagent/specialists.go` | `consultOne` resolves + logs the specialist's context policy, bounds output by `policy.OutputReserve`, sends the resolved `NumCtx`; specialist activity captions now show the resolved context (§17) |
-| `internal/runtime/runtime.go` | context-limit provider now reports BOTH engines (llama.cpp verified window while alive + native loaded-model limit, min); `ModelLimitsFn` wiring for per-agent resolution |
-| `internal/api/sessioncontext.go` | **NEW.** `GET/PUT /api/sessions/{id}/context` — the authoritative context decision for one chat (requested/configured/sessionPolicy/effective/modelMax/engineMax/usableInput/outputReserve/safetyReserve/used/remaining/pressure + resource classification + selector options); PUT persists the per-session policy and REJECTS (409) values classified `unsupported` with the reason; `POST /api/models/open-folder` for the first-use path (§10) |
-| `internal/api/server.go` | run path passes `agent.WithSessionContext(sess.Context.ContextTokens)`; `modelInfo` gains `estimatedMemoryBytes`/`recommendedContext` (§10 model card); routes registered |
-| `internal/api/engine.go` | **Startup (§9/§11):** snapshot gains `phase` (waiting → downloading-engine → loading-model → checking-capabilities → ready…), `verified`/`verifiedModel`/`verifiedContext`, `degraded` (state "ready" without verified serving) — degraded startup is visible, never hidden behind a green badge |
-| `scripts/gen-syso/main.go` | **Icon (§12):** full 16/24/32/48/64/128/256 ladder (24px added); also emits `build/sheytan.ico` (BMP entries ≤128 + PNG 256) for packaged shortcut/application metadata |
-| `.gitignore` | re-includes `/build/sheytan.ico` (committed packaging metadata; the `.syso` stays build-time-generated and CI already runs `go run ./scripts/gen-syso`) |
-| `src/AgentHeader.tsx` | **Chat UX (§16):** CONTEXT selector (4K…128K, backend-filtered, per-chat), USED `14.6K / 16K · 91%` meter with critical highlight, status pill reads the backend phase + verified proof |
-| `src/AgentBody.tsx` | **First use (§10) + startup (§9):** "No model selected / Choose model / Open models folder" gate; model card facts (architecture, quantization, context maximum, estimated memory, backend, status); startup phase labels + honest degraded-startup warning |
-| `src/App.tsx` | **Branding (§13):** `document.title` per layer (SHEYTAN, SHEYTAN — Coding Lab, SHEYTAN — Research, SHEYTAN — Settings); sidebar footer says `SHEYTAN™ Local-Agent · Native runtime · offline` (generic "Go + Wails" removed); version fallback refreshed |
-| `src/styles.css` | **Theme (§14):** canonical token block (`--surface`, `--surface-elevated`, `--border`, `--border-strong`, `--text-primary`, `--text-secondary`, `--accent`, `--accent-strong`, `--success`, `--warning`, `--error`, `--focus`) mapped onto the brand palette — dark-first, light-mode foundation; header context pills; phase/first-use/model-card styles |
-| `src/settings.css` | **Scrolling (§15):** `.settings-page` is the app-level scroll container (wheel/trackpad/keyboard/scrollbar, `overscroll-behavior: contain`, no horizontal overflow, cards inside viewport at 1280×720 → 2880×1800 incl. 125/150 % scaling); sticky toolbar with solid backdrop; theme tokens replace the previously-undefined `--border/--accent/--text-primary/--text-secondary` variables |
-| `src/SettingsPanel.tsx` | scroll container is focusable (`tabIndex={-1}`) so keyboard scrolling works |
-| `src/store.ts` | per-session context status state (fetched on session select/switch, refreshed after every turn), `setSessionContext` action — per-chat policy with zero global mutation |
-| `src/api.ts` | typed client for the context endpoints, extended engine/model/session types |
-| `web/static/**` | regenerated embedded frontend bundle (hashes replaced) |
+| `internal/config/config.go` | **Compat truth (P0):** `AppVersion` → `1.1.7`; new backend-managed fields `engineCompatReason` (classified failure kind + offending option recorded when a boot settles above level 0, cleared at level 0) and `engineCompatAt` (RFC3339 stamp used by the retry-up gate) |
+| `internal/llm/capability.go` | **Compat fix (P0):** `CompatInfo` + `CompatSnapshot()` (level, name, optimised, reason, recordedAt, removed-option changes — the user-visible "why compatibility mode" answer); `CapsSnapshot()` read-only accessor; `compatReasonFromError` (failure → recorded reason vocabulary); `shouldRetryFullSpeed` — the strict four-condition gate (persisted level > 0, option-class reason, verified profile newer than the downgrade or absent stamp, level-0 args pass `argProblems`) granting exactly ONE bounded full-speed retry; regression-locked in `capability_compat_test.go` |
+| `internal/llm/llama.go` | **Boot ladder (P0):** `persistBootOutcome` records the final active configuration — level, reason (never overwriting a recorded reason with an empty one) and stamp, refreshed only on a level change or after a retry attempt; bounded full-speed retry before the ladder resumes at the persisted level (clearly logged both ways: "retrying the full-speed profile once" / "full-speed retry failed — resuming"); the compatibility-mode log line now carries the recorded reason so the user can see WHY compatibility mode was selected |
+| `internal/llm/client.go` | **Telemetry (P0):** the streaming success path records what a REAL generation measured (prompt tokens, tokens, tok/s, TTFT, wall time) into the bounded perf ring — the exact numbers the old `PerfStats` already computed, now retained for the performance surface |
+| `internal/llm/perftracker.go` | **NEW.** 16-sample bounded ring (`PerfSample`) + `SnapshotEnginePerf` aggregation (last sample = current speed, plus honest prompt tok/s from wall time); zero-measurement samples are dropped so aborted calls never appear as fabricated zero-speed metrics |
+| `internal/llm/capability_compat_test.go` | **NEW.** `TestShouldRetryFullSpeedGates` (7 gate cases incl. the v1.1.6Z upgrade path and the invalid level-0 profile), `TestCompatReasonFromError` (option-layout/unknown-option/model-load/unknown vocabulary), `TestCompatSnapshotRecordsRemovedOptions` |
+| `internal/llm/perftracker_test.go` | **NEW.** Empty tracker reports no sample; last-sample aggregation; empty-sample rejection; ring bound (16+10 recorded → exactly 16 kept) |
+| `internal/netcheck/netcheck.go` | **Diagnostics (P0):** `Diagnose()` — ONE bounded check (OS DNS, two timed HTTPS samples, second-endpoint reachability, existing multi-strategy probe as proxied-machine fallback); `classifyDiag` → `Excellent / Good / Unstable / Slow / Offline` with the first meaningful failure reason (the warm sample must degrade vs the cold TLS-handshake sample to flag instability — no false "Unstable" on first-request handshake cost) |
+| `internal/netcheck/netcheck_diag_test.go` | **NEW.** Classification table (9 cases), state vocabulary pin, `firstErrLine` truncation |
+| `internal/logging/logging.go` | **Log surface (P0):** `LogEntry` + `RecentParsed` (parsed time/level/category/message, tolerant of non-canonical lines, REDACTED before display, ring-bounded); `redact()` gains inline scrubbing — quoted secret-bearing values (`apiKey/token/password/secret/authorization`), Bearer credentials and OpenAI-style `sk-…` tokens anywhere in a line |
+| `internal/logging/recentparsed_test.go` | **NEW.** Secret redaction (inline `apiKey "sk-…"` case), ring bound, tolerance of unparseable lines |
+| `internal/api/perf.go` | **NEW.** `GET /api/perf` — the compact live performance payload: CPU % (OS delta sampler), RAM, GPU/VRAM via `nvidia-smi` (5 s cache, bounded subprocess), generation metrics from `llm.SnapshotEnginePerf`, context usage vs the verified window, backend/model/engine state, `CompatInfo`, and `recommendedSettings` derived from sysinfo hardware + loaded model card + verified capability profile (advice only — applied exclusively through explicit UI actions) |
+| `internal/api/perf_windows.go` | **NEW.** Windows samplers: kernel32 `GetSystemTimes` CPU delta + `GlobalMemoryStatusEx` RAM (LazyProc — no new dependencies) |
+| `internal/api/perf_linux.go` | **NEW.** Linux samplers: `/proc/stat` CPU delta + `/proc/meminfo` RAM |
+| `internal/api/perf_other.go` | **NEW.** Not-known fallback so other platforms render N/A instead of guessing |
+| `internal/api/logs.go` | **NEW.** `GET /api/logs?limit=N` (default/cap 512) — parsed, redacted recent entries from the existing ring; `GET /api/netcheck` handler |
+| `internal/api/server.go` | routes mounted (`/api/perf`, `/api/logs`, `/api/netcheck`); `handleTools` now prefers `ShortDescription()` for the UI `description` and keeps the full spec in `detail` |
+| `internal/tools/shortdesc.go` | **NEW.** One-line `ShortDescription` per tool (Shell/Files/CodeExec/WebSearch/Git/Browser/Fetch/Screenshot/dataAnalysis/JSON/linuxSim/diff/archive) — the concise Options UI labels |
+| `internal/research/tool.go` | `ShortDescription`: "Search external sources with provenance." (full model-facing spec unchanged) |
+| `internal/lab/tool.go` | `ShortDescription`: "Run isolated engineering tasks in a disposable workspace." (full spec unchanged) |
+| `internal/memory/memory.go` | `ShortDescription`: "Store and retrieve approved knowledge." (full spec unchanged) |
+| `README.md` | version header → v1.1.7; new "v1.1.7" implemented-features section (shipped items only) |
+| `ARCHITECTURE.md` | new Part I section **I.8b** — the v1.1.7 surfaces as truth-table rows (compat retry-up gate, /api/perf, /api/logs, /api/netcheck, Options UI, concise tool labels) with packages and honest status |
+| `agent.md` | release line → v1.1.7; next-agent notes (retry gate ownership, real-measurements rule for the perf surface, Short/Full description contract, `touchesEngine` checklist, redaction rule) |
+| `package.json` | version → `1.1.7` |
+| `src/api.ts` | typed clients for `/api/perf`, `/api/logs`, `/api/netcheck` (`PerfSnapshot`, `RecommendedSettings`, `LogEntry`, `NetDiagResult`, `CompatInfo`); `ToolInfo.detail`; `engineCompatReason`/`engineCompatAt` on `RuntimeConfig` |
+| `src/settings.css` | v1.1.7 styles appended (theme tokens unchanged): section tabs, status chips, delayed 400 ms CSS tooltips, engine-profile blocks, recommendation rows, live-metrics grid, before/after block, log viewer (list/levels/controls) |
+| `src/SettingsPanel.tsx` | **Options redesign (P0, same architecture):** six scannable tabs (General / Performance / Generation / Tools / Network / Logs) over the existing card system, theme and scrolling; plain-language tooltips + capability chips on important options; `touchesEngine` — the restart-after-save condition now covers EVERY engine-affecting key (flash attention, cache reuse, u-batch, prefill threads, KV quant, mlock, GPU offload, draft model — previously saved but inert until a manual restart); in-memory before/after baseline captured when a performance option changes; live-metrics polling only while the Performance tab is open (3 s cadence) |
+| `web/static/.vite/manifest.json`, `web/static/index.html` | regenerated embedded build metadata |
 
 ## 4. ADD
 
 | Path | Why |
 |---|---|
-| `build/sheytan.ico` | multi-resolution brand icon (16–256) for installer/shortcut metadata (§12) |
-| `internal/llm/resources.go`, `internal/llm/resources_test.go` | resource-aware context classification (§8) |
-| `internal/multiagent/context.go`, `internal/multiagent/context_test.go` | per-agent context policies (§5) |
-| `internal/api/sessioncontext.go` | per-session context API (§4/§16) |
+| `internal/llm/perftracker.go` + `perftracker_test.go` | bounded real-measurement perf ring feeding the live performance surface |
+| `internal/llm/capability_compat_test.go` | focused regression tests for the compatibility-mode retry-up gate and reason vocabulary |
+| `internal/api/perf.go`, `perf_windows.go`, `perf_linux.go`, `perf_other.go` | `GET /api/perf` + OS-native samplers (no new dependencies) |
+| `internal/api/logs.go` | `GET /api/logs` + `GET /api/netcheck` handlers |
+| `internal/netcheck/netcheck_diag_test.go` | diagnostics classification tests |
+| `internal/logging/recentparsed_test.go` | log-surface redaction/bounding tests |
+| `internal/tools/shortdesc.go` | concise one-line tool labels for the Options UI |
+| `src/SettingsPerformance.tsx` | Performance tab cards (Engine profile, Recommended, Engine advanced, Context, Live Metrics + before/after), Network diagnostics card, Logs card |
+| `src/settings-shared.tsx` | shared `Tip`/`Chip`/`FieldLabel` option-metadata primitives and N/A-safe formatters |
+| `src/LogViewer.tsx` | in-app log viewer (live tail, pause, auto-scroll, search, severity + subsystem filters, copy, non-destructive clear view; replace-per-poll keeps memory bounded) |
+| `web/static/assets/AgentBody-CfUf-j4_.js`, `AgentHeader-xOezjwpD.js`, `AgentSidebar-BbRpID3s.js`, `LabPanel-rshNNsid.js`, `ResearchPanel-CfWYT8Pb.js`, `SettingsPanel-BgejwQSw.js`, `index-BRJmDjjc.js`, `index-Bvpcz4Hd.css` | regenerated embedded frontend bundle |
 
 ## 5. DO NOT TOUCH
 
-Everything else — in particular the managed llama.cpp lifecycle, the native
-C++ engine (`native/engine/**`), the backend router, Coding Lab, project
-intelligence, research providers, memory/recall, context cache, Continuum,
-skills, toolsets, MCP bridge, browser/computer tooling, verification and
-reliability cores, sandbox, security controls, streaming, Wails embedding,
-and the WebSocket contracts. `internal/aicontext/AI-CONTEXT.md` was
-inspected and intentionally unchanged (version marker stays 11; the
-briefing's contract is not altered by this phase).
+Everything not listed above is byte-identical to the base commit and MUST
+NOT be modified by applying this package. In particular the following
+subsystems are unchanged and regression-protected — applying v1.1.7 must
+not alter a single byte of them:
 
-## 6. TESTS
+- **Agent orchestration and reliability** — `internal/agent/*`
+  (orchestrator, reliability, verification, preflight tests)
+- **Tool system internals** — `internal/tools/tools.go` and every other
+  existing tool file (only the NEW `shortdesc.go` is added; the
+  model-facing `Description()` specs are untouched)
+- **Coding Lab** — `internal/lab/*` except the one `ShortDescription`
+  addition in `tool.go`
+- **Context planning, overflow protection, session context** —
+  `internal/contextplan`, `internal/contextcache`, `internal/ctxtelemetry`,
+  `internal/continuum`, `internal/sessions`, `internal/llm/resources.go`,
+  `internal/llm/modelcaps.go`
+- **Memory / recall / research / attachments / MCP / scheduler /
+  specialist agents / multi-agent / skills / toolsets / pipelines /
+  computer use / improve** — `internal/memory` (except the one
+  `ShortDescription` addition), `internal/recall`, `internal/research`
+  (except the one `ShortDescription` addition), `internal/attachments`,
+  `internal/mcp`, `internal/scheduler`, `internal/multiagent`,
+  `internal/skills`, `internal/toolsets`, `internal/pipeline`,
+  `internal/computer`, `internal/improve`
+- **Native engine + llama.cpp integration** — `native/engine/**`,
+  `internal/native/**`, `internal/llm/llamabackend.go`, `backend.go`,
+  `gguf.go`, `models.go`, `presets.go`, `resources.go`, `modelcaps.go`
+  (the llama lifecycle changes live ONLY in `llama.go`/`capability.go`
+  listed above)
+- **Security restrictions and path jails** — `internal/sandbox`,
+  `internal/proc`, `internal/termshell`, `internal/basedir`,
+  `internal/research/security_test.go`
+- **Logging architecture (writers)** — the app.log/tools.jsonl/llm.jsonl
+  writers, rotation and crash catching in `internal/logging/logging.go`
+  are untouched; v1.1.7 adds a read-only parsed view plus inline
+  redaction on top
+- **Config copy-on-write** — `internal/config/source.go` (the new config
+  fields are backend-managed: the UI never patches
+  `engineCompatReason`/`engineCompatAt`)
+- **Windows branding, updater, installer, desktop shell** —
+  `internal/brand`, `internal/updater`, `internal/installer`,
+  `internal/desktop`, `main_windows.go`, `build/**`, `scripts/**`
+- **Existing API contract** — every pre-existing route keeps its exact
+  request/response shape; `/api/tools` gains the additive `detail` field
+  and `/api/config` gains two additive optional fields; nothing existing
+  was renamed or removed
+- **Existing tests** — no pre-existing test file was modified; all v1.1.7
+  tests are NEW files
 
-- `internal/improve`: deadlock watchdogs, concurrency hammer, persistence,
-  bounded evidence, bounded store (race-clean).
-- `internal/llm`: session-context resolution chain, resource assessment,
-  selector ladder.
-- `internal/multiagent`: policy table + resolution ordering.
-- `internal/sessions`: per-chat policy persistence round trip.
-- Pre-existing suites: context plan fit gates, orchestrator preflight,
-  sessions, api, native engine, releasegate — all passing.
+---
 
-## 7. DOCUMENTATION
+## 6. Automated verification executed for this release
 
-Updated for truthfulness: `README.md` (1.1.6 section), `ARCHITECTURE.md`
-(context policies), `agent.md`, `worklog.md` (appended phase record),
-this file. Feature states are marked IMPLEMENTED / PARTIAL / FOUNDATION /
-PLANNED — planned behaviour is never described as implemented.
+All commands were actually executed; nothing below is assumed:
 
-## 8. RUNTIME VALIDATION
+| Check | Result |
+|---|---|
+| `go build ./...` (GOOS=windows — the shipping target, full tree incl. desktop shell) | **PASS** |
+| `go vet ./internal/... ./cmd/... .` (GOOS=windows) | **PASS** |
+| `go test ./internal/...` (34 packages OK, including the new tests in `internal/llm`, `internal/api`, `internal/netcheck`, `internal/logging`) | **PASS** — the only build failure is `internal/desktop`, a pre-existing environment limitation: it imports the Wails GTK4/webkitgtk shell, whose dev headers are absent on the Linux build host; the pristine base commit fails identically, and the Windows cross-build of the same tree passes |
+| `npm run typecheck` (`tsc --noEmit`) | **PASS** |
+| `npm run lint` (oxlint) | **PASS** (0 warnings, 0 errors) |
+| `npm run build` (`tsc -b && vite build && sync:web`) | **PASS** — embedded `web/static` regenerated |
 
-Performed on Linux (CI-equivalent):
+Native C++ tests were NOT re-run: no C++/native-engine file was touched in
+this release (`native/engine/**` is byte-identical to the base), so the
+existing C++ validation remains the authoritative gate for unchanged code.
 
-- `go test -tags headless ./internal/... -count=1` — PASS (incl. race build
-  for `internal/improve`)
-- `go vet -tags headless ./internal/...` — PASS
-- `npm run typecheck` / `npm run lint` / `npm run build` — PASS (embedded
-  frontend regenerated)
-- `node scripts/release-version.mjs --check` — PASS
-- native engine C++ build + ctest — PASS
-- Windows exe/resource layer validated via the gen-syso pipeline (deterministic
-  resource object + .ico); a real Windows GUI run was NOT available in this
-  environment and remains the maintainer's smoke step.
+## 7. Compatibility-mode finding (summary for the release record)
 
-## 9. KNOWN LIMITATIONS
+**Finding.** v1.1.6Z persisted `engineCompat` after the first successful
+boot at any compatibility level. Every later boot resumed AT that level
+and logged `started in compatibility mode 2 (no speed flags)` again — even
+when the Phase 7 capability adapter had already detected, validated and
+persisted a profile under which the full-speed (level 0) launch was valid.
+A one-time option rejection thus became a permanent, silent speed
+downgrade with no recorded cause.
 
-1. **Session policy cannot exceed the resolved limits.** Per §3 the
-   effective value is the minimum of the session policy, the global
-   configured context, the model GGUF maximum and the engine-verified
-   window. Selecting 32K in a chat while the engine runs a 16K window
-   serves 16K (with an explanatory trail). Raise the global context in
-   Settings and restart the engine to go higher — never by blindly
-   inflating `numCtx` at request time.
-2. **Resource estimates are conservative pre-flight math** (weights file
-   size + KV-cache from GGUF facts + fixed overhead vs RAM/VRAM), not a
-   runtime allocator. They classify, they do not guarantee.
-3. **llama.cpp `n_ctx` is fixed at launch.** The wire request carries the
-   validated effective context for honesty and remote-mode clarity; the
-   llama.cpp server itself only resizes its window on restart.
-4. **Real-model acceptance on Windows** (gemma-4-E2B-it-Q4_K_M smoke with
-   the desktop UI) requires a Windows machine with the model present; this
-   environment validated everything reproducible headlessly, including the
-   full context pipeline and engine state machine.
+**Fix.** The boot now (1) records the classified reason (`option-layout`,
+`unknown-option`, `model-load`, … + offending option) and time of any
+descent; (2) exposes reason + removed options via `/api/perf` and the
+Settings → Performance engine-profile card; (3) attempts ONE bounded
+full-speed retry before resuming the persisted level, strictly gated by
+`shouldRetryFullSpeed` (option-class reason + verified profile newer than
+the downgrade + clean pre-launch validation of the level-0 profile); and
+(4) re-blocks the gate after a failed non-option retry so the same
+incompatibility is never expensively rediscovered. Supported flags are
+never stripped by the fix — the surgical per-option repair behaviour of
+Phase 7 is preserved unchanged.

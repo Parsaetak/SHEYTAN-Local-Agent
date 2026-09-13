@@ -384,3 +384,480 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================================================
+   v1.1.7 — Options experience: section tabs, chips, delayed tooltips,
+   live metrics, recommendations, log viewer.
+   Theme tokens unchanged: --border / --surface / --accent /
+   --text-primary / --text-secondary.
+   ========================================================================== */
+
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 14px;
+  background: var(--surface, rgba(255, 255, 255, 0.02));
+  position: sticky;
+  top: 92px;
+  z-index: 4;
+  backdrop-filter: blur(6px);
+}
+
+.settings-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary, #9a9a9a);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.settings-tab:hover {
+  color: var(--text-primary, #f1f1f1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.settings-tab.active {
+  color: var(--text-primary, #f6f6f6);
+  background: rgba(255, 59, 48, 0.12);
+  border-color: rgba(255, 59, 48, 0.45);
+}
+
+/* --- status chips ------------------------------------------------------- */
+
+.settings-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  color: var(--text-secondary, #9c9c9c);
+}
+
+.settings-chip.chip-good {
+  border-color: rgba(70, 190, 120, 0.4);
+  background: rgba(70, 190, 120, 0.08);
+  color: #8fe0b4;
+}
+
+.settings-chip.chip-warn {
+  border-color: rgba(255, 176, 32, 0.4);
+  background: rgba(255, 176, 32, 0.08);
+  color: #ffce85;
+}
+
+.settings-chip.chip-bad {
+  border-color: rgba(255, 59, 48, 0.4);
+  background: rgba(255, 59, 48, 0.08);
+  color: #ff9d96;
+}
+
+.settings-chip.chip-accent {
+  border-color: rgba(255, 59, 48, 0.45);
+  background: rgba(255, 59, 48, 0.1);
+  color: var(--accent, #ff6f66);
+}
+
+.settings-field-chips {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.settings-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.settings-field-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary, #9a9a9a);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inline-toggle .settings-field-label {
+  width: auto;
+}
+
+.inline-toggle .settings-field-name {
+  text-transform: none;
+  font-size: 13px;
+  color: var(--text-primary, #e9e9e9);
+  letter-spacing: 0;
+}
+
+/* --- delayed hover tooltip (CSS-only: 400ms delay) ---------------------- */
+
+.settings-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.22));
+  color: var(--text-secondary, #9d9d9d);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: help;
+  user-select: none;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.settings-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 9px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 320px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: #161616;
+  color: var(--text-primary, #ececec);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.5;
+  text-transform: none;
+  white-space: normal;
+  text-align: left;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 30;
+  transition:
+    opacity 140ms ease 400ms,
+    visibility 0s linear 400ms;
+}
+
+.settings-tip:hover::after,
+.settings-tip:focus::after {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0ms;
+}
+
+.tool-detail-tip {
+  margin-left: 8px;
+  opacity: 0.7;
+}
+
+/* --- engine profile ----------------------------------------------------- */
+
+.engine-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.profile-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-facts div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.profile-facts span {
+  color: var(--text-secondary, #838383);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.profile-facts strong {
+  color: var(--text-primary, #ededed);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.profile-explain,
+.profile-changes {
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 176, 32, 0.25);
+  background: rgba(255, 176, 32, 0.05);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary, #a8a8a8);
+}
+
+.profile-explain strong,
+.profile-changes strong {
+  display: block;
+  color: #ffd08a;
+  margin-bottom: 4px;
+}
+
+.profile-explain p {
+  margin: 0;
+}
+
+.profile-changes div {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+
+/* --- recommendations ---------------------------------------------------- */
+
+.recommend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recommend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.recommend-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.recommend-info strong {
+  color: var(--text-primary, #eeeeee);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.recommend-values {
+  color: var(--text-secondary, #8a8a8a);
+  font-size: 12px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.recommend-values em {
+  font-style: normal;
+  color: var(--text-primary, #d8d8d8);
+}
+
+.recommend-arrow {
+  color: var(--accent, #ff6f66);
+}
+
+/* --- live metrics ------------------------------------------------------- */
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.metric-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.metric-row span {
+  color: var(--text-secondary, #838383);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metric-row strong {
+  color: var(--text-primary, #ededed);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.before-after {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border, rgba(255, 255, 255, 0.1));
+}
+
+.before-after-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.before-after-heading strong {
+  color: var(--text-primary, #eaeaea);
+  font-size: 13px;
+}
+
+/* --- log viewer --------------------------------------------------------- */
+
+.logviewer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.logviewer-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.logviewer-select {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-primary, #f1f1f1);
+  font: inherit;
+  font-size: 12px;
+}
+
+.logviewer-search {
+  flex: 1 1 180px;
+  min-height: 36px;
+  padding: 6px 11px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-primary, #f1f1f1);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.logviewer-search:focus {
+  border-color: rgba(255, 59, 48, 0.65);
+}
+
+.logviewer-list {
+  height: 380px;
+  overflow: auto;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 8px 0;
+  font-family: ui-monospace, "Cascadia Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.log-line {
+  display: flex;
+  gap: 9px;
+  padding: 1px 12px;
+  color: var(--text-secondary, #b0b0b0);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-line .log-time {
+  color: #6f6f6f;
+  flex: 0 0 auto;
+}
+
+.log-line .log-level {
+  flex: 0 0 44px;
+  color: #8f8f8f;
+  font-weight: 700;
+}
+
+.log-line .log-category {
+  color: #a3736f;
+  flex: 0 0 auto;
+}
+
+.log-line .log-message {
+  color: #cfcfcf;
+}
+
+.log-line.warn .log-level {
+  color: #ffce85;
+}
+
+.log-line.warn .log-message {
+  color: #ffe2b3;
+}
+
+.log-line.error .log-level {
+  color: #ff9d96;
+}
+
+.log-line.error .log-message {
+  color: #ffc4bf;
+}
+
+.log-line.debug {
+  opacity: 0.65;
+}
+
+.logviewer-empty {
+  padding: 24px 14px;
+  text-align: center;
+  color: var(--text-secondary, #7f7f7f);
+  font-family: inherit;
+}
+
+.logviewer-footnote {
+  color: var(--text-secondary, #7c7c7c);
+  font-size: 11px;
+}
+
+@media (max-width: 1100px) {
+  .profile-facts,
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-tabs {
+    top: 0;
+  }
+}

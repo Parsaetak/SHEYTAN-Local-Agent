@@ -1851,3 +1851,73 @@ replacement ZIP.
 - Real Windows/model smoke: not executable in this environment (headless
   Linux); everything reproducible headlessly is green. Recorded in
   UPDATE.md § KNOWN LIMITATIONS.
+
+---
+
+## v1.1.7 — Options Clarity, Capability Truth, Live Telemetry, In-App Diagnostics
+
+Date: 2026-09-13 · Base: main @ dd49eed (1.1.6Z)
+
+### Compatibility-mode finding (the technical clue from the Windows log)
+
+The user log showed the same line on every boot:
+
+    started in compatibility mode 2 (no speed flags)
+
+Root cause: `startLocked` persisted `engineCompat` after the first
+successful boot at any level > 0. Every later boot resumed AT that level
+and logged the line again — even when the Phase 7 capability adapter had
+already detected/validated/persisted a profile under which the full-speed
+(level 0) launch was valid. A one-time option rejection became a
+permanent, silent speed downgrade with no recorded cause.
+
+Fix (all in the existing engine system — no engine rewrite):
+- `engineCompatReason` / `engineCompatAt` recorded in config when a boot
+  settles above level 0; cleared at level 0 (backend-managed fields).
+- `shouldRetryFullSpeed` grants ONE bounded full-speed retry when the
+  recorded reason is option-class, a VERIFIED capability profile postdates
+  the downgrade (or the upgrade case: no stamp), and the level-0 profile
+  passes pre-launch validation. A failed non-option retry stamps a fresh
+  time, re-blocking the gate until the profile changes — no rediscovery
+  loops, no extra restarts in the common path.
+- Boot logs now state the recorded reason; `/api/perf` exposes
+  `compat: {level, name, optimised, reason, recordedAt, changes[]}`.
+- Regression-locked by `internal/llm/capability_compat_test.go`.
+
+### Shipped alongside (P0/P1, all reusing existing infrastructure)
+
+- Settings → six scannable sections (General/Performance/Generation/
+  Tools/Network/Logs), option tooltips (1–2 sentences, 400 ms delay),
+  capability chips; restart-after-save now covers EVERY engine-affecting
+  key (speed settings were previously saved but inert until manual
+  restart).
+- Concise one-line tool labels via `ShortDescription()`; the full
+  model-facing `Description()` specs are untouched (they carry the JSON
+  action syntax — shortening them would break orchestration).
+- `GET /api/perf`: CPU/RAM/GPU-VRAM where measurable + prompt tok/s,
+  generation tok/s, TTFT, context usage, backend, model, engine profile,
+  recommended settings (explicit Apply only). N/A for anything
+  unmeasurable; the 16-sample ring is fed by the existing tokenTimer.
+- `GET /api/netcheck`: one bounded check → Excellent/Good/Unstable/Slow/
+  Offline + first failure reason (cold-start TLS asymmetry handled).
+- `GET /api/logs` + Settings → Logs viewer: live tail/pause/autoscroll/
+  search/severity+subsystem filters/copy/non-destructive clear view over
+  the existing ring (bounded); entries redacted before display (inline
+  secret scrubbing added to `redact()`).
+- Simple before/after observation (in-memory) when a performance option
+  changes.
+
+### Verification executed (automated only, per release policy)
+
+- `go build ./...` (GOOS=windows, full tree) PASS
+- `go vet ./internal/... ./cmd/... .` (GOOS=windows) PASS
+- `go test ./internal/...`: 34 packages OK (incl. new tests); only
+  `internal/desktop` fails to BUILD on the Linux host (Wails
+  GTK4/webkitgtk dev headers absent) — pristine base fails identically;
+  Windows cross-build of the same tree passes.
+- `npm run typecheck` PASS · `npm run lint` PASS (0/0) · `npm run build`
+  PASS (embedded web/static regenerated).
+- Native C++ tests not re-run: no file under `native/engine/**` changed.
+
+Package: SHEYTAN-Local-Agent-v1.1.7-UPDATE.zip (UPDATE.md §6 lists the
+same results; §1–§5 carry the exact file map incl. DO NOT TOUCH).

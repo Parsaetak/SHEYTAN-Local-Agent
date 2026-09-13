@@ -1,11 +1,13 @@
-SHEYTAN-Local-Agent v1.1.6-zeta — Stabilisation Replacement Manifest
-================================================================
-Base: main @ a1cfb5d0bdb5382b8c69b5587891f5edf4d96ddb (1.1.6)
-Package: SHEYTAN-local-agent-1.1.6-zeta-stabilisation-replacement.zip
+SHEYTAN-Local-Agent v1.1.7 — Replacement Manifest
+=================================================
+Base: main @ dd49eed (1.1.6Z)
+Package: SHEYTAN-Local-Agent-v1.1.7-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
-The exact per-file change map (with reasons) lives in UPDATE.md.
+The exact per-file change map (with reasons), the DO NOT TOUCH list, the
+executed automated checks and the compatibility-mode finding summary live
+in UPDATE.md.
 
 [PACKAGE METADATA]
   UPDATE.md
@@ -19,89 +21,52 @@ The exact per-file change map (with reasons) lives in UPDATE.md.
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  build/sheytan.ico
-  internal/api/sessioncontext.go
-  internal/api/sessioncontext_test.go
-  internal/llm/resources.go
-  internal/llm/resources_test.go
-  internal/multiagent/context.go
-  internal/multiagent/context_test.go
+  internal/api/logs.go — /api/logs + /api/netcheck handlers
+  internal/api/perf.go — /api/perf live performance surface (real measurements only)
+  internal/api/perf_windows.go — Windows CPU/RAM samplers (kernel32)
+  internal/api/perf_linux.go — Linux CPU/RAM samplers (/proc)
+  internal/api/perf_other.go — not-known fallback (renders N/A)
+  internal/llm/capability_compat_test.go — retry-up gate + reason vocabulary tests
+  internal/llm/perftracker.go — bounded real-measurement perf ring
+  internal/llm/perftracker_test.go — perf ring tests
+  internal/logging/recentparsed_test.go — redaction/bounding tests for the log surface
+  internal/netcheck/netcheck_diag_test.go — diagnostics classification tests
+  internal/tools/shortdesc.go — concise one-line tool labels for the Options UI
+  src/LogViewer.tsx — in-app log viewer (tail/pause/filters/search/copy/clear view)
+  src/SettingsPerformance.tsx — Performance/Network/Logs cards
+  src/settings-shared.tsx — option metadata primitives (Tip/Chip/FieldLabel)
+  web/static/assets/* (new hashed Vite bundles)
 
 [MODIFIED FILES]
-  .gitignore
-    purpose:  re-include build/sheytan.ico (committed packaging metadata)
-  REPLACEMENT-MANIFEST.txt
-    purpose:  regenerated for this tree
-  REPLACEMENT-SHA256.txt
-    purpose:  regenerated for this tree
-  internal/agent/orchestrator.go
-    purpose:  RunOptions + WithSessionContext; full context telemetry; context plan log
-  internal/agent/preflight_test.go
-    purpose:  compactToolResults two-value return
-  internal/api/engine.go
-    purpose:  startup phase + verified readiness + degraded visibility
-  internal/api/server.go
-    purpose:  session context routes; model card fields; run passes session policy
-  internal/ctxtelemetry/ctxtelemetry.go
-    purpose:  full per-turn context decision trail fields
-  internal/improve/improve.go
-    purpose:  P0 CI deadlock fix: loadLocked() under held mutex; error propagation
-  internal/improve/improve_test.go
-    purpose:  P0 regression tests: watchdogs, concurrency, persistence, bounding
-  internal/llm/client.go
-    purpose:  BuildChatRequestWithOptions: wire n_ctx = validated effective context
-  internal/llm/llama.go
-    purpose:  EngineContextLimit (verified window while alive); VerifiedReady
-  internal/llm/modelcaps.go
-    purpose:  EffectiveContext Requested/SessionPolicy; ResolveSessionContext chain
-  internal/multiagent/multiagent.go
-    purpose:  per-role resolved NumCtx on planner/critic/summarizer; ModelLimitsFn
-  internal/multiagent/specialists.go
-    purpose:  specialist consults resolve + log context policy; activity captions
-  internal/runtime/runtime.go
-    purpose:  context-limit provider: llama verified window + native; ModelLimitsFn wiring
-  internal/sessions/sessions.go
-    purpose:  per-session context policy field (Context.ContextTokens)
-  internal/sessions/sessions_test.go
-    purpose:  per-chat policy persistence round trip
-  scripts/gen-syso/main.go
-    purpose:  16-256 icon ladder (24px added); build/sheytan.ico emission
-  src/AgentBody.tsx
-    purpose:  first-use gate, model card facts, startup phases, degraded warning
-  src/AgentHeader.tsx
-    purpose:  chat header CONTEXT selector + USED meter + status pill
-  src/App.tsx
-    purpose:  per-layer SHEYTAN titles; branded sidebar footer; version fallback
-  src/SettingsPanel.tsx
-    purpose:  focusable scroll container (keyboard scrolling)
-  src/api.ts
-    purpose:  context endpoints client + extended engine/model/session types
-  src/settings.css
-    purpose:  app-level scroll container + sticky solid toolbar + tokens
-  src/store.ts
-    purpose:  per-session context status state + actions
-  src/styles.css
-    purpose:  central theme tokens (§14) + header/panel additions
-  web/static/index.html
-    purpose:  regenerated embedded frontend (hash references)
+  ARCHITECTURE.md — v1.1.7 truth-table rows (I.8b)
+  README.md — v1.1.7 section + version header
+  UPDATE.md — this release's change map
+  agent.md — release line + next-agent notes
+  internal/api/server.go — new routes; handleTools short/full descriptions
+  internal/config/config.go — version 1.1.7; engineCompatReason/engineCompatAt
+  internal/lab/tool.go — ShortDescription (UI label only)
+  internal/llm/capability.go — CompatInfo, CapsSnapshot, shouldRetryFullSpeed, reason vocabulary
+  internal/llm/client.go — streaming path records real generation measurements
+  internal/llm/llama.go — boot ladder: reason persistence + bounded full-speed retry + honest logs
+  internal/logging/logging.go — RecentParsed surface + inline redaction scrubbing
+  internal/memory/memory.go — ShortDescription (UI label only)
+  internal/netcheck/netcheck.go — Diagnose/classifyDiag bounded connection diagnosis
+  internal/research/tool.go — ShortDescription (UI label only)
+  package.json — version 1.1.7
+  src/SettingsPanel.tsx — six Settings sections, option metadata, engine-restart coverage, perf polling, before/after baseline
+  src/api.ts — typed perf/logs/netcheck clients + additive types
+  src/settings.css — v1.1.7 component styles (theme tokens unchanged)
+  worklog.md — v1.1.7 entry: compatibility-mode finding, shipped items, executed verification
+  web/static/.vite/manifest.json — regenerated
+  web/static/index.html — regenerated
 
-[DOCUMENTATION]
-  ARCHITECTURE.md
-    purpose:  II.5: 1.1.6 context control status
-  README.md
-    purpose:  1.1.6-zeta stabilisation section (honest states)
-  UPDATE.md
-    purpose:  this phase's change map
-  agent.md
-    purpose:  1.1.6-zeta engineering handoff
-  worklog.md
-    purpose:  stabilisation log appended
+[DELETED FILES]
+  web/static/assets/ — 23 stale hashed Vite bundles superseded by the
+  regenerated embedded build (exact list in UPDATE.md §1)
 
-[UNCHANGED — DO NOT TOUCH]
-  Everything else in the tree. In particular the managed llama.cpp
-  lifecycle, the native C++ engine, backend router, Coding Lab,
-  project intelligence, research providers, memory/recall, context
-  cache, Continuum, skills, toolsets, MCP, browser/computer tooling,
-  verification, reliability, safe editing, sandbox, security
-  controls, streaming, Wails embedding, API/WebSocket contracts.
-
+[UNCHANGED]
+  Everything else — including agent orchestration, tool system, Coding
+  Lab, context planning/protection, memory/recall, research, attachments,
+  MCP, scheduler, specialist agents, native engine, llama.cpp integration,
+  security restrictions, path jails, config copy-on-write, Windows
+  branding (see UPDATE.md §5 DO NOT TOUCH).

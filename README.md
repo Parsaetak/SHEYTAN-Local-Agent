@@ -12,7 +12,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-Local-Agent
-Current release:  v1.1.6Z
+Current release:  v1.1.7
 Codename:         Zeta
 Branch:           main
 ```
@@ -67,6 +67,24 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.1.7 — Options Clarity, Capability Truth, Live Telemetry, In-App Diagnostics
+
+**Implemented in this release (all items shipped; nothing speculative):**
+
+| Area | What it does |
+|---|---|
+| **Compatibility-mode fix + retry-up** | The v1.1.6Z defect is fixed at the source: once the launch ladder descended (e.g. "compatibility mode 2 (no speed flags)"), the level was persisted and EVERY later boot resumed there — even after the capability profile had been repaired and re-verified. The boot now records WHY it descended (`engineCompatReason` + timestamp in config), and `shouldRetryFullSpeed` grants ONE bounded full-speed retry when (and only when) the recorded reason is option-class, a verified capability profile postdates the downgrade, and the level-0 profile validates cleanly. A failed non-option retry re-blocks the gate — the same incompatibility is never re-discovered expensively, and no unnecessary restarts are added. The reason and the exact removed options are exposed in the UI and the engine log |
+| **Settings redesign (same architecture)** | Six scannable sections — General / Performance / Generation / Tools / Network / Logs — on the existing card system, theme tokens and scrolling. No navigation-layer explosion |
+| **Option metadata + tooltips** | Important options show name, current value, recommended value, plain-language description, support/status chips (`Supported`, `Unsupported`, `Recommended`, `Restart required`) and a delayed (400 ms) CSS tooltip limited to 1–2 sentences: what it does + the main trade-off |
+| **Capability-aware engine options** | Engine/Speed-Pack controls (flash attention, cache reuse, KV-cache quant, prefill threads, u-batch, GPU layers, threads, mlock) are now visible, patchable, marked with real capability states, and — critically — the restart-after-save path now covers ALL of them, so saved speed options actually reach the engine |
+| **Concise tool descriptions** | Every tool exposes a one-line `ShortDescription` for the Options UI ("Shell — Run bounded terminal commands." style). The full operational specs still drive the model (removing them would break orchestration); they remain available via the API `detail` field, outside the Options UI |
+| **Live performance (real measurements only)** | `GET /api/perf` reports CPU % (kernel32 `GetSystemTimes` / `/proc/stat` delta), RAM (GlobalMemoryStatusEx / meminfo), GPU % + VRAM via `nvidia-smi` when present, and — from the streaming client's own per-request timer — prompt tok/s, generation tok/s and TTFT, plus context usage vs the verified window, backend, model and the ACTIVE engine profile. Anything unmeasurable renders N/A; nothing is fabricated. No new telemetry framework: one bounded ring (`perftracker.go`) fed by the existing `tokenTimer` |
+| **Recommended settings** | Derived from detected hardware (sysinfo probe) + loaded model card + verified engine capability. Applied only through explicit Apply buttons — never silently overwritten |
+| **Before/after comparison (P1)** | Changing a performance option snapshots the current measured metrics in memory; the Live Metrics card then shows Before → After with change % for generation tok/s, prompt tok/s, TTFT, CPU and GPU. No benchmark histories, no databases |
+| **Network diagnostics** | `GET /api/netcheck` — ONE bounded check (DNS, two HTTPS latency samples for stability, second-endpoint reachability) mapped to `Excellent / Good / Unstable / Slow / Offline` with the first meaningful failure reason. Bounded, no retries, informational only — SHEYTAN stays local-first |
+| **In-app Log Viewer** | Settings → Logs: live tail over the EXISTING logging ring (no second logging system), pause, auto-scroll, search, severity + subsystem filters, copy, and clear-view that hides displayed lines without touching the real log. Server-side ring cap (512) + replace-per-poll keep memory bounded; entries are REDACTED before they leave the process (inline secret scrubbing added) |
+| **Documentation** | README / ARCHITECTURE / agent.md updated for shipped items only |
 
 ## Phase 7 (v1.1.6Z) — Runtime Stability, Context Intelligence, Agent OS Foundation
 
