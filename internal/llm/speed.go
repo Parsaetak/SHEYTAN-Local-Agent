@@ -7,11 +7,16 @@ package llm
 //   - Direct llama.cpp beats wrapper apps (LM Studio / Ollama) by 5-20% on
 //     identical hardware — we ARE the engine host, zero wrapper overhead.
 //   - --flash-attn: fused attention kernels; a straight throughput win on
-//     both CPU and the bundled Vulkan backend.
+//     both CPU and the bundled Vulkan backend. PHASE 7: the flag became the
+//     tri-state `--flash-attn on|off|auto` option in newer releases; the
+//     emitted form is now chosen from the engine capability profile
+//     (capability.go), never hard-coded.
 //   - --cache-reuse N: KV-shift prompt-cache reuse. Agent turns share a
 //     long stable prefix (AI context + tool schemas), so after the first
 //     turn the repeated prefill collapses to near zero — dramatically
-//     lower time-to-first-token on every follow-up message.
+//     lower time-to-first-token on every follow-up message. It is an
+//     INDEPENDENT option: `--cache-reuse N` stands on its own and must
+//     never be attached to another option's value slot.
 //   - --ubatch-size 512: prompt-processing physical batch; the measured
 //     sweet spot on x86-64 multicore.
 //   - --threads = PHYSICAL cores for generation + --threads-batch =
@@ -58,27 +63,65 @@ func threadsBatchFor(cfg *config.Config) int {
 	return batch
 }
 
-// SpeedArgs builds the v1.0.4 speed flag set for the llama.cpp server.
-// Exported so the stress suite can lock the exact launch contract in.
+// SpeedArgs builds the speed flag set for the llama.cpp server. The exact
+// form of each flag follows the engine capability profile resolved from the
+// config (persisted verified profile, else release-tag heuristic), so a
+// newer llama.cpp release can never silently reinterpret an older option
+// layout.
+//
+// Exported so the stress suite can lock the launch contract in.
 func SpeedArgs(cfg *config.Config) []string {
+	return SpeedArgsWithCaps(cfg, resolveEngineCaps(cfg))
+}
+
+// SpeedArgsWithCaps is the capability-explicit variant: tests and the
+// launcher pass the profile that will be validated and launched.
+func SpeedArgsWithCaps(cfg *config.Config, caps *EngineCaps) []string {
+	if caps == nil {
+		caps = defaultCapsForTag("")
+	}
+
 	var args []string
 
-	// Fused attention kernels (default ON).
-	if cfg.FlashAttention {
-		args = append(args, "--flash-attn")
+	// Fused attention kernels (default ON). Two possible layouts:
+	//   value form (new):  --flash-attn on   /  --flash-attn off
+	//   flag form  (old):  --flash-attn
+	// The Phase 6 regression emitted the bare flag right before
+	// --cache-reuse on value-form engines; that combination can never be
+	// produced again.
+	if caps.FlashAttnEnabled {
+		if caps.FlashAttnValue {
+			if cfg.FlashAttention {
+				args = append(args, "--flash-attn", "on")
+			} else {
+				// The user disabled flash attention: on value-form
+				// engines say so explicitly instead of leaving the
+				// engine's default (auto) to silently re-enable it.
+				args = append(args, "--flash-attn", "off")
+			}
+		} else if cfg.FlashAttention {
+			args = append(args, "--flash-attn")
+		}
 	}
 
 	// Prompt-cache reuse for agent loops (stable prefix across turns).
-	if n := cfg.EffectiveCacheReuse(); n > 0 {
-		args = append(args, "--cache-reuse", fmt.Sprintf("%d", n))
+	// Independent option: always its own flag + value pair.
+	if caps.CacheReuse {
+		if n := cfg.EffectiveCacheReuse(); n > 0 {
+			args = append(args, "--cache-reuse", fmt.Sprintf("%d", n))
+		}
 	}
 
 	// Physical prompt-processing batch.
-	args = append(args, "--ubatch-size", fmt.Sprintf("%d", cfg.EffectiveUBatchSize()))
+	if caps.UBatchSize {
+		args = append(args, "--ubatch-size", fmt.Sprintf("%d", cfg.EffectiveUBatchSize()))
+	}
 
 	// Separate prefill thread pool (generation threads come from
 	// threadsFor() in llama.go's base args).
-	args = append(args, "--threads-batch", fmt.Sprintf("%d", threadsBatchFor(cfg)))
+	if caps.ThreadsBatch {
+		args = append(args, "--threads-batch", fmt.Sprintf("%d", threadsBatchFor(cfg)))
+	}
 
 	// KV-cache compression (opt-in).
 	if q := cfg.EffectiveKVCacheQuant(); q != "" {
@@ -103,7 +146,9 @@ func SpeedArgs(cfg *config.Config) []string {
 	}
 
 	// SHEYTAN is the interface; the engine's web UI is dead weight.
-	args = append(args, "--no-webui")
+	if caps.NoWebUI {
+		args = append(args, "--no-webui")
+	}
 
 	return args
 }

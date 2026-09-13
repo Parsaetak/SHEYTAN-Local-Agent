@@ -44,6 +44,53 @@ func runFakeLlamaServer() {
 		}
 	}
 
+	mode := os.Getenv("GO_FAKE_LLAMA_MODE")
+
+	// Phase 7: record the argv the engine was launched with so tests can
+	// assert the actual launch contract.
+	if out := os.Getenv("SHEYTAN_FAKE_ARGS_OUT"); out != "" {
+		_ = os.WriteFile(out, []byte(strings.Join(args, "\n")), 0o644)
+	}
+
+	// Phase 7: strict CLI-contract emulation.
+	//
+	// strict-new-args    — mimics the on|off|auto contract: a --flash-attn
+	//                      followed by anything else reproduces the EXACT
+	//                      historical error and exits 1.
+	// strict-legacy-args — mimics the boolean-flag contract: a
+	//                      --flash-attn followed by a value is rejected.
+	strictNew := mode == "strict-new-args"
+	strictLegacy := mode == "strict-legacy-args"
+	if strictNew || strictLegacy {
+		for i, a := range args {
+			if a != "--flash-attn" {
+				continue
+			}
+			next := ""
+			if i+1 < len(args) {
+				next = args[i+1]
+			}
+			isValue := next == "on" || next == "off" || next == "auto"
+
+			if strictNew {
+				// New contract: a value is REQUIRED. The next option
+				// being consumed as the value is the historical
+				// Phase 6 failure.
+				if next == "" || strings.HasPrefix(next, "--") || !isValue {
+					fmt.Fprintf(os.Stderr,
+						"error while handling argument \"--flash-attn\": \nunknown value for --flash-attn: '%s'\n",
+						next)
+					os.Exit(1)
+				}
+			}
+			if strictLegacy && isValue {
+				fmt.Fprintf(os.Stderr,
+					"error: invalid argument: %s\n", next)
+				os.Exit(1)
+			}
+		}
+	}
+
 	if port == 0 {
 		os.Exit(2)
 	}
@@ -53,10 +100,18 @@ func runFakeLlamaServer() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"fake-model.gguf"}]}`))
+	})
+	mux.HandleFunc("/props", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"default_generation_settings":{"n_ctx":16384}}`))
+	})
 
 	server := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: mux}
 
-	if os.Getenv("GO_FAKE_LLAMA_MODE") == "crash" {
+	if mode == "crash" {
 		go func() {
 			// Become healthy, then die — the watchdog must observe a real
 			// process death while running.

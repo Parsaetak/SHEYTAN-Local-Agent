@@ -178,6 +178,19 @@ func (m *MultiAgent) Run(
                 plan,
         )
 
+        // Phase 7C: bounded specialist consultations for complex tasks.
+        // Advisory input only — the critic still requires objective
+        // evidence, and a failed consultation never blocks execution.
+        if consult := m.consultSpecialists(ctx, prompt, plan, onActivity); consult != "" {
+                executionPrompt += "\n\n" + consult
+
+                onActivity(agent.Activity{
+                        Type:      "plan",
+                        Caption:   "Specialist input attached to the execution brief",
+                        Timestamp: time.Now(),
+                })
+        }
+
         var verification agent.VerificationReport
         var loopStats []agent.StatsSnapshot
 

@@ -1,6 +1,6 @@
 {
   "name": "sheytan-local-agent",
-  "version": "1.1.5-zeta",
+  "version": "1.1.6-zeta",
   "private": true,
   "type": "module",
   "engines": {

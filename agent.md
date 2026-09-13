@@ -6,7 +6,7 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 5: REAL native transformer inference + generation + streaming + cancellation + measured metrics for the llama architecture; llama.cpp remains the fallback. Phase 6: agent reliability (failure classification + loop prevention + run budgets), verification as a first-class system, safe anchored edits in the Coding Lab, persistent project intelligence, evidence-based multi-agent critique — see `worklog.md` for the full phase logs and the post-phase5 REPAIR log).
+Current release: `v1.1.6Z` (Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
 
 **Phase 5 repair (2026-09-11)**: the phase5 commit had accidentally deleted `build/config.yml` and four internal packages (`sessions`, `sandbox`, `attachments`, `memory`) that live code still imports — the tree did not compile and CI failed at the release gate. All were restored byte-identical from the Phase 4 baseline; two real native-path defects (misleading engine badge state; run gate requiring llama.cpp when native serves) and one CI gap (Go↔C++ integration tests never executed in any job) were fixed. Evidence in `worklog.md` — "v1.1.5Z Phase 5 Repair Log".
 
@@ -14,7 +14,28 @@ Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 5: REAL native tr
 
 **Read `worklog.md` before working.** It records the audit findings and the fixes this release shipped, including which subsystems were previously unwired and why.
 
-**Read `ARCHITECTURE.md` for the implementation truth table and the validated future direction.** Its Part II records the planned architecture (small local models, tiered model routing, the Context Engine, context budgeting, multi-agent, artifact-based communication, document editing). None of that is implemented — never present it as current capability. Its Part III defines the documentation truth standard every change must follow.
+**Read `ARCHITECTURE.md` for the implementation truth table and the validated future direction.** Its Part I now carries the Phase 7 rows (engine capability adapter, model capabilities, preflight budget pipeline, dynamic toolsets, skills, specialists, pipelines, computer use, MCP, scheduler, telemetry, self-improvement) with their honest IMPLEMENTED / PARTIALLY IMPLEMENTED / foundation status. Its Part II records what is still planned (tiered model routing, hierarchical retrieval, parallel multi-agent, artifact communication, document editing) — never present those as current capability. Its Part III defines the documentation truth standard every change must follow.
+
+**Phase 7 notes for the next agent:**
+
+- `internal/llm/capability.go` is the single authority for the llama.cpp
+  CLI contract. Never hard-code a flag layout again: extend `EngineCaps`
+  and the `--help` parser instead. The verified profile lives in
+  `DataDir/engine-caps.json`, keyed by release tag.
+- `internal/llm/modelcaps.go` is the single authority for model
+  capabilities. The effective context is `min(configured, GGUF limit,
+  engine limit)` — never raise a window beyond what the model declares.
+- The orchestrator preflight (`RunDetailed`) composes optional blocks and
+  injects them only when the plan keeps them. If you add a new prompt
+  section, wire it through `contextplan.Assemble` — do not bypass the
+  plan.
+- The compat ladder (levels 1–3) now fires only after per-option surgical
+  repair fails. When adding engine options, add them to `EngineCaps`,
+  `argProblems` and `repairCapsFor` together.
+- Every new subsystem (toolsets, skills, pipelines, computer, mcp,
+  scheduler, ctxtelemetry, improve) inherits the security invariants —
+  loopback-only, path jails, sanitized env, bounded resources,
+  deny-by-default risk policy.
 
 ---
 

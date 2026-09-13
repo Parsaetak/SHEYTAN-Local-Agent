@@ -12,7 +12,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-Local-Agent
-Current release:  v1.1.5Z
+Current release:  v1.1.6Z
 Codename:         Zeta
 Branch:           main
 ```
@@ -45,7 +45,7 @@ The model is never the authority on whether an engineering task succeeded — ob
                        ▼
 ┌─────────────────────────────────────────────┐
 │                 Go Runtime                  │
-│  agent orchestrator · tool registry (17)   │
+│  agent orchestrator · tool registry (18)   │
 │  engine backend contract · llama.cpp      │
 │  lifecycle · sandbox governor ·           │
 │  attachments · chunking · context cache    │
@@ -67,6 +67,26 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## Phase 7 (v1.1.6Z) — Runtime Stability, Context Intelligence, Agent OS Foundation
+
+**Implemented and tested in this release:**
+
+| Area | What it does |
+|---|---|
+| **Engine capability adapter** | The launcher no longer guesses the llama.cpp CLI contract. It detects the installed engine's real surface (`--help` parsing, release-tag fallback), validates every option/value pair BEFORE spawning, and — when the engine still rejects an option — classifies the failure from the engine's own stderr and repairs ONLY that option (e.g. the historical `--flash-attn` flag→`on\|off\|auto` layout change), retries at the same profile, and persists the verified capability profile (`engine-caps.json`). A single option mismatch can no longer silently drop the engine into compatibility mode |
+| **Model-aware context** | One `ModelCapabilities` object per loaded model (architecture, quantisation, parameters, GGUF context limit, tokenizer family, chat-template support, multimodal pairing, native-backend verdict, RAM/VRAM estimates, recommended context + generation budget). The effective context is the MINIMUM of configured `numCtx`, the GGUF training limit and any engine-reported limit — a small model never gets a window bigger than it has |
+| **Preflight budget pipeline** | Every request is assembled through one authoritative budget: effective window → output reserve → safety margin → tool schemas → system briefing → project intelligence → skills → recall → attachments → history. Optional blocks are injected only when the plan keeps them; fixed-section overflow triggers an automatic degradation ladder (dynamic toolset reduction → compact briefing → drop optional blocks) and, if the budget is still impossible, the run refuses BEFORE any engine call. The prompt can no longer intentionally exceed the model context |
+| **Verified startup state machine** | `/health` 200 proves the process serves — the engine then verifies the model is actually served (`/v1/models`) and the context capability is real (`/props`), recording both honestly |
+| **Dynamic toolsets (7A)** | Tools are grouped into capability groups (coding, research, verification, filesystem, git, browser, computer, system, data). Under tool-schema pressure the agent receives only the task-relevant subset — the largest fixed context cost adapts to the task |
+| **Skills (7B)** | Local skill store (identity / trigger / procedure / tools / prerequisites / verification / failure modes / evidence), load-on-demand with token-bounded injection. VERIFIED-LEARNING RULE: a successful execution never becomes a skill automatically — promotion requires an objective `verified` verdict |
+| **Specialist agents (7C)** | Complexity-gated bounded consultations (researcher, architect, coder, debugger, tester, security) between planner and executor — ≤2 per run, every consultation time- and token-bounded; the critic still requires objective evidence |
+| **Programmatic pipelines (7D)** | The `pipeline` tool executes a model-declared, bounded deterministic stage plan (inspect → build → test → verify) without regenerating every intermediate call; per-stage timeouts, output caps, stage bound, observable results |
+| **Computer use (7E)** | Unified observe → inspect → act → observe → verify abstraction with a deny-by-default risk policy (read-only / interactive / destructive), per-action timeouts, action boundaries and result observation |
+| **MCP bridge (7F)** | Optional stdio JSON-RPC adapter for external MCP servers with a guarded registration pipeline (discovery → classification → deny-by-default permission → schema validation → bounded execution). Off by default; never blindly exposes external tools |
+| **Scheduler (8)** | Local event/task foundation: manual / startup / timer triggers implemented (file/git/CI triggers declared for future emitters), bounded runs, persisted reports, memory summaries |
+| **Context telemetry (10)** | Per-turn measurement of tokens added/removed, retrieval latency and hits, compression ratio, pressure, tool-success rate and the verification verdict — answering "which context actually helped" |
+| **Self-improvement (11)** | Prediction → outcome → verification tactic lifecycle: candidates never guide planning; two independently verified predictions activate a tactic; one verified contradiction retires it |
 
 ## SHEYTAN Native AI Engine (v1.1.5Z, Phase 5 — REAL native inference)
 
@@ -145,16 +165,16 @@ cgo) and the full rationale are documented in
 
 | Area | What works |
 |---|---|
-| **Engine lifecycle** | Automatic download → launch → `/health` readiness → `ready`; bounded auto-restart (3 attempts, exponential backoff); deliberate stop suppression; port-conflict adoption; compat ladder (4 launch profiles); one-shot self-update when a model needs a newer engine; scheduled update loop (daily/weekly/monthly) |
+| **Engine lifecycle** | Automatic download → launch → `/health` readiness → `ready`; bounded auto-restart (3 attempts, exponential backoff); deliberate stop suppression; port-conflict adoption; compat ladder (4 launch profiles, now the LAST resort behind per-option surgical repair); engine capability profile (--help detection, pre-launch validation, verified persistence); one-shot self-update when a model needs a newer engine; scheduled update loop (daily/weekly/monthly) |
 | **Engine states** | `idle / downloading / starting / ready / running / busy / stopping / stopped / failed` — backend-authoritative, fanned out over every activity WebSocket; the UI never invents them |
 | **Agent loop** | Streaming responses with think-tag splitting and native `reasoning_content`; tool calls with argument validation; tool-result follow-up turns; iteration cap (default 25); per-run time budget (default 60 min); abort with partial-result preservation; regenerate; timeout-vs-abort distinguished in the UI |
 | **Reliability (Phase 6)** | Every tool failure diagnosed into 14 categories with a category-specific repair hint fed back to the model (re-plan, never blind retry); loop guard detects repeated identical calls (warning on first repeat, refusal past the bound) with run-level tool-call (200) and wall-clock (30 min) budgets; failure tally and per-tool call stats on every run |
 | **Verification (Phase 6)** | Run-level verification verdict computed from objective evidence only: `verified / partially_verified / failed / not_verified`. Lab verify actions and explicit build/test outcomes count; everything else contributes nothing. A completion claim with no evidence reports `not_verified` — model prose is never proof |
-| **Tools** | 17 registered tools: `shell`, `files`, `codeExec` (Job-Object sandboxed), `webSearch`, `git`, `browser`, `dataAnalysis`, `json`, `archive`, `fetch`, `diff`, `screenshot`, `linux`, `coding_lab`, `research`, `memory` (+ sandbox override). Tool schemas are measured exactly before windowing |
+| **Tools** | 18 registered tools (adds `pipeline`): `shell`, `files`, `codeExec` (Job-Object sandboxed), `webSearch`, `git`, `browser`, `dataAnalysis`, `json`, `archive`, `fetch`, `diff`, `screenshot`, `linux`, `coding_lab`, `research`, `memory` (+ sandbox override). Tool schemas are measured exactly before windowing |
 | **Coding Lab** | Isolated workspace copies (symlinks skipped, `.git` excluded), lexical command policy (dangerous/network/interactive/escape denylists + expansion-token hardening), 2 MiB bounded output, sanitized environment (secrets scrubbed, `HOME` pinned to the workspace), objective verification (trivial `echo`-style checks rejected), bounded repair loop with repeat-command detection, patch export, snapshot-before-promote; safe anchored edits (`read_file` bounded line-numbered views, `edit_file` requires the anchor to occur exactly once — stale or ambiguous anchors are refused, writes are atomic and re-verified, every edit invalidates verification) |
 | **Project intelligence (Phase 6)** | Persistent per-project facts: measured languages, build system, layout, Lab-verified build/test commands (verified beats inferred, never clobbered), bounded lessons. The compact card is injected into every run so the model starts knowing the project instead of re-discovering it |
 | **Attachments** | Content-addressed staging (sha256, symlink-safe, no exec bits), size/count/processing/chunk caps, text normalization + paragraph-boundary chunking, cached retrieval with provenance headers, image classification into the vision pipeline |
-| **Context** | Measured context plan (system / tools / recall / attachments / history sections with priorities); history windowing to the budget; content-keyed LRU cache (entries + bytes + TTL bounds); overflow surfaces as a visible error instead of an engine rejection |
+| **Context** | Preflight budget pipeline with a guaranteed fit: model-aware effective window (configured ∩ GGUF limit ∩ engine limit), output reserve + safety margin, measured tool schemas, automatic degradation ladder (dynamic toolsets → compact briefing → dropped optional blocks), refusal without an engine call when the budget is impossible; history windowing to the budget; content-keyed LRU cache; context-effectiveness telemetry per turn |
 | **Long context** | Continuum chapter rollover: when a session crosses the pressure threshold, facts/decisions/threads are distilled into a framework and the conversation continues in a fresh chapter session (the UI follows automatically) |
 | **Memory & recall** | Trust-classed memory (M1–M7, external material quarantined), BM25 recall with recency boost and 👍/👎 feedback steering (persistent sidecar) |
 | **Research** | Auto/GitHub/Reddit/DuckDuckGo/SearXNG providers, TTL-cached, authority-ranked, provenance-tagged |
@@ -212,7 +232,7 @@ Settings are edited in the UI (`Settings` view) or by patching `config.json` (th
 | `model` | first `.gguf` | active local model |
 | `llamaPort` | 8080 | managed engine port |
 | `llamaAutoStart` | true | prewarm engine at launch |
-| `llm.numCtx` | 16384 | context window (measured minimum for the full tool schema is ~9.8k tokens) |
+| `llm.numCtx` | 16384 | configured context window — the EFFECTIVE window is min(configured, GGUF model limit, engine limit), so a small model is never over-windowed |
 | `llm.*` | — | sampling: temperature, top-p, top-k, min-p, penalties, mirostat, seed, stop |
 | `maxIterations` | 25 | agent-loop iteration cap |
 | `runTimeoutMinutes` | 60 | per-turn budget (0 = unbounded) |

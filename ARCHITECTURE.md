@@ -35,7 +35,8 @@ The core principle that governs both current and future work:
 # Part I — What is implemented today
 
 Every row below was verified against source code, tests and the stress
-suite at release `v1.1.4Z` (see `worklog.md` for the audit method).
+suite (Phase 7 rows at release `v1.1.6Z`; earlier rows audited at
+`v1.1.4Z`/`v1.1.5Z` — see `worklog.md` for the audit method).
 "TESTED" means covered by `go test` packages and/or the 30-scenario
 stress suite; see the exact commands in `agent.md` §10.
 
@@ -57,6 +58,20 @@ stress suite; see the exact commands in `agent.md` §10.
 | Research (auto/GitHub/Reddit/DuckDuckGo/SearXNG, TTL cache, provenance) | `internal/research` | IMPLEMENTED + TESTED | SSRF/alias contracts tested |
 | Vision (mmproj projector pairing, image classification, screenshot capture) | `internal/vision`, `internal/screen` | PARTIALLY IMPLEMENTED | pairing logic implemented + unit-tested; not yet exercised with a real projector model (known limitation) |
 | Multi-agent pipeline (planner → executor → critic → summarizer) | `internal/multiagent` | PARTIALLY IMPLEMENTED | wired via CLI `ask --multi` only; **not** exposed through the HTTP API or UI; runs **sequentially** on one model |
+| Engine capability adapter (CLI-contract detection, pre-launch argument validation, classified startup failures, per-option surgical repair, verified profile persistence) | `internal/llm/capability.go` | IMPLEMENTED + TESTED (Phase 7) | `--help` parsing preferred, release-tag fallback; the historical `--flash-attn`/`--cache-reuse` argument regression is locked out by `TestSpeedArgsNeverProducesFlashAttnCacheReuse` and the end-to-end `TestEngineStartRepairsHistoricalRegression`; the 4-level compat ladder remains only as the last resort |
+| Model capabilities (one card per loaded model: architecture, quant, params, GGUF context limit, tokenizer family, chat template, multimodal pairing, native verdict, RAM/VRAM estimates, recommended context + generation budget) | `internal/llm/modelcaps.go` | IMPLEMENTED + TESTED (Phase 7) | derived from the real GGUF header; the effective context is min(configured, model limit, engine limit) and the launcher passes it as `--ctx-size` |
+| Preflight context budget pipeline (fit-guaranteed requests: effective window → output reserve → safety margin → tools → system → project intel → skills → recall → attachments → history; automatic degradation ladder; refusal without an engine call when impossible) | `internal/agent`, `internal/contextplan`, `internal/llm` | IMPLEMENTED + TESTED (Phase 7) | optional blocks composed-then-injected only when the plan keeps them; the v1.1.3 "fixed-section overflow" warning is now an automatic repair path (`TestPreflightImpossibleBudgetNeverCallsEngine`, `TestPreflightToolsetReductionOnOverflow`, `TestPreflightCompactBriefingOnOverflow`) |
+| In-loop fit guard (mid-turn tool-result elision/bounding so the growing request stays inside the ceiling) | `internal/agent` | IMPLEMENTED + TESTED (Phase 7) | the freshest tool result is never fully elided (bounded truncation instead); structure preserved |
+| Verified startup state machine (health → verify served model → verify context capability, honestly recorded) | `internal/llm` | IMPLEMENTED + TESTED (Phase 7) | `/v1/models` + `/props` probes; unverifiable claims are never claimed |
+| Dynamic toolsets (capability groups + task-signal selection + pressure-driven reduction) | `internal/toolsets` | IMPLEMENTED + TESTED (Phase 7) | core tools (files/shell/memory) always offered; selection is deterministic and logged on the plan |
+| Skills subsystem (identity/trigger/procedure/tools/prerequisites/verification/failure-modes/evidence; load-on-demand injection) | `internal/skills` | IMPLEMENTED + TESTED (Phase 7) | VERIFIED-LEARNING RULE enforced: promotion requires an objective `verified` verdict; unverified executions never become skills |
+| Specialist agent consultations (researcher/architect/coder/debugger/tester/security) | `internal/multiagent/specialists.go` | PARTIALLY IMPLEMENTED (Phase 7) | complexity-gated (score ≥ 2), ≤ 2 specialists per run, each one bounded LLM call; advisory only — the critic still requires objective evidence; per-role separate models and persistent agent society remain Part II |
+| Programmatic tool pipelines (model-declared bounded stage plans executed deterministically) | `internal/pipeline`, `internal/agent/pipeline_tool.go` | IMPLEMENTED + TESTED (Phase 7) | ≤ 12 stages, per-stage timeout (≤ 600 s), 64 KiB output cap per stage, observable results; the `pipeline` tool is registered like any other tool |
+| Computer-use abstraction (observe → inspect → act → observe → verify, deny-by-default risk policy) | `internal/computer` | IMPLEMENTED foundation + TESTED (Phase 7) | read-only/interactive allowed, destructive denied without an explicit gate; wired over the existing browser/screen capabilities in a later phase |
+| MCP extension bridge (stdio JSON-RPC adapter, guarded registration pipeline) | `internal/mcp` | IMPLEMENTED foundation + TESTED-ready (Phase 7) | deny-by-default tool permissions, schema validation, 120 s call timeout, 32 KiB result cap; OFF by default — no production wiring yet |
+| Event/scheduler foundation (event taxonomy, bounded task runs, persisted reports, memory summaries) | `internal/scheduler` | PARTIALLY IMPLEMENTED (Phase 7) | manual/startup/timer triggers implemented (timer floor 5 min); file-change/git-change/test/CI/build-failure emitters are declared but not implemented |
+| Context-effectiveness telemetry (tokens added/removed, retrieval latency/hits, compression ratio, pressure, tool success, verification verdict) | `internal/ctxtelemetry` | IMPLEMENTED + TESTED (Phase 7) | one bounded JSONL record per turn; observability only — never decides |
+| Self-improvement loop (prediction → outcome → verified tactic lifecycle) | `internal/improve` | IMPLEMENTED foundation + TESTED (Phase 7) | candidates never guide planning; activation requires TWO independently verified predictions; one verified contradiction retires the tactic; the laboratory remains authoritative |
 | Config source (copy-on-write live configuration) | `internal/config` | IMPLEMENTED + TESTED | race-detector-clean; `Source` is the only sanctioned mutation path |
 | Observability (logs, rotation, crash reports, diagnostics zip with redaction, perf HUD) | `internal/logging`, `internal/resources` | IMPLEMENTED + TESTED | |
 | Sessions (persistence, concurrency, sidecars) | `internal/sessions` | IMPLEMENTED + TESTED | |
@@ -423,36 +438,27 @@ attachment chunks a stable identity. Chunks carry **no** structural
 metadata (no section path, no parent/sibling links, no content hash
 index). The hierarchy above is the target Context Engine data model.
 
-## II.5 — Context budgeting (PLANNED extension of an implemented seed)
+## II.5 — Context budgeting (implemented core; deeper retrieval is PLANNED)
 
-The future agent should treat context as an explicitly budgeted resource
-allocated among:
+**Phase 7 status:** the hard budget pipeline EXISTS and is authoritative:
+model-aware effective window (min of configured / GGUF limit / engine
+limit), output reserve, safety margin, measured tool schemas, and a
+degradation ladder that reduces lower-priority content before anything
+essential is touched. The request is guaranteed to fit before any engine
+call (`contextplan.Assemble` + the orchestrator preflight). What remains
+PLANNED is the deeper retrieval integration below — hierarchical
+retrieval over hierarchical chunks feeding the same budget.
 
-```text
-system instructions
-task description
-memory (persistent facts, distilled frameworks)
-retrieved source (chunks + provenance)
-tool output
-conversation history
-reasoning scratch space
-response allowance
-```
+Intended direction (unchanged):
 
-The goal is not "use as much context as possible" but
-**"use the smallest sufficient working set."** Smaller working sets mean
-faster inference, more concurrency, less drift, and deterministic
-overflow behavior on low-resource machines.
-
-Current state (honest): `internal/contextplan` already implements a real
-budget — `numCtx` minus an output reserve, sections for system / tools /
-recall / attachments / history with priorities, exact measurement of tool
-schemas before windowing, and a visible error on overflow. This is the
-implemented seed. The future work is: finer-grained sections (task,
-retrieved source, tool output, reasoning), budget policies per agent
-role, and budget-aware retrieval (fetch fewer/smaller chunks when the
-budget is tight). Extend the existing package; do not invent a parallel
-mechanism.
+- a context assembly pipeline that treats the window as a budget with
+  hard per-section allowances,
+- priority-ordered elision (recency-ranked summarization of history,
+  progressive elision of large file sections, demoting low-value
+  retrieved chunks under pressure),
+- everything measured: token costs, retrieval relevance, and which
+  context actually improved the task (Phase 7 telemetry records this per
+  turn — `internal/ctxtelemetry`).
 
 ## II.6 — Multi-agent architecture (PLANNED)
 
@@ -484,7 +490,7 @@ resource budget
 failure / retry state
 ```
 
-Current state (honest):
+Current state (honest, updated Phase 7):
 
 - The **primary runtime is a single-agent sequential loop**
   (`internal/agent`): one model, tools executed one at a time, iteration
@@ -494,11 +500,18 @@ Current state (honest):
   exists (`internal/multiagent`) and is reachable from the CLI
   (`sheytan ask --multi`). It uses a single model and is not exposed via
   the HTTP API or the UI.
+- **Phase 7 added bounded specialist CONSULTATIONS** (researcher /
+  architect / coder / debugger / tester / security) between planning and
+  execution: complexity-gated, at most two per run, one bounded LLM call
+  each, advisory only. This is a first step toward the role taxonomy
+  below — NOT parallel multi-agent execution. Per-agent model assignment
+  and a persistent agent society remain Part II futures.
 
 Do not claim true parallel multi-agent execution, per-agent model
 assignment, or a persistent agent society. Those are Part II futures.
-The truth is: sequential single-model pipelines today; specialized,
-model-diverse, eventually-parallel agents as the target.
+The truth is: sequential single-model pipelines with bounded specialist
+consultations today; specialized, model-diverse, eventually-parallel
+agents as the target.
 
 ## II.7 — Agent-to-agent communication via structured artifacts (PLANNED)
 

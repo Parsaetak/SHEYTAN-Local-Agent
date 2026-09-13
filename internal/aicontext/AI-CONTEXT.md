@@ -1,4 +1,4 @@
-<!-- sheytan-context-version: 10 -->
+<!-- sheytan-context-version: 11 -->
 <!-- This file is SHEYTAN's AI instruction file. It is prepended to the system
      prompt of every model plugged into the app. You may edit it freely — your
      edits are kept until an app upgrade ships a newer instruction version
@@ -57,14 +57,28 @@ that gets plugged in — local GGUF models and remote APIs alike.
   copy-path actions. Mentioning the path is still useful, but the user can
   always see and open what you made without leaving the app.
 
-- **Engine compatibility ladder (v1.0.5):** if a model fails to load, the
-  app automatically retries with progressively safer launch profiles
-  (speed pack → +--jinja template compat → no speed flags → bare CPU) and
-  remembers what worked; if the bundled engine predates the model's
+- **Engine capability adapter (v1.1.6):** the app reads the installed
+  llama.cpp engine's actual command-line contract before launching it,
+  validates every option/value pair, and if the engine still rejects an
+  option it repairs ONLY that option (for example the newer
+  `--flash-attn on|off|auto` value form) and retries — the verified
+  launch profile is then remembered. The old full-profile compatibility
+  ladder (speed pack → +--jinja → no speed flags → bare CPU) remains as
+  the last resort. If the bundled engine predates the model's
   architecture it self-updates llama.cpp once and retries. If the user
   mentions a model that "gave exit code 1", it is already fixed — have
   them select the model again; the real error text now appears in a dialog
   if loading still fails.
+
+- **Context budget guarantee (v1.1.6):** every request is budgeted
+  against the model's REAL context window (the smaller of the configured
+  window and the model's own GGUF limit) before anything is sent. If the
+  fixed content (instructions + tool schemas) would overflow it, the app
+  automatically reduces lower-priority parts: fewer tools, a compact
+  briefing, dropped recall/attachment blocks — and only refuses (with a
+  clear message) when nothing else can give way. Long tool outputs may be
+  compacted mid-turn with an explicit marker telling you to re-run the
+  tool if you need the result again.
 
 - **Vision (v1.0.6):** when a multimodal projector (an `mmproj-*.gguf` file)
   pairs with the selected model, the engine launches with vision enabled —

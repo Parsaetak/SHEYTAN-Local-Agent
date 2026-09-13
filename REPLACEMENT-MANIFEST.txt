@@ -1,158 +1,101 @@
-SHEYTAN-Local-Agent v1.1.5-zeta — Phase 6 Replacement Manifest
+SHEYTAN-Local-Agent v1.1.6-zeta — Phase 7 Replacement Manifest
 ================================================================
-Base: main @ 4d91aacb2336526067b151e75d8ca36cd0b8b4a0 (v1.1.5Z Phase 5)
-Package: SHEYTAN-local-agent-1.1.5-zeta-phase6-replacement.zip
+Base: main @ f3fe78a6ab7423fd35c55ba86c9a9c0cea5e9f38 (v1.1.5-zeta Phase 6)
+Package: SHEYTAN-local-agent-1.1.6-zeta-phase7-replacement.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
+The exact per-file change map (with reasons) lives in UPDATE.md.
 
 [PACKAGE METADATA]
   UPDATE.md
-    status:   new
-    purpose:  This replacement package's instructions
+    status:   modified
+    purpose:  This replacement package's exact change map (Phase 7)
   REPLACEMENT-MANIFEST.txt
-    status:   new
+    status:   modified
     purpose:  This manifest
   REPLACEMENT-SHA256.txt
-    status:   new
+    status:   modified
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  internal/agent/reliability.go
-    status:   new
-    purpose:  P0 #1: 14-category failure classification + repair hints; LoopGuard (repeat detection, tool-call/wall-clock budgets); call stats
-  internal/agent/reliability_test.go
-    status:   new
-    purpose:  Tests: classifier table, LoopGuard semantics, evidence verdicts, orchestrator integration, project card injection
-  internal/agent/verification.go
-    status:   new
-    purpose:  P0 #1: run-level verification system — EvidenceCollector, verified/partially_verified/failed/not_verified verdicts
-  internal/lab/safeedit.go
-    status:   new
-    purpose:  P0 #2: safe anchored edits — ReadFile bounded views; EditFile exactly-once anchor, atomic fsync+rename writes, post-write verification
-  internal/lab/safeedit_test.go
-    status:   new
-    purpose:  Tests: windowed reads, binary refusal, anchored edits, stale/ambiguous/noop refusals, path jail, verification invalidation
-  internal/multiagent/multiagent_test.go
-    status:   new
-    purpose:  Tests: critic sees honest verdict, bounded excerpt contract, maxIter regression, revision loop
-  internal/projectintel/projectintel.go
-    status:   new
-    purpose:  P0 #3: persistent per-project intelligence — bounded observation, Lab-verified command recording, bounded lessons, card rendering
-  internal/projectintel/projectintel_test.go
-    status:   new
-    purpose:  Tests: language detection, vendor skipping, verified-beats-inferred, FIFO bound, card, isolation
-  web/static/assets/AgentBody-cofMEBW6.js
-    status:   new
-    purpose:  Regenerated frontend bundle
-  web/static/assets/AgentHeader-BE0L2Nf8.js
-    status:   new
-    purpose:  Regenerated frontend bundle
-  web/static/assets/AgentSidebar-crN0VbUz.js
-    status:   new
-    purpose:  Regenerated frontend bundle
-  web/static/assets/LabPanel-BPBo4Rq7.js
-    status:   new
-    purpose:  Regenerated frontend bundle
-  web/static/assets/ResearchPanel-DyeLdq3-.js
-    status:   new
-    purpose:  Regenerated frontend bundle
-  web/static/assets/SettingsPanel-g7g40a_x.js
-    status:   new
-    purpose:  Regenerated frontend bundle
-  web/static/assets/index-OiRp_Wkd.js
-    status:   new
-    purpose:  Regenerated frontend bundle
+  internal/llm/capability.go
+  internal/llm/capability_test.go
+  internal/llm/modelcaps.go
+  internal/llm/modelcaps_test.go
+  internal/toolsets/toolsets.go
+  internal/toolsets/toolsets_test.go
+  internal/skills/skills.go
+  internal/skills/skills_test.go
+  internal/pipeline/pipeline.go
+  internal/pipeline/pipeline_test.go
+  internal/agent/pipeline_tool.go
+  internal/agent/preflight_test.go
+  internal/computer/computer.go
+  internal/computer/computer_test.go
+  internal/mcp/mcp.go
+  internal/scheduler/scheduler.go
+  internal/scheduler/scheduler_test.go
+  internal/ctxtelemetry/ctxtelemetry.go
+  internal/ctxtelemetry/ctxtelemetry_test.go
+  internal/improve/improve.go
+  internal/improve/improve_test.go
+  internal/contextplan/contextplan_phase7_test.go
+  internal/multiagent/specialists.go
+  internal/native/engine/phase7_acceptance_test.go
 
 [MODIFIED FILES]
-  ARCHITECTURE.md
-    status:   modified
-    purpose:  Part I truth table: five Phase 6 rows
-  README.md
-    status:   modified
-    purpose:  Phase 6 capability rows (reliability, verification, safe edits, project intelligence)
-  agent.md
-    status:   modified
-    purpose:  Phase 6 handoff context: release line, package map, test chain, next tasks
+  internal/llm/speed.go
+    purpose:  ROOT-CAUSE FIX 1: version-aware Speed Pack emission (capability profile)
+  internal/llm/llama.go
+    purpose:  ROOT-CAUSE FIX 1+3: capability-aware launch, pre-launch validation, surgical repair, verified startup state machine, model-aware --ctx-size
+  internal/llm/llama_test.go
+    purpose:  fake engine strict CLI-contract modes + argv recording + /v1/models + /props
+  internal/contextplan/contextplan.go
+    purpose:  ROOT-CAUSE FIX 2 primitives: safety margin, prompt ceiling, overflow, adjustments, reserve fix
   internal/agent/orchestrator.go
-    status:   modified
-    purpose:  Reliability wiring: loop guard, failure classification + repair hints, evidence collection, verification report on RunResult, project card seam
-  internal/api/server.go
-    status:   modified
-    purpose:  UX: /api/models reports backend, servingPath, per-model serving marker (honest currently-serving vocabulary)
-  internal/lab/tool.go
-    status:   modified
-    purpose:  P0 #2: read_file/edit_file actions; IntelRecorder (Lab-verified commands recorded against the task source root)
+    purpose:  ROOT-CAUSE FIX 2: preflight budget pipeline, degradation ladder, guaranteed-fit gates, in-loop fit guard, toolsets/skills/telemetry integration
+  internal/aicontext/aicontext.go
+    purpose:  CompactSystemMessage for the context-pressure ladder
+  internal/aicontext/AI-CONTEXT.md
+    purpose:  runtime briefing updated (capability adapter + context budget), version 11
   internal/multiagent/multiagent.go
-    status:   modified
-    purpose:  P0 #4: evidence-based critic (measured verification verdict + bounded excerpts); maxIter<1 normalization bug fixed
-  internal/native/engine/phase5_integration_test.go
-    status:   modified
-    purpose:  Go regressions through the real host binary: prompt ownership burst + 20-generation lane recycling (catch the original CI defect)
+    purpose:  Phase 7C specialist consultation hook
   internal/runtime/runtime.go
-    status:   modified
-    purpose:  Wiring: projectintel store, workspace observation, lab intel hook, orchestrator card provider
-  native/engine/src/host_main.cpp
-    status:   modified
-    purpose:  CI fix (run 34703102794): GenLane owns its prompt (dangling stack pointer removed); finished-lane sweeping bounds concurrency, not lifetime totals
-  native/engine/tests/test_host.cpp
-    status:   modified
-    purpose:  CI fix: failure gate moved after phase5 tests (silent-failure bug); streaming harness + deterministic cancel fixed; burst prompt-ownership + lane-recycling C++ regressions
-  src/SettingsPanel.tsx
-    status:   modified
-    purpose:  UX: model list marks the serving model with the active backend name
-  src/api.ts
-    status:   modified
-    purpose:  UX: ModelsResponse.backend/servingPath + Model.serving types
-  web/static/.vite/manifest.json
-    status:   modified
-    purpose:  Regenerated frontend build manifest
-  web/static/index.html
-    status:   modified
-    purpose:  Regenerated frontend build (npm run build)
+    purpose:  Phase 7 wiring: context limits, skills, telemetry, pipeline tool, scheduler
+  package.json
+    purpose:  version 1.1.6-zeta (single source of truth)
+  internal/config/config.go
+    purpose:  AppVersion 1.1.6 (synced)
+  build/config.yml
+    purpose:  productVersion 1.1.6-zeta (synced)
+  SIGNATURE
+    purpose:  first line v1.1.6 (synced)
+  .github/workflows/build-desktop.yml
+    purpose:  APP_VERSION 1.1.6 (synced)
+  README.md
+    purpose:  Phase 7 capability section + honest row updates
+  ARCHITECTURE.md
+    purpose:  Part I Phase 7 truth-table rows; II.5/II.6 status updates
+  agent.md
+    purpose:  v1.1.6Z engineering handoff
   worklog.md
-    status:   modified
-    purpose:  Full Phase 6 implementation log with the evidence chain
+    purpose:  Phase 7 implementation log
 
 [DELETED FILES]
   web/static/assets/AgentBody-2-br3YvV.js
-    status:   deleted
-    purpose:  superseded by the regenerated frontend bundles above
   web/static/assets/AgentHeader-B8b76u9o.js
-    status:   deleted
-    purpose:  superseded by the regenerated frontend bundles above
   web/static/assets/AgentSidebar-DJaBwMC5.js
-    status:   deleted
-    purpose:  superseded by the regenerated frontend bundles above
   web/static/assets/LabPanel-CW_A6EcB.js
-    status:   deleted
-    purpose:  superseded by the regenerated frontend bundles above
   web/static/assets/ResearchPanel-Qeb2hrAX.js
-    status:   deleted
-    purpose:  superseded by the regenerated frontend bundles above
   web/static/assets/SettingsPanel-C5Hpkvys.js
-    status:   deleted
-    purpose:  superseded by the regenerated frontend bundles above
   web/static/assets/index-C1xyllm1.js
-    status:   deleted
-    purpose:  superseded by the regenerated frontend bundles above
+    purpose:  stale pre-Phase-6 Vite bundles replaced by the hashed set referenced by web/static/index.html
 
-[UNCHANGED — SECURITY AND RESOURCE INVARIANTS (do not touch)]
-  build/config.yml
-    status:   unchanged
-  internal/attachments/*
-    status:   unchanged
-  internal/memory/*
-    status:   unchanged
-  internal/sandbox/*
-    status:   unchanged
-  internal/sessions/*
-    status:   unchanged
-  internal/proc/*
-    status:   unchanged
-  internal/updater/*
-    status:   unchanged
-  internal/config/* (no policy change)
-    status:   unchanged
-
-Totals: 15 new, 16 modified, 7 deleted.
+[UNCHANGED — DO NOT TOUCH]
+  internal/lab/**, internal/agent/reliability.go, internal/agent/verification.go,
+  internal/memory/**, internal/recall/**, internal/continuum/**,
+  internal/sandbox/**, internal/proc/**, internal/updater/**,
+  internal/browser/**, internal/tools/**, internal/research/**, internal/api/**,
+  native/engine/src/**, native/engine/include/**, scripts/**, src/**,
+  web/embed.go, go.mod, go.sum, LICENSE, FIX-README.md

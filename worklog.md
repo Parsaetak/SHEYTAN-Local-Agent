@@ -1631,3 +1631,137 @@ Known limitations (unchanged or newly documented):
 - Stub-engine e2e: 16/16 PASS — launch, auto-start, ready, session, upload, run with attachment, engine envelope, regenerate, cache stats, shutdown.
 - REAL engine e2e: llama.cpp b10642 (linux x64, CPU) + Qwen2.5-0.5B/1.5B Instruct GGUF: automatic startup to ready (~5 s), real inference streamed and persisted, busy → ready, regenerate.
 - The oversized-request failure (9854 tok vs 8192 ctx) was reproduced against the real engine, root-caused, fixed and re-verified.
+
+---
+
+## v1.1.6Z Phase 7 Implementation Log (2026-09-13)
+
+### P0 #1 — llama.cpp launch contract repaired at the source (flash-attn / cache-reuse)
+
+Root cause confirmed against the real Windows log: newer llama.cpp releases
+changed `--flash-attn` from a bare boolean flag to the tri-state
+`--flash-attn on|off|auto` option. The Phase 6 launcher emitted the bare
+flag immediately before `--cache-reuse N`, so the new engine parsed the pair
+as `--flash-attn '--cache-reuse'` and aborted, which silently dropped every
+startup into compatibility mode 2 (no speed flags).
+
+Implemented (`internal/llm/capability.go`, `speed.go`, `llama.go`):
+- `EngineCaps` capability profile; detection via `llama-server --help`
+  parsing (preferred) with a conservative release-tag fallback.
+- Version-aware `SpeedArgsWithCaps` — bare flag for legacy engines,
+  explicit `on`/`off` for value-form engines; `--cache-reuse N` remains an
+  independent option; per-option capability strips.
+- Pre-launch validation (`argProblems`) — the malformed pair can never be
+  spawned; validation failure = loud error, no engine call.
+- `ClassifyStartupFailure` maps engine stderr to typed failures
+  (option-layout / unknown-option / model-arch / model-load / environment).
+- Surgical repair (`launchWithRepair`): repair ONLY the offending option
+  (layout flip / single-option drop), bounded to 2 attempts per compat
+  level, retry at the SAME level; the generic "no speed flags" ladder is
+  now only the last resort.
+- Verified-profile persistence: `DataDir/engine-caps.json`, stamped with
+  the verified-at time, keyed by release tag; downgrades recorded with
+  reason.
+
+Evidence: `TestEngineStartRepairsHistoricalRegression` reproduces the exact
+historical error against a strict CLI-contract engine, then reaches READY
+with `--flash-attn on` + `--cache-reuse 32` in the REAL argv and the
+verified profile persisted. `TestSpeedArgsNeverProducesFlashAttnCacheReuse`
+locks the regression shut.
+
+### P0 #2 — context preflight budget pipeline (fit-guaranteed requests)
+
+The "context overflow: fixed sections exceed usable window" path is now a
+preflight repair pipeline, not a warning (`internal/agent/orchestrator.go`,
+`internal/contextplan`):
+- Model-aware effective context (`internal/llm/modelcaps.go`):
+  min(configured numCtx, GGUF training limit, engine-reported limit);
+  the launcher passes the effective value as --ctx-size.
+- Safety margin (~1.5%, clamp 64..256 tok) held back on top of the output
+  reserve; `Plan.PromptCeiling()` / `Plan.Overflow()` are the authority.
+- Optional blocks (recall, project card, skills, staged attachments) are
+  COMPOSED first, INJECTED only when the plan keeps them.
+- Degradation ladder on fixed overflow: dynamic toolset reduction →
+  compact system briefing → drop all optional blocks → honest refusal with
+  NO engine call. Every step recorded on the plan.
+- In-loop fit guard (`compactToolResults`) elides oldest tool results
+  mid-turn; the final request is still guaranteed to fit.
+- v1.1.3 double-count fixed: history section now measures history only.
+
+### Phase 7 foundations wired
+
+- 7A Dynamic toolsets (`internal/toolsets`): 10 capability groups,
+  task-signal selection, budget-driven reduction inside the agent loop.
+- 7B Skills (`internal/skills`): identity/trigger/procedure/tools/
+  prerequisites/verification/failure-modes/evidence; load-on-demand,
+  token-bounded injection; promotion ONLY on verified objective evidence.
+- 7C Specialists (`internal/multiagent/specialists.go`): complexity-gated
+  bounded consultations (researcher/architect/coder/debugger/tester/
+  security) between planner and executor; ≤2 per run; critic unchanged.
+- 7D Pipelines (`internal/pipeline` + `agent/pipeline_tool.go`): model
+  declares a bounded stage plan once (≤12 stages, per-stage timeout,
+  output caps); runtime executes deterministically; observable results.
+- 7E Computer use (`internal/computer`): observe→inspect→act→observe→
+  verify with deny-by-default risk policy, per-action timeout, action
+  boundaries, result observation.
+- 7F MCP (`internal/mcp`): optional stdio JSON-RPC bridge; guarded
+  registration pipeline (discovery → classification → deny-by-default
+  permission → schema validation → bounded execution); off by default.
+- 8 Scheduler (`internal/scheduler`): event taxonomy (manual/startup/
+  timer/file/git/test/CI/build/maintenance), bounded runs, persisted
+  reports, memory summaries; manual/startup/timer implemented.
+- 10 Context telemetry (`internal/ctxtelemetry`): per-turn tokens
+  added/removed, retrieval latency + hits, compression ratio, pressure,
+  tool-success rate, verification verdict; bounded JSONL + summary.
+- 11 Self-improvement (`internal/improve`): prediction→outcome→verified
+  tactic lifecycle; candidate → active ONLY with two independently
+  verified predictions; unverified attempts change nothing.
+
+Runtime wiring (`internal/runtime/runtime.go`): context-limit provider,
+skills store, telemetry store, pipeline tool registration, scheduler +
+timer loop. Version surfaces bumped to 1.1.6-zeta.
+
+
+### Validation evidence (Phase 7, full re-run at the final tree)
+
+| Stage | Command | Result |
+|---|---|---|
+| Build | `go build -tags headless ./...` | PASS |
+| Full Go suite | `go test -tags headless ./internal/... ./cmd/... -count=1` | PASS (all packages) |
+| Race detector | `go test -race -tags headless ./internal/agent/ ./internal/llm/ ./internal/api/ ./internal/native/engine/ -count=1` | PASS |
+| Vet | `go vet -tags headless ./...` | PASS |
+| Typecheck | `npm run typecheck` | PASS (0 errors) |
+| Lint | `npm run lint` | PASS (0 warnings / 0 errors, 20 files) |
+| Frontend build | `npm run build && npm run sync:web` | PASS (embedded bundle refreshed byte-identical) |
+| Native build | `cmake -S native/engine -B native/engine/build && cmake --build` | PASS |
+| Native tests | `ctest --test-dir native/engine/build --output-on-failure` | 12/12 PASS |
+| Release gate | `node scripts/release-version.mjs --check` | PASS (all surfaces 1.1.6 / 1.1.6-zeta) |
+
+### Real-model acceptance (native C++ boundary, REAL inference — not mocked)
+
+`go test ./internal/native/engine/ -run TestPhase7SmallModelAcceptance -v`:
+
+```text
+acceptance: model card F32 · 256 ctx · 6 MB (arch=llama quant=F32 size=5959200)
+acceptance: effective context 256 (configured 4096, model 256, engine 256)
+acceptance: tokens=8 chunks=2 prompt=0.041s ttft=0.041s decode=0.011s
+            (699.50 tok/s) finish=length
+```
+
+The acceptance proves the full small-model chain on REAL weights: the real
+GGUF header's 256-token training limit OVERRODE the configured 4096 window
+(the Phase 7 model-aware clamp working exactly as designed), the prompt fit
+preflight, and real tokens streamed back through the production IPC
+boundary with measured metrics. No compatibility-mode fallback, no
+malformed llama arguments (the native path carries no llama.cpp CLI at
+all), no false overflow.
+
+The llama.cpp path itself is validated against a strict CLI-contract fake
+engine (`TestEngineStartRepairsHistoricalRegression`): the exact historical
+`--flash-attn` / `--cache-reuse` error is reproduced, classified, repaired
+surgically, and the engine reaches READY with `--flash-attn on` +
+`--cache-reuse 32` in the REAL argv and the verified profile persisted.
+A genuinely small real llama.cpp GGUF run was not possible in this
+environment (no prebuilt llama-server for this host); the fixture-based
+contract validation is reported as such, distinctly from the REAL native
+inference run above.

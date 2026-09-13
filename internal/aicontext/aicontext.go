@@ -434,6 +434,37 @@ func SystemMessageWithTools(
 		)
 }
 
+// CompactMarker identifies a compact briefing (context-pressure mode).
+const CompactMarker = "SHEYTAN compact briefing (context-pressure mode)"
+
+// CompactSystemMessage builds a REDUCED first system message for
+// small-context pressure: the identity header, the non-negotiable operating
+// rules and the live environment block, dropping the long-form guidance
+// sections of the full briefing. Used only by the Phase 7 preflight
+// degradation ladder when the full briefing would crowd out the
+// conversation itself; the full briefing is restored as soon as the
+// context allows it.
+func CompactSystemMessage(
+	cfg *config.Config,
+	registeredTools []string,
+) string {
+	var b strings.Builder
+
+	b.WriteString("# " + HeaderSentinel + " — compact mode\n\n")
+	b.WriteString("You are SHEYTAN, a local-first agent running fully on this machine.\n\n")
+	b.WriteString(CompactMarker + ". The full briefing was compacted because the context window is tight; the rules below are binding.\n\n")
+	b.WriteString("## OPERATING RULES\n")
+	b.WriteString("- Tools execute; you coordinate. Never claim an action happened without the matching tool result in this conversation.\n")
+	b.WriteString("- Verify outcomes objectively (build/test/file state). Your own statement of success is not evidence.\n")
+	b.WriteString("- Stay inside the working directory and the tool policies; never invent tool names outside the registered list.\n")
+	b.WriteString("- Keep answers tight; prefer completing the user's current instruction over narrating.\n")
+	b.WriteString("- Persist durable facts with the memory tool instead of relying on conversation memory.\n\n")
+
+	b.WriteString(BriefingWithTools(cfg, registeredTools))
+
+	return b.String()
+}
+
 // HeaderSentinel is a stable substring identifying an AI-context system
 // message, so callers can avoid double-prepending it.
 const HeaderSentinel = "SHEYTAN™ Local-Agent — AI Operating Instructions"
