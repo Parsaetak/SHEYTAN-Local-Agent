@@ -1,180 +1,144 @@
-# UPDATE.md — v1.1.6-zeta Phase 7 Replacement Package
+# UPDATE.md — v1.1.6-zeta Stabilisation & Context Control Replacement Package
 
-**Release:** `v1.1.6-zeta` (codename Zeta, Phase 7) · **Base:** `main @ f3fe78a6ab7423fd35c55ba86c9a9c0cea5e9f38` (`v1.1.5-zeta`, Phase 6)
+**Release:** `v1.1.6-zeta` (codename Zeta, stabilisation) · **Base:** `main @ a1cfb5d0bdb5382b8c69b5587891f5edf4d96ddb` (`1.1.6`)
 **Date:** 2026-09-13
 
 This package is a COMPLETE REPLACEMENT of the repository state. Apply it by
 replacing the whole tree (or, file-by-file, by following the exact map
 below). Every path is relative to the repository root.
 
-Phase 7 fixes the malformed llama.cpp `--flash-attn` / `--cache-reuse`
-argument construction at its source, replaces the post-build context
-overflow warning with a preflight budget pipeline that guarantees the final
-request fits, and lays the Hermes-inspired foundations (dynamic toolsets,
-verified-learning skills, specialist consultations, programmatic pipelines,
-computer-use abstraction, MCP bridge, event scheduler, context telemetry,
-self-improvement tactics) — without regressing any Phase 6 behavior.
+This phase fixes the Linux CI deadlock in `internal/improve` at its source,
+closes the context-overflow path architecturally (per-session and per-agent
+context policies, model/engine-aware resolution, resource-aware guards, full
+per-turn telemetry, wire-request context truthfulness), upgrades the startup
+and first-use experience, ships the SHEYTAN icon/theme/branding layer, and
+fixes Settings scrolling — without regressing any existing subsystem
+(managed llama.cpp lifecycle, native C++ engine, backend router, Coding Lab,
+project intelligence, research, memory, recall, context cache, Continuum,
+skills, toolsets, MCP, browser/computer tooling, verification, reliability,
+safe editing, sandbox, security controls, streaming, Wails embedding,
+API/WebSocket contracts).
 
 ---
 
 ## 1. DELETE
 
-Files/directories removed from the repository. Reason stated per entry.
-
 | Path | Why |
 |---|---|
-| `web/static/assets/AgentBody-2-br3YvV.js` | stale pre-Phase-6 Vite bundle; regenerated build produces the hashed set actually referenced by `web/static/index.html` |
-| `web/static/assets/AgentHeader-B8b76u9o.js` | stale pre-Phase-6 Vite bundle (same reason) |
-| `web/static/assets/AgentSidebar-DJaBwMC5.js` | stale pre-Phase-6 Vite bundle (same reason) |
-| `web/static/assets/LabPanel-CW_A6EcB.js` | stale pre-Phase-6 Vite bundle (same reason) |
-| `web/static/assets/ResearchPanel-Qeb2hrAX.js` | stale pre-Phase-6 Vite bundle (same reason) |
-| `web/static/assets/SettingsPanel-C5Hpkvys.js` | stale pre-Phase-6 Vite bundle (same reason) |
-| `web/static/assets/index-C1xyllm1.js` | stale pre-Phase-6 Vite bundle (same reason) |
+| `web/static/assets/AgentBody-2-br3YvV.js`, `AgentBody-cofMEBW6.js`, `AgentHeader-B8b76u9o.js`, `AgentHeader-BE0L2Nf8.js`, `AgentSidebar-DJaBwMC5.js`, `AgentSidebar-crN0VbUz.js`, `LabPanel-BPBo4Rq7.js`, `LabPanel-CW_A6EcB.js`, `ResearchPanel-DyeLdq3-.js`, `ResearchPanel-Qeb2hrAX.js`, `SettingsPanel-C5Hpkvys.js`, `SettingsPanel-g7g40a_x.js`, `index-C1xyllm1.js`, `index-OiRp_Wkd.js`, `index-n0UF0DI4.css` | stale Vite bundles; the regenerated embedded build produces the hashed set actually referenced by `web/static/index.html` |
 
 ## 2. REPLACE
 
-Files whose entire contents were rewritten (new file replaces the old one
-in full).
-
 | Path | Why |
 |---|---|
-| `UPDATE.md` | this change map (Phase 6 map superseded) |
-| `REPLACEMENT-MANIFEST.txt` | regenerated for the Phase 7 tree |
-| `REPLACEMENT-SHA256.txt` | regenerated for the Phase 7 tree |
+| `UPDATE.md` | this change map (Phase 7 map superseded) |
+| `REPLACEMENT-MANIFEST.txt` | regenerated for this tree |
+| `REPLACEMENT-SHA256.txt` | regenerated for this tree |
 
 ## 3. MODIFY
 
-Files edited in place. Reason stated per entry.
-
 | Path | Why |
 |---|---|
-| `internal/llm/speed.go` | **ROOT-CAUSE FIX (1):** version-aware Speed Pack emission. `SpeedArgs` now resolves the engine capability profile; `SpeedArgsWithCaps` emits `--flash-attn on`/`off` for value-form engines (new llama.cpp) or the bare flag for legacy engines, keeps `--cache-reuse N` an independent option, and drops per-option when the profile says the build lacks it |
-| `internal/llm/llama.go` | **ROOT-CAUSE FIX (1+3):** capability-aware launch path — `detectCapsForBoot` before any launch; `buildArgsWithCaps` (also passes the model-aware `--ctx-size`); `launchWithRepair` validates the profile pre-spawn and performs surgical per-option repair (classify → repair ONLY the offending option → retry at the same compat level, bounded); verified startup state machine (`verifyStartupState`: `/v1/models` + `/props` probes, `VerifiedModel`/`VerifiedContext`/`Caps` accessors); verified profile persisted only after a successful start |
-| `internal/contextplan/contextplan.go` | Phase 7 budget primitives: `SafetyMarginTokens` input, `Plan.SafetyMargin`/`PromptCeiling()`/`Overflow()`/`AddAdjustment()`/`SectionTokens()`, `ModelSummary`; `TotalTokens()` no longer double-counts the output reserve against the prompt ceiling |
-| `internal/agent/orchestrator.go` | **ROOT-CAUSE FIX (2):** preflight budget pipeline in `RunDetailed` — model-aware effective context (`resolveEffectiveContext`), safety margin, optional blocks (recall / project card / skills / staged attachments) composed first and injected only when the plan keeps them, degradation ladder (dynamic toolset reduction → compact briefing → drop optional blocks), guaranteed-fit gates that refuse WITHOUT an engine call, non-double-counting history measurement, in-loop fit guard (`compactToolResults`), skills + telemetry + toolset integration |
-| `internal/aicontext/aicontext.go` | `CompactSystemMessage` + `CompactMarker` for the context-pressure degradation ladder |
-| `internal/aicontext/AI-CONTEXT.md` | runtime briefing updated: capability adapter replaces the compat-ladder description; context budget guarantee documented; context version marker 10 → 11 |
-| `internal/multiagent/multiagent.go` | Phase 7C hook: bounded specialist consultations attached to the execution brief between planner and executor |
-| `internal/runtime/runtime.go` | Phase 7 wiring: context-limit provider (native engine), skills store, context telemetry store, `pipeline` tool registration, scheduler instance + `StartScheduler` loop + `scheduleRunner` seam |
-| `internal/llm/llama_test.go` | fake engine gains strict CLI-contract modes (`strict-new-args` reproducing the EXACT historical error, `strict-legacy-args`), argv recording (`SHEYTAN_FAKE_ARGS_OUT`), and `/v1/models` + `/props` endpoints |
-| `package.json` | version 1.1.5-zeta → **1.1.6-zeta** (single source of truth) |
-| `internal/config/config.go` | `AppVersion` 1.1.5 → **1.1.6** (synced by `scripts/release-version.mjs`) |
-| `build/config.yml` | `productVersion` 1.1.5-zeta → **1.1.6-zeta** (synced) |
-| `SIGNATURE` | first line `SHEYTAN-Local-Agent v1.1.5` → **v1.1.6** (synced) |
-| `.github/workflows/build-desktop.yml` | `APP_VERSION` 1.1.5 → **1.1.6** (synced) |
-| `README.md` | release header v1.1.6Z; new "Phase 7" capability section; engine lifecycle / context / tools rows updated honestly (18 tools, preflight pipeline, capability adapter); `llm.numCtx` key now documents the effective-window rule |
-| `ARCHITECTURE.md` | Part I truth table gains 14 Phase 7 rows with honest status labels (IMPLEMENTED + TESTED / PARTIALLY IMPLEMENTED / IMPLEMENTED foundation); II.5 context-budgeting section updated (core implemented, deep retrieval still planned); II.6 multi-agent current-state note updated (specialist consultations ≠ parallel multi-agent) |
-| `agent.md` | engineering handoff updated to v1.1.6Z: Phase 7 summary, next-agent notes (capability.go is the single CLI-contract authority; modelcaps.go the single capability authority; preflight wiring rules) |
-| `worklog.md` | Phase 7 implementation log appended (root causes, fixes, evidence) |
+| `internal/improve/improve.go` | **P0 FIX (CI deadlock):** `Load()` split into the locking public method and a `loadLocked()` private reader; `Propose()`, `RecordAttempt()` and `Active()` use `loadLocked()` under the already-held mutex — the recursive `sync.Mutex` acquisition (Lock → Load → Lock) that hung `TestProposeRequiresCompleteDefinition` for 10 minutes is gone; load/save errors are now propagated instead of swallowed |
+| `internal/improve/improve_test.go` | **P0 regression tests:** `TestProposeCompletesImmediately`, `TestRecordAttemptCompletesImmediately` (watchdog-guarded), `TestConcurrentStoreAccess` (8 writers × 12 attempts + concurrent readers, race-safe, no lost updates), `TestPersistenceRoundTrip`, `TestEvidenceBounded`, `TestStoreBoundedToMaxTactics` |
+| `internal/sessions/sessions.go` | **Context policies (§4):** `sessions.Context.ContextTokens` — the per-chat context-window policy persisted with the session (0 = inherit global); Chat A = 8K, Chat B = 32K, Chat C = 16K are independent and restored on switch |
+| `internal/llm/modelcaps.go` | **Context resolution (§3/§4):** `EffectiveContext` gains `Requested`/`SessionPolicy`; new `ResolveSessionContext` — effective = min(session policy, global configured, model GGUF max, engine-verified window), floored at 1024, every clamp recorded in `Reasons` |
+| `internal/llm/llama.go` | **Readiness (§11):** `EngineContextLimit()` (verified `/props` window while the subprocess is alive; 0 when dead so a stale window can never clamp the next plan), `VerifiedReady()` (alive + `/health` 200 + serving model verified) |
+| `internal/llm/client.go` | **Wire truthfulness (§2):** `BuildChatRequestWithOptions` — the request's `n_ctx` carries the SAME effective context the planner validated, never a second, larger global number |
+| `internal/llm/resources.go` | **NEW.** Resource protection (§8): `AssessContextResource` (weights + KV-cache + runtime overhead vs RAM/VRAM → `safe` / `caution` / `unsupported` with a user-facing reason), `KVCacheBytes` estimator (layers × embedding × KV quant from the GGUF card), `ContextOptions` 4K…128K selector ladder with per-rung verdicts and model/engine clamp flags |
+| `internal/llm/resources_test.go` | **NEW.** Tests: session-context inheritance/narrowing/clamps/floor, resource unsupported/safe/unknown-RAM classification, selector ladder correctness |
+| `internal/agent/orchestrator.go` | **Overflow architecture (§2/§7):** `RunDetailed` accepts `RunOption`s; `WithSessionContext` applies the per-chat policy to plan, gates and request; extended per-turn telemetry (requested/effective/modelMax/engineMax/session policy, per-section token split incl. system/tools/recall/attachments/history/current-task/output-reserve/safety-reserve, elided/compressed, `overflowPrevented`); the structured `context plan:` log block BEFORE the engine call; `compactToolResults` now also returns tokens freed; `ContextSafetyMargin` exported so the API layer reports the same figure |
+| `internal/agent/preflight_test.go` | updated for `compactToolResults`' second return value (tokens freed) |
+| `internal/ctxtelemetry/ctxtelemetry.go` | **Telemetry (§7):** `TurnRecord` gains `contextRequested/contextEffective/contextModelMax/contextEngineMax/sessionContext`, the per-section split (`tokensSystem…tokensSafetyReserve`, `tokensCurrentTask`), `tokensElided/tokensCompressed`, `rolloverTriggered`, `overflowPrevented` |
+| `internal/multiagent/context.go` | **NEW.** Per-agent context policies (§5): `ContextPolicy{requestedContext, minimumContext, maximumContext, outputReserve}` per role (planner 16K, coder 32K, researcher 8K, critic 12K, summarizer 8K, …), `ResolveAgentContext` (agent override → session/global → model max → engine window, role minimum honored only within hard limits), logged one line per consult |
+| `internal/multiagent/context_test.go` | **NEW.** Policy table + resolution tests (base clamp, model-max wins, inherit, floor-vs-hard-limit) |
+| `internal/multiagent/multiagent.go` | planner/critic/summarizer requests carry their resolved context (`NumCtx`); `ModelLimitsFn` seam for the runtime wiring |
+| `internal/multiagent/specialists.go` | `consultOne` resolves + logs the specialist's context policy, bounds output by `policy.OutputReserve`, sends the resolved `NumCtx`; specialist activity captions now show the resolved context (§17) |
+| `internal/runtime/runtime.go` | context-limit provider now reports BOTH engines (llama.cpp verified window while alive + native loaded-model limit, min); `ModelLimitsFn` wiring for per-agent resolution |
+| `internal/api/sessioncontext.go` | **NEW.** `GET/PUT /api/sessions/{id}/context` — the authoritative context decision for one chat (requested/configured/sessionPolicy/effective/modelMax/engineMax/usableInput/outputReserve/safetyReserve/used/remaining/pressure + resource classification + selector options); PUT persists the per-session policy and REJECTS (409) values classified `unsupported` with the reason; `POST /api/models/open-folder` for the first-use path (§10) |
+| `internal/api/server.go` | run path passes `agent.WithSessionContext(sess.Context.ContextTokens)`; `modelInfo` gains `estimatedMemoryBytes`/`recommendedContext` (§10 model card); routes registered |
+| `internal/api/engine.go` | **Startup (§9/§11):** snapshot gains `phase` (waiting → downloading-engine → loading-model → checking-capabilities → ready…), `verified`/`verifiedModel`/`verifiedContext`, `degraded` (state "ready" without verified serving) — degraded startup is visible, never hidden behind a green badge |
+| `scripts/gen-syso/main.go` | **Icon (§12):** full 16/24/32/48/64/128/256 ladder (24px added); also emits `build/sheytan.ico` (BMP entries ≤128 + PNG 256) for packaged shortcut/application metadata |
+| `.gitignore` | re-includes `/build/sheytan.ico` (committed packaging metadata; the `.syso` stays build-time-generated and CI already runs `go run ./scripts/gen-syso`) |
+| `src/AgentHeader.tsx` | **Chat UX (§16):** CONTEXT selector (4K…128K, backend-filtered, per-chat), USED `14.6K / 16K · 91%` meter with critical highlight, status pill reads the backend phase + verified proof |
+| `src/AgentBody.tsx` | **First use (§10) + startup (§9):** "No model selected / Choose model / Open models folder" gate; model card facts (architecture, quantization, context maximum, estimated memory, backend, status); startup phase labels + honest degraded-startup warning |
+| `src/App.tsx` | **Branding (§13):** `document.title` per layer (SHEYTAN, SHEYTAN — Coding Lab, SHEYTAN — Research, SHEYTAN — Settings); sidebar footer says `SHEYTAN™ Local-Agent · Native runtime · offline` (generic "Go + Wails" removed); version fallback refreshed |
+| `src/styles.css` | **Theme (§14):** canonical token block (`--surface`, `--surface-elevated`, `--border`, `--border-strong`, `--text-primary`, `--text-secondary`, `--accent`, `--accent-strong`, `--success`, `--warning`, `--error`, `--focus`) mapped onto the brand palette — dark-first, light-mode foundation; header context pills; phase/first-use/model-card styles |
+| `src/settings.css` | **Scrolling (§15):** `.settings-page` is the app-level scroll container (wheel/trackpad/keyboard/scrollbar, `overscroll-behavior: contain`, no horizontal overflow, cards inside viewport at 1280×720 → 2880×1800 incl. 125/150 % scaling); sticky toolbar with solid backdrop; theme tokens replace the previously-undefined `--border/--accent/--text-primary/--text-secondary` variables |
+| `src/SettingsPanel.tsx` | scroll container is focusable (`tabIndex={-1}`) so keyboard scrolling works |
+| `src/store.ts` | per-session context status state (fetched on session select/switch, refreshed after every turn), `setSessionContext` action — per-chat policy with zero global mutation |
+| `src/api.ts` | typed client for the context endpoints, extended engine/model/session types |
+| `web/static/**` | regenerated embedded frontend bundle (hashes replaced) |
 
 ## 4. ADD
 
-New files/directories. Reason stated per entry.
-
 | Path | Why |
 |---|---|
-| `internal/llm/capability.go` | Phase 7 engine capability layer: `EngineCaps` profile, `--help` detection + tag fallback, profile persistence (`engine-caps.json`), `argProblems` pre-launch validation, `ClassifyStartupFailure`, `repairCapsFor` surgical repair |
-| `internal/llm/capability_test.go` | regression lock: the historical `--flash-attn --cache-reuse` pair can never be emitted; valid combinations validated; classification + surgical repair unit-tested; end-to-end repair test reaching READY with the corrected argv and persisted profile |
-| `internal/llm/modelcaps.go` | Phase 7 model capability card (`ModelCapabilities`), `ResolveModelCapabilities` (real GGUF parse, cached), `ResolveEffectiveContext` (min of configured / model / engine), `launchContextSize` for `--ctx-size`, native architecture verdict |
-| `internal/llm/modelcaps_test.go` | capability card parsed from the REAL GGUF fixture; effective-context clamps (small model, engine limit, never-raise rule) |
-| `internal/toolsets/toolsets.go` | Phase 7A dynamic toolsets: 10 capability groups, tool→group map, deterministic task-signal selection, bounded reduction |
-| `internal/toolsets/toolsets_test.go` | group selection, max-tools bound, determinism |
-| `internal/skills/skills.go` | Phase 7B skills subsystem: skill schema, JSONL store, trigger matching, bounded rendering, `PromoteCandidate` verified-learning rule |
-| `internal/skills/skills_test.go` | promotion requires `verified` objective evidence (all other verdicts rejected); store persistence, matching, budget |
-| `internal/pipeline/pipeline.go` | Phase 7D programmatic pipelines: bounded stage execution (≤12 stages, per-stage timeout ≤600 s, 64 KiB output cap), stop-on-required-failure with skipped stages, evidence-grade report |
-| `internal/pipeline/pipeline_test.go` | happy path, required-failure abort, optional-failure continue, cancellation, bounds |
-| `internal/agent/pipeline_tool.go` | the `pipeline` agent tool + orchestrator registry runner adapter |
-| `internal/computer/computer.go` | Phase 7E computer-use abstraction: observe/inspect/act/verify loop, deny-by-default risk policy, per-action timeout, verification predicates |
-| `internal/computer/computer_test.go` | risk denial, gate override, verify-failure stop, timeout, cancellation, step bound |
-| `internal/mcp/mcp.go` | Phase 7F MCP stdio bridge: JSON-RPC client (initialize/tools/list/tools/call), guarded registration pipeline (deny-by-default), bounded execution; OFF by default |
-| `internal/scheduler/scheduler.go` | Phase 8 event/scheduler foundation: event taxonomy, task store, 5-minute timer floor, bounded runs, persisted reports, memory summaries, `Tick` loop |
-| `internal/scheduler/scheduler_test.go` | interval policy, persistence, bounded manual runs, failure honesty, concurrency refusal, timer firing |
-| `internal/ctxtelemetry/ctxtelemetry.go` | Phase 10 context-effectiveness telemetry: per-turn record, bounded JSONL, aggregation summary |
-| `internal/ctxtelemetry/ctxtelemetry_test.go` | recording, aggregation math, compaction bound |
-| `internal/improve/improve.go` | Phase 11 self-improvement tactics: candidate → active (two verified predictions) → retired (verified contradiction); unverified attempts change nothing |
-| `internal/improve/improve_test.go` | promotion/retirement rules, unverified-never-promotes |
-| `internal/contextplan/contextplan_phase7_test.go` | prompt-ceiling/safety-margin, exact-fit, overflow-by-one, output-reserve rejection, adjustment trail |
-| `internal/agent/preflight_test.go` | preflight pipeline regressions: impossible budget → zero engine calls, toolset reduction on overflow, compact briefing on overflow, in-loop tool-result compaction (end-to-end via fake engine), telemetry recorded, compaction structure preservation, safety-margin clamps |
-| `internal/native/engine/phase7_acceptance_test.go` | REAL-MODEL acceptance run through the native C++ boundary: real GGUF capability card → model-aware effective context (256 for the 256-ctx fixture) → preflight fit → real streamed generation (measured tokens + metrics) |
+| `build/sheytan.ico` | multi-resolution brand icon (16–256) for installer/shortcut metadata (§12) |
+| `internal/llm/resources.go`, `internal/llm/resources_test.go` | resource-aware context classification (§8) |
+| `internal/multiagent/context.go`, `internal/multiagent/context_test.go` | per-agent context policies (§5) |
+| `internal/api/sessioncontext.go` | per-session context API (§4/§16) |
 
 ## 5. DO NOT TOUCH
 
-Unrelated files/directories that Phase 7 deliberately did not modify.
-Do not regenerate, reformat or "modernize" any of them.
+Everything else — in particular the managed llama.cpp lifecycle, the native
+C++ engine (`native/engine/**`), the backend router, Coding Lab, project
+intelligence, research providers, memory/recall, context cache, Continuum,
+skills, toolsets, MCP bridge, browser/computer tooling, verification and
+reliability cores, sandbox, security controls, streaming, Wails embedding,
+and the WebSocket contracts. `internal/aicontext/AI-CONTEXT.md` was
+inspected and intentionally unchanged (version marker stays 11; the
+briefing's contract is not altered by this phase).
 
-| Path | Why untouched |
-|---|---|
-| `internal/lab/**` | Phase 6 Coding Lab (runner, verifier, safeedit, policy, repair) is authoritative and unchanged |
-| `internal/agent/reliability.go`, `internal/agent/verification.go` | Phase 6 failure classification, loop guard, evidence collector — untouched and still authoritative |
-| `internal/memory/**`, `internal/recall/**` | trust model and BM25 recall unchanged |
-| `internal/continuum/**` | chapter rollover unchanged (the preflight pipeline composes with it, does not replace it) |
-| `internal/sandbox/**`, `internal/proc/**` | security governors unchanged |
-| `internal/updater/**` | engine download/update machinery unchanged (capability profile is stored beside it, not inside it) |
-| `internal/browser/**`, `internal/tools/**`, `internal/research/**` | existing tool implementations unchanged (the Phase 7E computer-use layer wraps, not rewrites) |
-| `internal/api/**` | local API surface unchanged in this phase (loopback/origin security untouched) |
-| `native/engine/src/**`, `native/engine/include/**` | native C++ engine unchanged (Phase 5 performance rule: no native optimization this phase) |
-| `scripts/**`, `web/embed.go`, `index.html`, `vite.config.ts`, `tsconfig*.json` | build/dev tooling unchanged |
-| `LICENSE`, `FIX-README.md`, `go.mod`, `go.sum` | unchanged |
-| `src/**` (React/TS sources) | frontend unchanged in Phase 7 (bundles rebuilt byte-identical, hashed names unchanged) |
+## 6. TESTS
 
-## 6. TESTS — exact validation performed
+- `internal/improve`: deadlock watchdogs, concurrency hammer, persistence,
+  bounded evidence, bounded store (race-clean).
+- `internal/llm`: session-context resolution chain, resource assessment,
+  selector ladder.
+- `internal/multiagent`: policy table + resolution ordering.
+- `internal/sessions`: per-chat policy persistence round trip.
+- Pre-existing suites: context plan fit gates, orchestrator preflight,
+  sessions, api, native engine, releasegate — all passing.
 
-All commands run at the final tree state (`v1.1.6-zeta`), Go 1.26:
+## 7. DOCUMENTATION
 
-```text
-go build -tags headless ./...                                → PASS
-go test -tags headless ./internal/... ./cmd/... -count=1     → PASS (all packages)
-go test -race -tags headless ./internal/agent/ ./internal/llm/
-         ./internal/api/ ./internal/native/engine/ -count=1 → PASS
-go vet -tags headless ./...                                  → PASS
-npm ci && npm run typecheck                                  → PASS (0 errors)
-npm run lint                                                 → PASS (0 warnings, 0 errors, 20 files)
-npm run build && npm run sync:web                            → PASS (web/static embedded bundle refreshed)
-cmake -S native/engine -B native/engine/build && cmake --build native/engine/build → PASS
-ctest --test-dir native/engine/build --output-on-failure     → 12/12 PASS
-node scripts/release-version.mjs --check                     → PASS (all version surfaces = 1.1.6/1.1.6-zeta)
-```
+Updated for truthfulness: `README.md` (1.1.6 section), `ARCHITECTURE.md`
+(context policies), `agent.md`, `worklog.md` (appended phase record),
+this file. Feature states are marked IMPLEMENTED / PARTIAL / FOUNDATION /
+PLANNED — planned behaviour is never described as implemented.
 
-Focused Phase 7 regression suites (all PASS):
+## 8. RUNTIME VALIDATION
 
-```text
-go test ./internal/llm/ -run 'TestSpeedArgs|TestArgProblems|TestClassifyStartup|TestRepairCaps|TestEngineStartRepairs|TestEngineStartLegacy|TestStartupVerification|TestDetectEngineCaps|TestResolveModel|TestResolveEffective|TestLaunchContext|TestNativeArchitecture'
-go test ./internal/agent/ -run 'TestPreflight|TestInLoop|TestCompactTool|TestContextSafety'
-go test ./internal/contextplan/ ./internal/toolsets/ ./internal/skills/ ./internal/pipeline/ ./internal/computer/ ./internal/scheduler/ ./internal/ctxtelemetry/ ./internal/improve/
-go test ./internal/native/engine/ -run TestPhase7SmallModelAcceptance
-```
+Performed on Linux (CI-equivalent):
 
-## 7. DOCUMENTATION — updated in this package
+- `go test -tags headless ./internal/... -count=1` — PASS (incl. race build
+  for `internal/improve`)
+- `go vet -tags headless ./internal/...` — PASS
+- `npm run typecheck` / `npm run lint` / `npm run build` — PASS (embedded
+  frontend regenerated)
+- `node scripts/release-version.mjs --check` — PASS
+- native engine C++ build + ctest — PASS
+- Windows exe/resource layer validated via the gen-syso pipeline (deterministic
+  resource object + .ico); a real Windows GUI run was NOT available in this
+  environment and remains the maintainer's smoke step.
 
-| Document | Change |
-|---|---|
-| `README.md` | Phase 7 capability section; engine/context/tools rows; version header |
-| `ARCHITECTURE.md` | Part I Phase 7 rows; II.5/II.6 status updates |
-| `agent.md` | v1.1.6Z handoff + Phase 7 next-agent notes |
-| `worklog.md` | Phase 7 implementation log with evidence |
-| `internal/aicontext/AI-CONTEXT.md` | runtime briefing: capability adapter + context budget guarantee (version 11) |
-| `UPDATE.md` | this file |
+## 9. KNOWN LIMITATIONS
 
-## 8. ZIP
-
-| Item | Value |
-|---|---|
-| Archive | `SHEYTAN-local-agent-1.1.6-zeta-phase7-replacement.zip` |
-| Contents | the complete final repository source tree (see §9 exclusions) |
-| Integrity | `REPLACEMENT-SHA256.txt` covers every file in the archive; verify with `sha256sum -c REPLACEMENT-SHA256.txt` |
-
-## 9. ZIP exclusions (by design)
-
-```text
-.git/
-node_modules/
-models/
-sessions/
-logs/
-caches/
-tmp/
-secrets/
-native/engine/build/
-*.exe, *.syso, *.zip
-machine-specific runtime data (engine-caps.json is a runtime artifact created under DataDir at first boot, not shipped)
-```
+1. **Session policy cannot exceed the resolved limits.** Per §3 the
+   effective value is the minimum of the session policy, the global
+   configured context, the model GGUF maximum and the engine-verified
+   window. Selecting 32K in a chat while the engine runs a 16K window
+   serves 16K (with an explanatory trail). Raise the global context in
+   Settings and restart the engine to go higher — never by blindly
+   inflating `numCtx` at request time.
+2. **Resource estimates are conservative pre-flight math** (weights file
+   size + KV-cache from GGUF facts + fixed overhead vs RAM/VRAM), not a
+   runtime allocator. They classify, they do not guarantee.
+3. **llama.cpp `n_ctx` is fixed at launch.** The wire request carries the
+   validated effective context for honesty and remote-mode clarity; the
+   llama.cpp server itself only resizes its window on restart.
+4. **Real-model acceptance on Windows** (gemma-4-E2B-it-Q4_K_M smoke with
+   the desktop UI) requires a Windows machine with the model present; this
+   environment validated everything reproducible headlessly, including the
+   full context pipeline and engine state machine.

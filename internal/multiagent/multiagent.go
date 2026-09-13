@@ -82,6 +82,12 @@ type MultiAgent struct {
         // ModelFn resolves the current model id lazily so provider/model
         // switches in the UI apply to the very next LLM call.
         ModelFn func() string
+
+        // ModelLimitsFn (1.1.6 §5) resolves the model's GGUF context maximum
+        // and the engine's verified window so every role's context policy is
+        // resolved against real limits. Nil = limits unknown (policies then
+        // resolve against the base effective context only).
+        ModelLimitsFn func() (modelMax, engineMax int)
 }
 
 // NewMultiAgent constructs a multi-agent runner. modelFn is called before
@@ -369,6 +375,8 @@ func (m *MultiAgent) callPlanner(
         ctx context.Context,
         prompt string,
 ) (*planJSON, error) {
+        policy := PolicyForRole("planner")
+        effectiveCtx := m.resolveRoleContext("planner", policy, 0)
         req := &llm.ChatRequest{
                 Model: m.model(),
                 Messages: []llm.Message{
@@ -383,6 +391,7 @@ func (m *MultiAgent) callPlanner(
                 },
                 Temperature: 0.3,
                 MaxTokens:   512,
+                NumCtx:      effectiveCtx,
         }
 
         resp, err := m.client.Chat(
@@ -436,6 +445,8 @@ func (m *MultiAgent) callCritic(
         verification agent.VerificationReport,
         loopStats []agent.StatsSnapshot,
 ) (*critiqueJSON, error) {
+        policy := PolicyForRole("critic")
+        effectiveCtx := m.resolveRoleContext("critic", policy, 0)
         req := &llm.ChatRequest{
                 Model: m.model(),
                 Messages: []llm.Message{
@@ -455,6 +466,7 @@ func (m *MultiAgent) callCritic(
                 },
                 Temperature: 0.2,
                 MaxTokens:   256,
+                NumCtx:      effectiveCtx,
         }
 
         resp, err := m.client.Chat(
@@ -501,6 +513,8 @@ func (m *MultiAgent) callSummarizer(
         prompt string,
         result string,
 ) (string, error) {
+        policy := PolicyForRole("summarizer")
+        effectiveCtx := m.resolveRoleContext("summarizer", policy, 0)
         req := &llm.ChatRequest{
                 Model: m.model(),
                 Messages: []llm.Message{
@@ -519,6 +533,7 @@ func (m *MultiAgent) callSummarizer(
                 },
                 Temperature: 0.5,
                 MaxTokens:   1024,
+                NumCtx:      effectiveCtx,
         }
 
         resp, err := m.client.Chat(

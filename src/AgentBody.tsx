@@ -63,6 +63,28 @@ function engineBadge(state: EngineState | undefined, provider: string): {
   }
 }
 
+// v1.1.6 §9: user-facing labels for the backend startup phases.
+const PHASE_LABELS: Record<string, string> = {
+  "downloading-engine": "Downloading engine…",
+  "loading-model": "Loading model…",
+  "checking-capabilities": "Checking capabilities…",
+  "preparing-context": "Preparing context…",
+  stopping: "Stopping…",
+  stopped: "Engine stopped",
+  failed: "Engine failed",
+};
+
+// formatBytes renders the estimated-memory figure.
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) {
+    return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  }
+  if (bytes >= 1024 ** 2) {
+    return `${Math.round(bytes / 1024 ** 2)} MiB`;
+  }
+  return `${bytes} B`;
+}
+
 function AgentBody() {
   const models = useRuntimeStore((state) => state.models);
   const sessions = useRuntimeStore((state) => state.sessions);
@@ -142,6 +164,20 @@ function AgentBody() {
   const localModels = models?.local ?? [];
 
   const badge = engineBadge(engine?.state, engine?.provider ?? "local");
+
+  // v1.1.6 §10: the card facts of the model that will serve (selection
+  // order: chosen config model → engine-served model).
+  const selectedModelCard = useMemo(() => {
+    const wanted = config?.model || engine?.model || activeSession?.model;
+    if (!wanted) {
+      return null;
+    }
+    return (
+      localModels.find((m) => m.id === wanted) ??
+      localModels.find((m) => wanted.startsWith(m.id)) ??
+      null
+    );
+  }, [localModels, config?.model, engine?.model, activeSession?.model]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -315,6 +351,23 @@ function AgentBody() {
               </div>
             </div>
 
+            {/* v1.1.6 §9: real startup progress states while the engine
+                prepares — the UI stays usable during the whole flow. */}
+            {engine?.phase && engine.phase !== "ready" && engine.phase !== "waiting" && (
+              <span className="runtime-hint engine-phase">
+                {PHASE_LABELS[engine.phase] ?? engine.phase}
+              </span>
+            )}
+
+            {/* v1.1.6 §11: never hide degraded startup behind a green
+                status — if "ready" could not be verified, say so. */}
+            {engine?.degraded && (
+              <span className="runtime-hint engine-phase engine-phase-warn">
+                Degraded startup: the serving model could not be verified
+                {engine.detail ? ` — ${engine.detail}` : ""}
+              </span>
+            )}
+
             {engine?.detail ? (
               <span className="runtime-hint engine-detail" title={engine.detail}>
                 {engine.detail}
@@ -344,6 +397,49 @@ function AgentBody() {
               </button>
             </div>
           </div>
+
+          {/* v1.1.6 §10 first use: when no valid model exists, give the
+              user a clear path instead of a dead dropdown. */}
+          {localModels.length === 0 && !config?.model && (
+            <div className="runtime-section first-use">
+              <span className="eyebrow">GET STARTED</span>
+
+              <strong className="first-use-title">No model selected</strong>
+
+              <span className="runtime-hint">
+                Place a GGUF model in the models folder, then choose it
+                here. Path: <code>{config?.modelsDir || "models/"}</code>
+              </span>
+
+              <div className="header-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    const select = document.querySelector<HTMLSelectElement>(
+                      ".runtime-panel .runtime-select",
+                    );
+                    select?.focus();
+                    select?.click();
+                  }}
+                >
+                  Choose model
+                </button>
+
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => {
+                    void api.openModelsFolder().catch(() => {
+                      /* best effort; the path is shown above */
+                    });
+                  }}
+                >
+                  Open models folder
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="runtime-section">
             <span className="eyebrow">MODEL</span>
@@ -383,6 +479,45 @@ function AgentBody() {
                   "No model selected"}
               </strong>
             </div>
+
+            {/* v1.1.6 §10: the model card facts — backend-measured, no
+                engine internals during normal startup. */}
+            {selectedModelCard && (
+              <div className="model-card-facts">
+                {selectedModelCard.architecture && (
+                  <div className="session-detail">
+                    <span>Architecture</span>
+                    <strong>{selectedModelCard.architecture}</strong>
+                  </div>
+                )}
+                {selectedModelCard.quantization && (
+                  <div className="session-detail">
+                    <span>Quantization</span>
+                    <strong>{selectedModelCard.quantization}</strong>
+                  </div>
+                )}
+                {!!selectedModelCard.contextLength && (
+                  <div className="session-detail">
+                    <span>Context maximum</span>
+                    <strong>{selectedModelCard.contextLength.toLocaleString()} tok</strong>
+                  </div>
+                )}
+                {!!selectedModelCard.estimatedMemoryBytes && (
+                  <div className="session-detail">
+                    <span>Estimated memory</span>
+                    <strong>{formatBytes(selectedModelCard.estimatedMemoryBytes)}</strong>
+                  </div>
+                )}
+                <div className="session-detail">
+                  <span>Backend</span>
+                  <strong>{engine?.backend ?? "llama"}</strong>
+                </div>
+                <div className="session-detail">
+                  <span>Status</span>
+                  <strong>{badge.label}</strong>
+                </div>
+              </div>
+            )}
 
             {modelBusy ? (
               <span className="runtime-hint">Switching model…</span>

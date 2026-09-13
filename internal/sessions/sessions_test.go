@@ -224,3 +224,68 @@ func TestActivitySidecarBounded(t *testing.T) {
 		t.Fatalf("activity sidecar not bounded: %d", len(loaded.Activities))
 	}
 }
+
+// TestSessionContextPolicyPersistsPerChat: the 1.1.6 per-session context
+// policy travels with the session — Chat A = 8K, Chat B = 32K — and
+// switching (reloading) restores each chat's own policy.
+func TestSessionContextPolicyPersistsPerChat(t *testing.T) {
+	store := newTestStore(t)
+
+	a := store.Create()
+	a.Context.ContextTokens = 8192
+	if err := store.Save(a); err != nil {
+		t.Fatalf("save A: %v", err)
+	}
+
+	b := store.Create()
+	b.Context.ContextTokens = 32768
+	if err := store.Save(b); err != nil {
+		t.Fatalf("save B: %v", err)
+	}
+
+	c := store.Create() // inherits the global policy (0)
+	if err := store.Save(c); err != nil {
+		t.Fatalf("save C: %v", err)
+	}
+
+	// "Switch sessions": reload each one fresh.
+	for _, tc := range []struct {
+		id   string
+		want int
+	}{} {
+		_ = tc
+	}
+
+	reloadedA, err := store.Get(a.ID)
+	if err != nil {
+		t.Fatalf("get A: %v", err)
+	}
+	reloadedB, err := store.Get(b.ID)
+	if err != nil {
+		t.Fatalf("get B: %v", err)
+	}
+	reloadedC, err := store.Get(c.ID)
+	if err != nil {
+		t.Fatalf("get C: %v", err)
+	}
+
+	if reloadedA.Context.ContextTokens != 8192 {
+		t.Fatalf("chat A policy = %d, want 8192", reloadedA.Context.ContextTokens)
+	}
+	if reloadedB.Context.ContextTokens != 32768 {
+		t.Fatalf("chat B policy = %d, want 32768", reloadedB.Context.ContextTokens)
+	}
+	if reloadedC.Context.ContextTokens != 0 {
+		t.Fatalf("chat C policy = %d, want 0 (inherit)", reloadedC.Context.ContextTokens)
+	}
+
+	// UpdateContext replaces the policy honestly.
+	reloadedA.Context.ContextTokens = 16384
+	if err := store.UpdateContext(a.ID, reloadedA.Context); err != nil {
+		t.Fatalf("update A: %v", err)
+	}
+	again, _ := store.Get(a.ID)
+	if again.Context.ContextTokens != 16384 {
+		t.Fatalf("chat A updated policy = %d, want 16384", again.Context.ContextTokens)
+	}
+}

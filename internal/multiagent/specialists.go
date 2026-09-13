@@ -165,9 +165,14 @@ func (m *MultiAgent) consultSpecialists(
 			break
 		}
 
+		// 1.1.6 §17: the activity shows the agent, its resolved
+		// context policy and status — without noisy internals.
+		policy := PolicyForRole(string(sp.Role))
+		resolvedCtx := m.resolveRoleContext(string(sp.Role), policy, 0)
+
 		onActivity(agent.Activity{
 			Type:      "thinking",
-			Caption:   fmt.Sprintf("Specialist %s: consulting…", sp.Label),
+			Caption:   fmt.Sprintf("Specialist %s: consulting… (%s context)", sp.Label, llm.ContextLabel(resolvedCtx)),
 			Timestamp: time.Now(),
 		})
 
@@ -192,7 +197,10 @@ func (m *MultiAgent) consultSpecialists(
 	return b.String()
 }
 
-// consultOne performs ONE bounded specialist call (45s, 400 tokens).
+// consultOne performs ONE bounded specialist call (45s, policy-bounded
+// output). The specialist's context policy (1.1.6 §5) is resolved and
+// logged before the call so no agent silently runs with the largest
+// available window.
 func (m *MultiAgent) consultOne(
 	ctx context.Context,
 	sp specialistProfile,
@@ -201,6 +209,9 @@ func (m *MultiAgent) consultOne(
 ) string {
 	callCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
+
+	policy := PolicyForRole(string(sp.Role))
+	effectiveCtx := m.resolveRoleContext(string(sp.Role), policy, 0)
 
 	userContent := fmt.Sprintf("Task: %s\n\nPlan summary: %s",
 		boundedExcerpt(task, 2000), planExcerpt)
@@ -211,8 +222,9 @@ func (m *MultiAgent) consultOne(
 			{Role: "system", Content: sp.System},
 			{Role: "user", Content: userContent},
 		},
-		MaxTokens:   400,
+		MaxTokens:   policy.OutputReserve,
 		Temperature: 0.3,
+		NumCtx:      effectiveCtx,
 	})
 	if err != nil {
 		return ""

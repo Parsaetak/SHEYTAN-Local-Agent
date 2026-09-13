@@ -16,6 +16,7 @@ import {
   type Session,
   type SysInfo,
   type ToolInfo,
+  type SessionContextStatus,
 } from "./api";
 import { activityWebSocketURL } from "./config";
 
@@ -48,6 +49,13 @@ type RuntimeState = {
 
   // v1.1.3Z: authoritative engine state (polled + WS-pushed).
   engine: EngineSnapshot | null;
+
+  // v1.1.6: backend-resolved context status for the active session
+  // (selector options, usage, pressure). Backend is authoritative.
+  sessionContext: SessionContextStatus | null;
+  sessionContextError: string | null;
+  setSessionContext: (tokens: number) => Promise<void>;
+  refreshSessionContext: () => Promise<void>;
 
   // v1.1.3Z: real conversation history for the active session plus the
   // streaming assistant bubble.
@@ -501,6 +509,9 @@ function handleConversationEvent(event: ActivityEvent): void {
 
           if (current.activeSessionId === sessionId) {
             void current.loadSession(sessionId);
+            // v1.1.6: the turn changed the session's context usage —
+            // refresh the authoritative status (used/pressure).
+            void current.refreshSessionContext();
           }
         }, 400);
       }
@@ -533,6 +544,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   running: false,
 
   engine: null,
+
+  // v1.1.6: per-session context status (fetched per active session).
+  sessionContext: null,
+  sessionContextError: null,
 
   messages: [],
   streaming: null,
@@ -684,6 +699,54 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     }
   },
 
+  // v1.1.6: fetch the backend-resolved context status for the active
+  // session. Switching sessions restores each chat's own policy — the
+  // status is per-session and never mutates other chats.
+  refreshSessionContext: async () => {
+    const id = get().activeSessionId;
+    if (!id) {
+      set({ sessionContext: null, sessionContextError: null });
+      return;
+    }
+    try {
+      const status = await api.sessionContext(id);
+      if (useRuntimeStore.getState().activeSessionId !== id) {
+        return;
+      }
+      set({ sessionContext: status, sessionContextError: null });
+    } catch (err) {
+      if (useRuntimeStore.getState().activeSessionId !== id) {
+        return;
+      }
+      set({
+        sessionContext: null,
+        sessionContextError:
+          err instanceof Error ? err.message : "context status unavailable",
+      });
+    }
+  },
+
+  // v1.1.6: set THIS session's context policy; the backend persists it
+  // with the session and returns the resolved status.
+  setSessionContext: async (tokens) => {
+    const id = get().activeSessionId;
+    if (!id) {
+      return;
+    }
+    try {
+      const status = await api.setSessionContext(id, tokens);
+      if (useRuntimeStore.getState().activeSessionId !== id) {
+        return;
+      }
+      set({ sessionContext: status, sessionContextError: null });
+    } catch (err) {
+      set({
+        sessionContextError:
+          err instanceof Error ? err.message : "could not set the context",
+      });
+    }
+  },
+
   loadSession: async (id) => {
     try {
       const detail = await api.sessionDetail(id);
@@ -824,6 +887,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     if (id) {
       get().connectActivity();
       void get().loadSession(id);
+      void get().refreshSessionContext();
+    } else {
+      set({ sessionContext: null, sessionContextError: null });
     }
   },
 

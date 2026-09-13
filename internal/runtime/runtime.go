@@ -6,108 +6,108 @@
 package runtime
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"path/filepath"
-	"sync"
-	"time"
+        "context"
+        "fmt"
+        "net/http"
+        "path/filepath"
+        "sync"
+        "time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/ctxtelemetry"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
-	nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/projectintel"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/scheduler"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/skills"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/ctxtelemetry"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
+        nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/projectintel"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/scheduler"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/skills"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 // Stack is the fully-wired agent runtime.
 type Stack struct {
-	// Src is the live, concurrency-safe configuration source shared by
-	// every component that reads config at runtime (client, orchestrator,
-	// engine, API handlers). Values obtained from Load() are immutable.
-	Src *config.Source
+        // Src is the live, concurrency-safe configuration source shared by
+        // every component that reads config at runtime (client, orchestrator,
+        // engine, API handlers). Values obtained from Load() are immutable.
+        Src *config.Source
 
-	// Cfg is the configuration the stack was CONSTRUCTED with (v1.1.4Z:
-	// historical field kept for construction-time consumers; live reads
-	// must go through Src).
-	Cfg    *config.Config
-	Client *llm.Client
-	Orch   *agent.Orchestrator
-	Multi  *multiagent.MultiAgent
+        // Cfg is the configuration the stack was CONSTRUCTED with (v1.1.4Z:
+        // historical field kept for construction-time consumers; live reads
+        // must go through Src).
+        Cfg    *config.Config
+        Client *llm.Client
+        Orch   *agent.Orchestrator
+        Multi  *multiagent.MultiAgent
 
-	// clientStream is the llama.cpp generation path (the client's
-	// StreamChatDetailed), swappable for tests. Set in NewStack.
-	clientStream func(ctx context.Context, req *llm.ChatRequest,
-		onEvent func(llm.StreamEvent) error) (llm.PerfStats, error)
-	Mem     *memory.Store
-	Llama   *llm.LlamaServer
-	Browser *tools.BrowserTool
-	Sandbox *sandbox.CodeExecSandbox
-	Recall  *recall.Engine
+        // clientStream is the llama.cpp generation path (the client's
+        // StreamChatDetailed), swappable for tests. Set in NewStack.
+        clientStream func(ctx context.Context, req *llm.ChatRequest,
+                onEvent func(llm.StreamEvent) error) (llm.PerfStats, error)
+        Mem     *memory.Store
+        Llama   *llm.LlamaServer
+        Browser *tools.BrowserTool
+        Sandbox *sandbox.CodeExecSandbox
+        Recall  *recall.Engine
 
-	// Native (v1.1.5Z Phase 1) is the supervised SHEYTAN native engine.
-	// nil unless cfg.EngineBackend == "native" at construction: the
-	// native path is an explicit opt-in. Since Phase 5 the native
-	// engine performs REAL generation for validated llama-architecture
-	// models (plain-text requests); llama.cpp remains the fallback for
-	// everything the native path does not support.
-	Native *nativeengine.Engine
+        // Native (v1.1.5Z Phase 1) is the supervised SHEYTAN native engine.
+        // nil unless cfg.EngineBackend == "native" at construction: the
+        // native path is an explicit opt-in. Since Phase 5 the native
+        // engine performs REAL generation for validated llama-architecture
+        // models (plain-text requests); llama.cpp remains the fallback for
+        // everything the native path does not support.
+        Native *nativeengine.Engine
 
-	// llamaBackend / nativeBackend adapt the engines to the
-	// llm.Backend contract (selection seam).
-	llamaBackend  llm.Backend
-	nativeBackend llm.Backend
+        // llamaBackend / nativeBackend adapt the engines to the
+        // llm.Backend contract (selection seam).
+        llamaBackend  llm.Backend
+        nativeBackend llm.Backend
 
-	// Lab is the autonomous Coding Lab tool.
-	Lab *lab.Tool
+        // Lab is the autonomous Coding Lab tool.
+        Lab *lab.Tool
 
-	// Research is the unified external research service.
-	Research *research.Service
+        // Research is the unified external research service.
+        Research *research.Service
 
-	// ResearchTool is the agent-facing research tool backed by Research.
-	ResearchTool *research.Tool
+        // ResearchTool is the agent-facing research tool backed by Research.
+        ResearchTool *research.Tool
 
-	// Attachments is the staged-file store backing real file uploads.
-	Attachments *attachments.Manager
+        // Attachments is the staged-file store backing real file uploads.
+        Attachments *attachments.Manager
 
-	// Cache is the process-wide content-aware context cache.
-	Cache *contextcache.Cache
+        // Cache is the process-wide content-aware context cache.
+        Cache *contextcache.Cache
 
-	// Phase 7 additions ---------------------------------------------------
+        // Phase 7 additions ---------------------------------------------------
 
-	// Skills is the persisted, load-on-demand skills store (validated
-	// learning only — see internal/skills).
-	Skills *skills.Store
+        // Skills is the persisted, load-on-demand skills store (validated
+        // learning only — see internal/skills).
+        Skills *skills.Store
 
-	// Telemetry records per-turn context-effectiveness measurements.
-	Telemetry *ctxtelemetry.Store
+        // Telemetry records per-turn context-effectiveness measurements.
+        Telemetry *ctxtelemetry.Store
 
-	// Sched is the local autonomous event/task foundation (manual /
-	// startup / timer triggers in this release).
-	Sched *scheduler.Scheduler
+        // Sched is the local autonomous event/task foundation (manual /
+        // startup / timer triggers in this release).
+        Sched *scheduler.Scheduler
 
-	// Linux (v1.0.6) is the built-in Linux-like shell used by BOTH the agent
-	// (the `linux` tool) and the Terminal view — one shared instance so the
-	// user sees (and can replay) exactly what the agent did.
-	Linux *tools.LinuxSim
+        // Linux (v1.0.6) is the built-in Linux-like shell used by BOTH the agent
+        // (the `linux` tool) and the Terminal view — one shared instance so the
+        // user sees (and can replay) exactly what the agent did.
+        Linux *tools.LinuxSim
 
-	// browserMu guards the lazy BrowserTool cache.
-	browserMu sync.Mutex
+        // browserMu guards the lazy BrowserTool cache.
+        browserMu sync.Mutex
 }
 
 // NewStack wires every tool into the orchestrator. The sandbox is optional —
@@ -115,550 +115,595 @@ type Stack struct {
 // registered. SandboxEnabled (v1.1.4Z, default true) gates the override: the
 // setting was previously stored but never read — a meaningless toggle.
 func NewStack(cfg *config.Config) *Stack {
-	src := config.NewSource(cfg)
-
-	client := llm.NewClient(src)
-	orch := agent.New(src, client)
-
-	// v1.1.3Z: content-aware context cache shared by attachments, chunking
-	// pipelines and retrieval.
-	cache := contextcache.New()
-
-	// v1.1.3Z: real attachment staging under the app's private data dir.
-	attMgr, attErr := attachments.NewManager(
-		filepath.Join(cfg.DataDir, "attachments"),
-		attachments.Options{Cache: cache},
-	)
-
-	if attErr != nil {
-		logging.Default().Warn(
-			"runtime",
-			"attachment store unavailable: %v",
-			attErr,
-		)
-	}
-
-	// v1.0.1: materialize AI-CONTEXT.md in the app folder.
-	if path, err := aicontext.EnsureFile(
-		cfg.DataDir,
-	); err != nil {
-		logging.Default().Warn(
-			"runtime",
-			"AI context file: %v",
-			err,
-		)
-	} else {
-		logging.Default().Info(
-			"runtime",
-			"AI context file: %s",
-			path,
-		)
-	}
-
-	// Canonical base dir for every tool.
-	tools.SetBaseDir(cfg.DataDir)
-
-	// Core tools.
-	orch.Register(tools.Shell{})
-	orch.Register(tools.Files{})
-	orch.Register(tools.CodeExec{})
-	orch.Register(tools.WebSearch{})
-	orch.Register(tools.Git{})
-	orch.Register(tools.NewBrowserTool(cfg))
-	orch.Register(tools.NewDataTool(cfg))
-
-	// v1.0.10 (PRISM): structured data, archives, URLs, verification.
-	orch.Register(tools.JSONTool{})
-	orch.Register(tools.ArchiveTool{})
-	orch.Register(tools.NewFetchTool())
-	orch.Register(tools.DiffTool{})
-
-	// v1.0.6: vision + terminal.
-	llamaSrv := llm.NewLlamaServer(src)
-
-	// v1.1.5Z Phase 1: SHEYTAN Native Engine architecture. The native
-	// engine exists ONLY behind the explicit "native" opt-in; the
-	// default ("llama") preserves v1.1.4Z behavior byte-for-byte.
-	// Even when selected, generation still runs on llama.cpp until
-	// the native engine implements it (see Stack.Engine).
-	var nativeEng *nativeengine.Engine
-	var nativeBack *nativeengine.Backend
-
-	if cfg.NativeBackendEnabled() {
-		hostPath := nativeengine.DefaultHostPath(
-			cfg.DataDir,
-			cfg.NativeEnginePath,
-		)
-
-		nativeEng = nativeengine.New(hostPath)
-		nativeBack = nativeengine.NewBackend(nativeEng)
-
-		if !nativeEng.Available() {
-			logging.Default().Warn(
-				"runtime",
-				"native engine selected but host binary not found at %s — build native/engine (CMake) or set nativeEnginePath; llama.cpp remains the engine",
-				hostPath,
-			)
-		}
-	}
-
-	llamaBack := llm.NewLlamaBackend(llamaSrv, client)
-
-	// v1.1.5Z Phase 5: the backend-aware generation router. The
-	// orchestrator's loop calls this seam instead of the client
-	// directly, so generation actually flows through
-	// llm.SelectGenerationBackend: the native engine when the user
-	// selected it AND it can generate (llama graph validated at load
-	// time); llama.cpp otherwise. Request shapes the native path
-	// cannot serve (tools, images) and pre-first-token native
-	// failures fall back to llama.cpp with an explicit, logged,
-	// inspectable reason — the Phase 5 activation contract.
-	stack := &Stack{
-		Src:           src,
-		Cfg:           cfg,
-		Client:        client,
-		Orch:          orch,
-		Llama:         llamaSrv,
-		Native:        nativeEng,
-		llamaBackend:  llamaBack,
-		nativeBackend: nativeBack,
-	}
-	stack.clientStream = client.StreamChatDetailed
-	orch.SetGenerationStream(stack.streamGeneration)
-
-	// ---------------------------------------------------------------------
-	// Phase 7 wiring: model capabilities → planner, dynamic toolsets →
-	// orchestrator, skills, context telemetry, programmatic pipelines.
-	// ---------------------------------------------------------------------
-
-	// Model-aware context: the effective context is min(configured,
-	// GGUF model limit, engine-reported limit). The native engine reports
-	// its loaded model's limit; llama.cpp needs none (the GGUF clamp and
-	// the server's own allocation cover it).
-	orch.SetContextLimitProvider(func(c *config.Config) int {
-		if stack.Native == nil {
-			return 0
-		}
-		res, err := stack.Native.ModelInfo(context.Background())
-		if err != nil || !res.Loaded || res.Model == nil ||
-			res.Model.ContextLength <= 0 {
-			return 0
-		}
-		return int(res.Model.ContextLength)
-	})
-
-	// Skills: load-on-demand injection of VALIDATED procedures only.
-	skillStore := skills.NewStore(cfg.DataDir)
-	if err := skillStore.Load(); err != nil {
-		logging.Default().Warn("runtime", "skills store: %v", err)
-	}
-	stack.Skills = skillStore
-	orch.SetSkillSource(skillStore)
-
-	// Context-effectiveness telemetry (bounded JSONL under DataDir).
-	telemetryStore := ctxtelemetry.NewStore(cfg.DataDir)
-	stack.Telemetry = telemetryStore
-	orch.SetTelemetry(telemetryStore)
-
-	// Programmatic tool pipelines: the model declares a bounded stage
-	// plan once; the runtime executes it deterministically.
-	orch.Register(agent.NewPipelineTool(orch, src))
-
-	// Scheduler foundation: manual / startup / timer triggers; the run
-	// seam goes through the orchestrator so every scheduled run keeps the
-	// full reliability and verification machinery.
-	sched := scheduler.New(
-		filepath.Join(cfg.DataDir, "scheduler"),
-		scheduleRunner(orch),
-		func(task scheduler.Task, report scheduler.Report) {
-			summary := fmt.Sprintf("Scheduled task %q (%s): ok=%v in %s",
-				task.Name, report.Trigger, report.OK,
-				time.Duration(report.DurationMs)*time.Millisecond)
-			_ = stack.Mem.Append([]string{"scheduler", task.ID}, summary, "scheduler")
-		},
-	)
-	if err := sched.Load(); err != nil {
-		logging.Default().Warn("runtime", "scheduler tasks: %v", err)
-	}
-	stack.Sched = sched
-
-	orch.Register(tools.Screenshot{})
-
-	linuxSim := tools.NewLinuxSim(
-		cfg.DataDir,
-	)
-
-	orch.Register(linuxSim)
-
-	// Version Zeta: autonomous Coding Lab.
-	var labTool *lab.Tool
-
-	// v1.1.5Z Phase 6: persistent project intelligence. One store per
-	// install, keyed per project root. The workspace gets observed at
-	// startup (bounded walk) and the card is injected per run; Lab
-	// verification outcomes record VERIFIED build/test commands against
-	// the task's source project.
-	intel := projectintel.NewStore(
-		cfg.DataDir + "/projectintel",
-	)
-
-	if _, err := intel.Observe(cfg.WorkspaceDir()); err != nil {
-		logging.Default().Warn(
-			"runtime",
-			"project intelligence observe: %v",
-			err,
-		)
-	}
-
-	if cfg.LabEnabled {
-		var err error
-
-		labTool, err = lab.NewTool(cfg)
-
-		if err != nil {
-			logging.Default().Warn(
-				"runtime",
-				"Coding Lab unavailable: %v",
-				err,
-			)
-		} else {
-			labTool.SetIntel(intel)
-			orch.Register(labTool)
-
-			logging.Default().Info(
-				"runtime",
-				"Coding Lab registered: workspace=%s network=%t",
-				cfg.LabWorkspaceRoot,
-				cfg.LabAllowNetwork,
-			)
-		}
-	}
-
-	// Project card injection: measured facts before every run.
-	orch.SetProjectCard(func() string {
-		return intel.Card(cfg.WorkspaceDir())
-	})
-
-	// Version Zeta: unified external research.
-	var researchService *research.Service
-	var researchTool *research.Tool
-
-	if cfg.ResearchEnabled {
-		researchConfig := research.ServiceConfig{
-			Backend:    cfg.ResearchBackend,
-			MaxResults: cfg.ResearchMaxResults,
-			Timeout: researchTimeout(
-				cfg.ResearchTimeoutSec,
-			),
-		}
-
-		researchService = research.NewService(
-			researchConfig,
-		)
-
-		researchHTTPClient := &http.Client{
-			Timeout: researchTimeout(
-				cfg.ResearchTimeoutSec,
-			),
-		}
-
-		researchCacheTTL := researchCacheTTL(
-			cfg.ResearchCacheTTLMin,
-		)
-
-		if cfg.ResearchGitHub {
-			var githubProvider research.Provider
-
-			githubProvider = research.NewGitHubProvider(
-				researchHTTPClient,
-				"",
-				"",
-			)
-
-			githubProvider = research.NewCachedProvider(
-				githubProvider,
-				researchCacheTTL,
-			)
-
-			if err := researchService.Register(
-				githubProvider,
-			); err != nil {
-				logging.Default().Warn(
-					"research",
-					"GitHub provider unavailable: %v",
-					err,
-				)
-			} else {
-				logging.Default().Info(
-					"research",
-					"GitHub provider registered",
-				)
-			}
-		}
-
-		if cfg.ResearchReddit {
-			var redditProvider research.Provider
-
-			redditProvider = research.NewRedditProvider(
-				researchHTTPClient,
-				"",
-				"",
-				cfg.ResearchUserAgent,
-			)
-
-			redditProvider = research.NewCachedProvider(
-				redditProvider,
-				researchCacheTTL,
-			)
-
-			if err := researchService.Register(
-				redditProvider,
-			); err != nil {
-				logging.Default().Warn(
-					"research",
-					"Reddit provider unavailable: %v",
-					err,
-				)
-			} else {
-				logging.Default().Info(
-					"research",
-					"Reddit provider registered",
-				)
-			}
-		}
-
-		if cfg.ResearchWeb {
-			var duckDuckGoProvider research.Provider
-
-			duckDuckGoProvider =
-				research.NewDuckDuckGoProvider(
-					researchHTTPClient,
-					"",
-				)
-
-			duckDuckGoProvider = research.NewCachedProvider(
-				duckDuckGoProvider,
-				researchCacheTTL,
-			)
-
-			if err := researchService.Register(
-				duckDuckGoProvider,
-			); err != nil {
-				logging.Default().Warn(
-					"research",
-					"DuckDuckGo provider unavailable: %v",
-					err,
-				)
-			} else {
-				logging.Default().Info(
-					"research",
-					"DuckDuckGo provider registered",
-				)
-			}
-		}
-
-		if cfg.ResearchSearXNGURL != "" {
-			var searxngProvider research.Provider
-
-			searxngProvider =
-				research.NewSearXNGProvider(
-					researchHTTPClient,
-					cfg.ResearchSearXNGURL,
-				)
-
-			searxngProvider = research.NewCachedProvider(
-				searxngProvider,
-				researchCacheTTL,
-			)
-
-			if err := researchService.Register(
-				searxngProvider,
-			); err != nil {
-				logging.Default().Warn(
-					"research",
-					"SearXNG provider unavailable: %v",
-					err,
-				)
-			} else {
-				logging.Default().Info(
-					"research",
-					"SearXNG provider registered: %s",
-					cfg.ResearchSearXNGURL,
-				)
-			}
-		}
-
-		tool, err := research.NewTool(
-			researchService,
-		)
-
-		if err != nil {
-			logging.Default().Warn(
-				"research",
-				"research tool unavailable: %v",
-				err,
-			)
-		} else {
-			researchTool = tool
-
-			orch.Register(researchTool)
-
-			logging.Default().Info(
-				"research",
-				"unified research tool registered: backend=%s results=%d timeout=%s cache=%s providers=%v",
-				researchService.Backend(),
-				cfg.ResearchMaxResults,
-				researchTimeout(
-					cfg.ResearchTimeoutSec,
-				),
-				researchCacheTTL,
-				researchService.ProviderNames(),
-			)
-		}
-	}
-
-	// Vision gate: the screenshot tool refuses politely when the engine
-	// cannot see images.
-	tools.VisionCheck = func() error {
-		if cfg.IsRemote() {
-			return fmt.Errorf(
-				"the remote provider does not accept tool-result images — switch to the local engine with an mmproj projector, or attach the image to your message instead",
-			)
-		}
-
-		if !llamaSrv.VisionActive() {
-			if !cfg.VisionEnabled {
-				return fmt.Errorf(
-					"vision is disabled in Settings — enable it and add an mmproj-*.gguf projector to the models folder",
-				)
-			}
-
-			return fmt.Errorf(
-				"no multimodal projector paired with the current model — drop a matching mmproj-*.gguf (e.g. mmproj-gemma-4-E2B-it-BF16.gguf) into the models folder and restart the engine",
-			)
-		}
-
-		return nil
-	}
-
-	// Memory + persistent recall.
-	mem := memory.New(
-		cfg.DataDir + "/memory.jsonl",
-	)
-
-	engine := recall.New(
-		cfg.DataDir,
-	)
-
-	orch.Register(memory.Tool{
-		Store: mem,
-		RecallSearch: func(
-			query string,
-			k int,
-		) []string {
-			var lines []string
-
-			for _, c := range engine.Search(
-				query,
-				k,
-			) {
-				lines = append(
-					lines,
-					formatCapsuleLine(c),
-				)
-			}
-
-			return lines
-		},
-	})
-
-	if cfg.RecallEnabled {
-		orch.SetRecaller(engine)
-
-		go func() {
-			store := sessions.New(
-				cfg.SessionsDir,
-			)
-
-			if err := engine.Backfill(
-				store,
-			); err != nil {
-				logging.Default().Warn(
-					"recall",
-					"backfill: %v",
-					err,
-				)
-			} else if n := engine.Count(); n > 0 {
-				logging.Default().Info(
-					"recall",
-					"index ready: %d past exchanges",
-					n,
-				)
-			}
-		}()
-	}
-
-	// Job-Object sandbox (overrides plain codeExec when available).
-	// v1.1.4Z: the config's sandbox controls actually apply now —
-	// SandboxEnabled gates registration, SandboxMemory/SandboxCPU feed the
-	// governor (previously hardcoded 512 MB / 25% and the settings card did
-	// nothing).
-	var sb *sandbox.CodeExecSandbox
-
-	if cfg.SandboxEnabled {
-		var sbErr error
-
-		sb, sbErr = sandbox.NewCodeExecSandbox(
-			cfg.EffectiveSandboxMemoryMB(),
-			cfg.EffectiveSandboxCPUPercent(),
-			cfg.SandboxDir(),
-		)
-
-		if sbErr == nil {
-			orch.Register(sb)
-		} else {
-			logging.Default().Warn(
-				"runtime",
-				"Job-Object sandbox unavailable, using plain codeExec: %v",
-				sbErr,
-			)
-		}
-	} else {
-		logging.Default().Info(
-			"runtime",
-			"Job-Object sandbox disabled by configuration — plain codeExec in use",
-		)
-	}
-
-	multi := multiagent.NewMultiAgent(
-		client,
-		orch,
-		mem,
-		func() string { return src.Load().EffectiveModel() },
-		cfg.EffectiveMultiAgentDepth(),
-	)
-
-	// v1.1.3Z: inference traffic reports engine busy state to the
-	// authoritative state machine (no-op unless the local engine is
-	// alive, so remote providers are unaffected).
-	client.SetBusyHook(llamaSrv.MarkBusy)
-
-	// (The Stack struct itself was constructed early so the
-	// generation router could capture it; late-bound subsystems
-	// attach here.)
-	stack.Multi = multi
-	stack.Mem = mem
-	stack.Browser = nil
-	stack.Sandbox = sb
-	stack.Recall = engine
-	stack.Lab = labTool
-	stack.Research = researchService
-	stack.ResearchTool = researchTool
-	stack.Attachments = attMgr
-	stack.Cache = cache
-	stack.Linux = linuxSim
-
-	return stack
+        src := config.NewSource(cfg)
+
+        client := llm.NewClient(src)
+        orch := agent.New(src, client)
+
+        // v1.1.3Z: content-aware context cache shared by attachments, chunking
+        // pipelines and retrieval.
+        cache := contextcache.New()
+
+        // v1.1.3Z: real attachment staging under the app's private data dir.
+        attMgr, attErr := attachments.NewManager(
+                filepath.Join(cfg.DataDir, "attachments"),
+                attachments.Options{Cache: cache},
+        )
+
+        if attErr != nil {
+                logging.Default().Warn(
+                        "runtime",
+                        "attachment store unavailable: %v",
+                        attErr,
+                )
+        }
+
+        // v1.0.1: materialize AI-CONTEXT.md in the app folder.
+        if path, err := aicontext.EnsureFile(
+                cfg.DataDir,
+        ); err != nil {
+                logging.Default().Warn(
+                        "runtime",
+                        "AI context file: %v",
+                        err,
+                )
+        } else {
+                logging.Default().Info(
+                        "runtime",
+                        "AI context file: %s",
+                        path,
+                )
+        }
+
+        // Canonical base dir for every tool.
+        tools.SetBaseDir(cfg.DataDir)
+
+        // Core tools.
+        orch.Register(tools.Shell{})
+        orch.Register(tools.Files{})
+        orch.Register(tools.CodeExec{})
+        orch.Register(tools.WebSearch{})
+        orch.Register(tools.Git{})
+        orch.Register(tools.NewBrowserTool(cfg))
+        orch.Register(tools.NewDataTool(cfg))
+
+        // v1.0.10 (PRISM): structured data, archives, URLs, verification.
+        orch.Register(tools.JSONTool{})
+        orch.Register(tools.ArchiveTool{})
+        orch.Register(tools.NewFetchTool())
+        orch.Register(tools.DiffTool{})
+
+        // v1.0.6: vision + terminal.
+        llamaSrv := llm.NewLlamaServer(src)
+
+        // v1.1.5Z Phase 1: SHEYTAN Native Engine architecture. The native
+        // engine exists ONLY behind the explicit "native" opt-in; the
+        // default ("llama") preserves v1.1.4Z behavior byte-for-byte.
+        // Even when selected, generation still runs on llama.cpp until
+        // the native engine implements it (see Stack.Engine).
+        var nativeEng *nativeengine.Engine
+        var nativeBack *nativeengine.Backend
+
+        if cfg.NativeBackendEnabled() {
+                hostPath := nativeengine.DefaultHostPath(
+                        cfg.DataDir,
+                        cfg.NativeEnginePath,
+                )
+
+                nativeEng = nativeengine.New(hostPath)
+                nativeBack = nativeengine.NewBackend(nativeEng)
+
+                if !nativeEng.Available() {
+                        logging.Default().Warn(
+                                "runtime",
+                                "native engine selected but host binary not found at %s — build native/engine (CMake) or set nativeEnginePath; llama.cpp remains the engine",
+                                hostPath,
+                        )
+                }
+        }
+
+        llamaBack := llm.NewLlamaBackend(llamaSrv, client)
+
+        // v1.1.5Z Phase 5: the backend-aware generation router. The
+        // orchestrator's loop calls this seam instead of the client
+        // directly, so generation actually flows through
+        // llm.SelectGenerationBackend: the native engine when the user
+        // selected it AND it can generate (llama graph validated at load
+        // time); llama.cpp otherwise. Request shapes the native path
+        // cannot serve (tools, images) and pre-first-token native
+        // failures fall back to llama.cpp with an explicit, logged,
+        // inspectable reason — the Phase 5 activation contract.
+        stack := &Stack{
+                Src:           src,
+                Cfg:           cfg,
+                Client:        client,
+                Orch:          orch,
+                Llama:         llamaSrv,
+                Native:        nativeEng,
+                llamaBackend:  llamaBack,
+                nativeBackend: nativeBack,
+        }
+        stack.clientStream = client.StreamChatDetailed
+        orch.SetGenerationStream(stack.streamGeneration)
+
+        // ---------------------------------------------------------------------
+        // Phase 7 wiring: model capabilities → planner, dynamic toolsets →
+        // orchestrator, skills, context telemetry, programmatic pipelines.
+        // ---------------------------------------------------------------------
+
+        // Model-aware context: the effective context is min(configured,
+        // GGUF model limit, engine-reported limit). Both engines report
+        // here: the native engine reports its loaded model's limit, and
+        // llama.cpp reports its STARTUP-VERIFIED window (from /props) while
+        // the subprocess is alive (1.1.6). A dead engine reports 0 so a
+        // stale window from a previous boot can never clamp the next plan.
+        orch.SetContextLimitProvider(func(c *config.Config) int {
+                limit := 0
+
+                if stack.Llama != nil {
+                        if v := stack.Llama.EngineContextLimit(); v > 0 {
+                                limit = v
+                        }
+                }
+
+                if stack.Native != nil {
+                        if res, err := stack.Native.ModelInfo(context.Background()); err == nil &&
+                                res.Loaded && res.Model != nil && res.Model.ContextLength > 0 {
+                                native := int(res.Model.ContextLength)
+                                if limit == 0 || native < limit {
+                                        limit = native
+                                }
+                        }
+                }
+
+                return limit
+        })
+
+        // 1.1.6 §5 per-agent context: the multi-agent runner resolves each
+        // specialist's context policy against the same model/engine limits
+        // the orchestrator plans with — one source of truth, no agent gets a
+        // window the machine cannot serve.
+        if stack.Multi != nil {
+                stack.Multi.ModelLimitsFn = func() (modelMax, engineMax int) {
+                        c := src.Load()
+                        engineMax = 0
+                        if stack.Llama != nil {
+                                if v := stack.Llama.EngineContextLimit(); v > 0 {
+                                        engineMax = v
+                                }
+                        }
+                        if stack.Native != nil {
+                                if res, err := stack.Native.ModelInfo(context.Background()); err == nil &&
+                                        res.Loaded && res.Model != nil && res.Model.ContextLength > 0 {
+                                        native := int(res.Model.ContextLength)
+                                        if engineMax == 0 || native < engineMax {
+                                                engineMax = native
+                                        }
+                                }
+                        }
+                        if !c.IsRemote() {
+                                if modelPath, err := llm.ResolveModelPath(c.ModelsDir, c.Model); err == nil {
+                                        if caps := llm.ResolveModelCapabilities(c, modelPath); caps != nil {
+                                                modelMax = caps.ContextLength
+                                        }
+                                }
+                        }
+                        return modelMax, engineMax
+                }
+        }
+
+        // Skills: load-on-demand injection of VALIDATED procedures only.
+        skillStore := skills.NewStore(cfg.DataDir)
+        if err := skillStore.Load(); err != nil {
+                logging.Default().Warn("runtime", "skills store: %v", err)
+        }
+        stack.Skills = skillStore
+        orch.SetSkillSource(skillStore)
+
+        // Context-effectiveness telemetry (bounded JSONL under DataDir).
+        telemetryStore := ctxtelemetry.NewStore(cfg.DataDir)
+        stack.Telemetry = telemetryStore
+        orch.SetTelemetry(telemetryStore)
+
+        // Programmatic tool pipelines: the model declares a bounded stage
+        // plan once; the runtime executes it deterministically.
+        orch.Register(agent.NewPipelineTool(orch, src))
+
+        // Scheduler foundation: manual / startup / timer triggers; the run
+        // seam goes through the orchestrator so every scheduled run keeps the
+        // full reliability and verification machinery.
+        sched := scheduler.New(
+                filepath.Join(cfg.DataDir, "scheduler"),
+                scheduleRunner(orch),
+                func(task scheduler.Task, report scheduler.Report) {
+                        summary := fmt.Sprintf("Scheduled task %q (%s): ok=%v in %s",
+                                task.Name, report.Trigger, report.OK,
+                                time.Duration(report.DurationMs)*time.Millisecond)
+                        _ = stack.Mem.Append([]string{"scheduler", task.ID}, summary, "scheduler")
+                },
+        )
+        if err := sched.Load(); err != nil {
+                logging.Default().Warn("runtime", "scheduler tasks: %v", err)
+        }
+        stack.Sched = sched
+
+        orch.Register(tools.Screenshot{})
+
+        linuxSim := tools.NewLinuxSim(
+                cfg.DataDir,
+        )
+
+        orch.Register(linuxSim)
+
+        // Version Zeta: autonomous Coding Lab.
+        var labTool *lab.Tool
+
+        // v1.1.5Z Phase 6: persistent project intelligence. One store per
+        // install, keyed per project root. The workspace gets observed at
+        // startup (bounded walk) and the card is injected per run; Lab
+        // verification outcomes record VERIFIED build/test commands against
+        // the task's source project.
+        intel := projectintel.NewStore(
+                cfg.DataDir + "/projectintel",
+        )
+
+        if _, err := intel.Observe(cfg.WorkspaceDir()); err != nil {
+                logging.Default().Warn(
+                        "runtime",
+                        "project intelligence observe: %v",
+                        err,
+                )
+        }
+
+        if cfg.LabEnabled {
+                var err error
+
+                labTool, err = lab.NewTool(cfg)
+
+                if err != nil {
+                        logging.Default().Warn(
+                                "runtime",
+                                "Coding Lab unavailable: %v",
+                                err,
+                        )
+                } else {
+                        labTool.SetIntel(intel)
+                        orch.Register(labTool)
+
+                        logging.Default().Info(
+                                "runtime",
+                                "Coding Lab registered: workspace=%s network=%t",
+                                cfg.LabWorkspaceRoot,
+                                cfg.LabAllowNetwork,
+                        )
+                }
+        }
+
+        // Project card injection: measured facts before every run.
+        orch.SetProjectCard(func() string {
+                return intel.Card(cfg.WorkspaceDir())
+        })
+
+        // Version Zeta: unified external research.
+        var researchService *research.Service
+        var researchTool *research.Tool
+
+        if cfg.ResearchEnabled {
+                researchConfig := research.ServiceConfig{
+                        Backend:    cfg.ResearchBackend,
+                        MaxResults: cfg.ResearchMaxResults,
+                        Timeout: researchTimeout(
+                                cfg.ResearchTimeoutSec,
+                        ),
+                }
+
+                researchService = research.NewService(
+                        researchConfig,
+                )
+
+                researchHTTPClient := &http.Client{
+                        Timeout: researchTimeout(
+                                cfg.ResearchTimeoutSec,
+                        ),
+                }
+
+                researchCacheTTL := researchCacheTTL(
+                        cfg.ResearchCacheTTLMin,
+                )
+
+                if cfg.ResearchGitHub {
+                        var githubProvider research.Provider
+
+                        githubProvider = research.NewGitHubProvider(
+                                researchHTTPClient,
+                                "",
+                                "",
+                        )
+
+                        githubProvider = research.NewCachedProvider(
+                                githubProvider,
+                                researchCacheTTL,
+                        )
+
+                        if err := researchService.Register(
+                                githubProvider,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "research",
+                                        "GitHub provider unavailable: %v",
+                                        err,
+                                )
+                        } else {
+                                logging.Default().Info(
+                                        "research",
+                                        "GitHub provider registered",
+                                )
+                        }
+                }
+
+                if cfg.ResearchReddit {
+                        var redditProvider research.Provider
+
+                        redditProvider = research.NewRedditProvider(
+                                researchHTTPClient,
+                                "",
+                                "",
+                                cfg.ResearchUserAgent,
+                        )
+
+                        redditProvider = research.NewCachedProvider(
+                                redditProvider,
+                                researchCacheTTL,
+                        )
+
+                        if err := researchService.Register(
+                                redditProvider,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "research",
+                                        "Reddit provider unavailable: %v",
+                                        err,
+                                )
+                        } else {
+                                logging.Default().Info(
+                                        "research",
+                                        "Reddit provider registered",
+                                )
+                        }
+                }
+
+                if cfg.ResearchWeb {
+                        var duckDuckGoProvider research.Provider
+
+                        duckDuckGoProvider =
+                                research.NewDuckDuckGoProvider(
+                                        researchHTTPClient,
+                                        "",
+                                )
+
+                        duckDuckGoProvider = research.NewCachedProvider(
+                                duckDuckGoProvider,
+                                researchCacheTTL,
+                        )
+
+                        if err := researchService.Register(
+                                duckDuckGoProvider,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "research",
+                                        "DuckDuckGo provider unavailable: %v",
+                                        err,
+                                )
+                        } else {
+                                logging.Default().Info(
+                                        "research",
+                                        "DuckDuckGo provider registered",
+                                )
+                        }
+                }
+
+                if cfg.ResearchSearXNGURL != "" {
+                        var searxngProvider research.Provider
+
+                        searxngProvider =
+                                research.NewSearXNGProvider(
+                                        researchHTTPClient,
+                                        cfg.ResearchSearXNGURL,
+                                )
+
+                        searxngProvider = research.NewCachedProvider(
+                                searxngProvider,
+                                researchCacheTTL,
+                        )
+
+                        if err := researchService.Register(
+                                searxngProvider,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "research",
+                                        "SearXNG provider unavailable: %v",
+                                        err,
+                                )
+                        } else {
+                                logging.Default().Info(
+                                        "research",
+                                        "SearXNG provider registered: %s",
+                                        cfg.ResearchSearXNGURL,
+                                )
+                        }
+                }
+
+                tool, err := research.NewTool(
+                        researchService,
+                )
+
+                if err != nil {
+                        logging.Default().Warn(
+                                "research",
+                                "research tool unavailable: %v",
+                                err,
+                        )
+                } else {
+                        researchTool = tool
+
+                        orch.Register(researchTool)
+
+                        logging.Default().Info(
+                                "research",
+                                "unified research tool registered: backend=%s results=%d timeout=%s cache=%s providers=%v",
+                                researchService.Backend(),
+                                cfg.ResearchMaxResults,
+                                researchTimeout(
+                                        cfg.ResearchTimeoutSec,
+                                ),
+                                researchCacheTTL,
+                                researchService.ProviderNames(),
+                        )
+                }
+        }
+
+        // Vision gate: the screenshot tool refuses politely when the engine
+        // cannot see images.
+        tools.VisionCheck = func() error {
+                if cfg.IsRemote() {
+                        return fmt.Errorf(
+                                "the remote provider does not accept tool-result images — switch to the local engine with an mmproj projector, or attach the image to your message instead",
+                        )
+                }
+
+                if !llamaSrv.VisionActive() {
+                        if !cfg.VisionEnabled {
+                                return fmt.Errorf(
+                                        "vision is disabled in Settings — enable it and add an mmproj-*.gguf projector to the models folder",
+                                )
+                        }
+
+                        return fmt.Errorf(
+                                "no multimodal projector paired with the current model — drop a matching mmproj-*.gguf (e.g. mmproj-gemma-4-E2B-it-BF16.gguf) into the models folder and restart the engine",
+                        )
+                }
+
+                return nil
+        }
+
+        // Memory + persistent recall.
+        mem := memory.New(
+                cfg.DataDir + "/memory.jsonl",
+        )
+
+        engine := recall.New(
+                cfg.DataDir,
+        )
+
+        orch.Register(memory.Tool{
+                Store: mem,
+                RecallSearch: func(
+                        query string,
+                        k int,
+                ) []string {
+                        var lines []string
+
+                        for _, c := range engine.Search(
+                                query,
+                                k,
+                        ) {
+                                lines = append(
+                                        lines,
+                                        formatCapsuleLine(c),
+                                )
+                        }
+
+                        return lines
+                },
+        })
+
+        if cfg.RecallEnabled {
+                orch.SetRecaller(engine)
+
+                go func() {
+                        store := sessions.New(
+                                cfg.SessionsDir,
+                        )
+
+                        if err := engine.Backfill(
+                                store,
+                        ); err != nil {
+                                logging.Default().Warn(
+                                        "recall",
+                                        "backfill: %v",
+                                        err,
+                                )
+                        } else if n := engine.Count(); n > 0 {
+                                logging.Default().Info(
+                                        "recall",
+                                        "index ready: %d past exchanges",
+                                        n,
+                                )
+                        }
+                }()
+        }
+
+        // Job-Object sandbox (overrides plain codeExec when available).
+        // v1.1.4Z: the config's sandbox controls actually apply now —
+        // SandboxEnabled gates registration, SandboxMemory/SandboxCPU feed the
+        // governor (previously hardcoded 512 MB / 25% and the settings card did
+        // nothing).
+        var sb *sandbox.CodeExecSandbox
+
+        if cfg.SandboxEnabled {
+                var sbErr error
+
+                sb, sbErr = sandbox.NewCodeExecSandbox(
+                        cfg.EffectiveSandboxMemoryMB(),
+                        cfg.EffectiveSandboxCPUPercent(),
+                        cfg.SandboxDir(),
+                )
+
+                if sbErr == nil {
+                        orch.Register(sb)
+                } else {
+                        logging.Default().Warn(
+                                "runtime",
+                                "Job-Object sandbox unavailable, using plain codeExec: %v",
+                                sbErr,
+                        )
+                }
+        } else {
+                logging.Default().Info(
+                        "runtime",
+                        "Job-Object sandbox disabled by configuration — plain codeExec in use",
+                )
+        }
+
+        multi := multiagent.NewMultiAgent(
+                client,
+                orch,
+                mem,
+                func() string { return src.Load().EffectiveModel() },
+                cfg.EffectiveMultiAgentDepth(),
+        )
+
+        // v1.1.3Z: inference traffic reports engine busy state to the
+        // authoritative state machine (no-op unless the local engine is
+        // alive, so remote providers are unaffected).
+        client.SetBusyHook(llamaSrv.MarkBusy)
+
+        // (The Stack struct itself was constructed early so the
+        // generation router could capture it; late-bound subsystems
+        // attach here.)
+        stack.Multi = multi
+        stack.Mem = mem
+        stack.Browser = nil
+        stack.Sandbox = sb
+        stack.Recall = engine
+        stack.Lab = labTool
+        stack.Research = researchService
+        stack.ResearchTool = researchTool
+        stack.Attachments = attMgr
+        stack.Cache = cache
+        stack.Linux = linuxSim
+
+        return stack
 }
 
 // streamGeneration is the single backend-aware generation seam wired
@@ -674,135 +719,135 @@ func NewStack(cfg *config.Config) *Stack {
 //     applied to backend selection); a failure AFTER the first token
 //     surfaces to the loop like any engine error.
 func (s *Stack) streamGeneration(ctx context.Context, req *llm.ChatRequest,
-	onEvent func(llm.StreamEvent) error) (llm.PerfStats, error) {
+        onEvent func(llm.StreamEvent) error) (llm.PerfStats, error) {
 
-	selected := llm.SelectGenerationBackend(
-		s.Src.Load(),
-		s.nativeBackend,
-		s.llamaBackend,
-	)
+        selected := llm.SelectGenerationBackend(
+                s.Src.Load(),
+                s.nativeBackend,
+                s.llamaBackend,
+        )
 
-	if selected == nil || selected.Name() != "native" {
-		return s.clientStream(ctx, req, onEvent)
-	}
+        if selected == nil || selected.Name() != "native" {
+                return s.clientStream(ctx, req, onEvent)
+        }
 
-	// Native selected: request-shape check (tools / images stay on
-	// llama.cpp — documented Phase 5 limits, not silent behavior).
-	hasTools := len(req.Tools) > 0
-	hasImages := false
-	for i := range req.Messages {
-		if len(req.Messages[i].Images) > 0 {
-			hasImages = true
-			break
-		}
-	}
-	if hasTools || hasImages {
-		logging.Default().Info(
-			"native-engine",
-			"native generation skipped (request shape: tools=%v images=%v) — llama.cpp serving",
-			hasTools,
-			hasImages,
-		)
-		return s.clientStream(ctx, req, onEvent)
-	}
+        // Native selected: request-shape check (tools / images stay on
+        // llama.cpp — documented Phase 5 limits, not silent behavior).
+        hasTools := len(req.Tools) > 0
+        hasImages := false
+        for i := range req.Messages {
+                if len(req.Messages[i].Images) > 0 {
+                        hasImages = true
+                        break
+                }
+        }
+        if hasTools || hasImages {
+                logging.Default().Info(
+                        "native-engine",
+                        "native generation skipped (request shape: tools=%v images=%v) — llama.cpp serving",
+                        hasTools,
+                        hasImages,
+                )
+                return s.clientStream(ctx, req, onEvent)
+        }
 
-	emitted := false
-	wrapped := func(ev llm.StreamEvent) error {
-		if ev.Content != "" || ev.Reasoning != "" {
-			emitted = true
-		}
-		return onEvent(ev)
-	}
+        emitted := false
+        wrapped := func(ev llm.StreamEvent) error {
+                if ev.Content != "" || ev.Reasoning != "" {
+                        emitted = true
+                }
+                return onEvent(ev)
+        }
 
-	perf, err := selected.StreamGenerate(ctx, req, wrapped)
-	if err == nil {
-		return perf, nil
-	}
+        perf, err := selected.StreamGenerate(ctx, req, wrapped)
+        if err == nil {
+                return perf, nil
+        }
 
-	if !emitted {
-		// Pre-first-token failure: explicit, logged, inspectable
-		// fallback (the llama.cpp path stays fully functional).
-		logging.Default().Warn(
-			"native-engine",
-			"native generation failed before the first token (%v) — llama.cpp serving this request",
-			err,
-		)
-		return s.clientStream(ctx, req, onEvent)
-	}
+        if !emitted {
+                // Pre-first-token failure: explicit, logged, inspectable
+                // fallback (the llama.cpp path stays fully functional).
+                logging.Default().Warn(
+                        "native-engine",
+                        "native generation failed before the first token (%v) — llama.cpp serving this request",
+                        err,
+                )
+                return s.clientStream(ctx, req, onEvent)
+        }
 
-	// Mid-stream failure after content: surface like any engine
-	// error (the loop's error handling owns it).
-	return perf, err
+        // Mid-stream failure after content: surface like any engine
+        // error (the loop's error handling owns it).
+        return perf, err
 }
 
 // researchTimeout converts the configuration's seconds value
 // into a safe service/client timeout.
 func researchTimeout(seconds int) time.Duration {
-	if seconds <= 0 {
-		seconds = 20
-	}
+        if seconds <= 0 {
+                seconds = 20
+        }
 
-	return time.Duration(seconds) *
-		time.Second
+        return time.Duration(seconds) *
+                time.Second
 }
 
 // researchCacheTTL converts the configured cache lifetime in minutes.
 // Zero or negative values disable caching.
 func researchCacheTTL(minutes int) time.Duration {
-	if minutes <= 0 {
-		return 0
-	}
+        if minutes <= 0 {
+                return 0
+        }
 
-	return time.Duration(minutes) *
-		time.Minute
+        return time.Duration(minutes) *
+                time.Minute
 }
 
 // formatCapsuleLine renders one recall capsule for the memory
 // tool's history action.
 func formatCapsuleLine(
-	c recall.Capsule,
+        c recall.Capsule,
 ) string {
-	line := c.TS.Format(
-		"2006-01-02",
-	) +
-		" [" +
-		c.SessionID +
-		"]"
+        line := c.TS.Format(
+                "2006-01-02",
+        ) +
+                " [" +
+                c.SessionID +
+                "]"
 
-	if c.Title != "" {
-		line += " " + c.Title
-	}
+        if c.Title != "" {
+                line += " " + c.Title
+        }
 
-	if c.Query != "" {
-		line += "\n  asked: " + c.Query
-	}
+        if c.Query != "" {
+                line += "\n  asked: " + c.Query
+        }
 
-	if c.Answer != "" {
-		line += "\n  outcome: " + c.Answer
-	}
+        if c.Answer != "" {
+                line += "\n  outcome: " + c.Answer
+        }
 
-	return line
+        return line
 }
 
 // BrowserTool returns the shared browser tool registered in the stack.
 // (v1.1.4Z: the lazy cache is mutex-guarded — two concurrent callers could
 // previously race the field write.)
 func (s *Stack) BrowserTool() *tools.BrowserTool {
-	s.browserMu.Lock()
-	defer s.browserMu.Unlock()
+        s.browserMu.Lock()
+        defer s.browserMu.Unlock()
 
-	if s.Browser != nil {
-		return s.Browser
-	}
+        if s.Browser != nil {
+                return s.Browser
+        }
 
-	for _, t := range s.Orch.Tools() {
-		if bt, ok := t.(*tools.BrowserTool); ok {
-			s.Browser = bt
-			return bt
-		}
-	}
+        for _, t := range s.Orch.Tools() {
+                if bt, ok := t.(*tools.BrowserTool); ok {
+                        s.Browser = bt
+                        return bt
+                }
+        }
 
-	return nil
+        return nil
 }
 
 // Engine (v1.1.5Z) returns the backend that must serve a generation
@@ -812,11 +857,11 @@ func (s *Stack) BrowserTool() *tools.BrowserTool {
 // model genuinely routes generation natively; anything unsupported (or not
 // loaded) still resolves to the llama backend.
 func (s *Stack) Engine() llm.Backend {
-	return llm.SelectGenerationBackend(
-		s.Src.Load(),
-		s.nativeBackend,
-		s.llamaBackend,
-	)
+        return llm.SelectGenerationBackend(
+                s.Src.Load(),
+                s.nativeBackend,
+                s.llamaBackend,
+        )
 }
 
 // LlamaBackend exposes the llama.cpp backend adapter (contract access for
@@ -826,10 +871,10 @@ func (s *Stack) LlamaBackend() llm.Backend { return s.llamaBackend }
 // NativeBackend exposes the native engine backend adapter (nil unless the
 // native path is enabled).
 func (s *Stack) NativeBackend() llm.Backend {
-	if s.nativeBackend == nil {
-		return nil
-	}
-	return s.nativeBackend
+        if s.nativeBackend == nil {
+                return nil
+        }
+        return s.nativeBackend
 }
 
 // EnsureNativeReady brings the native engine to a USABLE state synchronously:
@@ -850,74 +895,74 @@ func (s *Stack) NativeBackend() llm.Backend {
 // reflected in GenerationCapable() — llama.cpp keeps serving those, so
 // they are fallback conditions, not engine-start failures.
 func (s *Stack) EnsureNativeReady(ctx context.Context) error {
-	if s.Native == nil {
-		return fmt.Errorf("native engine path not enabled (engineBackend != \"native\")")
-	}
+        if s.Native == nil {
+                return fmt.Errorf("native engine path not enabled (engineBackend != \"native\")")
+        }
 
-	if !s.Native.IsAlive() {
-		if err := s.Native.Start(ctx); err != nil {
-			logging.Default().Warn(
-				"native-engine",
-				"native engine did not start (llama.cpp remains the engine): %v",
-				err,
-			)
-			return err
-		}
-	}
+        if !s.Native.IsAlive() {
+                if err := s.Native.Start(ctx); err != nil {
+                        logging.Default().Warn(
+                                "native-engine",
+                                "native engine did not start (llama.cpp remains the engine): %v",
+                                err,
+                        )
+                        return err
+                }
+        }
 
-	logging.Default().Info(
-		"native-engine",
-		"native engine host ready",
-	)
+        logging.Default().Info(
+                "native-engine",
+                "native engine host ready",
+        )
 
-	// Phase 5: load the selected model NATIVELY so generation can
-	// actually flow through the native path (validate → map →
-	// metadata → llama-graph verdict). A model that does not
-	// validate stays loaded-but-incapable: generation keeps flowing
-	// to llama.cpp with the reason recorded here (inspectable).
-	cfg := s.Src.Load()
-	if cfg.IsRemote() || cfg.Model == "" {
-		return nil
-	}
+        // Phase 5: load the selected model NATIVELY so generation can
+        // actually flow through the native path (validate → map →
+        // metadata → llama-graph verdict). A model that does not
+        // validate stays loaded-but-incapable: generation keeps flowing
+        // to llama.cpp with the reason recorded here (inspectable).
+        cfg := s.Src.Load()
+        if cfg.IsRemote() || cfg.Model == "" {
+                return nil
+        }
 
-	resolved, rerr := llm.ResolveModelPath(cfg.ModelsDir, cfg.Model)
-	if rerr != nil {
-		logging.Default().Info(
-			"native-engine",
-			"native model load skipped (model %q not resolvable): %v",
-			cfg.Model,
-			rerr,
-		)
-		return nil
-	}
+        resolved, rerr := llm.ResolveModelPath(cfg.ModelsDir, cfg.Model)
+        if rerr != nil {
+                logging.Default().Info(
+                        "native-engine",
+                        "native model load skipped (model %q not resolvable): %v",
+                        cfg.Model,
+                        rerr,
+                )
+                return nil
+        }
 
-	spec := llm.ModelSpec{Path: resolved}
-	if err := s.NativeBackend().LoadModel(ctx, spec); err != nil {
-		logging.Default().Warn(
-			"native-engine",
-			"native model load failed (%s) — llama.cpp serves generation: %v",
-			resolved,
-			err,
-		)
-		return nil
-	}
+        spec := llm.ModelSpec{Path: resolved}
+        if err := s.NativeBackend().LoadModel(ctx, spec); err != nil {
+                logging.Default().Warn(
+                        "native-engine",
+                        "native model load failed (%s) — llama.cpp serves generation: %v",
+                        resolved,
+                        err,
+                )
+                return nil
+        }
 
-	if gc, ok := s.NativeBackend().(llm.GenerationCapable); ok && gc.GenerationCapable() {
-		logging.Default().Info(
-			"native-engine",
-			"native generation ACTIVE for %s (llama architecture validated; llama.cpp remains the fallback)",
-			filepath.Base(resolved),
-		)
-	} else {
-		logging.Default().Info(
-			"native-engine",
-			"native model loaded but NOT generation-capable (%s) — llama.cpp serves generation; reason: %s",
-			filepath.Base(resolved),
-			s.Native.NativeGenerationReason(),
-		)
-	}
+        if gc, ok := s.NativeBackend().(llm.GenerationCapable); ok && gc.GenerationCapable() {
+                logging.Default().Info(
+                        "native-engine",
+                        "native generation ACTIVE for %s (llama architecture validated; llama.cpp remains the fallback)",
+                        filepath.Base(resolved),
+                )
+        } else {
+                logging.Default().Info(
+                        "native-engine",
+                        "native model loaded but NOT generation-capable (%s) — llama.cpp serves generation; reason: %s",
+                        filepath.Base(resolved),
+                        s.Native.NativeGenerationReason(),
+                )
+        }
 
-	return nil
+        return nil
 }
 
 // prewarmNative runs the native start+load sequence in the background
@@ -925,21 +970,21 @@ func (s *Stack) EnsureNativeReady(ctx context.Context) error {
 // block or fail the llama.cpp path — they surface in the native engine
 // state and logs instead.
 func (s *Stack) prewarmNative() {
-	if s.Native == nil {
-		return
-	}
+        if s.Native == nil {
+                return
+        }
 
-	go func() {
-		ctx, cancel := context.WithTimeout(
-			context.Background(),
-			45*time.Second,
-		)
-		defer cancel()
+        go func() {
+                ctx, cancel := context.WithTimeout(
+                        context.Background(),
+                        45*time.Second,
+                )
+                defer cancel()
 
-		if err := s.EnsureNativeReady(ctx); err != nil {
-			return // already logged by EnsureNativeReady
-		}
-	}()
+                if err := s.EnsureNativeReady(ctx); err != nil {
+                        return // already logged by EnsureNativeReady
+                }
+        }()
 }
 
 // EnsureLLM makes sure an LLM backend is reachable and ready:
@@ -951,38 +996,38 @@ func (s *Stack) prewarmNative() {
 // This is the ONE canonical engine gate: every inference path (desktop,
 // serve, ask) funnels through it.
 func (s *Stack) EnsureLLM() error {
-	if s.Src.Load().IsRemote() {
-		logging.Default().Info(
-			"runtime",
-			"remote provider active: %s (model %s)",
-			remoteBaseURL(s.Src.Load()),
-			s.Src.Load().EffectiveModel(),
-		)
+        if s.Src.Load().IsRemote() {
+                logging.Default().Info(
+                        "runtime",
+                        "remote provider active: %s (model %s)",
+                        remoteBaseURL(s.Src.Load()),
+                        s.Src.Load().EffectiveModel(),
+                )
 
-		return nil
-	}
+                return nil
+        }
 
-	// Phase 5 repair: when the native engine is the backend actually
-	// serving generation (selected AND generation-capable — the same
-	// single selection policy that routes requests), the llama gate
-	// is already satisfied: llama.cpp is a FALLBACK, not a
-	// prerequisite, for native-serving users. This is what lets an
-	// offline / llama-less native deployment actually run.
-	if backend := s.Engine(); backend != nil && backend.Name() == "native" {
-		return nil
-	}
+        // Phase 5 repair: when the native engine is the backend actually
+        // serving generation (selected AND generation-capable — the same
+        // single selection policy that routes requests), the llama gate
+        // is already satisfied: llama.cpp is a FALLBACK, not a
+        // prerequisite, for native-serving users. This is what lets an
+        // offline / llama-less native deployment actually run.
+        if backend := s.Engine(); backend != nil && backend.Name() == "native" {
+                return nil
+        }
 
-	// v1.1.5Z: bring the native engine up too when enabled (best-effort
-	// — never blocks or fails the generation path).
-	if s.Src.Load().NativeBackendEnabled() && s.Native != nil && !s.Native.IsAlive() {
-		s.prewarmNative()
-	}
+        // v1.1.5Z: bring the native engine up too when enabled (best-effort
+        // — never blocks or fails the generation path).
+        if s.Src.Load().NativeBackendEnabled() && s.Native != nil && !s.Native.IsAlive() {
+                s.prewarmNative()
+        }
 
-	if err := s.Llama.Start(); err != nil {
-		return err
-	}
+        if err := s.Llama.Start(); err != nil {
+                return err
+        }
 
-	return nil
+        return nil
 }
 
 // PrewarmLLM boots the local engine in the background so a freshly
@@ -992,38 +1037,38 @@ func (s *Stack) EnsureLLM() error {
 // because the user may only be browsing settings; a later explicit start
 // or the first message retries through EnsureLLM.
 func (s *Stack) PrewarmLLM() {
-	if s.Src.Load().IsRemote() {
-		logging.Default().Info(
-			"runtime",
-			"remote provider active: %s (model %s) — local engine not started",
-			remoteBaseURL(s.Src.Load()),
-			s.Src.Load().EffectiveModel(),
-		)
+        if s.Src.Load().IsRemote() {
+                logging.Default().Info(
+                        "runtime",
+                        "remote provider active: %s (model %s) — local engine not started",
+                        remoteBaseURL(s.Src.Load()),
+                        s.Src.Load().EffectiveModel(),
+                )
 
-		return
-	}
+                return
+        }
 
-	// v1.1.5Z: supervised native engine (opt-in) — started alongside,
-	// never fatal.
-	s.prewarmNative()
+        // v1.1.5Z: supervised native engine (opt-in) — started alongside,
+        // never fatal.
+        s.prewarmNative()
 
-	go func() {
-		if err := s.Llama.Start(); err != nil {
-			logging.Default().Warn(
-				"engine",
-				"automatic startup failed (the agent will retry on first use): %v",
-				err,
-			)
+        go func() {
+                if err := s.Llama.Start(); err != nil {
+                        logging.Default().Warn(
+                                "engine",
+                                "automatic startup failed (the agent will retry on first use): %v",
+                                err,
+                        )
 
-			return
-		}
+                        return
+                }
 
-		logging.Default().Info(
-			"engine",
-			"local engine ready automatically (model %s)",
-			s.Src.Load().EffectiveModel(),
-		)
-	}()
+                logging.Default().Info(
+                        "engine",
+                        "local engine ready automatically (model %s)",
+                        s.Src.Load().EffectiveModel(),
+                )
+        }()
 }
 
 // EnsureLLMContext is EnsureLLM with a deadline: the run path uses it so a
@@ -1031,105 +1076,105 @@ func (s *Stack) PrewarmLLM() {
 // ready within the timeout or the request fails with a clear, visible
 // error while the startup keeps progressing in the background.
 func (s *Stack) EnsureLLMContext(ctx context.Context) error {
-	if s.Src.Load().IsRemote() {
-		return nil
-	}
+        if s.Src.Load().IsRemote() {
+                return nil
+        }
 
-	if s.Llama.IsRunning() {
-		return nil
-	}
+        if s.Llama.IsRunning() {
+                return nil
+        }
 
-	// Phase 5 repair: the native-serving early exit (see EnsureLLM).
-	// Same single selection policy — native selected + actually
-	// generation-capable — never a second, looser check.
-	if backend := s.Engine(); backend != nil && backend.Name() == "native" {
-		return nil
-	}
+        // Phase 5 repair: the native-serving early exit (see EnsureLLM).
+        // Same single selection policy — native selected + actually
+        // generation-capable — never a second, looser check.
+        if backend := s.Engine(); backend != nil && backend.Name() == "native" {
+                return nil
+        }
 
-	errCh := make(chan error, 1)
+        errCh := make(chan error, 1)
 
-	go func() {
-		errCh <- s.Llama.Start()
-	}()
+        go func() {
+                errCh <- s.Llama.Start()
+        }()
 
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		return fmt.Errorf(
-			"engine startup still in progress: %w",
-			ctx.Err(),
-		)
-	}
+        select {
+        case err := <-errCh:
+                return err
+        case <-ctx.Done():
+                return fmt.Errorf(
+                        "engine startup still in progress: %w",
+                        ctx.Err(),
+                )
+        }
 }
 
 // remoteBaseURL renders the remote endpoint for logs (empty-safe).
 func remoteBaseURL(cfg *config.Config) string {
-	if cfg.RemoteBaseURL == "" {
-		return "(unset)"
-	}
-	return cfg.RemoteBaseURL
+        if cfg.RemoteBaseURL == "" {
+                return "(unset)"
+        }
+        return cfg.RemoteBaseURL
 }
 
 // Close tears down every owned subprocess/handle.
 func (s *Stack) Close() {
-	if s.BrowserTool() != nil {
-		s.BrowserTool().Close()
-	}
+        if s.BrowserTool() != nil {
+                s.BrowserTool().Close()
+        }
 
-	if s.Sandbox != nil {
-		_ = s.Sandbox.Close()
-	}
+        if s.Sandbox != nil {
+                _ = s.Sandbox.Close()
+        }
 
-	// v1.1.5Z: stop the native engine FIRST (bounded) so its teardown
-	// never waits behind the llama.cpp stop.
-	if s.Native != nil {
-		stopCtx, cancel := context.WithTimeout(
-			context.Background(),
-			10*time.Second,
-		)
-		_ = s.Native.Stop(stopCtx)
-		cancel()
-	}
+        // v1.1.5Z: stop the native engine FIRST (bounded) so its teardown
+        // never waits behind the llama.cpp stop.
+        if s.Native != nil {
+                stopCtx, cancel := context.WithTimeout(
+                        context.Background(),
+                        10*time.Second,
+                )
+                _ = s.Native.Stop(stopCtx)
+                cancel()
+        }
 
-	_ = s.Llama.Stop()
+        _ = s.Llama.Stop()
 }
 
 // scheduleRunner adapts the orchestrator to the scheduler's Runner seam:
 // one scheduled task = one bounded agent run with the full reliability,
 // verification and telemetry machinery attached.
 func scheduleRunner(orch *agent.Orchestrator) scheduler.Runner {
-	return func(ctx context.Context, task scheduler.Task) (string, error) {
-		if orch == nil {
-			return "", fmt.Errorf("scheduler: orchestrator unavailable")
-		}
-		return orch.Run(
-			ctx,
-			[]llm.Message{{Role: "user", Content: task.Prompt}},
-			func(agent.Activity) {}, // scheduled runs publish no live stream
-		)
-	}
+        return func(ctx context.Context, task scheduler.Task) (string, error) {
+                if orch == nil {
+                        return "", fmt.Errorf("scheduler: orchestrator unavailable")
+                }
+                return orch.Run(
+                        ctx,
+                        []llm.Message{{Role: "user", Content: task.Prompt}},
+                        func(agent.Activity) {}, // scheduled runs publish no live stream
+                )
+        }
 }
 
 // StartScheduler launches the scheduler's timer loop (one Tick per
 // minute). Cancellation of the returned context stops it. The loop is
 // bounded by design: every fired task carries its own runtime budget.
 func (s *Stack) StartScheduler(ctx context.Context) {
-	if s == nil || s.Sched == nil {
-		return
-	}
+        if s == nil || s.Sched == nil {
+                return
+        }
 
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
+        go func() {
+                ticker := time.NewTicker(time.Minute)
+                defer ticker.Stop()
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				s.Sched.Tick(ctx)
-			}
-		}
-	}()
+                for {
+                        select {
+                        case <-ctx.Done():
+                                return
+                        case <-ticker.C:
+                                s.Sched.Tick(ctx)
+                        }
+                }
+        }()
 }

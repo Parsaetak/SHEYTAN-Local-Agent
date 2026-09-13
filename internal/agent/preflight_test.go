@@ -265,9 +265,12 @@ func TestCompactToolResultsPreservesStructure(t *testing.T) {
         msgs[2].ToolCalls[0].Function.Name = "shell"
         msgs[2].ToolCalls[0].Function.Arguments = "{}"
 
-        elided := compactToolResults(msgs, 1000)
+        elided, savedTokens := compactToolResults(msgs, 1000)
         if elided != 1 {
                 t.Fatalf("elided = %d, want 1", elided)
+        }
+        if savedTokens <= 0 {
+                t.Fatalf("savedTokens = %d, want > 0", savedTokens)
         }
         if msgs[3].Role != "tool" || msgs[3].ToolCallID != "1" {
                 t.Fatal("tool message structure must be preserved")
@@ -276,7 +279,7 @@ func TestCompactToolResultsPreservesStructure(t *testing.T) {
                 t.Fatal("body must be replaced by the explicit marker")
         }
         // Running again is a no-op (already elided).
-        if again := compactToolResults(msgs, 1000); again != 0 {
+        if again, againSaved := compactToolResults(msgs, 1000); again != 0 || againSaved != 0 {
                 t.Fatalf("second pass must not re-elide, got %d", again)
         }
 }

@@ -35,6 +35,25 @@
   --topbar-height: 72px;
   --sidebar-width: 270px;
   --radius: 12px;
+
+  /* ----------------------------------------------------------------
+     1.1.6 §14: canonical SHEYTAN theme tokens — one central token
+     system (dark-first, professional, technical). Every surface reads
+     these instead of hard-coding values; a future light theme only
+     swaps the token VALUES in this block.
+     ---------------------------------------------------------------- */
+  --surface: var(--panel-solid);
+  --surface-elevated: var(--panel-light);
+  --border: var(--line);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-soft);
+  --accent: var(--red);
+  --accent-strong: var(--red-hot);
+  --success: var(--green);
+  --warning: var(--yellow);
+  --error: var(--red-hot);
+  --focus: var(--blue);
 }
 
 *,
@@ -701,6 +720,48 @@ textarea:focus-visible {
 /* Workspace                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/* v1.1.6 §9/§10/§17: startup phases, first-use gate, model card facts. */
+.engine-phase {
+  color: var(--text-soft);
+}
+
+.engine-phase-warn {
+  color: var(--warning);
+}
+
+.first-use {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.first-use-title {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.first-use code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-soft);
+}
+
+.model-card-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  margin-top: 4px;
+  padding-top: 8px;
+
+  border-top: 1px solid var(--line-soft);
+}
+
+.model-card-facts .session-detail {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .workspace {
   min-width: 0;
   min-height: 0;
@@ -765,6 +826,64 @@ textarea:focus-visible {
   gap: 10px;
 
   flex: 0 0 auto;
+}
+
+/* v1.1.6 §16: per-chat context state in the session header. */
+.ctx-pill {
+  min-height: 27px;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+
+  padding: 0 9px;
+
+  border: 1px solid var(--border);
+  border-radius: 999px;
+
+  background: var(--surface);
+}
+
+.ctx-pill-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
+
+.ctx-select {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  outline-color: var(--focus);
+}
+
+.ctx-usage-value {
+  font-size: 12px;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-usage.ctx-critical {
+  border-color: var(--line-red);
+  color: var(--error);
+}
+
+.ctx-usage.ctx-critical .ctx-usage-value {
+  color: var(--error);
+}
+
+.runtime-pill-degraded {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.runtime-pill-degraded::before {
+  content: "!";
+  margin-right: 6px;
+  font-weight: 700;
 }
 
 .runtime-pill {

@@ -20,6 +20,9 @@
 # the file existed on disk, `git add .` skipped it, and GitHub got ENOENT.
 /build/*
 !/build/config.yml
+# 1.1.6 §12: the multi-resolution brand icon is committed packaging
+# metadata (regenerated deterministically by scripts/gen-syso).
+!/build/sheytan.ico
 *.exe
 *.syso
 *.zip

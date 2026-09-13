@@ -1765,3 +1765,89 @@ A genuinely small real llama.cpp GGUF run was not possible in this
 environment (no prebuilt llama-server for this host); the fixture-based
 contract validation is reported as such, distinctly from the REAL native
 inference run above.
+
+---
+
+## v1.1.6-zeta Stabilisation Log (2026-09-13)
+
+Task: 1.1.6 stabilisation / next update — CI deadlock fix, architectural
+context-overflow protection, per-session + per-agent context, startup UX,
+Windows icon/branding/theme, Settings scrolling, docs, validation,
+replacement ZIP.
+
+### P0 #1 — `internal/improve` Linux CI deadlock (FIXED)
+
+- Root cause confirmed in `internal/improve/improve.go`: `Propose()` and
+  `RecordAttempt()` locked `s.mu` and then called the locking `Load()` —
+  `sync.Mutex` is not reentrant → the 10-minute test panic in
+  `TestProposeRequiresCompleteDefinition` (Actions run 34758505188).
+- Fix: `Load()` = lock + `loadLocked()`; `Propose()`/`RecordAttempt()`/
+  `Active()` use `loadLocked()` under the already-held mutex. Save errors
+  are now propagated instead of swallowed.
+- Regression tests added: `TestProposeCompletesImmediately`,
+  `TestRecordAttemptCompletesImmediately` (watchdog-guarded),
+  `TestConcurrentStoreAccess` (8 writers × 12 verified attempts +
+  concurrent readers; asserts no lost updates and correct promotion),
+  `TestPersistenceRoundTrip`, `TestEvidenceBounded`,
+  `TestStoreBoundedToMaxTactics`. All pass with `-race`.
+
+### P0 #2 — Context overflow architecture (CLOSED)
+
+- Per-session context policy: `sessions.Context.ContextTokens`, persisted
+  with the session, editable per chat via `GET/PUT
+  /api/sessions/{id}/context`; the run path passes
+  `agent.WithSessionContext(...)` into `RunDetailed`.
+- Resolution chain implemented exactly once, in `llm.ResolveSessionContext`:
+  effective = min(session policy, global configured, model GGUF max,
+  engine-verified window), floored at 1024, every clamp recorded.
+- The engine's verified window (llama.cpp `/props` while alive; native
+  loaded-model limit) feeds back into planning through the context-limit
+  provider (`EngineContextLimit` returns 0 for a dead engine — a stale
+  window can never clamp the next plan).
+- Wire truthfulness: `BuildChatRequestWithOptions` sends the validated
+  effective `n_ctx`, not the raw global value.
+- Resource protection: `internal/llm/resources.go` classifies candidate
+  windows (weights + KV-cache from GGUF facts + runtime overhead vs
+  RAM/VRAM) into safe/caution/unsupported; the API rejects unsupported
+  values with the reason; the selector ladder (4K…128K) exposes per-rung
+  verdicts and model/engine clamp flags.
+- Per-agent policies: `internal/multiagent/context.go` — per-role
+  requested/minimum/maximum/outputReserve, resolved against the same
+  limits, logged per consult, applied to planner/critic/summarizer/
+  specialist requests; specialist activity captions show the resolved
+  context.
+- Telemetry: `TurnRecord` now carries the full decision trail
+  (requested/effective/modelMax/engineMax/session policy, per-section
+  token split, elided/compressed, rolloverTriggered, overflowPrevented);
+  the orchestrator logs a structured `context plan:` block BEFORE the
+  engine call; refusal gates set `overflowPrevented`.
+
+### Startup / readiness / branding / Settings
+
+- Engine snapshot gains `phase` (waiting → downloading-engine →
+  loading-model → checking-capabilities → ready), `verified`,
+  `verifiedModel`, `verifiedContext`, `degraded` — "ready" means verified
+  serving; degraded startup is visible.
+- UI: header CONTEXT selector + USED meter + status from the backend;
+  first-use gate (No model selected / Choose model / Open models folder);
+  model card facts; startup phase labels.
+- Windows: `scripts/gen-syso` emits the full 16/24/32/48/64/128/256 ladder
+  and `build/sheytan.ico`; the `.syso` stays build-time-generated (CI runs
+  gen-syso). Branding: `document.title` per layer, "Go + Wails" footer
+  removed. Theme: central token block in `styles.css` (surface/border/
+  text/accent/…), settings.css undefined variables now resolve to real
+  tokens. Settings scrolling: `.settings-page` is the app-level scroll
+  container with a sticky solid toolbar and keyboard focus support.
+
+### Validation (Linux, CI-equivalent)
+
+- `go test -tags headless ./internal/... -count=1` PASS
+- `go test -race -tags headless ./internal/improve/` PASS
+- `go vet -tags headless ./internal/...` PASS
+- `npm run typecheck`, `npm run lint`, `npm run build` PASS (embedded
+  frontend regenerated)
+- `node scripts/release-version.mjs --check` PASS
+- native engine C++ build + ctest PASS
+- Real Windows/model smoke: not executable in this environment (headless
+  Linux); everything reproducible headlessly is green. Recorded in
+  UPDATE.md § KNOWN LIMITATIONS.

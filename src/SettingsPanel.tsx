@@ -209,7 +209,7 @@ function SettingsPanel() {
 
   if (!config) {
     return (
-      <div className="settings-page">
+      <div className="settings-page" tabIndex={-1}>
         <div className="settings-loading">
           <div className="panel-loading-mark">✦</div>
           <strong>Loading runtime configuration</strong>

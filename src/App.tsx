@@ -76,6 +76,14 @@ function App() {
 
   const activeLayer = getWorkspaceLayer(view);
 
+  // v1.1.6 §13: a consistent SHEYTAN identity on every workspace layer
+  // (window title / taskbar). "SHEYTAN", "SHEYTAN — Settings", … — never
+  // generic shell or localhost strings.
+  useEffect(() => {
+    document.title =
+      view === "agent" ? "SHEYTAN" : `SHEYTAN — ${activeLayer.label}`;
+  }, [view, activeLayer.label]);
+
   const statusLabel =
     connection === "connected"
       ? "Connected"
@@ -108,7 +116,7 @@ function App() {
         </div>
 
         <div className="topbar-meta">
-          <span>{appVersion ?? "v1.1.4Z"}</span>
+          <span>{appVersion ?? "v1.1.6"}</span>
         </div>
       </header>
 
@@ -158,8 +166,8 @@ function App() {
           )}
 
           <div className="sidebar-footer">
-            <span>Native runtime</span>
-            <span>Go + Wails</span>
+            <span>SHEYTAN™ Local-Agent</span>
+            <span>Native runtime · offline</span>
           </div>
         </aside>
 

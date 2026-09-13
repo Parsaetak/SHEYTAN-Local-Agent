@@ -1,7 +1,7 @@
-SHEYTAN-Local-Agent v1.1.6-zeta — Phase 7 Replacement Manifest
+SHEYTAN-Local-Agent v1.1.6-zeta — Stabilisation Replacement Manifest
 ================================================================
-Base: main @ f3fe78a6ab7423fd35c55ba86c9a9c0cea5e9f38 (v1.1.5-zeta Phase 6)
-Package: SHEYTAN-local-agent-1.1.6-zeta-phase7-replacement.zip
+Base: main @ a1cfb5d0bdb5382b8c69b5587891f5edf4d96ddb (1.1.6)
+Package: SHEYTAN-local-agent-1.1.6-zeta-stabilisation-replacement.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
@@ -10,7 +10,7 @@ The exact per-file change map (with reasons) lives in UPDATE.md.
 [PACKAGE METADATA]
   UPDATE.md
     status:   modified
-    purpose:  This replacement package's exact change map (Phase 7)
+    purpose:  This replacement package's exact change map
   REPLACEMENT-MANIFEST.txt
     status:   modified
     purpose:  This manifest
@@ -19,83 +19,89 @@ The exact per-file change map (with reasons) lives in UPDATE.md.
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  internal/llm/capability.go
-  internal/llm/capability_test.go
-  internal/llm/modelcaps.go
-  internal/llm/modelcaps_test.go
-  internal/toolsets/toolsets.go
-  internal/toolsets/toolsets_test.go
-  internal/skills/skills.go
-  internal/skills/skills_test.go
-  internal/pipeline/pipeline.go
-  internal/pipeline/pipeline_test.go
-  internal/agent/pipeline_tool.go
-  internal/agent/preflight_test.go
-  internal/computer/computer.go
-  internal/computer/computer_test.go
-  internal/mcp/mcp.go
-  internal/scheduler/scheduler.go
-  internal/scheduler/scheduler_test.go
-  internal/ctxtelemetry/ctxtelemetry.go
-  internal/ctxtelemetry/ctxtelemetry_test.go
-  internal/improve/improve.go
-  internal/improve/improve_test.go
-  internal/contextplan/contextplan_phase7_test.go
-  internal/multiagent/specialists.go
-  internal/native/engine/phase7_acceptance_test.go
+  build/sheytan.ico
+  internal/api/sessioncontext.go
+  internal/api/sessioncontext_test.go
+  internal/llm/resources.go
+  internal/llm/resources_test.go
+  internal/multiagent/context.go
+  internal/multiagent/context_test.go
 
 [MODIFIED FILES]
-  internal/llm/speed.go
-    purpose:  ROOT-CAUSE FIX 1: version-aware Speed Pack emission (capability profile)
-  internal/llm/llama.go
-    purpose:  ROOT-CAUSE FIX 1+3: capability-aware launch, pre-launch validation, surgical repair, verified startup state machine, model-aware --ctx-size
-  internal/llm/llama_test.go
-    purpose:  fake engine strict CLI-contract modes + argv recording + /v1/models + /props
-  internal/contextplan/contextplan.go
-    purpose:  ROOT-CAUSE FIX 2 primitives: safety margin, prompt ceiling, overflow, adjustments, reserve fix
+  .gitignore
+    purpose:  re-include build/sheytan.ico (committed packaging metadata)
+  REPLACEMENT-MANIFEST.txt
+    purpose:  regenerated for this tree
+  REPLACEMENT-SHA256.txt
+    purpose:  regenerated for this tree
   internal/agent/orchestrator.go
-    purpose:  ROOT-CAUSE FIX 2: preflight budget pipeline, degradation ladder, guaranteed-fit gates, in-loop fit guard, toolsets/skills/telemetry integration
-  internal/aicontext/aicontext.go
-    purpose:  CompactSystemMessage for the context-pressure ladder
-  internal/aicontext/AI-CONTEXT.md
-    purpose:  runtime briefing updated (capability adapter + context budget), version 11
+    purpose:  RunOptions + WithSessionContext; full context telemetry; context plan log
+  internal/agent/preflight_test.go
+    purpose:  compactToolResults two-value return
+  internal/api/engine.go
+    purpose:  startup phase + verified readiness + degraded visibility
+  internal/api/server.go
+    purpose:  session context routes; model card fields; run passes session policy
+  internal/ctxtelemetry/ctxtelemetry.go
+    purpose:  full per-turn context decision trail fields
+  internal/improve/improve.go
+    purpose:  P0 CI deadlock fix: loadLocked() under held mutex; error propagation
+  internal/improve/improve_test.go
+    purpose:  P0 regression tests: watchdogs, concurrency, persistence, bounding
+  internal/llm/client.go
+    purpose:  BuildChatRequestWithOptions: wire n_ctx = validated effective context
+  internal/llm/llama.go
+    purpose:  EngineContextLimit (verified window while alive); VerifiedReady
+  internal/llm/modelcaps.go
+    purpose:  EffectiveContext Requested/SessionPolicy; ResolveSessionContext chain
   internal/multiagent/multiagent.go
-    purpose:  Phase 7C specialist consultation hook
+    purpose:  per-role resolved NumCtx on planner/critic/summarizer; ModelLimitsFn
+  internal/multiagent/specialists.go
+    purpose:  specialist consults resolve + log context policy; activity captions
   internal/runtime/runtime.go
-    purpose:  Phase 7 wiring: context limits, skills, telemetry, pipeline tool, scheduler
-  package.json
-    purpose:  version 1.1.6-zeta (single source of truth)
-  internal/config/config.go
-    purpose:  AppVersion 1.1.6 (synced)
-  build/config.yml
-    purpose:  productVersion 1.1.6-zeta (synced)
-  SIGNATURE
-    purpose:  first line v1.1.6 (synced)
-  .github/workflows/build-desktop.yml
-    purpose:  APP_VERSION 1.1.6 (synced)
-  README.md
-    purpose:  Phase 7 capability section + honest row updates
-  ARCHITECTURE.md
-    purpose:  Part I Phase 7 truth-table rows; II.5/II.6 status updates
-  agent.md
-    purpose:  v1.1.6Z engineering handoff
-  worklog.md
-    purpose:  Phase 7 implementation log
+    purpose:  context-limit provider: llama verified window + native; ModelLimitsFn wiring
+  internal/sessions/sessions.go
+    purpose:  per-session context policy field (Context.ContextTokens)
+  internal/sessions/sessions_test.go
+    purpose:  per-chat policy persistence round trip
+  scripts/gen-syso/main.go
+    purpose:  16-256 icon ladder (24px added); build/sheytan.ico emission
+  src/AgentBody.tsx
+    purpose:  first-use gate, model card facts, startup phases, degraded warning
+  src/AgentHeader.tsx
+    purpose:  chat header CONTEXT selector + USED meter + status pill
+  src/App.tsx
+    purpose:  per-layer SHEYTAN titles; branded sidebar footer; version fallback
+  src/SettingsPanel.tsx
+    purpose:  focusable scroll container (keyboard scrolling)
+  src/api.ts
+    purpose:  context endpoints client + extended engine/model/session types
+  src/settings.css
+    purpose:  app-level scroll container + sticky solid toolbar + tokens
+  src/store.ts
+    purpose:  per-session context status state + actions
+  src/styles.css
+    purpose:  central theme tokens (§14) + header/panel additions
+  web/static/index.html
+    purpose:  regenerated embedded frontend (hash references)
 
-[DELETED FILES]
-  web/static/assets/AgentBody-2-br3YvV.js
-  web/static/assets/AgentHeader-B8b76u9o.js
-  web/static/assets/AgentSidebar-DJaBwMC5.js
-  web/static/assets/LabPanel-CW_A6EcB.js
-  web/static/assets/ResearchPanel-Qeb2hrAX.js
-  web/static/assets/SettingsPanel-C5Hpkvys.js
-  web/static/assets/index-C1xyllm1.js
-    purpose:  stale pre-Phase-6 Vite bundles replaced by the hashed set referenced by web/static/index.html
+[DOCUMENTATION]
+  ARCHITECTURE.md
+    purpose:  II.5: 1.1.6 context control status
+  README.md
+    purpose:  1.1.6-zeta stabilisation section (honest states)
+  UPDATE.md
+    purpose:  this phase's change map
+  agent.md
+    purpose:  1.1.6-zeta engineering handoff
+  worklog.md
+    purpose:  stabilisation log appended
 
 [UNCHANGED — DO NOT TOUCH]
-  internal/lab/**, internal/agent/reliability.go, internal/agent/verification.go,
-  internal/memory/**, internal/recall/**, internal/continuum/**,
-  internal/sandbox/**, internal/proc/**, internal/updater/**,
-  internal/browser/**, internal/tools/**, internal/research/**, internal/api/**,
-  native/engine/src/**, native/engine/include/**, scripts/**, src/**,
-  web/embed.go, go.mod, go.sum, LICENSE, FIX-README.md
+  Everything else in the tree. In particular the managed llama.cpp
+  lifecycle, the native C++ engine, backend router, Coding Lab,
+  project intelligence, research providers, memory/recall, context
+  cache, Continuum, skills, toolsets, MCP, browser/computer tooling,
+  verification, reliability, safe editing, sandbox, security
+  controls, streaming, Wails embedding, API/WebSocket contracts.
+

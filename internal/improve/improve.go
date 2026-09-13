@@ -91,7 +91,14 @@ func NewStore(dir string) *Store {
 func (s *Store) Load() ([]Tactic, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.loadLocked()
+}
 
+// loadLocked reads all tactics. It MUST be called with s.mu already held.
+// Callers that already hold the lock must use this instead of Load(), which
+// re-acquires the mutex. sync.Mutex is not reentrant: Load() under a held
+// lock deadlocks (the 1.1.6 CI hang in Propose/RecordAttempt).
+func (s *Store) loadLocked() ([]Tactic, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -149,7 +156,10 @@ func (s *Store) Propose(t Tactic) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	existing, _ := s.Load()
+	existing, err := s.loadLocked()
+	if err != nil {
+		return fmt.Errorf("read tactic store: %w", err)
+	}
 	for i := range existing {
 		if existing[i].ID == t.ID {
 			return fmt.Errorf("tactic %q already exists", t.ID)
@@ -160,7 +170,9 @@ func (s *Store) Propose(t Tactic) error {
 	t.Created = time.Now().UTC()
 	t.Updated = t.Created
 
-	s.saveLocked(append(existing, t))
+	if err := s.saveLocked(append(existing, t)); err != nil {
+		return fmt.Errorf("persist tactic: %w", err)
+	}
 	return nil
 }
 
@@ -176,7 +188,10 @@ func (s *Store) RecordAttempt(att Attempt) (State, error) {
 		att.At = time.Now().UTC()
 	}
 
-	existing, _ := s.Load()
+	existing, err := s.loadLocked()
+	if err != nil {
+		return "", fmt.Errorf("read tactic store: %w", err)
+	}
 	for i := range existing {
 		if existing[i].ID != att.TacticID {
 			continue
@@ -214,7 +229,9 @@ func (s *Store) RecordAttempt(att Attempt) (State, error) {
 			// Unverified attempts change nothing — by design.
 		}
 
-		s.saveLocked(existing)
+		if err := s.saveLocked(existing); err != nil {
+			return "", fmt.Errorf("persist tactic: %w", err)
+		}
 		return t.State, nil
 	}
 
@@ -223,7 +240,10 @@ func (s *Store) RecordAttempt(att Attempt) (State, error) {
 
 // Active returns the tactics allowed to guide planning (active state only).
 func (s *Store) Active() []Tactic {
-	all, _ := s.Load()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	all, _ := s.loadLocked()
 	var out []Tactic
 	for _, t := range all {
 		if t.State == StateActive {

@@ -1,143 +1,143 @@
 package llm
 
 import (
-	"bufio"
-	"bytes"
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
+        "bufio"
+        "bytes"
+        "context"
+        "encoding/json"
+        "errors"
+        "fmt"
+        "io"
+        "net/http"
+        "os"
+        "path/filepath"
+        "strings"
+        "sync"
+        "sync/atomic"
+        "time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
 )
 
 // Message is an OpenAI-style chat message.
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+        Role       string     `json:"role"`
+        Content    string     `json:"content,omitempty"`
+        ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+        ToolCallID string     `json:"tool_call_id,omitempty"`
+        Name       string     `json:"name,omitempty"`
 
-	// Reasoning holds the model's separate thinking trace (v1.0.2
-	// thinking mode): native reasoning_content from the endpoint, or
-	// extracted <think>…</think> blocks. Persisted with the session but
-	// never re-sent to the API (json:"-" on the wire would break some
-	// strict servers, so it is stripped when building requests via
-	// StripReasoning).
-	Reasoning   string   `json:"reasoning,omitempty"`
-	Attachments []string `json:"attachments,omitempty"` // display-only file names
+        // Reasoning holds the model's separate thinking trace (v1.0.2
+        // thinking mode): native reasoning_content from the endpoint, or
+        // extracted <think>…</think> blocks. Persisted with the session but
+        // never re-sent to the API (json:"-" on the wire would break some
+        // strict servers, so it is stripped when building requests via
+        // StripReasoning).
+        Reasoning   string   `json:"reasoning,omitempty"`
+        Attachments []string `json:"attachments,omitempty"` // display-only file names
 
-	// Images (v1.0.6 vision): file paths of images attached to this
-	// message. Persisted with the session so history keeps them; on the
-	// WIRE they are converted into OpenAI content parts (image_url data
-	// URLs) for the current turn and degraded to text notes for older
-	// turns (see wireMessages — re-encoding every historical image every
-	// iteration would stall the agent loop).
-	Images []string `json:"images,omitempty"`
+        // Images (v1.0.6 vision): file paths of images attached to this
+        // message. Persisted with the session so history keeps them; on the
+        // WIRE they are converted into OpenAI content parts (image_url data
+        // URLs) for the current turn and degraded to text notes for older
+        // turns (see wireMessages — re-encoding every historical image every
+        // iteration would stall the agent loop).
+        Images []string `json:"images,omitempty"`
 
-	// Feedback (v1.0.6): the user's 👍/👎 verdict on an assistant message.
-	// 0 = none, +1 = like, -1 = dislike. Persisted with the session and
-	// mirrored into the recall engine (liked answers rank higher in future
-	// memory searches). Never sent to the API.
-	Feedback int `json:"feedback,omitempty"`
+        // Feedback (v1.0.6): the user's 👍/👎 verdict on an assistant message.
+        // 0 = none, +1 = like, -1 = dislike. Persisted with the session and
+        // mirrored into the recall engine (liked answers rank higher in future
+        // memory searches). Never sent to the API.
+        Feedback int `json:"feedback,omitempty"`
 
-	// At (v1.0.6): when the message was sent — rendered as the bubble's
-	// timestamp. Zero = unknown (legacy sessions). Never sent to the API.
-	At time.Time `json:"at,omitempty"`
+        // At (v1.0.6): when the message was sent — rendered as the bubble's
+        // timestamp. Zero = unknown (legacy sessions). Never sent to the API.
+        At time.Time `json:"at,omitempty"`
 }
 
 // StripReasoning returns a copy of msgs with the reasoning and attachment
 // display fields removed — the chat-completions wire format knows neither.
 func StripReasoning(msgs []Message) []Message {
-	out := make([]Message, len(msgs))
-	copy(out, msgs)
-	for i := range out {
-		out[i].Reasoning = ""
-		out[i].Attachments = nil
-		out[i].Feedback = 0
-		out[i].At = time.Time{}
-	}
-	return out
+        out := make([]Message, len(msgs))
+        copy(out, msgs)
+        for i := range out {
+                out[i].Reasoning = ""
+                out[i].Attachments = nil
+                out[i].Feedback = 0
+                out[i].At = time.Time{}
+        }
+        return out
 }
 
 type ToolCall struct {
-	// Index identifies the streaming slot this delta belongs to. OpenAI-
-	// compatible servers stream tool-call arguments in fragments tagged
-	// with index; assembling by index (not by arrival order) is required
-	// when several tool calls are streamed interleaved.
-	Index    int    `json:"index"`
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
+        // Index identifies the streaming slot this delta belongs to. OpenAI-
+        // compatible servers stream tool-call arguments in fragments tagged
+        // with index; assembling by index (not by arrival order) is required
+        // when several tool calls are streamed interleaved.
+        Index    int    `json:"index"`
+        ID       string `json:"id"`
+        Type     string `json:"type"`
+        Function struct {
+                Name      string `json:"name"`
+                Arguments string `json:"arguments"`
+        } `json:"function"`
 }
 
 // Client is the OpenAI-compatible chat client. It talks to either the
 // bundled llama.cpp server (provider=local) or any remote OpenAI-compatible
 // endpoint (provider=remote) using cfg.EffectiveBaseURL/APIKey.
 type Client struct {
-	// src is the live config source: sampling values are read per request
-	// so Settings patches apply to the very next call (v1.1.4Z: previously
-	// a shared mutable pointer — a data race against the config patcher).
-	src  *config.Source
-	http *http.Client
+        // src is the live config source: sampling values are read per request
+        // so Settings patches apply to the very next call (v1.1.4Z: previously
+        // a shared mutable pointer — a data race against the config patcher).
+        src  *config.Source
+        http *http.Client
 
-	// streamHTTP serves streaming requests. It carries NO overall timeout
-	// (a 10-minute cap silently truncated long generations); the request
-	// context plus the stream stall watchdog provide the bounds instead.
-	streamHTTP *http.Client
+        // streamHTTP serves streaming requests. It carries NO overall timeout
+        // (a 10-minute cap silently truncated long generations); the request
+        // context plus the stream stall watchdog provide the bounds instead.
+        streamHTTP *http.Client
 
-	// v1.1.3Z: engine busy hook. Runtime wiring sets it to LlamaServer
-	// MarkBusy so real inference traffic flips the authoritative engine
-	// state ready↔busy for the UI. Nil = no reporting (tests).
-	busyMu   sync.RWMutex
-	busyHook func(busy bool)
+        // v1.1.3Z: engine busy hook. Runtime wiring sets it to LlamaServer
+        // MarkBusy so real inference traffic flips the authoritative engine
+        // state ready↔busy for the UI. Nil = no reporting (tests).
+        busyMu   sync.RWMutex
+        busyHook func(busy bool)
 
-	// v1.0.6: encoded-image cache. The agent loop rebuilds the request
-	// every iteration; without the cache a 1 MB screenshot would be
-	// base64-encoded dozens of times per turn. Keyed by path, invalidated
-	// by mtime, hard-capped at 8 entries (one turn's worth).
-	imgCacheMu sync.Mutex
-	imgCache   map[string]imageCacheEntry
+        // v1.0.6: encoded-image cache. The agent loop rebuilds the request
+        // every iteration; without the cache a 1 MB screenshot would be
+        // base64-encoded dozens of times per turn. Keyed by path, invalidated
+        // by mtime, hard-capped at 8 entries (one turn's worth).
+        imgCacheMu sync.Mutex
+        imgCache   map[string]imageCacheEntry
 }
 
 // SetBusyHook wires the engine busy reporter. Safe under concurrency
 // (v1.1.4Z: previously an unsynchronized write raced the streaming read
 // path — benign only because wiring happened at boot, now guaranteed).
 func (c *Client) SetBusyHook(fn func(busy bool)) {
-	c.busyMu.Lock()
-	c.busyHook = fn
-	c.busyMu.Unlock()
+        c.busyMu.Lock()
+        c.busyHook = fn
+        c.busyMu.Unlock()
 }
 
 // markBusy reports an inference window to the wired hook, if any.
 func (c *Client) markBusy(busy bool) {
-	c.busyMu.RLock()
-	fn := c.busyHook
-	c.busyMu.RUnlock()
+        c.busyMu.RLock()
+        fn := c.busyHook
+        c.busyMu.RUnlock()
 
-	if fn != nil {
-		fn(busy)
-	}
+        if fn != nil {
+                fn(busy)
+        }
 }
 
 type imageCacheEntry struct {
-	modTime time.Time
-	url     string
+        modTime time.Time
+        url     string
 }
 
 // newTunedTransport builds the shared HTTP transport (v1.0.4 Speed Pack):
@@ -145,79 +145,79 @@ type imageCacheEntry struct {
 // streaming chat calls, and parallel tool requests reuse one warm
 // connection instead of paying a fresh TCP handshake every time.
 func newTunedTransport() *http.Transport {
-	return &http.Transport{
-		MaxIdleConns:        16,
-		MaxIdleConnsPerHost: 8,
-		IdleConnTimeout:     120 * time.Second,
-		DisableCompression:  false,
-	}
+        return &http.Transport{
+                MaxIdleConns:        16,
+                MaxIdleConnsPerHost: 8,
+                IdleConnTimeout:     120 * time.Second,
+                DisableCompression:  false,
+        }
 }
 
 func NewClient(src *config.Source) *Client {
-	// v1.1.4Z: two clients. `http` keeps the 10-minute overall timeout for
-	// non-streaming calls. `streamHTTP` has no overall timeout — long
-	// generations are legal — but the transport bounds the response HEADER
-	// wait and the SSE read loop is guarded by the stall watchdog in
-	// streamOnce (5 minutes without a single byte = abort).
-	streamTransport := newTunedTransport()
-	streamTransport.ResponseHeaderTimeout = 2 * time.Minute
+        // v1.1.4Z: two clients. `http` keeps the 10-minute overall timeout for
+        // non-streaming calls. `streamHTTP` has no overall timeout — long
+        // generations are legal — but the transport bounds the response HEADER
+        // wait and the SSE read loop is guarded by the stall watchdog in
+        // streamOnce (5 minutes without a single byte = abort).
+        streamTransport := newTunedTransport()
+        streamTransport.ResponseHeaderTimeout = 2 * time.Minute
 
-	return &Client{
-		src:        src,
-		http:       &http.Client{Timeout: 10 * time.Minute, Transport: newTunedTransport()},
-		streamHTTP: &http.Client{Transport: streamTransport},
-	}
+        return &Client{
+                src:        src,
+                http:       &http.Client{Timeout: 10 * time.Minute, Transport: newTunedTransport()},
+                streamHTTP: &http.Client{Transport: streamTransport},
+        }
 }
 
 // ChatRequest is the body sent to /v1/chat/completions.
 type ChatRequest struct {
-	Model            string     `json:"model"`
-	Messages         []Message  `json:"-"` // marshaled via MarshalJSON (wire form)
-	Temperature      float64    `json:"temperature,omitempty"`
-	TopP             float64    `json:"top_p,omitempty"`
-	TopK             int        `json:"top_k,omitempty"`
-	MinP             float64    `json:"min_p,omitempty"` // llama.cpp sampler
-	MaxTokens        int        `json:"max_tokens,omitempty"`
-	Stop             []string   `json:"stop,omitempty"`
-	Seed             int        `json:"seed,omitempty"`
-	PresencePenalty  float64    `json:"presence_penalty,omitempty"`  // OpenAI standard
-	FrequencyPenalty float64    `json:"frequency_penalty,omitempty"` // OpenAI standard
-	RepeatLastN      int        `json:"repeat_last_n,omitempty"`     // llama.cpp sampler
-	Stream           bool       `json:"stream,omitempty"`
-	Tools            []ToolSpec `json:"tools,omitempty"`
-	NumCtx           int        `json:"n_ctx,omitempty"`
-	// CachePrompt asks llama.cpp to reuse the KV cache across turns
-	// (v1.0.4). Together with --cache-reuse on the server this collapses
-	// the repeated agent prefix (AI context + tool schemas) to a near-zero
-	// prefill after the first turn. Harmless no-op on other servers.
-	CachePrompt bool `json:"cache_prompt"`
+        Model            string     `json:"model"`
+        Messages         []Message  `json:"-"` // marshaled via MarshalJSON (wire form)
+        Temperature      float64    `json:"temperature,omitempty"`
+        TopP             float64    `json:"top_p,omitempty"`
+        TopK             int        `json:"top_k,omitempty"`
+        MinP             float64    `json:"min_p,omitempty"` // llama.cpp sampler
+        MaxTokens        int        `json:"max_tokens,omitempty"`
+        Stop             []string   `json:"stop,omitempty"`
+        Seed             int        `json:"seed,omitempty"`
+        PresencePenalty  float64    `json:"presence_penalty,omitempty"`  // OpenAI standard
+        FrequencyPenalty float64    `json:"frequency_penalty,omitempty"` // OpenAI standard
+        RepeatLastN      int        `json:"repeat_last_n,omitempty"`     // llama.cpp sampler
+        Stream           bool       `json:"stream,omitempty"`
+        Tools            []ToolSpec `json:"tools,omitempty"`
+        NumCtx           int        `json:"n_ctx,omitempty"`
+        // CachePrompt asks llama.cpp to reuse the KV cache across turns
+        // (v1.0.4). Together with --cache-reuse on the server this collapses
+        // the repeated agent prefix (AI context + tool schemas) to a near-zero
+        // prefill after the first turn. Harmless no-op on other servers.
+        CachePrompt bool `json:"cache_prompt"`
 
-	// wire (v1.0.6) is the precomputed multimodal wire form produced by
-	// BuildChatRequest: messages with images become OpenAI content parts.
-	// nil → MarshalJSON derives a plain string-content wire copy (the
-	// pre-v1.0.6 behavior, used by direct constructions like the
-	// multi-agent planner prompts).
-	wire []wireMessage `json:"-"`
+        // wire (v1.0.6) is the precomputed multimodal wire form produced by
+        // BuildChatRequest: messages with images become OpenAI content parts.
+        // nil → MarshalJSON derives a plain string-content wire copy (the
+        // pre-v1.0.6 behavior, used by direct constructions like the
+        // multi-agent planner prompts).
+        wire []wireMessage `json:"-"`
 }
 
 // wireMessage is the on-the-wire message: Content is either a string or a
 // content-parts array (multimodal).
 type wireMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content,omitempty"` // string | []contentPart
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+        Role       string     `json:"role"`
+        Content    any        `json:"content,omitempty"` // string | []contentPart
+        ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+        ToolCallID string     `json:"tool_call_id,omitempty"`
+        Name       string     `json:"name,omitempty"`
 }
 
 type contentPart struct {
-	Type     string    `json:"type"` // "text" | "image_url"
-	Text     string    `json:"text,omitempty"`
-	ImageURL *imageURL `json:"image_url,omitempty"`
+        Type     string    `json:"type"` // "text" | "image_url"
+        Text     string    `json:"text,omitempty"`
+        ImageURL *imageURL `json:"image_url,omitempty"`
 }
 
 type imageURL struct {
-	URL string `json:"url"`
+        URL string `json:"url"`
 }
 
 // MarshalJSON projects the request into the OpenAI wire format: the
@@ -225,100 +225,100 @@ type imageURL struct {
 // string-content form. Display-only fields (reasoning, attachments,
 // feedback, image paths) never reach the wire.
 func (r *ChatRequest) MarshalJSON() ([]byte, error) {
-	msgs := r.wire
-	if msgs == nil && r.Messages != nil {
-		msgs = plainWireMessages(r.Messages)
-	}
-	return json.Marshal(struct {
-		Model            string      `json:"model"`
-		Messages         interface{} `json:"messages"`
-		Temperature      float64     `json:"temperature,omitempty"`
-		TopP             float64     `json:"top_p,omitempty"`
-		TopK             int         `json:"top_k,omitempty"`
-		MinP             float64     `json:"min_p,omitempty"`
-		MaxTokens        int         `json:"max_tokens,omitempty"`
-		Stop             []string    `json:"stop,omitempty"`
-		Seed             int         `json:"seed,omitempty"`
-		PresencePenalty  float64     `json:"presence_penalty,omitempty"`
-		FrequencyPenalty float64     `json:"frequency_penalty,omitempty"`
-		RepeatLastN      int         `json:"repeat_last_n,omitempty"`
-		Stream           bool        `json:"stream,omitempty"`
-		Tools            []ToolSpec  `json:"tools,omitempty"`
-		NumCtx           int         `json:"n_ctx,omitempty"`
-		CachePrompt      bool        `json:"cache_prompt"`
-	}{
-		Model:            r.Model,
-		Messages:         msgs,
-		Temperature:      r.Temperature,
-		TopP:             r.TopP,
-		TopK:             r.TopK,
-		MinP:             r.MinP,
-		MaxTokens:        r.MaxTokens,
-		Stop:             r.Stop,
-		Seed:             r.Seed,
-		PresencePenalty:  r.PresencePenalty,
-		FrequencyPenalty: r.FrequencyPenalty,
-		RepeatLastN:      r.RepeatLastN,
-		Stream:           r.Stream,
-		Tools:            r.Tools,
-		NumCtx:           r.NumCtx,
-		CachePrompt:      r.CachePrompt,
-	})
+        msgs := r.wire
+        if msgs == nil && r.Messages != nil {
+                msgs = plainWireMessages(r.Messages)
+        }
+        return json.Marshal(struct {
+                Model            string      `json:"model"`
+                Messages         interface{} `json:"messages"`
+                Temperature      float64     `json:"temperature,omitempty"`
+                TopP             float64     `json:"top_p,omitempty"`
+                TopK             int         `json:"top_k,omitempty"`
+                MinP             float64     `json:"min_p,omitempty"`
+                MaxTokens        int         `json:"max_tokens,omitempty"`
+                Stop             []string    `json:"stop,omitempty"`
+                Seed             int         `json:"seed,omitempty"`
+                PresencePenalty  float64     `json:"presence_penalty,omitempty"`
+                FrequencyPenalty float64     `json:"frequency_penalty,omitempty"`
+                RepeatLastN      int         `json:"repeat_last_n,omitempty"`
+                Stream           bool        `json:"stream,omitempty"`
+                Tools            []ToolSpec  `json:"tools,omitempty"`
+                NumCtx           int         `json:"n_ctx,omitempty"`
+                CachePrompt      bool        `json:"cache_prompt"`
+        }{
+                Model:            r.Model,
+                Messages:         msgs,
+                Temperature:      r.Temperature,
+                TopP:             r.TopP,
+                TopK:             r.TopK,
+                MinP:             r.MinP,
+                MaxTokens:        r.MaxTokens,
+                Stop:             r.Stop,
+                Seed:             r.Seed,
+                PresencePenalty:  r.PresencePenalty,
+                FrequencyPenalty: r.FrequencyPenalty,
+                RepeatLastN:      r.RepeatLastN,
+                Stream:           r.Stream,
+                Tools:            r.Tools,
+                NumCtx:           r.NumCtx,
+                CachePrompt:      r.CachePrompt,
+        })
 }
 
 // plainWireMessages is the pre-v1.0.6 projection: string content, display
 // fields stripped, images degraded to text notes (callers that build a
 // ChatRequest directly never carry images — this is a safety net).
 func plainWireMessages(msgs []Message) []wireMessage {
-	out := make([]wireMessage, 0, len(msgs))
-	for _, m := range msgs {
-		wm := wireMessage{
-			Role:       m.Role,
-			ToolCalls:  m.ToolCalls,
-			ToolCallID: m.ToolCallID,
-			Name:       m.Name,
-		}
-		content := m.Content
-		if len(m.Images) > 0 {
-			var names []string
-			for _, p := range m.Images {
-				names = append(names, filepath.Base(p))
-			}
-			note := "[image attached: " + strings.Join(names, ", ") + "]"
-			if content == "" {
-				content = note
-			} else {
-				content += "\n" + note
-			}
-		}
-		if content != "" {
-			wm.Content = content
-		}
-		out = append(out, wm)
-	}
-	return out
+        out := make([]wireMessage, 0, len(msgs))
+        for _, m := range msgs {
+                wm := wireMessage{
+                        Role:       m.Role,
+                        ToolCalls:  m.ToolCalls,
+                        ToolCallID: m.ToolCallID,
+                        Name:       m.Name,
+                }
+                content := m.Content
+                if len(m.Images) > 0 {
+                        var names []string
+                        for _, p := range m.Images {
+                                names = append(names, filepath.Base(p))
+                        }
+                        note := "[image attached: " + strings.Join(names, ", ") + "]"
+                        if content == "" {
+                                content = note
+                        } else {
+                                content += "\n" + note
+                        }
+                }
+                if content != "" {
+                        wm.Content = content
+                }
+                out = append(out, wm)
+        }
+        return out
 }
 
 type ToolSpec struct {
-	Type     string `json:"type"`
-	Function struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Parameters  any    `json:"parameters"`
-	} `json:"function"`
+        Type     string `json:"type"`
+        Function struct {
+                Name        string `json:"name"`
+                Description string `json:"description"`
+                Parameters  any    `json:"parameters"`
+        } `json:"function"`
 }
 
 // ChatResponse is a non-streaming response.
 type ChatResponse struct {
-	Choices []struct {
-		Message      Message `json:"message"`
-		FinishReason string  `json:"finish_reason"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
+        Choices []struct {
+                Message      Message `json:"message"`
+                FinishReason string  `json:"finish_reason"`
+        } `json:"choices"`
+        Usage struct {
+                PromptTokens     int `json:"prompt_tokens"`
+                CompletionTokens int `json:"completion_tokens"`
+                TotalTokens      int `json:"total_tokens"`
+        } `json:"usage"`
 }
 
 // baseURL/apiKey resolve the active provider endpoints.
@@ -327,171 +327,171 @@ func (c *Client) apiKey() string  { return c.src.Load().EffectiveAPIKey() }
 
 // promptStats returns message count + total chars for logging.
 func promptStats(msgs []Message) (int, int) {
-	n := 0
-	for _, m := range msgs {
-		n += len(m.Content)
-	}
-	return len(msgs), n
+        n := 0
+        for _, m := range msgs {
+                n += len(m.Content)
+        }
+        return len(msgs), n
 }
 
 // offlineError is the fail-fast error returned when a remote provider is
 // unreachable because the machine has no internet. The GUI surfaces its
 // message directly so the user knows local mode keeps working.
 func (c *Client) offlineError() error {
-	return errors.New("remote LLM endpoint unreachable: no internet connection detected. " +
-		"Switch to the local provider (Agent → LLM provider → local llama.cpp) to keep working offline — " +
-		"all local tools continue to function")
+        return errors.New("remote LLM endpoint unreachable: no internet connection detected. " +
+                "Switch to the local provider (Agent → LLM provider → local llama.cpp) to keep working offline — " +
+                "all local tools continue to function")
 }
 
 // isLocalBaseURL reports whether an endpoint lives on this machine
 // (127.0.0.1, localhost, ::1). Local servers — llama.cpp, Ollama, LM Studio
 // — keep working while offline, so the offline fast-fail must not fire.
 func isLocalBaseURL(base string) bool {
-	b := strings.ToLower(base)
-	return strings.Contains(b, "localhost") || strings.Contains(b, "127.0.0.1") ||
-		strings.Contains(b, "[::1]") || strings.Contains(b, "0.0.0.0")
+        b := strings.ToLower(base)
+        return strings.Contains(b, "localhost") || strings.Contains(b, "127.0.0.1") ||
+                strings.Contains(b, "[::1]") || strings.Contains(b, "0.0.0.0")
 }
 
 // offlineBlocked reports whether the active provider is a REMOTE endpoint
 // that cannot be reached while offline.
 func (c *Client) offlineBlocked() bool {
-	cfg := c.src.Load()
-	return cfg.IsRemote() && !isLocalBaseURL(c.baseURL()) && netcheck.IsOffline()
+        cfg := c.src.Load()
+        return cfg.IsRemote() && !isLocalBaseURL(c.baseURL()) && netcheck.IsOffline()
 }
 
 // Chat sends a non-streaming chat request with retry on transient errors.
 func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
-	// Offline fail-fast: skip the 4-attempt/19s backoff ladder when the
-	// machine simply has no connectivity (local endpoints are exempt).
-	if c.offlineBlocked() {
-		err := c.offlineError()
-		c.logCall(req, time.Now(), 0, 0, "", err)
-		return nil, err
-	}
-	req.Stream = false
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
-		if attempt > 0 {
-			logging.Default().Warn("llm", "retry %d after %v", attempt, lastErr)
-			if err := sleepCtx(ctx, retryDelay(attempt)); err != nil {
-				return nil, err
-			}
-		}
-		httpReq, err := http.NewRequestWithContext(ctx, "POST",
-			c.baseURL()+"/chat/completions", bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey())
+        // Offline fail-fast: skip the 4-attempt/19s backoff ladder when the
+        // machine simply has no connectivity (local endpoints are exempt).
+        if c.offlineBlocked() {
+                err := c.offlineError()
+                c.logCall(req, time.Now(), 0, 0, "", err)
+                return nil, err
+        }
+        req.Stream = false
+        body, err := json.Marshal(req)
+        if err != nil {
+                return nil, err
+        }
+        var lastErr error
+        for attempt := 0; attempt < 4; attempt++ {
+                if attempt > 0 {
+                        logging.Default().Warn("llm", "retry %d after %v", attempt, lastErr)
+                        if err := sleepCtx(ctx, retryDelay(attempt)); err != nil {
+                                return nil, err
+                        }
+                }
+                httpReq, err := http.NewRequestWithContext(ctx, "POST",
+                        c.baseURL()+"/chat/completions", bytes.NewReader(body))
+                if err != nil {
+                        return nil, err
+                }
+                httpReq.Header.Set("Content-Type", "application/json")
+                httpReq.Header.Set("Authorization", "Bearer "+c.apiKey())
 
-		start := time.Now()
-		resp, err := c.http.Do(httpReq)
-		if err != nil {
-			lastErr = fmt.Errorf("LLM call: %w", err)
-			c.logCall(req, start, 0, 0, "", lastErr)
-			if isTransient(err) {
-				continue
-			}
-			return nil, lastErr
-		}
-		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			lastErr = fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
-			continue // retryable
-		}
-		if resp.StatusCode != 200 {
-			buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			err := fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
-			c.logCall(req, start, 0, 0, "", err)
-			return nil, err
-		}
-		var out ChatResponse
-		decodeErr := json.NewDecoder(resp.Body).Decode(&out)
-		resp.Body.Close()
+                start := time.Now()
+                resp, err := c.http.Do(httpReq)
+                if err != nil {
+                        lastErr = fmt.Errorf("LLM call: %w", err)
+                        c.logCall(req, start, 0, 0, "", lastErr)
+                        if isTransient(err) {
+                                continue
+                        }
+                        return nil, lastErr
+                }
+                if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+                        buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+                        resp.Body.Close()
+                        lastErr = fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
+                        continue // retryable
+                }
+                if resp.StatusCode != 200 {
+                        buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+                        resp.Body.Close()
+                        err := fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
+                        c.logCall(req, start, 0, 0, "", err)
+                        return nil, err
+                }
+                var out ChatResponse
+                decodeErr := json.NewDecoder(resp.Body).Decode(&out)
+                resp.Body.Close()
 
-		if decodeErr != nil {
-			c.logCall(req, start, 0, 0, "", decodeErr)
-			return nil, decodeErr
-		}
+                if decodeErr != nil {
+                        c.logCall(req, start, 0, 0, "", decodeErr)
+                        return nil, decodeErr
+                }
 
-		if len(out.Choices) == 0 {
-			err := errors.New(
-				"LLM response contained no choices",
-			)
+                if len(out.Choices) == 0 {
+                        err := errors.New(
+                                "LLM response contained no choices",
+                        )
 
-			c.logCall(
-				req,
-				start,
-				0,
-				0,
-				"",
-				err,
-			)
+                        c.logCall(
+                                req,
+                                start,
+                                0,
+                                0,
+                                "",
+                                err,
+                        )
 
-			return nil, err
-		}
+                        return nil, err
+                }
 
-		finish := ""
-		contentLen := 0
-		toolCalls := 0
-		if len(out.Choices) > 0 {
-			finish = out.Choices[0].FinishReason
-			contentLen = len(out.Choices[0].Message.Content)
-			toolCalls = len(out.Choices[0].Message.ToolCalls)
-		}
-		c.logCall(req, start, contentLen, toolCalls, finish, nil)
-		return &out, nil
-	}
-	// v1.1.4Z: retry exhaustion was previously invisible in llm.jsonl —
-	// only individual transport errors were logged, never the final
-	// give-up. This is the record that actually explains a dead turn.
-	if lastErr != nil {
-		c.logCall(req, time.Now(), 0, 0, "", lastErr)
-	}
-	return nil, lastErr
+                finish := ""
+                contentLen := 0
+                toolCalls := 0
+                if len(out.Choices) > 0 {
+                        finish = out.Choices[0].FinishReason
+                        contentLen = len(out.Choices[0].Message.Content)
+                        toolCalls = len(out.Choices[0].Message.ToolCalls)
+                }
+                c.logCall(req, start, contentLen, toolCalls, finish, nil)
+                return &out, nil
+        }
+        // v1.1.4Z: retry exhaustion was previously invisible in llm.jsonl —
+        // only individual transport errors were logged, never the final
+        // give-up. This is the record that actually explains a dead turn.
+        if lastErr != nil {
+                c.logCall(req, time.Now(), 0, 0, "", lastErr)
+        }
+        return nil, lastErr
 }
 
 // isTransient reports whether a transport error is worth retrying.
 func isTransient(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "eof") ||
-		strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "broken pipe")
+        if err == nil {
+                return false
+        }
+        msg := strings.ToLower(err.Error())
+        return strings.Contains(msg, "connection reset") ||
+                strings.Contains(msg, "connection refused") ||
+                strings.Contains(msg, "eof") ||
+                strings.Contains(msg, "timeout") ||
+                strings.Contains(msg, "broken pipe")
 }
 
 // retryDelay returns the backoff before retry attempt n (1-based):
 // 2s, 5s, 12s — long enough to ride out API rate-limit windows.
 func retryDelay(attempt int) time.Duration {
-	switch attempt {
-	case 1:
-		return 2 * time.Second
-	case 2:
-		return 5 * time.Second
-	default:
-		return 12 * time.Second
-	}
+        switch attempt {
+        case 1:
+                return 2 * time.Second
+        case 2:
+                return 5 * time.Second
+        default:
+                return 12 * time.Second
+        }
 }
 
 // sleepCtx sleeps for d or until ctx is cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) error {
-	select {
-	case <-time.After(d):
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+        select {
+        case <-time.After(d):
+                return nil
+        case <-ctx.Done():
+                return ctx.Err()
+        }
 }
 
 // StreamChat sends a streaming chat request. The callback is invoked for
@@ -505,206 +505,206 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 //     response is decoded and replayed as a single event
 //   - both `data: ` and `data:` prefixes are accepted
 type StreamEvent struct {
-	Content      string
-	Reasoning    string // native thinking trace delta (reasoning_content / reasoning)
-	ToolCalls    []ToolCall
-	FinishReason string
-	Usage        *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	}
+        Content      string
+        Reasoning    string // native thinking trace delta (reasoning_content / reasoning)
+        ToolCalls    []ToolCall
+        FinishReason string
+        Usage        *struct {
+                PromptTokens     int `json:"prompt_tokens"`
+                CompletionTokens int `json:"completion_tokens"`
+                TotalTokens      int `json:"total_tokens"`
+        }
 }
 
 // PerfStats is the live speed telemetry of one streaming call (v1.0.4
 // Speed Pack): time-to-first-token and tokens/sec, LM Studio-style — what
 // local-LLM users expect to see.
 type PerfStats struct {
-	TTFTMs       int     // request start → first content delta
-	Tokens       int     // completion tokens (usage when present, else deltas)
-	TokensPerSec float64 // generation throughput
-	PromptTokens int     // from usage when the server reports it
-	WallMs       int     // total call duration
+        TTFTMs       int     // request start → first content delta
+        Tokens       int     // completion tokens (usage when present, else deltas)
+        TokensPerSec float64 // generation throughput
+        PromptTokens int     // from usage when the server reports it
+        WallMs       int     // total call duration
 }
 
 // String renders the compact HUD line: "41.2 tok/s · first token 0.8s".
 func (p PerfStats) String() string {
-	if p.TokensPerSec <= 0 || p.WallMs <= 0 {
-		return ""
-	}
-	s := fmt.Sprintf("%.1f tok/s", p.TokensPerSec)
-	if p.TTFTMs > 0 {
-		s += fmt.Sprintf(" · first token %.1fs", float64(p.TTFTMs)/1000)
-	}
-	return s
+        if p.TokensPerSec <= 0 || p.WallMs <= 0 {
+                return ""
+        }
+        s := fmt.Sprintf("%.1f tok/s", p.TokensPerSec)
+        if p.TTFTMs > 0 {
+                s += fmt.Sprintf(" · first token %.1fs", float64(p.TTFTMs)/1000)
+        }
+        return s
 }
 
 // toolCallAssembler assembles streaming tool-call deltas by index.
 type toolCallAssembler struct {
-	order []int       // indices in first-seen order
-	byIdx map[int]int // index -> position in calls
-	calls map[int]*ToolCall
+        order []int       // indices in first-seen order
+        byIdx map[int]int // index -> position in calls
+        calls map[int]*ToolCall
 }
 
 func newAssembler() *toolCallAssembler {
-	return &toolCallAssembler{byIdx: map[int]int{}, calls: map[int]*ToolCall{}}
+        return &toolCallAssembler{byIdx: map[int]int{}, calls: map[int]*ToolCall{}}
 }
 
 func (a *toolCallAssembler) add(tc ToolCall) {
-	if _, ok := a.byIdx[tc.Index]; !ok {
-		a.byIdx[tc.Index] = len(a.order)
-		a.order = append(a.order, tc.Index)
-	}
-	pos := a.byIdx[tc.Index]
-	if _, ok := a.calls[pos]; !ok {
-		clone := tc
-		a.calls[pos] = &clone
-		return
-	}
-	existing := a.calls[pos]
-	if tc.ID != "" {
-		existing.ID = tc.ID
-	}
-	if tc.Type != "" {
-		existing.Type = tc.Type
-	}
-	if tc.Function.Name != "" {
-		existing.Function.Name = tc.Function.Name
-	}
-	if tc.Function.Arguments != "" {
-		existing.Function.Arguments += tc.Function.Arguments
-	}
+        if _, ok := a.byIdx[tc.Index]; !ok {
+                a.byIdx[tc.Index] = len(a.order)
+                a.order = append(a.order, tc.Index)
+        }
+        pos := a.byIdx[tc.Index]
+        if _, ok := a.calls[pos]; !ok {
+                clone := tc
+                a.calls[pos] = &clone
+                return
+        }
+        existing := a.calls[pos]
+        if tc.ID != "" {
+                existing.ID = tc.ID
+        }
+        if tc.Type != "" {
+                existing.Type = tc.Type
+        }
+        if tc.Function.Name != "" {
+                existing.Function.Name = tc.Function.Name
+        }
+        if tc.Function.Arguments != "" {
+                existing.Function.Arguments += tc.Function.Arguments
+        }
 }
 
 func (a *toolCallAssembler) all() []ToolCall {
-	out := make([]ToolCall, 0, len(a.order))
-	for _, idx := range a.order {
-		if c, ok := a.calls[a.byIdx[idx]]; ok {
-			out = append(out, *c)
-		}
-	}
-	return out
+        out := make([]ToolCall, 0, len(a.order))
+        for _, idx := range a.order {
+                if c, ok := a.calls[a.byIdx[idx]]; ok {
+                        out = append(out, *c)
+                }
+        }
+        return out
 }
 
 func (c *Client) StreamChat(ctx context.Context, req *ChatRequest, onEvent func(StreamEvent) error) error {
-	_, err := c.StreamChatDetailed(ctx, req, onEvent)
-	return err
+        _, err := c.StreamChatDetailed(ctx, req, onEvent)
+        return err
 }
 
 // StreamChatDetailed streams like StreamChat and additionally returns the
 // performance telemetry of the successful attempt (v1.0.4).
 func (c *Client) StreamChatDetailed(ctx context.Context, req *ChatRequest, onEvent func(StreamEvent) error) (PerfStats, error) {
-	// Offline fail-fast (remote provider): skip retries entirely.
-	if c.offlineBlocked() {
-		err := c.offlineError()
-		c.logCall(req, time.Now(), 0, 0, "", err)
-		return PerfStats{}, err
-	}
-	req.Stream = true
-	// v1.0.4: ask the engine to reuse the cached prompt prefix across
-	// turns (agent loop prefill collapse; no-op elsewhere).
-	req.CachePrompt = true
-	body, err := json.Marshal(req)
-	if err != nil {
-		return PerfStats{}, err
-	}
-	var lastErr error
-	var perf PerfStats
-	c.markBusy(true)
-	defer c.markBusy(false)
-	for attempt := 0; attempt < 4; attempt++ {
-		if attempt > 0 {
-			logging.Default().Warn("llm", "stream retry %d after %v", attempt, lastErr)
-			if err := sleepCtx(ctx, retryDelay(attempt)); err != nil {
-				return perf, err
-			}
-		}
-		var emitted bool
-		// per-attempt telemetry
-		tr := newTokenTimer()
-		lastErr = c.streamOnce(ctx, req, body, func(ev StreamEvent) error {
-			emitted = true
-			tr.observe(ev)
-			return onEvent(ev)
-		})
-		perf = tr.stats()
-		// Retry only when nothing was emitted yet (retrying mid-stream
-		// would duplicate content the caller already saw).
-		if lastErr == nil || emitted {
-			return perf, lastErr
-		}
-		if !isTransient(lastErr) && !isRetryableStatus(lastErr) {
-			return perf, lastErr
-		}
-	}
-	// v1.1.4Z: record the final give-up (mirrors the Chat path).
-	if lastErr != nil {
-		c.logCall(req, time.Now(), 0, 0, "", lastErr)
-	}
-	return perf, lastErr
+        // Offline fail-fast (remote provider): skip retries entirely.
+        if c.offlineBlocked() {
+                err := c.offlineError()
+                c.logCall(req, time.Now(), 0, 0, "", err)
+                return PerfStats{}, err
+        }
+        req.Stream = true
+        // v1.0.4: ask the engine to reuse the cached prompt prefix across
+        // turns (agent loop prefill collapse; no-op elsewhere).
+        req.CachePrompt = true
+        body, err := json.Marshal(req)
+        if err != nil {
+                return PerfStats{}, err
+        }
+        var lastErr error
+        var perf PerfStats
+        c.markBusy(true)
+        defer c.markBusy(false)
+        for attempt := 0; attempt < 4; attempt++ {
+                if attempt > 0 {
+                        logging.Default().Warn("llm", "stream retry %d after %v", attempt, lastErr)
+                        if err := sleepCtx(ctx, retryDelay(attempt)); err != nil {
+                                return perf, err
+                        }
+                }
+                var emitted bool
+                // per-attempt telemetry
+                tr := newTokenTimer()
+                lastErr = c.streamOnce(ctx, req, body, func(ev StreamEvent) error {
+                        emitted = true
+                        tr.observe(ev)
+                        return onEvent(ev)
+                })
+                perf = tr.stats()
+                // Retry only when nothing was emitted yet (retrying mid-stream
+                // would duplicate content the caller already saw).
+                if lastErr == nil || emitted {
+                        return perf, lastErr
+                }
+                if !isTransient(lastErr) && !isRetryableStatus(lastErr) {
+                        return perf, lastErr
+                }
+        }
+        // v1.1.4Z: record the final give-up (mirrors the Chat path).
+        if lastErr != nil {
+                c.logCall(req, time.Now(), 0, 0, "", lastErr)
+        }
+        return perf, lastErr
 }
 
 // tokenTimer measures TTFT + throughput of one streaming attempt.
 type tokenTimer struct {
-	start    time.Time
-	firstAt  time.Time
-	deltas   int // content/reasoning deltas seen (token approximation)
-	usageTok int // authoritative completion tokens when reported
-	prompt   int
-	done     time.Time
+        start    time.Time
+        firstAt  time.Time
+        deltas   int // content/reasoning deltas seen (token approximation)
+        usageTok int // authoritative completion tokens when reported
+        prompt   int
+        done     time.Time
 }
 
 func newTokenTimer() *tokenTimer { return &tokenTimer{start: time.Now()} }
 
 func (t *tokenTimer) observe(ev StreamEvent) {
-	if ev.Content != "" || ev.Reasoning != "" {
-		t.deltas++
-		if t.firstAt.IsZero() {
-			t.firstAt = time.Now()
-		}
-	}
-	if ev.Usage != nil {
-		if ev.Usage.CompletionTokens > 0 {
-			t.usageTok = ev.Usage.CompletionTokens
-		}
-		if ev.Usage.PromptTokens > 0 {
-			t.prompt = ev.Usage.PromptTokens
-		}
-	}
+        if ev.Content != "" || ev.Reasoning != "" {
+                t.deltas++
+                if t.firstAt.IsZero() {
+                        t.firstAt = time.Now()
+                }
+        }
+        if ev.Usage != nil {
+                if ev.Usage.CompletionTokens > 0 {
+                        t.usageTok = ev.Usage.CompletionTokens
+                }
+                if ev.Usage.PromptTokens > 0 {
+                        t.prompt = ev.Usage.PromptTokens
+                }
+        }
 }
 
 func (t *tokenTimer) stats() PerfStats {
-	t.done = time.Now()
-	p := PerfStats{WallMs: int(t.done.Sub(t.start).Milliseconds()), PromptTokens: t.prompt}
-	if !t.firstAt.IsZero() {
-		p.TTFTMs = int(t.firstAt.Sub(t.start).Milliseconds())
-	}
-	tokens := t.usageTok
-	if tokens == 0 {
-		tokens = t.deltas
-	}
-	p.Tokens = tokens
-	genMs := t.done.Sub(t.firstAt).Milliseconds()
-	if tokens > 0 && genMs > 0 {
-		p.TokensPerSec = float64(tokens) / (float64(genMs) / 1000)
-	}
-	return p
+        t.done = time.Now()
+        p := PerfStats{WallMs: int(t.done.Sub(t.start).Milliseconds()), PromptTokens: t.prompt}
+        if !t.firstAt.IsZero() {
+                p.TTFTMs = int(t.firstAt.Sub(t.start).Milliseconds())
+        }
+        tokens := t.usageTok
+        if tokens == 0 {
+                tokens = t.deltas
+        }
+        p.Tokens = tokens
+        genMs := t.done.Sub(t.firstAt).Milliseconds()
+        if tokens > 0 && genMs > 0 {
+                p.TokensPerSec = float64(tokens) / (float64(genMs) / 1000)
+        }
+        return p
 }
 
 // isRetryableStatus inspects an error produced by streamOnce for HTTP-level
 // retry codes embedded in the message.
 func isRetryableStatus(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "HTTP 429") || strings.Contains(msg, "HTTP 5")
+        if err == nil {
+                return false
+        }
+        msg := err.Error()
+        return strings.Contains(msg, "HTTP 429") || strings.Contains(msg, "HTTP 5")
 }
 
 // SSE wire tokens (v1.0.9 byte-level pump).
 var (
-	sseDataPrefix = []byte("data:")
-	sseDoneToken  = []byte("[DONE]")
+        sseDataPrefix = []byte("data:")
+        sseDoneToken  = []byte("[DONE]")
 )
 
 // streamStallTimeout is how long a stream may deliver ZERO bytes before the
@@ -713,265 +713,265 @@ var (
 var streamStallTimeout = 5 * time.Minute
 
 func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, onEvent func(StreamEvent) error) error {
-	// v1.1.4Z: the request runs on a child context the stall watchdog can
-	// cancel. A blocked SSE body read cannot be interrupted by any reader
-	// wrapper — canceling the request context is the only reliable way to
-	// unwind a hung connection.
-	reqCtx, reqCancel := context.WithCancel(ctx)
-	defer reqCancel()
+        // v1.1.4Z: the request runs on a child context the stall watchdog can
+        // cancel. A blocked SSE body read cannot be interrupted by any reader
+        // wrapper — canceling the request context is the only reliable way to
+        // unwind a hung connection.
+        reqCtx, reqCancel := context.WithCancel(ctx)
+        defer reqCancel()
 
-	httpReq, err := http.NewRequestWithContext(reqCtx, "POST",
-		c.baseURL()+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey())
-	httpReq.Header.Set("Accept", "text/event-stream")
+        httpReq, err := http.NewRequestWithContext(reqCtx, "POST",
+                c.baseURL()+"/chat/completions", bytes.NewReader(body))
+        if err != nil {
+                return err
+        }
+        httpReq.Header.Set("Content-Type", "application/json")
+        httpReq.Header.Set("Authorization", "Bearer "+c.apiKey())
+        httpReq.Header.Set("Accept", "text/event-stream")
 
-	start := time.Now()
-	// v1.1.4Z: streaming uses the timeout-free client — the overall
-	// bound is the caller's context plus the stall watchdog below.
-	resp, err := c.streamHTTP.Do(httpReq)
-	if err != nil {
-		err = fmt.Errorf("LLM stream: %w", err)
-		c.logCall(req, start, 0, 0, "", err)
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		err := fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
-		c.logCall(req, start, 0, 0, "", err)
-		return err
-	}
+        start := time.Now()
+        // v1.1.4Z: streaming uses the timeout-free client — the overall
+        // bound is the caller's context plus the stall watchdog below.
+        resp, err := c.streamHTTP.Do(httpReq)
+        if err != nil {
+                err = fmt.Errorf("LLM stream: %w", err)
+                c.logCall(req, start, 0, 0, "", err)
+                return err
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode != 200 {
+                buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+                err := fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
+                c.logCall(req, start, 0, 0, "", err)
+                return err
+        }
 
-	// Non-SSE fallback: server returned plain JSON despite stream=true.
-	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.Contains(ct, "text/event-stream") {
-		var out ChatResponse
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			c.logCall(req, start, 0, 0, "", err)
-			return err
-		}
-		ev := StreamEvent{}
-		if len(out.Choices) > 0 {
-			ev.Content = out.Choices[0].Message.Content
-			ev.Reasoning = out.Choices[0].Message.Reasoning
-			ev.ToolCalls = out.Choices[0].Message.ToolCalls
-			ev.FinishReason = out.Choices[0].FinishReason
-			if ev.FinishReason == "" {
-				ev.FinishReason = "stop"
-			}
-		}
-		c.logCall(req, start, len(ev.Content), len(ev.ToolCalls), ev.FinishReason, nil)
-		return onEvent(ev)
-	}
+        // Non-SSE fallback: server returned plain JSON despite stream=true.
+        if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.Contains(ct, "text/event-stream") {
+                var out ChatResponse
+                if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+                        c.logCall(req, start, 0, 0, "", err)
+                        return err
+                }
+                ev := StreamEvent{}
+                if len(out.Choices) > 0 {
+                        ev.Content = out.Choices[0].Message.Content
+                        ev.Reasoning = out.Choices[0].Message.Reasoning
+                        ev.ToolCalls = out.Choices[0].Message.ToolCalls
+                        ev.FinishReason = out.Choices[0].FinishReason
+                        if ev.FinishReason == "" {
+                                ev.FinishReason = "stop"
+                        }
+                }
+                c.logCall(req, start, len(ev.Content), len(ev.ToolCalls), ev.FinishReason, nil)
+                return onEvent(ev)
+        }
 
-	// v1.0.9 (TURBINE): the SSE pump scans BYTES — scanner.Bytes() with
-	// prefix/trim handled at the byte level, so a data line only becomes a
-	// string when it is actually a JSON chunk worth decoding. The old loop
-	// allocated two strings per SSE line (scanner.Text() + TrimPrefix) even
-	// for comment/keep-alive lines, which on a fast stream meant thousands
-	// of short-lived allocations per reply (GC pressure = dropped frames).
-	//
-	// v1.1.4Z stall watchdog: a stalled engine (deadlocked generation,
-	// half-dead TCP connection) previously hung the stream until the
-	// 10-minute client timeout — which in turn silently TRUNCATED every
-	// longer generation. The watchdog aborts only when NO bytes arrive
-	// for streamStallTimeout; active generations never trigger it.
-	var lastData int64 // unix nano of the last received byte
-	atomic.StoreInt64(&lastData, time.Now().UnixNano())
+        // v1.0.9 (TURBINE): the SSE pump scans BYTES — scanner.Bytes() with
+        // prefix/trim handled at the byte level, so a data line only becomes a
+        // string when it is actually a JSON chunk worth decoding. The old loop
+        // allocated two strings per SSE line (scanner.Text() + TrimPrefix) even
+        // for comment/keep-alive lines, which on a fast stream meant thousands
+        // of short-lived allocations per reply (GC pressure = dropped frames).
+        //
+        // v1.1.4Z stall watchdog: a stalled engine (deadlocked generation,
+        // half-dead TCP connection) previously hung the stream until the
+        // 10-minute client timeout — which in turn silently TRUNCATED every
+        // longer generation. The watchdog aborts only when NO bytes arrive
+        // for streamStallTimeout; active generations never trigger it.
+        var lastData int64 // unix nano of the last received byte
+        atomic.StoreInt64(&lastData, time.Now().UnixNano())
 
-	// The watchdog cancels the REQUEST context: a blocked SSE body read
-	// cannot be interrupted by any reader wrapper — reqCancel is the only
-	// reliable way to unwind a hung connection. The tick adapts to the
-	// stall window (3 checks per window, clamped to 200ms..15s).
-	tick := streamStallTimeout / 3
-	if tick < 200*time.Millisecond {
-		tick = 200 * time.Millisecond
-	}
-	if tick > 15*time.Second {
-		tick = 15 * time.Second
-	}
+        // The watchdog cancels the REQUEST context: a blocked SSE body read
+        // cannot be interrupted by any reader wrapper — reqCancel is the only
+        // reliable way to unwind a hung connection. The tick adapts to the
+        // stall window (3 checks per window, clamped to 200ms..15s).
+        tick := streamStallTimeout / 3
+        if tick < 200*time.Millisecond {
+                tick = 200 * time.Millisecond
+        }
+        if tick > 15*time.Second {
+                tick = 15 * time.Second
+        }
 
-	go func() {
-		ticker := time.NewTicker(tick)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-reqCtx.Done():
-				return
-			case <-ticker.C:
-				last := atomic.LoadInt64(&lastData)
-				if time.Since(time.Unix(0, last)) > streamStallTimeout {
-					reqCancel()
-					return
-				}
-			}
-		}
-	}()
+        go func() {
+                ticker := time.NewTicker(tick)
+                defer ticker.Stop()
+                for {
+                        select {
+                        case <-reqCtx.Done():
+                                return
+                        case <-ticker.C:
+                                last := atomic.LoadInt64(&lastData)
+                                if time.Since(time.Unix(0, last)) > streamStallTimeout {
+                                        reqCancel()
+                                        return
+                                }
+                        }
+                }
+        }()
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	asm := newAssembler()
-	var contentChars int
-	var finishReason string
-	var streamErr error
+        scanner := bufio.NewScanner(resp.Body)
+        scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+        asm := newAssembler()
+        var contentChars int
+        var finishReason string
+        var streamErr error
 
-	emit := func(ev StreamEvent) error {
-		contentChars += len(ev.Content)
-		if ev.FinishReason != "" {
-			finishReason = ev.FinishReason
-		}
-		return onEvent(ev)
-	}
+        emit := func(ev StreamEvent) error {
+                contentChars += len(ev.Content)
+                if ev.FinishReason != "" {
+                        finishReason = ev.FinishReason
+                }
+                return onEvent(ev)
+        }
 
-	defer func() {
-		c.logCall(req, start, contentChars, len(asm.all()), finishReason, streamErr)
-	}()
+        defer func() {
+                c.logCall(req, start, contentChars, len(asm.all()), finishReason, streamErr)
+        }()
 
-	for scanner.Scan() {
-		atomic.StoreInt64(&lastData, time.Now().UnixNano())
+        for scanner.Scan() {
+                atomic.StoreInt64(&lastData, time.Now().UnixNano())
 
-		line := scanner.Bytes()
-		if !bytes.HasPrefix(line, sseDataPrefix) {
-			continue
-		}
-		data := bytes.TrimSpace(line[len(sseDataPrefix):])
-		if len(data) == 0 {
-			continue
-		}
-		if bytes.Equal(data, sseDoneToken) {
-			break
-		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content    string     `json:"content"`
-					Reasoning  string     `json:"reasoning_content"` // DeepSeek/GLM style
-					Reasoning2 string     `json:"reasoning"`         // some vendors' alt field
-					ToolCalls  []ToolCall `json:"tool_calls"`
-					Role       string     `json:"role"`
-				} `json:"delta"`
-				Message struct {
-					Content   string     `json:"content"`
-					Reasoning string     `json:"reasoning_content"`
-					ToolCalls []ToolCall `json:"tool_calls"`
-				} `json:"message"` // some servers send full messages mid-stream
-				FinishReason string `json:"finish_reason"`
-			} `json:"choices"`
-			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-				TotalTokens      int `json:"total_tokens"`
-			} `json:"usage"`
-		}
-		if err := json.Unmarshal(data, &chunk); err != nil {
-			continue
-		}
-		ev := StreamEvent{Usage: chunk.Usage}
-		if len(chunk.Choices) > 0 {
-			choice := chunk.Choices[0]
-			ev.Content = choice.Delta.Content
-			ev.Reasoning = choice.Delta.Reasoning
-			if ev.Reasoning == "" {
-				ev.Reasoning = choice.Delta.Reasoning2
-			}
-			// Full-message variant (some servers emit it for the
-			// first chunk or when replaying non-SSE JSON as SSE).
-			if ev.Content == "" && choice.Message.Content != "" {
-				ev.Content = choice.Message.Content
-			}
-			if ev.Reasoning == "" && choice.Message.Reasoning != "" {
-				ev.Reasoning = choice.Message.Reasoning
-			}
-			if len(choice.Message.ToolCalls) > 0 && len(choice.Delta.ToolCalls) == 0 {
-				ev.ToolCalls = choice.Message.ToolCalls
-			}
-			ev.FinishReason = choice.FinishReason
-			if len(choice.Delta.ToolCalls) > 0 {
-				for _, tc := range choice.Delta.ToolCalls {
-					asm.add(tc)
-				}
-				ev.ToolCalls = asm.all()
-			}
-		}
-		if err := emit(ev); err != nil {
-			streamErr = err
-			return err
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		// Distinguish a watchdog abort from a transport failure so the
-		// visible error says what actually happened.
-		if reqCtx.Err() != nil && ctx.Err() == nil {
-			err = fmt.Errorf(
-				"LLM stream stalled: no data for %v — the engine was generating nothing (aborted)",
-				streamStallTimeout,
-			)
-		}
-		streamErr = err
-		return err
-	}
-	return nil
+                line := scanner.Bytes()
+                if !bytes.HasPrefix(line, sseDataPrefix) {
+                        continue
+                }
+                data := bytes.TrimSpace(line[len(sseDataPrefix):])
+                if len(data) == 0 {
+                        continue
+                }
+                if bytes.Equal(data, sseDoneToken) {
+                        break
+                }
+                var chunk struct {
+                        Choices []struct {
+                                Delta struct {
+                                        Content    string     `json:"content"`
+                                        Reasoning  string     `json:"reasoning_content"` // DeepSeek/GLM style
+                                        Reasoning2 string     `json:"reasoning"`         // some vendors' alt field
+                                        ToolCalls  []ToolCall `json:"tool_calls"`
+                                        Role       string     `json:"role"`
+                                } `json:"delta"`
+                                Message struct {
+                                        Content   string     `json:"content"`
+                                        Reasoning string     `json:"reasoning_content"`
+                                        ToolCalls []ToolCall `json:"tool_calls"`
+                                } `json:"message"` // some servers send full messages mid-stream
+                                FinishReason string `json:"finish_reason"`
+                        } `json:"choices"`
+                        Usage *struct {
+                                PromptTokens     int `json:"prompt_tokens"`
+                                CompletionTokens int `json:"completion_tokens"`
+                                TotalTokens      int `json:"total_tokens"`
+                        } `json:"usage"`
+                }
+                if err := json.Unmarshal(data, &chunk); err != nil {
+                        continue
+                }
+                ev := StreamEvent{Usage: chunk.Usage}
+                if len(chunk.Choices) > 0 {
+                        choice := chunk.Choices[0]
+                        ev.Content = choice.Delta.Content
+                        ev.Reasoning = choice.Delta.Reasoning
+                        if ev.Reasoning == "" {
+                                ev.Reasoning = choice.Delta.Reasoning2
+                        }
+                        // Full-message variant (some servers emit it for the
+                        // first chunk or when replaying non-SSE JSON as SSE).
+                        if ev.Content == "" && choice.Message.Content != "" {
+                                ev.Content = choice.Message.Content
+                        }
+                        if ev.Reasoning == "" && choice.Message.Reasoning != "" {
+                                ev.Reasoning = choice.Message.Reasoning
+                        }
+                        if len(choice.Message.ToolCalls) > 0 && len(choice.Delta.ToolCalls) == 0 {
+                                ev.ToolCalls = choice.Message.ToolCalls
+                        }
+                        ev.FinishReason = choice.FinishReason
+                        if len(choice.Delta.ToolCalls) > 0 {
+                                for _, tc := range choice.Delta.ToolCalls {
+                                        asm.add(tc)
+                                }
+                                ev.ToolCalls = asm.all()
+                        }
+                }
+                if err := emit(ev); err != nil {
+                        streamErr = err
+                        return err
+                }
+        }
+        if err := scanner.Err(); err != nil {
+                // Distinguish a watchdog abort from a transport failure so the
+                // visible error says what actually happened.
+                if reqCtx.Err() != nil && ctx.Err() == nil {
+                        err = fmt.Errorf(
+                                "LLM stream stalled: no data for %v — the engine was generating nothing (aborted)",
+                                streamStallTimeout,
+                        )
+                }
+                streamErr = err
+                return err
+        }
+        return nil
 }
 
 // logCall records one LLM call to the log catcher (llm.jsonl).
 func (c *Client) logCall(req *ChatRequest, start time.Time, completionChars, toolCalls int, finish string, err error) {
-	msgs, chars := promptStats(req.Messages)
-	rec := logging.LLMCallRecord{
-		TS:              start,
-		Provider:        c.src.Load().ProviderKind(),
-		Model:           req.Model,
-		PromptMsgs:      msgs,
-		PromptChars:     chars,
-		CompletionChars: completionChars,
-		ToolCalls:       toolCalls,
-		FinishReason:    finish,
-		DurationMs:      time.Since(start).Milliseconds(),
-	}
-	if err != nil {
-		rec.Error = err.Error()
-	}
-	logging.Default().LLMCall(rec)
+        msgs, chars := promptStats(req.Messages)
+        rec := logging.LLMCallRecord{
+                TS:              start,
+                Provider:        c.src.Load().ProviderKind(),
+                Model:           req.Model,
+                PromptMsgs:      msgs,
+                PromptChars:     chars,
+                CompletionChars: completionChars,
+                ToolCalls:       toolCalls,
+                FinishReason:    finish,
+                DurationMs:      time.Since(start).Milliseconds(),
+        }
+        if err != nil {
+                rec.Error = err.Error()
+        }
+        logging.Default().LLMCall(rec)
 }
 
 func truncateStr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
+        if len(s) <= n {
+                return s
+        }
+        return s[:n] + "…"
 }
 
 // imageDataURL returns the data-URL form of an image file, cached by path
 // and mtime (the agent loop rebuilds the request every iteration — the cache
 // turns dozens of base64 encodings into one). Hard-capped at 8 entries.
 func (c *Client) imageDataURL(path string) (string, error) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	c.imgCacheMu.Lock()
-	if e, ok := c.imgCache[path]; ok && e.modTime.Equal(fi.ModTime()) {
-		c.imgCacheMu.Unlock()
-		return e.url, nil
-	}
-	c.imgCacheMu.Unlock()
+        fi, err := os.Stat(path)
+        if err != nil {
+                return "", err
+        }
+        c.imgCacheMu.Lock()
+        if e, ok := c.imgCache[path]; ok && e.modTime.Equal(fi.ModTime()) {
+                c.imgCacheMu.Unlock()
+                return e.url, nil
+        }
+        c.imgCacheMu.Unlock()
 
-	url, err := vision.EncodeImage(path)
-	if err != nil {
-		return "", err
-	}
-	c.imgCacheMu.Lock()
-	if c.imgCache == nil {
-		c.imgCache = map[string]imageCacheEntry{}
-	}
-	if len(c.imgCache) >= 8 {
-		c.imgCache = map[string]imageCacheEntry{} // bounded: one turn's worth
-	}
-	c.imgCache[path] = imageCacheEntry{modTime: fi.ModTime(), url: url}
-	c.imgCacheMu.Unlock()
-	return url, nil
+        url, err := vision.EncodeImage(path)
+        if err != nil {
+                return "", err
+        }
+        c.imgCacheMu.Lock()
+        if c.imgCache == nil {
+                c.imgCache = map[string]imageCacheEntry{}
+        }
+        if len(c.imgCache) >= 8 {
+                c.imgCache = map[string]imageCacheEntry{} // bounded: one turn's worth
+        }
+        c.imgCache[path] = imageCacheEntry{modTime: fi.ModTime(), url: url}
+        c.imgCacheMu.Unlock()
+        return url, nil
 }
 
 // wireMessages projects messages into the multimodal wire form (v1.0.6).
@@ -986,81 +986,81 @@ func (c *Client) imageDataURL(path string) (string, error) {
 // messages, but the OpenAI wire spec (and most hosted endpoints) require
 // string content there — remote providers get the degrading note instead.
 func (c *Client) wireMessages(msgs []Message) []wireMessage {
-	lastUser := -1
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			lastUser = i
-			break
-		}
-	}
-	remote := c.src.Load().IsRemote()
-	out := make([]wireMessage, 0, len(msgs))
-	for i, m := range msgs {
-		wm := wireMessage{
-			Role:       m.Role,
-			ToolCalls:  m.ToolCalls,
-			ToolCallID: m.ToolCallID,
-			Name:       m.Name,
-		}
-		if len(m.Images) == 0 {
-			if m.Content != "" {
-				wm.Content = m.Content
-			}
-			out = append(out, wm)
-			continue
-		}
-		live := lastUser >= 0 && i >= lastUser
-		if m.Role == "tool" && remote {
-			live = false
-		}
-		if !live {
-			var names []string
-			for _, p := range m.Images {
-				names = append(names, filepath.Base(p))
-			}
-			note := "[image attached earlier: " + strings.Join(names, ", ") + "]"
-			content := m.Content
-			if content == "" {
-				content = note
-			} else {
-				content += "\n" + note
-			}
-			wm.Content = content
-			out = append(out, wm)
-			continue
-		}
-		// Live multimodal content: text part + up to MaxImagesPerMessage
-		// image parts.
-		var parts []contentPart
-		if m.Content != "" {
-			parts = append(parts, contentPart{Type: "text", Text: m.Content})
-		}
-		appended := 0
-		for _, p := range m.Images {
-			if appended >= vision.MaxImagesPerMessage {
-				break
-			}
-			url, err := c.imageDataURL(p)
-			if err != nil {
-				parts = append(parts, contentPart{Type: "text",
-					Text: fmt.Sprintf("[image %s could not be loaded: %v]", filepath.Base(p), err)})
-				continue
-			}
-			parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: url}})
-			appended++
-		}
-		wm.Content = parts
-		out = append(out, wm)
-	}
-	return out
+        lastUser := -1
+        for i := len(msgs) - 1; i >= 0; i-- {
+                if msgs[i].Role == "user" {
+                        lastUser = i
+                        break
+                }
+        }
+        remote := c.src.Load().IsRemote()
+        out := make([]wireMessage, 0, len(msgs))
+        for i, m := range msgs {
+                wm := wireMessage{
+                        Role:       m.Role,
+                        ToolCalls:  m.ToolCalls,
+                        ToolCallID: m.ToolCallID,
+                        Name:       m.Name,
+                }
+                if len(m.Images) == 0 {
+                        if m.Content != "" {
+                                wm.Content = m.Content
+                        }
+                        out = append(out, wm)
+                        continue
+                }
+                live := lastUser >= 0 && i >= lastUser
+                if m.Role == "tool" && remote {
+                        live = false
+                }
+                if !live {
+                        var names []string
+                        for _, p := range m.Images {
+                                names = append(names, filepath.Base(p))
+                        }
+                        note := "[image attached earlier: " + strings.Join(names, ", ") + "]"
+                        content := m.Content
+                        if content == "" {
+                                content = note
+                        } else {
+                                content += "\n" + note
+                        }
+                        wm.Content = content
+                        out = append(out, wm)
+                        continue
+                }
+                // Live multimodal content: text part + up to MaxImagesPerMessage
+                // image parts.
+                var parts []contentPart
+                if m.Content != "" {
+                        parts = append(parts, contentPart{Type: "text", Text: m.Content})
+                }
+                appended := 0
+                for _, p := range m.Images {
+                        if appended >= vision.MaxImagesPerMessage {
+                                break
+                        }
+                        url, err := c.imageDataURL(p)
+                        if err != nil {
+                                parts = append(parts, contentPart{Type: "text",
+                                        Text: fmt.Sprintf("[image %s could not be loaded: %v]", filepath.Base(p), err)})
+                                continue
+                        }
+                        parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: url}})
+                        appended++
+                }
+                wm.Content = parts
+                out = append(out, wm)
+        }
+        return out
 }
 
 // ImageCacheLenForTest exposes the encoded-image cache size (v1.0.6 stress
 // seam: proves the cache is bounded and actually hit).
 func (c *Client) ImageCacheLenForTest() int {
-	c.imgCacheMu.Lock()
-	defer c.imgCacheMu.Unlock()
-	return len(c.imgCache)
+        c.imgCacheMu.Lock()
+        defer c.imgCacheMu.Unlock()
+        return len(c.imgCache)
 }
 
 // BuildChatRequest converts raw messages + sampling options to a ChatRequest.
@@ -1074,28 +1074,42 @@ func (c *Client) ImageCacheLenForTest() int {
 // presence/frequency penalty) now actually reach the engine — they were
 // editable in Settings but silently dropped from every request before.
 func (c *Client) BuildChatRequest(model string, messages []Message, tools []ToolSpec) *ChatRequest {
-	cfg := c.src.Load()
-	clean := StripReasoning(messages)
-	req := &ChatRequest{
-		Model:            model,
-		Messages:         clean,
-		wire:             c.wireMessages(clean),
-		Tools:            tools,
-		Temperature:      cfg.LLM.Temperature,
-		TopP:             cfg.LLM.TopP,
-		MaxTokens:        cfg.LLM.MaxTokens,
-		Seed:             cfg.LLM.Seed,
-		PresencePenalty:  cfg.LLM.PresencePenalty,
-		FrequencyPenalty: cfg.LLM.FrequencyPenalty,
-	}
-	if !cfg.IsRemote() {
-		req.TopK = cfg.LLM.TopK
-		req.NumCtx = cfg.LLM.NumCtx
-		req.MinP = cfg.LLM.MinP
-		req.RepeatLastN = cfg.LLM.RepeatLastN
-	}
-	if cfg.LLM.Stop != "" {
-		req.Stop = strings.Split(cfg.LLM.Stop, ",")
-	}
-	return req
+        return c.BuildChatRequestWithOptions(model, messages, tools, 0)
+}
+
+// BuildChatRequestWithOptions is BuildChatRequest with an explicit
+// context-window override for the wire payload (1.1.6). numCtx > 0
+// replaces cfg.LLM.NumCtx in the request body for local endpoints so the
+// request carries the SAME effective context the planner validated —
+// never a second, larger number that would advertise an unsupported
+// window to the engine.
+func (c *Client) BuildChatRequestWithOptions(model string, messages []Message, tools []ToolSpec, numCtx int) *ChatRequest {
+        cfg := c.src.Load()
+        clean := StripReasoning(messages)
+        req := &ChatRequest{
+                Model:            model,
+                Messages:         clean,
+                wire:             c.wireMessages(clean),
+                Tools:            tools,
+                Temperature:      cfg.LLM.Temperature,
+                TopP:             cfg.LLM.TopP,
+                MaxTokens:        cfg.LLM.MaxTokens,
+                Seed:             cfg.LLM.Seed,
+                PresencePenalty:  cfg.LLM.PresencePenalty,
+                FrequencyPenalty: cfg.LLM.FrequencyPenalty,
+        }
+        if !cfg.IsRemote() {
+                req.TopK = cfg.LLM.TopK
+                if numCtx > 0 {
+                        req.NumCtx = numCtx
+                } else {
+                        req.NumCtx = cfg.LLM.NumCtx
+                }
+                req.MinP = cfg.LLM.MinP
+                req.RepeatLastN = cfg.LLM.RepeatLastN
+        }
+        if cfg.LLM.Stop != "" {
+                req.Stop = strings.Split(cfg.LLM.Stop, ",")
+        }
+        return req
 }

@@ -22,6 +22,7 @@ package api
 // without touching the badge.
 
 import (
+        "context"
         "encoding/json"
         "net/http"
         "time"
@@ -52,6 +53,18 @@ type engineSnapshot struct {
         // when the native path is enabled (nil otherwise). Purely local
         // reads — the poll path never performs IPC.
         Native *nativeEngineSnapshot `json:"native,omitempty"`
+
+        // 1.1.6 §9/§11 startup experience: a user-facing PHASE for the
+        // progress flow (waiting | downloading-engine | loading-model |
+        // checking-capabilities | preparing-context | ready) and the
+        // verified-readiness proof. Ready requires the process to be
+        // alive AND healthy AND the serving model verified — a spawned
+        // subprocess alone never reports verified.
+        Phase           string `json:"phase"`
+        Verified        bool   `json:"verified"`
+        VerifiedModel   string `json:"verifiedModel,omitempty"`
+        VerifiedContext int    `json:"verifiedContext,omitempty"`
+        Degraded        bool   `json:"degraded,omitempty"`
 }
 
 // nativeEngineSnapshot is the native engine status block (local reads
@@ -125,6 +138,17 @@ func (s *Server) engineSnapshot() engineSnapshot {
         snap.Model = s.src.Load().DisplayModel()
         snap.Vision = s.llama.VisionActive()
 
+        // 1.1.6 §11: readiness must mean READY — verified model serving,
+        // not merely a spawned subprocess. The phase mapping drives the
+        // startup progress states in the UI.
+        if snap.Backend != "native" {
+                snap.VerifiedModel = s.llama.VerifiedModel()
+                snap.VerifiedContext = s.llama.VerifiedContext()
+                snap.Verified = s.llama.VerifiedReady() && snap.VerifiedContext > 0
+        }
+        snap.Phase = enginePhase(snap.State, snap.Verified, s.src.Load().IsRemote())
+        snap.Degraded = snap.Backend == "llama" && snap.State == llm.StateReady && !snap.Verified
+
         // When native serves, LoadedPath/Logs were already sourced from
         // the native engine above; only the llama fallback path (and the
         // pre-native v1.1.4Z contract) populates them from llama.cpp.
@@ -150,6 +174,18 @@ func (s *Server) engineSnapshot() engineSnapshot {
                 }
 
                 snap.Native = native
+
+                // 1.1.6 §11: when the native engine SERVES generation, its
+                // loaded state is the readiness proof (its ModelInfo is the
+                // verified model + context source).
+                if snap.Backend == "native" {
+                        if res, err := s.native.ModelInfo(context.Background()); err == nil &&
+                                res.Loaded && res.Model != nil {
+                                snap.Verified = true
+                                snap.VerifiedContext = int(res.Model.ContextLength)
+                        }
+                        snap.Phase = enginePhase(snap.State, snap.Verified, false)
+                }
         }
 
         if s.stack != nil && s.stack.Cache != nil {
@@ -157,6 +193,37 @@ func (s *Server) engineSnapshot() engineSnapshot {
         }
 
         return snap
+}
+
+// enginePhase maps the raw engine state onto the 1.1.6 §9 startup flow
+// states the UI renders as real progress:
+//
+//      Starting → Downloading engine → Loading model →
+//      Checking capabilities → Preparing context → Ready
+func enginePhase(state string, verified bool, remote bool) string {
+        if remote {
+                return "ready"
+        }
+
+        switch state {
+        case llm.StateIdle:
+                return "waiting"
+        case llm.StateDownloading:
+                return "downloading-engine"
+        case llm.StateStarting:
+                return "loading-model"
+        case llm.StateReady, llm.StateRunning, llm.StateBusy:
+                if verified {
+                        return "ready"
+                }
+                return "checking-capabilities"
+        case llm.StateStopping:
+                return "stopping"
+        case llm.StateStopped, llm.StateFailed:
+                return state
+        default:
+                return state
+        }
 }
 
 // engineActivity converts one engine transition into an agent.Activity so

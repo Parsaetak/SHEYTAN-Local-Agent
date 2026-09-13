@@ -67,7 +67,10 @@ func main() {
 
 	// 2) Pack the multi-size icon (winres resizes with a high-quality filter
 	//    internally and writes valid ICO-format resource entries).
-	icon, err := winres.NewIconFromResizedImage(img, []int{256, 128, 64, 48, 32, 16})
+	// 1.1.6 §12: the full resolution ladder incl. 24px (16 / 24 / 32 /
+	// 48 / 64 / 128 / 256) so every shell surface — exe, taskbar, title
+	// bar, switcher, packaged shortcut metadata — gets a crisp glyph.
+	icon, err := winres.NewIconFromResizedImage(img, []int{256, 128, 64, 48, 32, 24, 16})
 	if err != nil {
 		fatal("build icon: %v", err)
 	}
@@ -125,8 +128,137 @@ func main() {
 		fatal("write syso: %v", err)
 	}
 
-	fmt.Printf("rsrc_windows_amd64.syso written — icon + version %s + DPI-aware manifest embedded\n",
+	// 6) 1.1.6 §12: also emit a standalone multi-resolution .ico for
+	// packaged shortcut/application metadata (Wails NSIS/installer,
+	// Windows Explorer property sheets). Same brand mark, same ladder.
+	if err := writeICO("build/sheytan.ico", img); err != nil {
+		fatal("write ico: %v", err)
+	}
+
+	fmt.Printf("rsrc_windows_amd64.syso + build/sheytan.ico written — icon + version %s + DPI-aware manifest embedded\n",
 		config.AppVersion)
+}
+
+// writeICO packs img into a classic multi-image .ico file: BMP entries
+// for the small sizes (maximum shell compatibility) and a PNG entry for
+// 256px (Vista+ standard). All seven resolutions of the §12 ladder.
+func writeICO(path string, src image.Image) error {
+	sizes := []int{16, 24, 32, 48, 64, 128, 256}
+
+	type entry struct {
+		width  int
+		height int
+		data   []byte
+		isPNG  bool
+	}
+
+	entries := make([]entry, 0, len(sizes))
+	for _, s := range sizes {
+		if s == 256 {
+			var buf bytes.Buffer
+			if err := png.Encode(&buf, src); err != nil {
+				return err
+			}
+			entries = append(entries, entry{256, 256, buf.Bytes(), true})
+			continue
+		}
+		bmp, err := bmpFromImage(src, s)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, entry{s, s, bmp, false})
+	}
+
+	// ICONDIR + ICONDIRENTRY table + image blobs.
+	total := 6 + 16*len(entries)
+	out := bytes.NewBuffer(make([]byte, 0, total))
+	out.WriteByte(0) // reserved
+	out.WriteByte(0)
+	out.WriteByte(1) // type: icon
+	out.WriteByte(0)
+	out.WriteByte(byte(len(entries)))
+	out.WriteByte(0)
+
+	offset := total
+	for _, e := range entries {
+		w := byte(e.width)
+		if e.width == 256 {
+			w = 0
+		}
+		out.WriteByte(w)
+		out.WriteByte(byte(e.height))
+		out.WriteByte(0) // palette
+		out.WriteByte(0) // reserved
+		out.WriteByte(1) // planes
+		out.WriteByte(0)
+		out.WriteByte(32) // bpp
+		out.WriteByte(0)
+
+		size := uint32(len(e.data))
+		out.WriteByte(byte(size))
+		out.WriteByte(byte(size >> 8))
+		out.WriteByte(byte(size >> 16))
+		out.WriteByte(byte(size >> 24))
+
+		off := uint32(offset)
+		out.WriteByte(byte(off))
+		out.WriteByte(byte(off >> 8))
+		out.WriteByte(byte(off >> 16))
+		out.WriteByte(byte(off >> 24))
+
+		offset += len(e.data)
+	}
+
+	for _, e := range entries {
+		out.Write(e.data)
+	}
+
+	return os.WriteFile(path, out.Bytes(), 0o644)
+}
+
+// bmpFromImage renders src at size×size and encodes it as a Windows
+// BITMAPINFOHEADER bitmap with 32-bit BGRA pixels + AND mask (the ICO
+// BMP layout: double height, top-down pixels, bottom-up mask).
+func bmpFromImage(src image.Image, size int) ([]byte, error) {
+	dst := image.NewRGBA(image.Rect(0, 0, size, size))
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dst.Set(x, y, src.At(x*src.Bounds().Dx()/size, y*src.Bounds().Dy()/size))
+		}
+	}
+
+	header := make([]byte, 40)
+	put := func(i int, v uint32) {
+		header[i] = byte(v)
+		header[i+1] = byte(v >> 8)
+		header[i+2] = byte(v >> 16)
+		header[i+3] = byte(v >> 24)
+	}
+	put(0, 40)
+	put(4, uint32(size))
+	put(8, uint32(size*2)) // double height (XOR + AND)
+	put(12, 1)
+	put(14, 32) // bpp
+	// compression 0, sizeImage may be 0 for BI_RGB.
+
+	pixels := make([]byte, 0, size*size*4)
+	for y := size - 1; y >= 0; y-- { // bottom-up rows
+		for x := 0; x < size; x++ {
+			r, g, b, a := dst.At(x, y).RGBA()
+			pixels = append(pixels, byte(b>>8), byte(g>>8), byte(r>>8), byte(a>>8))
+		}
+	}
+
+	// AND mask: 1bpp, bottom-up, rows padded to 32 bits. Fully opaque
+	// images use all-zero masks; alpha is honored from the XOR plane.
+	rowBytes := ((size + 31) / 32) * 4
+	mask := make([]byte, rowBytes*size)
+
+	out := make([]byte, 0, 40+len(pixels)+len(mask))
+	out = append(out, header...)
+	out = append(out, pixels...)
+	out = append(out, mask...)
+	return out, nil
 }
 
 // renderLogo decodes the embedded, pre-rendered brand flame.

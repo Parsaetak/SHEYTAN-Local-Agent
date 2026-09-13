@@ -449,6 +449,23 @@ call (`contextplan.Assemble` + the orchestrator preflight). What remains
 PLANNED is the deeper retrieval integration below — hierarchical
 retrieval over hierarchical chunks feeding the same budget.
 
+**1.1.6-zeta status (IMPLEMENTED):** the budget became a full context
+CONTROL system. `llm.ResolveSessionContext` resolves every run's window as
+`min(session policy, global configured, model GGUF max, engine-verified
+window)` floored at 1024 — the per-session policy lives in
+`sessions.Context.ContextTokens`, is edited per chat from the header
+selector, and never mutates other sessions. The llama.cpp engine's
+`/props`-verified window feeds back into planning while the process is
+alive (`EngineContextLimit`), and the wire request's `n_ctx` carries the
+same validated effective value (`BuildChatRequestWithOptions`) — no second
+truth anywhere. Large windows are resource-classified BEFORE use
+(`llm.AssessContextResource`: weights + KV-cache from GGUF facts + runtime
+overhead vs RAM/VRAM → safe / caution / unsupported; unsupported values are
+rejected by the API with the reason). Per-agent policies
+(`internal/multiagent/context.go`) bound specialist/role windows the same
+way. Every turn logs a structured `context plan:` block before the engine
+call and records the full decision trail in `ctxtelemetry`.
+
 Intended direction (unchanged):
 
 - a context assembly pipeline that treats the window as a budget with

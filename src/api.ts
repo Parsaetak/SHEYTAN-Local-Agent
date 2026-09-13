@@ -85,6 +85,10 @@ export interface Model {
   quantization?: string;
   contextLength?: number;
   parameterInfo?: string;
+  // v1.1.6 first-use model card: backend-measured footprint at the
+  // model class' recommended context, plus that recommendation itself.
+  estimatedMemoryBytes?: number;
+  recommendedContext?: number;
 }
 
 export interface ModelsResponse {
@@ -423,6 +427,15 @@ export interface EngineSnapshot {
   // enabled (engineBackend: "native"). Absent by default. Local status
   // reads only — the poll never performs engine IPC.
   native?: NativeEngineStatus;
+  // v1.1.6 startup flow: user-facing phase (waiting | downloading-engine |
+  // loading-model | checking-capabilities | preparing-context | ready |
+  // stopping | stopped | failed) and the verified-readiness proof —
+  // "ready" is only reported when the serving model is verified.
+  phase?: string;
+  verified?: boolean;
+  verifiedModel?: string;
+  verifiedContext?: number;
+  degraded?: boolean;
   logs?: string[];
   cacheStats?: {
     entries: number;
@@ -488,7 +501,42 @@ export interface SessionDetail extends Session {
     attachedFiles?: string[];
     attachmentIds?: string[];
     maxIterations?: number;
+    // v1.1.6: per-session context-window policy in tokens
+    // (0/absent = inherit the global configured context).
+    contextTokens?: number;
   };
+}
+
+// v1.1.6: the backend-resolved context decision for one session. The
+// backend is authoritative — the UI never computes a different truth.
+export interface SessionContextOption {
+  tokens: number;
+  label: string;
+  classification: "safe" | "caution" | "unsupported";
+  available: boolean;
+  reason?: string;
+  modelClamped?: boolean;
+  engineClamped?: boolean;
+}
+
+export interface SessionContextStatus {
+  sessionId: string;
+  requested: number;
+  configured: number;
+  sessionPolicy?: number;
+  effective: number;
+  modelMax?: number;
+  engineMax?: number;
+  usableInput: number;
+  outputReserve: number;
+  safetyReserve: number;
+  used: number;
+  remaining: number;
+  pressure: number;
+  classification: "safe" | "caution" | "unsupported";
+  resourceReason?: string;
+  reasons?: string[];
+  options: SessionContextOption[];
 }
 
 export interface ChatMessage {
@@ -664,6 +712,37 @@ export const api = {
     return request<EngineSnapshot>("/engine");
   },
 
+  // v1.1.6: the backend-resolved context status for one session
+  // (selector options, usage, pressure, resource verdict).
+  sessionContext(id: string): Promise<SessionContextStatus> {
+    return request<SessionContextStatus>(
+      `/sessions/${encodeURIComponent(id)}/context`,
+    );
+  },
+
+  // v1.1.6: set the per-session context policy (tokens; 0 = inherit the
+  // global context). The choice travels with THIS session only.
+  setSessionContext(
+    id: string,
+    contextTokens: number,
+  ): Promise<SessionContextStatus> {
+    return request<SessionContextStatus>(
+      `/sessions/${encodeURIComponent(id)}/context`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contextTokens }),
+      },
+    );
+  },
+
+  // v1.1.6 first-use: open the models directory in the OS file manager.
+  openModelsFolder(): Promise<{ ok: boolean; path?: string }> {
+    return request<{ ok: boolean; path?: string }>("/models/open-folder", {
+      method: "POST",
+    });
+  },
+
   // v1.1.3Z: staged attachments.
   attachments(): Promise<{ attachments: Attachment[]; limits?: unknown }> {
     return request("/attachments");
@@ -763,6 +842,7 @@ export const api = {
         systemPrompt?: string;
         attachedFiles?: string[];
         maxIterations?: number;
+        contextTokens?: number;
       };
     },
   ): Promise<Session> {

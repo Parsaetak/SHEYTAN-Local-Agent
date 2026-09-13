@@ -332,6 +332,7 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("/api/lab", s.handleLab)
         mux.HandleFunc("/api/lab/", s.handleLabTask)
         mux.HandleFunc("/api/research", s.handleResearch)
+        mux.HandleFunc("/api/models/open-folder", s.handleModelsFolder)
 
         // WebSocket: real-time agent activity for a session
         mux.HandleFunc("/ws/activity", s.handleActivityWS)
@@ -413,6 +414,14 @@ type modelInfo struct {
         Quantization  string `json:"quantization,omitempty"`
         ContextLength int    `json:"contextLength,omitempty"`
         ParameterInfo string `json:"parameterInfo,omitempty"`
+
+        // 1.1.6 §10 first-use model card: estimated memory footprint
+        // (weights + KV-cache at the recommended context + runtime
+        // overhead) and the model-class-recommended context, so the UI
+        // can present Architecture / Quantization / Context maximum /
+        // Estimated memory / Backend / Status without guessing.
+        EstimatedMemoryBytes int64 `json:"estimatedMemoryBytes,omitempty"`
+        RecommendedContext   int   `json:"recommendedContext,omitempty"`
 
         // Serving (v1.1.5Z Phase 6): true when the ACTIVE backend is
         // currently serving THIS model — the honest "currently serving"
@@ -500,6 +509,18 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
                         info.Quantization = card.Quant
                         info.ContextLength = card.ContextLength
                         info.ParameterInfo = card.FormatParams()
+
+                        // 1.1.6 §10: the estimated footprint uses the model
+                        // class' recommended context, not the global setting,
+                        // so the picker stays honest for any machine.
+                        if caps := llm.ResolveModelCapabilities(cfg, info.Path); caps != nil {
+                                info.RecommendedContext = caps.RecommendedCtx
+                                mem := s.systemMemory()
+                                info.EstimatedMemoryBytes = llm.AssessContextResource(
+                                        card, info.SizeBytes, caps.RecommendedCtx,
+                                        cfg.EffectiveKVCacheQuant(), mem,
+                                ).EstimatedTotalBytes
+                        }
                 }
 
                 localInfos = append(localInfos, info)
@@ -697,12 +718,20 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-        id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+        rest := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
 
-        if id == "" {
+        if rest == "" {
                 writeErr(w, http.StatusBadRequest, fmt.Errorf("missing session id"))
                 return
         }
+
+        // 1.1.6: per-session context policy subresource.
+        if id, sub := splitSessionPath(rest); sub == "context" {
+                s.handleSessionContext(w, r, id)
+                return
+        }
+
+        id := rest
 
         switch r.Method {
         case http.MethodGet:
@@ -1257,6 +1286,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
                 gateCancel()
 
+                // 1.1.6 §4: the run carries the session's own context
+                // policy — the orchestrator plans, gates and sends the
+                // request under THIS chat's resolved window.
                 res, err := s.orch.RunDetailed(
                         ctx,
                         messages,
@@ -1288,6 +1320,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                         )
                                 }
                         },
+                        agent.WithSessionContext(sess.Context.ContextTokens),
                 )
 
                 if err != nil {
