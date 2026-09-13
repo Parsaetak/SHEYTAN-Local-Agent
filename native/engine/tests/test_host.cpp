@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <vector>
 #include <string>
@@ -582,16 +583,23 @@ int main() {
         CHECK(rc == 0);
     }
 
-    if (failures > 0) {
-        std::fprintf(stderr, "test_host: %d failure(s)\n", failures);
-        return 1;
-    }
-
     // --- Phase 5: streaming generation through the real dispatch loop ---
+    //
+    // Phase 6 repair: this block used to run AFTER the `failures > 0`
+    // exit gate, so every phase5 CHECK failure was invisible to the
+    // process exit code — CI stayed green while the streaming tests
+    // silently failed (and a separate reader bug, fixed below, made
+    // blocks 1-2 fail on every run). The gate now runs LAST; the exit
+    // code is honest about ALL executed checks.
     {
         const char* env = std::getenv("SHTN_FIXTURES_DIR");
         std::string fixtures = env != nullptr ? env : "../tests/fixtures";
         phase5_generate_tests(fixtures);
+    }
+
+    if (failures > 0) {
+        std::fprintf(stderr, "test_host: %d failure(s)\n", failures);
+        return 1;
     }
 
     std::printf("test_host: all checks passed\n");
@@ -766,9 +774,17 @@ static bool run_host_generate_test(const std::string& fixture_path,
     std::string frame;
     while (reader.next(frame)) {
         frames_out.push_back(frame);
-        // Stop once the generate request's FINAL frame arrives (has an id
-        // and no "event" member).
-        if (frame.find("\"event\":\"chunk\"") == std::string::npos) {
+        // Phase 6 repair: stop at the GENERATE terminal frame, not at the
+        // first non-chunk frame. The old condition broke at the load_model
+        // response (always the first non-chunk frame), so the driver
+        // collected exactly one frame and the streaming assertions never
+        // had a chance to run. A generate terminal either carries a
+        // finishReason (success/cancelled) or is an ok:false error frame
+        // (rejected request); load/ping responses match neither.
+        const bool is_generate_terminal =
+            frame.find("\"finishReason\":") != std::string::npos ||
+            frame.find("\"ok\":false") != std::string::npos;
+        if (is_generate_terminal) {
             break;
         }
     }
@@ -832,30 +848,82 @@ static void phase5_generate_tests(const std::string& fixtures) {
     }
 
     // 2. Cancel mid-generation (slow fixture): event frames stop, the
-    //    final frame reports "cancelled", the host stays alive and serves
-    //    a follow-up request.
+    //    final frame reports "cancelled", the host stays alive.
+    //
+    //    Phase 6 repair: the original driver preloaded the cancel frame
+    //    together with the generate frame, so the dispatch loop could
+    //    process the cancel BEFORE the lane thread submitted the request
+    //    to the engine ("cancelled":false, generation then ran to
+    //    completion). The cancel is now issued only after the FIRST
+    //    streamed chunk arrives — at that point the request is provably
+    //    registered and active in the engine, which is the deterministic
+    //    mid-flight condition the test means to exercise (and what the
+    //    Go-side TestRealCppHostPhase5Cancellation has always done).
     {
+        using namespace hostgen;
+        ShtnPipe req_pipe[2];
+        ShtnPipe resp_pipe[2];
+        CHECK(make_pipe(req_pipe) && make_pipe(resp_pipe));
+
+        PipeInBuf in_buf(req_pipe[0]);
+        PipeOutBuf out_buf(resp_pipe[1]);
+        std::istream in(&in_buf);
+        std::ostream out(&out_buf);
+
+        std::thread host([&in, &out]() { shtn_host_run(in, out); });
+
         std::string script;
         script += frame("{\"id\":1,\"op\":\"load_model\",\"payload\":{\"path\":\"" +
                        fixtures + "/tiny-llama-slow.gguf\"}}");
         script += frame("{\"id\":2,\"op\":\"generate\",\"payload\":{" +
                        std::string("\"requestId\":\"go-2\",\"prompt\":\"hello\",") +
                        "\"maxTokens\":200,\"temperature\":1.1,\"seed\":5}}");
-        script += frame("{\"id\":3,\"op\":\"cancel\",\"payload\":{\"requestId\":\"go-2\"}}");
+        SHTN_WRITE(req_pipe[1], script.data(), script.size());
 
+        FrameReader reader(resp_pipe[0]);
         std::vector<std::string> frames;
-        CHECK(run_host_generate_test(fixtures, script, frames));
+        std::string f;
+
+        bool generation_active = false;
+        while (!generation_active && reader.next(f)) {
+            frames.push_back(f);
+            if (f.find("\"id\":2") != std::string::npos &&
+                f.find("\"event\":\"chunk\"") != std::string::npos) {
+                generation_active = true;
+            }
+        }
+        CHECK(generation_active);
+
+        // Mid-flight: the generation is streaming. Cancel it now.
+        const std::string cancel =
+            frame("{\"id\":3,\"op\":\"cancel\",\"payload\":{\"requestId\":\"go-2\"}}");
+        SHTN_WRITE(req_pipe[1], cancel.data(), cancel.size());
+
+        // Read through the cancelled final frame.
+        while (reader.next(f)) {
+            frames.push_back(f);
+            if (f.find("\"finishReason\":\"cancelled\"") != std::string::npos ||
+                f.find("\"ok\":false") != std::string::npos) {
+                break;
+            }
+        }
+
+        SHTN_CLOSE(req_pipe[1]);
+        host.join();
+        SHTN_CLOSE(req_pipe[0]);
+        SHTN_CLOSE(resp_pipe[0]);
+        SHTN_CLOSE(resp_pipe[1]);
 
         bool saw_cancel_ok = false;
         bool saw_cancelled_final = false;
-        for (const std::string& f : frames) {
-            if (f.find("\"id\":3") != std::string::npos) {
-                CHECK(f.find("\"cancelled\":true") != std::string::npos);
+        for (const std::string& fr : frames) {
+            if (fr.find("\"id\":3") != std::string::npos) {
+                CHECK(fr.find("\"cancelled\":true") != std::string::npos);
                 saw_cancel_ok = true;
             }
-            if (f.find("\"id\":2") != std::string::npos &&
-                f.find("\"event\"") == std::string::npos) {
-                CHECK(f.find("\"finishReason\":\"cancelled\"") !=
+            if (fr.find("\"id\":2") != std::string::npos &&
+                fr.find("\"event\"") == std::string::npos) {
+                CHECK(fr.find("\"finishReason\":\"cancelled\"") !=
                       std::string::npos);
                 saw_cancelled_final = true;
             }
@@ -897,5 +965,197 @@ static void phase5_generate_tests(const std::string& fixtures) {
             CHECK(frames[0].find("\"ok\":false") != std::string::npos);
             CHECK(frames[0].find("no model") != std::string::npos);
         }
+    }
+
+    // 5. Phase 6 regression — lane prompt OWNERSHIP (CI run 34703102794):
+    //    op_generate used to leave opts.prompt pointing at its stack-local
+    //    std::string; pipelined generate frames made the dispatch loop
+    //    reuse that dead stack slot while lanes were still starting, and
+    //    the corrupted prompt silently dropped the BPE merges ("hello"
+    //    → 7 tokens instead of 5 on a loaded runner; the context-bound
+    //    Go test then rejected a fitting request). The lane now owns a
+    //    copy. This test pipelines DISTINCT prompts — every request must
+    //    report the token count of ITS OWN prompt, so any cross-request
+    //    contamination or stack corruption fails an assertion.
+    //
+    //    Expected counts on tiny-llama-f32.gguf (vocab: ▁ + a-z singles +
+    //    "he"/"ll"; merges "h e" and "l l"; BOS auto-prepended):
+    //      "z"       → 3   (BOS + ▁ + z)
+    //      "ab"      → 4
+    //      "abcd"    → 6
+    //      "abcdef"  → 8
+    //      "hello"   → 5   (REQUIRES both merges to apply)
+    //      "abcdefgh"→ 10  (BOS + ▁ + 8 letters)
+    {
+        struct BurstReq {
+            int id;
+            const char* prompt;
+            int expected_prompt_tokens;
+        };
+        const BurstReq burst[] = {
+            {10, "z", 3},
+            {11, "ab", 4},
+            {12, "abcd", 6},
+            {13, "abcdef", 8},
+            {14, "hello", 5},
+            {15, "abcdefgh", 10},
+        };
+        const size_t kBurst = sizeof(burst) / sizeof(burst[0]);
+
+        std::string script;
+        script += frame("{\"id\":1,\"op\":\"load_model\",\"payload\":{\"path\":\"" +
+                       fixtures + "/tiny-llama-f32.gguf\"}}");
+        for (const BurstReq& r : burst) {
+            script += frame("{\"id\":" + std::to_string(r.id) +
+                           ",\"op\":\"generate\",\"payload\":{" +
+                           "\"requestId\":\"burst-" + std::to_string(r.id) +
+                           "\",\"prompt\":\"" + r.prompt +
+                           "\",\"maxTokens\":2,\"temperature\":0.0}}");
+        }
+
+        // Drive the host with ALL frames preloaded (pipelined — the
+        // dispatch loop never blocks on stdin, which is exactly the
+        // stack-reuse pressure that exposed the dangling pointer).
+        using namespace hostgen;
+        ShtnPipe req_pipe[2];
+        ShtnPipe resp_pipe[2];
+        CHECK(make_pipe(req_pipe) && make_pipe(resp_pipe));
+
+        PipeInBuf in_buf(req_pipe[0]);
+        PipeOutBuf out_buf(resp_pipe[1]);
+        std::istream in(&in_buf);
+        std::ostream out(&out_buf);
+
+        std::thread host([&in, &out]() { shtn_host_run(in, out); });
+
+        SHTN_WRITE(req_pipe[1], script.data(), script.size());
+
+        FrameReader reader(resp_pipe[0]);
+        std::map<int, std::string> finals; // generate id → terminal frame
+        std::string f;
+        while (finals.size() < kBurst && reader.next(f)) {
+            // A generate terminal carries finishReason (success) or is
+            // an error frame (ok:false). Counting BOTH keeps the loop's
+            // termination guaranteed even under rejection.
+            const bool is_terminal =
+                f.find("\"finishReason\":") != std::string::npos ||
+                f.find("\"ok\":false") != std::string::npos;
+            if (!is_terminal) {
+                continue;
+            }
+            for (const BurstReq& r : burst) {
+                if (f.find("\"id\":" + std::to_string(r.id) + ",") !=
+                    std::string::npos) {
+                    finals[r.id] = f;
+                    break;
+                }
+            }
+        }
+
+        SHTN_CLOSE(req_pipe[1]);
+        host.join();
+        SHTN_CLOSE(req_pipe[0]);
+        SHTN_CLOSE(resp_pipe[0]);
+        SHTN_CLOSE(resp_pipe[1]);
+
+        CHECK(finals.size() == kBurst);
+        for (const BurstReq& r : burst) {
+            const auto it = finals.find(r.id);
+            CHECK(it != finals.end());
+            if (it == finals.end()) {
+                continue;
+            }
+            CHECK(it->second.find("\"ok\":true") != std::string::npos);
+            CHECK(it->second.find("\"requestId\":\"burst-" +
+                                  std::to_string(r.id) + "\"") !=
+                  std::string::npos);
+            const std::string want =
+                "\"promptTokens\":" + std::to_string(r.expected_prompt_tokens);
+            if (it->second.find(want) == std::string::npos) {
+                std::fprintf(stderr,
+                             "[burst %d] prompt mismatch for prompt \"%s\": "
+                             "expected %s — frame: %s\n",
+                             r.id, r.prompt, want.c_str(),
+                             it->second.c_str());
+            }
+            CHECK(it->second.find(want) != std::string::npos);
+            CHECK(it->second.find("\"finishReason\":\"length\"") !=
+                  std::string::npos);
+        }
+    }
+
+    // 6. Phase 6 regression — lane RECYCLING: finished generation lanes
+    //    must be retired (join + free). Before the sweep, lanes stayed in
+    //    the host's list for its whole lifetime, so kMaxLanes (16) capped
+    //    the host at 16 generations TOTAL — the 17th request of a long
+    //    session was rejected with "too many concurrent requests" while
+    //    nothing was running. 20 SEQUENTIAL round-trip generations (never
+    //    more than one in flight) served by one host must ALL succeed.
+    //    (A pipelined burst of 20 is different: it legitimately exceeds
+    //    the CONCURRENT lane bound and is honestly rejected.)
+    {
+        using namespace hostgen;
+        ShtnPipe req_pipe[2];
+        ShtnPipe resp_pipe[2];
+        CHECK(make_pipe(req_pipe) && make_pipe(resp_pipe));
+
+        PipeInBuf in_buf(req_pipe[0]);
+        PipeOutBuf out_buf(resp_pipe[1]);
+        std::istream in(&in_buf);
+        std::ostream out(&out_buf);
+
+        std::thread host([&in, &out]() { shtn_host_run(in, out); });
+
+        const std::string load =
+            frame("{\"id\":1,\"op\":\"load_model\",\"payload\":{\"path\":\"" +
+                  fixtures + "/tiny-llama-f32.gguf\"}}");
+        SHTN_WRITE(req_pipe[1], load.data(), load.size());
+
+        FrameReader reader(resp_pipe[0]);
+        std::string f;
+
+        // Consume the load response.
+        CHECK(reader.next(f));
+        CHECK(f.find("\"ok\":true") != std::string::npos);
+
+        int successes = 0;
+        bool saw_reject = false;
+        for (int i = 0; i < 20; ++i) {
+            const std::string gen =
+                frame("{\"id\":" + std::to_string(100 + i) +
+                       ",\"op\":\"generate\",\"payload\":{" +
+                       "\"requestId\":\"recycle-" + std::to_string(i) +
+                       "\",\"prompt\":\"hello\",\"maxTokens\":2," +
+                       "\"temperature\":0.0}}");
+            SHTN_WRITE(req_pipe[1], gen.data(), gen.size());
+
+            // Read through THIS request's terminal frame (chunks first,
+            // then the final).
+            bool terminal = false;
+            while (!terminal && reader.next(f)) {
+                if (f.find("too many concurrent requests") !=
+                    std::string::npos) {
+                    saw_reject = true;
+                }
+                terminal =
+                    f.find("\"finishReason\":") != std::string::npos ||
+                    f.find("\"ok\":false") != std::string::npos;
+                if (terminal) {
+                    CHECK(f.find("\"ok\":true") != std::string::npos);
+                    CHECK(f.find("\"promptTokens\":5") != std::string::npos);
+                    ++successes;
+                }
+            }
+            CHECK(terminal);
+        }
+
+        SHTN_CLOSE(req_pipe[1]);
+        host.join();
+        SHTN_CLOSE(req_pipe[0]);
+        SHTN_CLOSE(resp_pipe[0]);
+        SHTN_CLOSE(resp_pipe[1]);
+
+        CHECK(!saw_reject);
+        CHECK(successes == 20);
     }
 }

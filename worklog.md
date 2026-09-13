@@ -2,7 +2,7 @@
 
 ## Current State
 
-Date: 2026-09-12 (validation & repair pass; phase logs below)
+Date: 2026-09-13 (Phase 6: reliability, coding effectiveness, context intelligence, multi-agent efficiency; phase logs below)
 
 Repository:
 
@@ -48,6 +48,131 @@ than llama.cpp (the numbers are below — no native-speed claim is
 made). llama.cpp remains fully functional as the fallback (and the
 default generation engine for everything the native path does not
 support). Full phase logs below.
+
+---
+
+# v1.1.5Z Phase 6 Implementation Log (2026-09-13)
+
+Phase 6 is the RELIABILITY / EFFECTIVENESS pass: the strategic product
+target is that a small local model plus SHEYTAN accomplishes work that
+normally needs a substantially larger model or a cloud agent. Four P0
+systems were implemented, each with tests through the real boundaries.
+
+## 0. CI defect fix (run 34703102794, Linux job)
+
+The two failing tests (`TestRealCppHostPhase5EndToEndGeneration` —
+prompt tokens 7 vs want 5; `TestRealCppHostPhase5ContextOverflow` —
+7+59 > 64) were root-caused to a **dangling prompt pointer** in
+`native/engine/src/host_main.cpp op_generate`: `lane->opts.prompt`
+pointed into a stack-local `std::string` that died when `op_generate`
+returned; the generation thread then read freed SSO bytes — a
+scheduling race (locally the lane thread won; on the 2-core CI runner
+the dispatch loop reused the stack slot first, the corrupted prompt
+lost its BPE merges, and "hello" tokenized as 7 instead of 5).
+
+Fixes (ownership, not timing):
+- `GenLane` now owns `std::string prompt` (copied before `c_str()`).
+- Lane lifecycle: `finished` atomic + `sweep_finished_lanes()` in the
+  host loop — completed lanes are joined and retired, so `kMaxLanes=16`
+  bounds CONCURRENT work, not lifetime totals (previously the host
+  rejected ALL generations after 16 total).
+- `test_host.cpp` silent-failure bug: `main()` checked `failures > 0`
+  BEFORE the phase5 tests ran (CI was green while they failed); the
+  gate moved to the end. The streaming harness broke on the first
+  non-chunk frame (the load_model response); now it breaks on the
+  generate terminal frame.
+- Regression tests: C++ burst prompt-ownership (6 pipelined distinct
+  prompts) + lane recycling (20 sequential generations); Go
+  `TestRealCppHostPhase5PromptOwnership` +
+  `TestRealCppHostPhase5LaneRecycling` through the real host binary.
+  Proof: reverting only the host_main.cpp fix reproduces the exact CI
+  signature deterministically.
+
+## 1. P0 #1 — Agent reliability (internal/agent/reliability.go, verification.go)
+
+- **FailureClassification**: 14 categories (knowledge, reasoning,
+  planning, tool_selection, tool_arguments, execution, filesystem,
+  process, network, model_capability, context, verification,
+  environment, state, unknown). Every tool error is classified from its
+  evidence, and a category-specific `RepairHint` is appended to the
+  tool result — the model re-plans against the DIAGNOSIS, never retries
+  blind. Classification is surfaced as a "failure" activity and
+  tallied on RunResult.FailureTally.
+- **LoopGuard**: repeat detection by call signature (tool + normalized
+  args — whitespace-insensitive so reformatting cannot reset the
+  counter). First repeat: strategy-change warning. Third: the exact
+  call is refused with an instruction to produce the final answer.
+  Run-level budgets: 200 tool calls, 30 min wall clock. Blocked calls
+  are not counted — counters track EXECUTIONS (CallStats match what
+  actually ran).
+- **Verification as a first-class system**: `RunResult.Verification`
+  reports `verified / partially_verified / failed / not_verified` from
+  an `EvidenceCollector` watching tool traffic (lab verify actions,
+  explicit build/test outcomes). Unknown tools and ambiguous output
+  contribute nothing; a completion claim with no evidence reports
+  `not_verified` and the timeline says so. Never again does model
+  prose serve as proof of success.
+
+## 2. P0 #2 — Coding effectiveness: safe anchored edits (internal/lab/safeedit.go)
+
+The Coding Lab gained `read_file` (bounded line-numbered views with
+offset/limit, binary sniffing, 2000-line/256KB caps) and `edit_file`
+(the safe-edit primitive): the anchor (oldText) must occur EXACTLY
+ONCE in the file — zero matches is STALE (the file changed since the
+last read; the model must re-read), two or more is AMBIGUOUS (more
+surrounding lines required). Writes are atomic (same-dir temp + fsync
++ rename), re-read and byte-verified before success, CRLF-normalized,
+and every edit invalidates the task's verification state. The edit
+success message explicitly states the edit is NOT verified — verify
+must run. Small local models no longer corrupt files through shell
+quoting accidents; the coding loop is read_file → edit_file → verify.
+
+## 3. P0 #3 — Context intelligence: persistent project intelligence (internal/projectintel)
+
+A per-project measured-facts store (`<DataDir>/projectintel/`, one JSON
+per project root): languages (extension census), build system +
+inferred commands (go.mod/package.json/Cargo.toml/CMakeLists/Makefile),
+layout, entry hints, conventions, and lessons (bounded dedup FIFO,
+24 x 200 chars). The Lab records VERIFIED build/test commands against
+the task's source root — a verified command is never clobbered by
+re-observation. The compact `Card()` (<= 4KB) is injected before the
+last user message (cache-friendly position, measured into the context
+plan like recall blocks): the model starts the task already knowing
+the project instead of re-discovering it every session.
+
+## 4. P0 #4 — Multi-agent efficiency + honest model status
+
+- The multi-agent critic loop previously read the raw `m.maxIter`
+  field instead of the normalized local — with `maxIter < 1` the critic
+  NEVER ran (fixed; regression test added). The executor now runs via
+  `RunDetailed`, so the critic receives the run's measured
+  verification verdict ("Objective verification: ...") and the critic
+  prompt forbids `"satisfied": true` without objective evidence for
+  verifiable tasks. All inter-agent hand-offs are bounded excerpts
+  (6KB, rune-safe, marked) — low-end hardware: one small model,
+  sequential phases, compact artifacts.
+- `/api/models` now reports `backend` (which engine serves
+  generation), `servingPath`, and per-model `serving: true` for the
+  model the ACTIVE backend is serving; the settings model list marks
+  it "currently serving (native engine | llama.cpp)". Discovered /
+  loaded / serving are now honestly distinguishable in the UI.
+
+## Verification performed (Phase 6)
+
+- `node scripts/release-version.mjs --check`: consistent.
+- `npm ci && npm run typecheck && npm run lint && npm run build`: pass
+  (0 warnings, 0 errors).
+- `go test ./internal/... -tags headless -count=1`: 25 packages ok.
+- `go test -race` on agent/llm/api/native/engine + lab/multiagent/
+  projectintel: pass.
+- `go vet -tags headless ./...`: clean.
+- cmake + ctest (native engine): 12/12 PASS with the fixed host.
+- Real Go<->C++ integration tests: ALL PASS, including both original
+  CI failures and both new regression tests.
+- `go run ./scripts/stress-main stress`: 30 pass / 0 fail.
+- Non-headless `go test ./...`: gtk4/webkitgtk system libs absent in
+  the dev sandbox — verified PRE-EXISTING at HEAD (same failures on
+  the untouched tree); CI runners have the libraries.
 
 ---
 

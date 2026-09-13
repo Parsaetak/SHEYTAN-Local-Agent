@@ -1,316 +1,158 @@
-# SHEYTAN-Local-Agent v1.1.5Z Phase 5 replacement manifest
-#
-# A COMPLETE replacement archive of the final repository state
-# (baseline for status classification: live main HEAD ad34c74 —
-#  the state being replaced; the archive also carries the 2026-09-11
-#  repair content, so it reconstructs the full final state from any
-#  phase-5-era checkout).
-# Status vocabulary:
-#   new       — absent from the baseline (added by this repair)
-#   modified  — changed relative to the baseline
-#   unchanged — identical to the baseline; included so the
-#               archive reconstructs the full repository state
-#   deleted   — present in the baseline, removed (none in this repair)
-#
-# Excluded by policy: .git/ node_modules/ dist/ build artifacts
-# (native/engine/build) runtime dirs (models/ sessions/ logs/
-# caches/ tmp/ secrets) and machine-specific files.
-#
-# files included: 295  (new: 1, modified: 11,
-# unchanged: 283)
+SHEYTAN-Local-Agent v1.1.5-zeta — Phase 6 Replacement Manifest
+================================================================
+Base: main @ 4d91aacb2336526067b151e75d8ca36cd0b8b4a0 (v1.1.5Z Phase 5)
+Package: SHEYTAN-local-agent-1.1.5-zeta-phase6-replacement.zip
+Apply over a clean checkout of the base commit.
 
-.github/workflows/build-desktop.yml	unchanged	repository source (required for complete replacement state)
-.gitignore	unchanged	repository source (required for complete replacement state)
-.oxlintrc.json	unchanged	repository source (required for complete replacement state)
-.prettierignore	unchanged	repository source (required for complete replacement state)
-ARCHITECTURE.md	unchanged	repository source (required for complete replacement state)
-FIX-README.md	unchanged	repository source (required for complete replacement state)
-LICENSE	unchanged	repository source (required for complete replacement state)
-README.md	modified	documentation truth: engineBackend row updated to the Phase 5 routing reality (stale Phase-1 text removed) and the llama.cpp Linux download reality documented
-REPLACEMENT-MANIFEST.txt	unchanged	replacement manifest (this file) — regenerated for the current archive
-REPLACEMENT-SHA256.txt	unchanged	SHA-256 for every file in the replacement archive — regenerated
-SIGNATURE	unchanged	repository source (required for complete replacement state)
-agent.md	modified	agent handoff updated with the 2026-09-12 validation pass (defects fixed, evidence pointer)
-build/config.yml	unchanged	repository source (required for complete replacement state)
-cmd/ask.go	unchanged	repository source (required for complete replacement state)
-cmd/context.go	unchanged	repository source (required for complete replacement state)
-cmd/diagnostics.go	unchanged	repository source (required for complete replacement state)
-cmd/license.go	unchanged	repository source (required for complete replacement state)
-cmd/logs.go	unchanged	repository source (required for complete replacement state)
-cmd/root.go	unchanged	repository source (required for complete replacement state)
-cmd/serve.go	unchanged	repository source (required for complete replacement state)
-cmd/setup.go	unchanged	repository source (required for complete replacement state)
-cmd/stress.go	unchanged	repository source (required for complete replacement state)
-cmd/stress_zeta.go	unchanged	repository source (required for complete replacement state)
-cmd/update.go	unchanged	repository source (required for complete replacement state)
-go.mod	unchanged	repository source (required for complete replacement state)
-go.sum	unchanged	repository source (required for complete replacement state)
-index.html	unchanged	repository source (required for complete replacement state)
-internal/agent/orchestrator.go	unchanged	repository source (required for complete replacement state)
-internal/agent/orchestrator_test.go	unchanged	repository source (required for complete replacement state)
-internal/aicontext/AI-CONTEXT.md	unchanged	repository source (required for complete replacement state)
-internal/aicontext/aicontext.go	unchanged	repository source (required for complete replacement state)
-internal/aicontext/aicontext_test.go	unchanged	repository source (required for complete replacement state)
-internal/api/attachments.go	unchanged	repository source (required for complete replacement state)
-internal/api/engine.go	unchanged	repository source (required for complete replacement state)
-internal/api/lab.go	unchanged	repository source (required for complete replacement state)
-internal/api/lifecycle.go	unchanged	repository source (required for complete replacement state)
-internal/api/research.go	unchanged	repository source (required for complete replacement state)
-internal/api/server.go	modified	engine toggle start repaired: calls Stack.EnsureNativeReady (start + native model load + capability verdict) and keeps the llama result authoritative only when native is not actually serving — a failed llama fallback no longer fails the toggle on native-serving deployments
-internal/api/server_native_test.go	modified	added TestEngineToggleNativeServesGeneration — HTTP-level regression pinning the toggle repair end-to-end (toggle 200 on native-only deployment, honest native badge, REAL native generation persisted)
-internal/api/server_test.go	unchanged	repository source (required for complete replacement state)
-internal/api/server_v114_test.go	unchanged	repository source (required for complete replacement state)
-internal/api/timeout_test.go	unchanged	repository source (required for complete replacement state)
-internal/api/ws.go	unchanged	repository source (required for complete replacement state)
-internal/artifacts/artifacts.go	unchanged	repository source (required for complete replacement state)
-internal/attachments/attachments.go	unchanged	repository source (required for complete replacement state)
-internal/attachments/attachments_phase3_test.go	unchanged	repository source (required for complete replacement state)
-internal/attachments/attachments_test.go	unchanged	repository source (required for complete replacement state)
-internal/brand/brand.go	unchanged	repository source (required for complete replacement state)
-internal/browser/browser.go	unchanged	repository source (required for complete replacement state)
-internal/chunking/bench_compare_test.go	unchanged	repository source (required for complete replacement state)
-internal/chunking/chunker.go	unchanged	repository source (required for complete replacement state)
-internal/chunking/chunker_test.go	unchanged	repository source (required for complete replacement state)
-internal/chunking/chunking.go	unchanged	repository source (required for complete replacement state)
-internal/chunking/chunking_test.go	unchanged	repository source (required for complete replacement state)
-internal/config/config.go	unchanged	repository source (required for complete replacement state)
-internal/config/source.go	unchanged	repository source (required for complete replacement state)
-internal/config/source_test.go	unchanged	repository source (required for complete replacement state)
-internal/contextcache/contextcache.go	unchanged	repository source (required for complete replacement state)
-internal/contextcache/contextcache_phase3_test.go	unchanged	repository source (required for complete replacement state)
-internal/contextcache/contextcache_test.go	unchanged	repository source (required for complete replacement state)
-internal/contextplan/contextplan.go	unchanged	repository source (required for complete replacement state)
-internal/contextplan/contextplan_test.go	unchanged	repository source (required for complete replacement state)
-internal/continuum/continuum.go	unchanged	repository source (required for complete replacement state)
-internal/continuum/continuum_test.go	unchanged	repository source (required for complete replacement state)
-internal/continuum/rollover.go	unchanged	repository source (required for complete replacement state)
-internal/desktop/desktop.go	unchanged	repository source (required for complete replacement state)
-internal/desktop/headless.go	unchanged	repository source (required for complete replacement state)
-internal/humanize/humanize.go	unchanged	repository source (required for complete replacement state)
-internal/installer/installer.go	unchanged	repository source (required for complete replacement state)
-internal/installer/lookpath.go	unchanged	repository source (required for complete replacement state)
-internal/lab/api.go	unchanged	repository source (required for complete replacement state)
-internal/lab/lab_test.go	unchanged	repository source (required for complete replacement state)
-internal/lab/policy.go	unchanged	repository source (required for complete replacement state)
-internal/lab/policy_v114_test.go	unchanged	repository source (required for complete replacement state)
-internal/lab/repair.go	unchanged	repository source (required for complete replacement state)
-internal/lab/repair_test.go	unchanged	repository source (required for complete replacement state)
-internal/lab/runner.go	unchanged	repository source (required for complete replacement state)
-internal/lab/runner_test.go	unchanged	repository source (required for complete replacement state)
-internal/lab/session.go	unchanged	repository source (required for complete replacement state)
-internal/lab/task.go	unchanged	repository source (required for complete replacement state)
-internal/lab/tool.go	unchanged	repository source (required for complete replacement state)
-internal/lab/verifier.go	unchanged	repository source (required for complete replacement state)
-internal/lab/workspace.go	unchanged	repository source (required for complete replacement state)
-internal/llm/backend.go	unchanged	repository source (required for complete replacement state)
-internal/llm/backend_test.go	unchanged	repository source (required for complete replacement state)
-internal/llm/client.go	unchanged	repository source (required for complete replacement state)
-internal/llm/client_response_test.go	unchanged	repository source (required for complete replacement state)
-internal/llm/client_v114_test.go	unchanged	repository source (required for complete replacement state)
-internal/llm/gguf.go	unchanged	repository source (required for complete replacement state)
-internal/llm/llama.go	modified	llamaDownloadURL repaired: llama.cpp removed upstream Linux prebuilt binaries so the pinned b10642 URL 404s forever on Linux — now probes the pinned tag, scans recent releases (bounded) for the platform asset, records the ACTUAL source tag, and fails with an honest actionable error when none exists
-internal/llm/llama_test.go	unchanged	repository source (required for complete replacement state)
-internal/llm/llamabackend.go	unchanged	repository source (required for complete replacement state)
-internal/llm/models.go	unchanged	repository source (required for complete replacement state)
-internal/llm/presets.go	unchanged	repository source (required for complete replacement state)
-internal/llm/speed.go	unchanged	repository source (required for complete replacement state)
-internal/logging/logging.go	unchanged	repository source (required for complete replacement state)
-internal/memory/memory.go	unchanged	repository source (required for complete replacement state)
-internal/memory/memory_phase3_test.go	unchanged	repository source (required for complete replacement state)
-internal/memory/memory_test.go	unchanged	repository source (required for complete replacement state)
-internal/memory/trust_test.go	unchanged	repository source (required for complete replacement state)
-internal/multiagent/multiagent.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/backend.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/cpp_integration_test.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/doc.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/engine_test.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/generation.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/kv.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/memory.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/metrics.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/model.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/model_test.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/phase4_integration_test.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/phase5_bench_test.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/phase5_integration_test.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/platform.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/protocol.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/runtime.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/scheduler.go	unchanged	repository source (required for complete replacement state)
-internal/native/engine/tokenizer.go	unchanged	repository source (required for complete replacement state)
-internal/native/filedialog_other.go	unchanged	repository source (required for complete replacement state)
-internal/native/filedialog_windows.go	unchanged	repository source (required for complete replacement state)
-internal/native/native.go	unchanged	repository source (required for complete replacement state)
-internal/netcheck/netcheck.go	unchanged	repository source (required for complete replacement state)
-internal/proc/env.go	unchanged	repository source (required for complete replacement state)
-internal/proc/proc.go	unchanged	repository source (required for complete replacement state)
-internal/proc/proc_other.go	unchanged	repository source (required for complete replacement state)
-internal/proc/proc_windows.go	unchanged	repository source (required for complete replacement state)
-internal/recall/recall.go	unchanged	repository source (required for complete replacement state)
-internal/recall/recall_phase3_test.go	unchanged	repository source (required for complete replacement state)
-internal/recall/recall_test.go	unchanged	repository source (required for complete replacement state)
-internal/releasegate/releasegate_test.go	unchanged	repository source (required for complete replacement state)
-internal/research/backend_alias_test.go	unchanged	repository source (required for complete replacement state)
-internal/research/cache.go	unchanged	repository source (required for complete replacement state)
-internal/research/cache_test.go	unchanged	repository source (required for complete replacement state)
-internal/research/duckduckgo.go	unchanged	repository source (required for complete replacement state)
-internal/research/github.go	unchanged	repository source (required for complete replacement state)
-internal/research/github_test.go	unchanged	repository source (required for complete replacement state)
-internal/research/provider.go	unchanged	repository source (required for complete replacement state)
-internal/research/reddit.go	unchanged	repository source (required for complete replacement state)
-internal/research/reddit_test.go	unchanged	repository source (required for complete replacement state)
-internal/research/searxng.go	unchanged	repository source (required for complete replacement state)
-internal/research/security_test.go	unchanged	repository source (required for complete replacement state)
-internal/research/service.go	unchanged	repository source (required for complete replacement state)
-internal/research/service_test.go	unchanged	repository source (required for complete replacement state)
-internal/research/tool.go	unchanged	repository source (required for complete replacement state)
-internal/research/tool_test.go	unchanged	repository source (required for complete replacement state)
-internal/research/web_test.go	unchanged	repository source (required for complete replacement state)
-internal/resources/resources.go	unchanged	repository source (required for complete replacement state)
-internal/resources/resources_other.go	unchanged	repository source (required for complete replacement state)
-internal/resources/resources_test.go	unchanged	repository source (required for complete replacement state)
-internal/resources/resources_windows.go	unchanged	repository source (required for complete replacement state)
-internal/runtime/runtime.go	modified	extracted Stack.EnsureNativeReady(ctx) — the single bounded start+load+verdict seam now shared by the launch prewarm and the engine toggle; prewarmNative is a thin async wrapper
-internal/runtime/runtime_test.go	unchanged	repository source (required for complete replacement state)
-internal/sandbox/sandbox.go	unchanged	repository source (required for complete replacement state)
-internal/sandbox/sandbox_other.go	unchanged	repository source (required for complete replacement state)
-internal/sandbox/sandbox_windows.go	unchanged	repository source (required for complete replacement state)
-internal/screen/screen_other.go	unchanged	repository source (required for complete replacement state)
-internal/screen/screen_windows.go	unchanged	repository source (required for complete replacement state)
-internal/sessions/sessions.go	unchanged	repository source (required for complete replacement state)
-internal/sessions/sessions_test.go	unchanged	repository source (required for complete replacement state)
-internal/sysinfo/sysinfo.go	unchanged	repository source (required for complete replacement state)
-internal/termshell/termshell.go	unchanged	repository source (required for complete replacement state)
-internal/termshell/termshell_test.go	unchanged	repository source (required for complete replacement state)
-internal/tools/archive.go	unchanged	repository source (required for complete replacement state)
-internal/tools/basedir.go	unchanged	repository source (required for complete replacement state)
-internal/tools/browser.go	unchanged	repository source (required for complete replacement state)
-internal/tools/data.go	unchanged	repository source (required for complete replacement state)
-internal/tools/data_analysis.go	unchanged	repository source (required for complete replacement state)
-internal/tools/data_tool.go	unchanged	repository source (required for complete replacement state)
-internal/tools/datachart.go	unchanged	repository source (required for complete replacement state)
-internal/tools/diff.go	unchanged	repository source (required for complete replacement state)
-internal/tools/fetch.go	unchanged	repository source (required for complete replacement state)
-internal/tools/json_tool.go	unchanged	repository source (required for complete replacement state)
-internal/tools/linux.go	unchanged	repository source (required for complete replacement state)
-internal/tools/parse_test.go	unchanged	repository source (required for complete replacement state)
-internal/tools/screenshot.go	unchanged	repository source (required for complete replacement state)
-internal/tools/testhooks.go	unchanged	repository source (required for complete replacement state)
-internal/tools/tools.go	unchanged	repository source (required for complete replacement state)
-internal/updater/updater.go	modified	exported updater.AssetExists (probe seam used by the repaired engine download path; scan machinery LatestTag already existed)
-internal/updater/zipsafe_test.go	unchanged	repository source (required for complete replacement state)
-internal/vision/vision.go	unchanged	repository source (required for complete replacement state)
-internal/vision/vision_test.go	unchanged	repository source (required for complete replacement state)
-main.go	unchanged	repository source (required for complete replacement state)
-main_headless.go	unchanged	repository source (required for complete replacement state)
-main_other.go	unchanged	repository source (required for complete replacement state)
-main_stderr.go	unchanged	repository source (required for complete replacement state)
-main_windows.go	unchanged	repository source (required for complete replacement state)
-native/engine/CMakeLists.txt	unchanged	repository source (required for complete replacement state)
-native/engine/Makefile	unchanged	repository source (required for complete replacement state)
-native/engine/README.md	unchanged	repository source (required for complete replacement state)
-native/engine/include/shtn/engine.h	unchanged	repository source (required for complete replacement state)
-native/engine/include/shtn/types.h	unchanged	repository source (required for complete replacement state)
-native/engine/include/shtn/version.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/engine.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/forward.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/forward.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/fp16.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/generate.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/generate.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/gguf.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/gguf.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/hardware.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/hardware.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/host_main.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/json.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/json.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/kv_cache.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/kv_cache.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/llama.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/llama.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/model.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/model.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/protocol.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/protocol.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/sampler.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/sampler.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/scheduler.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/scheduler.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/tensor.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/tensor.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/tokenizer.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/src/tokenizer.h	unchanged	repository source (required for complete replacement state)
-native/engine/src/util.h	unchanged	repository source (required for complete replacement state)
-native/engine/tests/fixtures/tiny-llama-app.gguf	new	new test fixture generated by make_fixture.py: F32 fixture dims (greedy decode runs to max_tokens) with a 2048-token context so a real application prompt fits the native engine's honest context-reject bound
-native/engine/tests/fixtures/tiny-llama-f32.gguf	unchanged	repository source (required for complete replacement state)
-native/engine/tests/fixtures/tiny-llama-ref.json	unchanged	repository source (required for complete replacement state)
-native/engine/tests/fixtures/tiny-llama-ref.txt	unchanged	repository source (required for complete replacement state)
-native/engine/tests/fixtures/tiny-llama-slow.gguf	unchanged	repository source (required for complete replacement state)
-native/engine/tests/gguf_writer.h	unchanged	repository source (required for complete replacement state)
-native/engine/tests/reference/make_fixture.py	modified	fixture generator extended with the deterministic app-fixture block (F32 dims, ctx=2048) used by the new HTTP-level native e2e regression test
-native/engine/tests/test_engine.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_forward.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_generate.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_gguf.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_host.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_kv_cache.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_model.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_protocol.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_sampler.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_scheduler.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_tensor.cpp	unchanged	repository source (required for complete replacement state)
-native/engine/tests/test_tokenizer.cpp	unchanged	repository source (required for complete replacement state)
-package-lock.json	unchanged	repository source (required for complete replacement state)
-package.json	unchanged	repository source (required for complete replacement state)
-scripts/browser-smoke/main.go	unchanged	repository source (required for complete replacement state)
-scripts/build-and-zip.sh	unchanged	repository source (required for complete replacement state)
-scripts/data-smoke/main.go	unchanged	repository source (required for complete replacement state)
-scripts/gen-license.go	unchanged	repository source (required for complete replacement state)
-scripts/gen-signature.go	unchanged	repository source (required for complete replacement state)
-scripts/gen-syso/logo-512.png	unchanged	repository source (required for complete replacement state)
-scripts/gen-syso/main.go	unchanged	repository source (required for complete replacement state)
-scripts/release-version.mjs	unchanged	repository source (required for complete replacement state)
-scripts/stress-main/main.go	unchanged	repository source (required for complete replacement state)
-scripts/sync-web.mjs	unchanged	repository source (required for complete replacement state)
-scripts/ws-smoke/main.go	unchanged	repository source (required for complete replacement state)
-sheytan-local-agent.bat	unchanged	repository source (required for complete replacement state)
-src/ActivityStream.tsx	unchanged	repository source (required for complete replacement state)
-src/AgentBody.tsx	unchanged	repository source (required for complete replacement state)
-src/AgentHeader.tsx	unchanged	repository source (required for complete replacement state)
-src/AgentSidebar.tsx	unchanged	repository source (required for complete replacement state)
-src/App.tsx	unchanged	repository source (required for complete replacement state)
-src/LabPanel.tsx	unchanged	repository source (required for complete replacement state)
-src/MessageStream.tsx	unchanged	repository source (required for complete replacement state)
-src/ResearchPanel.tsx	unchanged	repository source (required for complete replacement state)
-src/SettingsPanel.tsx	unchanged	repository source (required for complete replacement state)
-src/agent-init.ts	unchanged	repository source (required for complete replacement state)
-src/api.ts	unchanged	repository source (required for complete replacement state)
-src/config.ts	unchanged	repository source (required for complete replacement state)
-src/layers.css	unchanged	repository source (required for complete replacement state)
-src/main.tsx	unchanged	repository source (required for complete replacement state)
-src/motion.css	unchanged	repository source (required for complete replacement state)
-src/perf-hud.ts	unchanged	repository source (required for complete replacement state)
-src/settings.css	unchanged	repository source (required for complete replacement state)
-src/store.ts	unchanged	repository source (required for complete replacement state)
-src/styles.css	unchanged	repository source (required for complete replacement state)
-src/vite-env.d.ts	unchanged	repository source (required for complete replacement state)
-src/workspace.ts	unchanged	repository source (required for complete replacement state)
-tsconfig.app.json	unchanged	repository source (required for complete replacement state)
-tsconfig.json	unchanged	repository source (required for complete replacement state)
-tsconfig.node.json	unchanged	repository source (required for complete replacement state)
-vite.config.ts	unchanged	repository source (required for complete replacement state)
-web/embed.go	unchanged	repository source (required for complete replacement state)
-web/static/.vite/manifest.json	unchanged	repository source (required for complete replacement state)
-web/static/assets/AgentBody-2-br3YvV.js	unchanged	repository source (required for complete replacement state)
-web/static/assets/AgentHeader-B8b76u9o.js	unchanged	repository source (required for complete replacement state)
-web/static/assets/AgentSidebar-DJaBwMC5.js	unchanged	repository source (required for complete replacement state)
-web/static/assets/LabPanel-CW_A6EcB.js	unchanged	repository source (required for complete replacement state)
-web/static/assets/ResearchPanel-Qeb2hrAX.js	unchanged	repository source (required for complete replacement state)
-web/static/assets/SettingsPanel-C5Hpkvys.js	unchanged	repository source (required for complete replacement state)
-web/static/assets/index-C1xyllm1.js	unchanged	repository source (required for complete replacement state)
-web/static/assets/index-n0UF0DI4.css	unchanged	repository source (required for complete replacement state)
-web/static/index.html	unchanged	repository source (required for complete replacement state)
-worklog.md	modified	v1.1.5Z Validation & Repair Log (2026-09-12) added — independent re-verification of all repair claims plus the new defect fixes and measured evidence
-REPLACEMENT-MANIFEST.txt	modified	replacement manifest (this file) — regenerated for the current archive
-REPLACEMENT-SHA256.txt	modified	SHA-256 for every file in the replacement archive — regenerated
+Status vocabulary: new | modified | deleted | unchanged
+
+[PACKAGE METADATA]
+  UPDATE.md
+    status:   new
+    purpose:  This replacement package's instructions
+  REPLACEMENT-MANIFEST.txt
+    status:   new
+    purpose:  This manifest
+  REPLACEMENT-SHA256.txt
+    status:   new
+    purpose:  SHA-256 of every file in this package
+
+[NEW FILES]
+  internal/agent/reliability.go
+    status:   new
+    purpose:  P0 #1: 14-category failure classification + repair hints; LoopGuard (repeat detection, tool-call/wall-clock budgets); call stats
+  internal/agent/reliability_test.go
+    status:   new
+    purpose:  Tests: classifier table, LoopGuard semantics, evidence verdicts, orchestrator integration, project card injection
+  internal/agent/verification.go
+    status:   new
+    purpose:  P0 #1: run-level verification system — EvidenceCollector, verified/partially_verified/failed/not_verified verdicts
+  internal/lab/safeedit.go
+    status:   new
+    purpose:  P0 #2: safe anchored edits — ReadFile bounded views; EditFile exactly-once anchor, atomic fsync+rename writes, post-write verification
+  internal/lab/safeedit_test.go
+    status:   new
+    purpose:  Tests: windowed reads, binary refusal, anchored edits, stale/ambiguous/noop refusals, path jail, verification invalidation
+  internal/multiagent/multiagent_test.go
+    status:   new
+    purpose:  Tests: critic sees honest verdict, bounded excerpt contract, maxIter regression, revision loop
+  internal/projectintel/projectintel.go
+    status:   new
+    purpose:  P0 #3: persistent per-project intelligence — bounded observation, Lab-verified command recording, bounded lessons, card rendering
+  internal/projectintel/projectintel_test.go
+    status:   new
+    purpose:  Tests: language detection, vendor skipping, verified-beats-inferred, FIFO bound, card, isolation
+  web/static/assets/AgentBody-cofMEBW6.js
+    status:   new
+    purpose:  Regenerated frontend bundle
+  web/static/assets/AgentHeader-BE0L2Nf8.js
+    status:   new
+    purpose:  Regenerated frontend bundle
+  web/static/assets/AgentSidebar-crN0VbUz.js
+    status:   new
+    purpose:  Regenerated frontend bundle
+  web/static/assets/LabPanel-BPBo4Rq7.js
+    status:   new
+    purpose:  Regenerated frontend bundle
+  web/static/assets/ResearchPanel-DyeLdq3-.js
+    status:   new
+    purpose:  Regenerated frontend bundle
+  web/static/assets/SettingsPanel-g7g40a_x.js
+    status:   new
+    purpose:  Regenerated frontend bundle
+  web/static/assets/index-OiRp_Wkd.js
+    status:   new
+    purpose:  Regenerated frontend bundle
+
+[MODIFIED FILES]
+  ARCHITECTURE.md
+    status:   modified
+    purpose:  Part I truth table: five Phase 6 rows
+  README.md
+    status:   modified
+    purpose:  Phase 6 capability rows (reliability, verification, safe edits, project intelligence)
+  agent.md
+    status:   modified
+    purpose:  Phase 6 handoff context: release line, package map, test chain, next tasks
+  internal/agent/orchestrator.go
+    status:   modified
+    purpose:  Reliability wiring: loop guard, failure classification + repair hints, evidence collection, verification report on RunResult, project card seam
+  internal/api/server.go
+    status:   modified
+    purpose:  UX: /api/models reports backend, servingPath, per-model serving marker (honest currently-serving vocabulary)
+  internal/lab/tool.go
+    status:   modified
+    purpose:  P0 #2: read_file/edit_file actions; IntelRecorder (Lab-verified commands recorded against the task source root)
+  internal/multiagent/multiagent.go
+    status:   modified
+    purpose:  P0 #4: evidence-based critic (measured verification verdict + bounded excerpts); maxIter<1 normalization bug fixed
+  internal/native/engine/phase5_integration_test.go
+    status:   modified
+    purpose:  Go regressions through the real host binary: prompt ownership burst + 20-generation lane recycling (catch the original CI defect)
+  internal/runtime/runtime.go
+    status:   modified
+    purpose:  Wiring: projectintel store, workspace observation, lab intel hook, orchestrator card provider
+  native/engine/src/host_main.cpp
+    status:   modified
+    purpose:  CI fix (run 34703102794): GenLane owns its prompt (dangling stack pointer removed); finished-lane sweeping bounds concurrency, not lifetime totals
+  native/engine/tests/test_host.cpp
+    status:   modified
+    purpose:  CI fix: failure gate moved after phase5 tests (silent-failure bug); streaming harness + deterministic cancel fixed; burst prompt-ownership + lane-recycling C++ regressions
+  src/SettingsPanel.tsx
+    status:   modified
+    purpose:  UX: model list marks the serving model with the active backend name
+  src/api.ts
+    status:   modified
+    purpose:  UX: ModelsResponse.backend/servingPath + Model.serving types
+  web/static/.vite/manifest.json
+    status:   modified
+    purpose:  Regenerated frontend build manifest
+  web/static/index.html
+    status:   modified
+    purpose:  Regenerated frontend build (npm run build)
+  worklog.md
+    status:   modified
+    purpose:  Full Phase 6 implementation log with the evidence chain
+
+[DELETED FILES]
+  web/static/assets/AgentBody-2-br3YvV.js
+    status:   deleted
+    purpose:  superseded by the regenerated frontend bundles above
+  web/static/assets/AgentHeader-B8b76u9o.js
+    status:   deleted
+    purpose:  superseded by the regenerated frontend bundles above
+  web/static/assets/AgentSidebar-DJaBwMC5.js
+    status:   deleted
+    purpose:  superseded by the regenerated frontend bundles above
+  web/static/assets/LabPanel-CW_A6EcB.js
+    status:   deleted
+    purpose:  superseded by the regenerated frontend bundles above
+  web/static/assets/ResearchPanel-Qeb2hrAX.js
+    status:   deleted
+    purpose:  superseded by the regenerated frontend bundles above
+  web/static/assets/SettingsPanel-C5Hpkvys.js
+    status:   deleted
+    purpose:  superseded by the regenerated frontend bundles above
+  web/static/assets/index-C1xyllm1.js
+    status:   deleted
+    purpose:  superseded by the regenerated frontend bundles above
+
+[UNCHANGED — SECURITY AND RESOURCE INVARIANTS (do not touch)]
+  build/config.yml
+    status:   unchanged
+  internal/attachments/*
+    status:   unchanged
+  internal/memory/*
+    status:   unchanged
+  internal/sandbox/*
+    status:   unchanged
+  internal/sessions/*
+    status:   unchanged
+  internal/proc/*
+    status:   unchanged
+  internal/updater/*
+    status:   unchanged
+  internal/config/* (no policy change)
+    status:   unchanged
+
+Totals: 15 new, 16 modified, 7 deleted.

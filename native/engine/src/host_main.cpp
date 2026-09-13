@@ -46,6 +46,7 @@
 #include "json.h"
 #include "protocol.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -212,11 +213,30 @@ std::string op_metrics(shtn_engine* engine) {
 constexpr size_t kMaxLanes = 16;
 
 // GenLane is one in-flight generate request.
+//
+// Phase 6 repair (CI run 34703102794, Linux): the lane owns COPIES of
+// every string the engine reads through opts. Previously opts.prompt
+// pointed into op_generate's stack-local std::string — a dangling
+// pointer the moment op_generate returned. The lane thread usually won
+// the read race (prompt read at the top of shtn_engine_generate) and
+// the tests passed, but on a fully-loaded runner the dispatch loop
+// reused the dead stack frame first and the corrupted prompt silently
+// dropped the BPE merges: "hello" encoded as 7 tokens instead of 5 and
+// the context-bound test rejected a fitting request. The fix is
+// ownership, not timing: the prompt lives in the lane, which outlives
+// the generation.
 struct GenLane {
     int64_t id = 0;
     std::string request_id;
+    std::string prompt; // own copy — opts.prompt points here
     shtn_generation_options opts{};
     std::thread thread;
+    // Set by lane_body as its LAST action, after the final frame is
+    // written. host_loop sweeps finished lanes (join + retire) so the
+    // lane list tracks IN-FLIGHT work, not lifetime totals — without
+    // the sweep, kMaxLanes would cap the host at 16 generations TOTAL
+    // and then reject everything while idle.
+    std::atomic<bool> finished{false};
 };
 
 // HostCtx carries everything the lanes + dispatch loop share.
@@ -310,6 +330,10 @@ void lane_body(HostCtx* ctx, GenLane* lane) {
         std::lock_guard<std::mutex> lock(ctx->out_mu);
         shtn::protocol::write_frame(*ctx->out, payload);
     }
+
+    // LAST action: mark the lane finished so host_loop can join and
+    // retire it. No lock is taken after this point.
+    lane->finished.store(true, std::memory_order_release);
 }
 
 // op_generate schedules a generation lane. The dispatch loop returns
@@ -359,11 +383,10 @@ void op_generate(HostCtx* ctx, const shtn::json::Parsed& req,
     auto lane = std::make_unique<GenLane>();
     lane->id = req.id;
     lane->request_id = request_id;
+    lane->prompt = prompt; // own copy — MUST outlive the generation
     lane->opts.request_id = lane->request_id.c_str();
-    // NOTE: opts.prompt points into the lane's own copy, which outlives
-    // the generation (owned by the GenLane stored in the list).
-    lane->opts.prompt = prompt.c_str();
-    lane->opts.prompt_len = prompt.size();
+    lane->opts.prompt = lane->prompt.c_str();
+    lane->opts.prompt_len = lane->prompt.size();
     lane->opts.max_tokens = max_tokens;
     lane->opts.temperature = temperature;
     lane->opts.top_k = top_k;
@@ -381,6 +404,35 @@ void op_generate(HostCtx* ctx, const shtn::json::Parsed& req,
 
     raw->thread = std::thread(
         [ctx, raw]() { lane_body(ctx, raw); });
+}
+
+// sweep_finished_lanes retires lanes whose lane_body has returned.
+// Runs on the dispatch (host_loop) thread only — the same thread that
+// assigns lane->thread inside op_generate, so a lane can never be swept
+// between thread creation and handle assignment. Joins happen without
+// lanes_mu held (the finished lane is already at its end; join is
+// instantaneous) and the unique_ptr frees the lane only after its
+// thread was joined.
+void sweep_finished_lanes(HostCtx* ctx) {
+    std::list<std::unique_ptr<GenLane>> done;
+    {
+        std::lock_guard<std::mutex> lock(ctx->lanes_mu);
+        for (auto it = ctx->lanes.begin(); it != ctx->lanes.end();) {
+            if ((*it)->finished.load(std::memory_order_acquire)) {
+                done.splice(done.end(), ctx->lanes, it++);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    for (auto& lane : done) {
+        if (lane->thread.joinable()) {
+            lane->thread.join();
+        }
+    }
+    // `done` destruction frees the retired lanes — after their threads
+    // were joined.
 }
 
 // join_lanes cancels every in-flight generation and joins the lane
@@ -941,6 +993,11 @@ int host_loop(std::istream& in, std::ostream& out, shtn_engine* engine) {
             std::lock_guard<std::mutex> lock(ctx.out_mu);
             shtn::protocol::write_frame(out, resp);
         }
+
+        // Retire finished generation lanes after every dispatched frame so
+        // the lane list tracks in-flight work (bounded by kMaxLanes as a
+        // CONCURRENCY bound, not a lifetime total).
+        sweep_finished_lanes(&ctx);
     }
 }
 

@@ -24,6 +24,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
         nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/projectintel"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
@@ -220,6 +221,23 @@ func NewStack(cfg *config.Config) *Stack {
         // Version Zeta: autonomous Coding Lab.
         var labTool *lab.Tool
 
+        // v1.1.5Z Phase 6: persistent project intelligence. One store per
+        // install, keyed per project root. The workspace gets observed at
+        // startup (bounded walk) and the card is injected per run; Lab
+        // verification outcomes record VERIFIED build/test commands against
+        // the task's source project.
+        intel := projectintel.NewStore(
+                cfg.DataDir + "/projectintel",
+        )
+
+        if _, err := intel.Observe(cfg.WorkspaceDir()); err != nil {
+                logging.Default().Warn(
+                        "runtime",
+                        "project intelligence observe: %v",
+                        err,
+                )
+        }
+
         if cfg.LabEnabled {
                 var err error
 
@@ -232,6 +250,7 @@ func NewStack(cfg *config.Config) *Stack {
                                 err,
                         )
                 } else {
+                        labTool.SetIntel(intel)
                         orch.Register(labTool)
 
                         logging.Default().Info(
@@ -242,6 +261,11 @@ func NewStack(cfg *config.Config) *Stack {
                         )
                 }
         }
+
+        // Project card injection: measured facts before every run.
+        orch.SetProjectCard(func() string {
+                return intel.Card(cfg.WorkspaceDir())
+        })
 
         // Version Zeta: unified external research.
         var researchService *research.Service

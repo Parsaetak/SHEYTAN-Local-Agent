@@ -77,6 +77,9 @@ export interface Model {
   path?: string;
   sizeBytes?: number;
   loaded?: boolean;
+  // v1.1.5Z Phase 6: true when the ACTIVE backend is currently serving
+  // this model (the honest "currently serving" marker).
+  serving?: boolean;
   // v1.1.4Z: GGUF header metadata (populated from the model card parser).
   architecture?: string;
   quantization?: string;
@@ -88,6 +91,10 @@ export interface ModelsResponse {
   local: Model[];
   loaded: Model[];
   llamaRunning: boolean;
+  // v1.1.5Z Phase 6: honest status — which backend serves generation
+  // ("native" | "llama") and which model file it is serving right now.
+  backend?: string;
+  servingPath?: string;
 }
 
 export interface ToolInfo {

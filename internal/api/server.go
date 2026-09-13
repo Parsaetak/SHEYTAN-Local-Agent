@@ -413,6 +413,12 @@ type modelInfo struct {
         Quantization  string `json:"quantization,omitempty"`
         ContextLength int    `json:"contextLength,omitempty"`
         ParameterInfo string `json:"parameterInfo,omitempty"`
+
+        // Serving (v1.1.5Z Phase 6): true when the ACTIVE backend is
+        // currently serving THIS model — the honest "currently serving"
+        // marker for the picker. The backend itself is reported once at
+        // the response level.
+        Serving bool `json:"serving,omitempty"`
 }
 
 // modelCardCache memoizes GGUF header reads for handleModels.
@@ -509,10 +515,44 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
                 })
         }
 
+        // v1.1.5Z Phase 6 (honest model status): report WHICH backend is
+        // serving and WHICH model it serves, and mark that model in the
+        // local list. The UI vocabulary stays honest: discovered (listed
+        // here), loaded (llama.cpp loaded list), serving (the active
+        // backend is generating with it right now). Capability wording
+        // (native-capable / llama-capable) is owned by /api/engine, which
+        // has the validated capability state.
+        backend := "llama"
+
+        if s.stack != nil && s.stack.Engine() != nil {
+                backend = s.stack.Engine().Name()
+        }
+
+        servingPath := ""
+
+        switch backend {
+        case "native":
+                if s.native != nil {
+                        servingPath = s.native.NativeModelPath()
+                }
+        default:
+                servingPath = s.llama.LoadedModel()
+        }
+
+        if servingPath != "" {
+                for i := range localInfos {
+                        if filepath.Clean(localInfos[i].Path) == filepath.Clean(servingPath) {
+                                localInfos[i].Serving = true
+                        }
+                }
+        }
+
         writeJSON(w, map[string]any{
                 "local":        localInfos,
                 "loaded":       loadedInfos,
                 "llamaRunning": s.llama.IsRunning(),
+                "backend":      backend,
+                "servingPath":  servingPath,
         })
 }
 

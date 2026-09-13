@@ -6,7 +6,7 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 5: REAL native transformer inference + generation + streaming + cancellation + measured metrics for the llama architecture; llama.cpp remains the fallback — see `worklog.md` for the full Phase 1 + 2 + 4 + 5 logs and the post-phase5 REPAIR log).
+Current release: `v1.1.5Z` (SHEYTAN Native AI Engine — Phase 5: REAL native transformer inference + generation + streaming + cancellation + measured metrics for the llama architecture; llama.cpp remains the fallback. Phase 6: agent reliability (failure classification + loop prevention + run budgets), verification as a first-class system, safe anchored edits in the Coding Lab, persistent project intelligence, evidence-based multi-agent critique — see `worklog.md` for the full phase logs and the post-phase5 REPAIR log).
 
 **Phase 5 repair (2026-09-11)**: the phase5 commit had accidentally deleted `build/config.yml` and four internal packages (`sessions`, `sandbox`, `attachments`, `memory`) that live code still imports — the tree did not compile and CI failed at the release gate. All were restored byte-identical from the Phase 4 baseline; two real native-path defects (misleading engine badge state; run gate requiring llama.cpp when native serves) and one CI gap (Go↔C++ integration tests never executed in any job) were fixed. Evidence in `worklog.md` — "v1.1.5Z Phase 5 Repair Log".
 
@@ -91,6 +91,10 @@ Primary packages:
 
 ```text
 internal/agent       orchestrator (per-run config snapshot, tool registry)
+                     + Phase 6 reliability core: failure classification
+                     (14 categories with repair hints), LoopGuard (repeat
+                     detection, tool/wall-clock budgets), EvidenceCollector
+                     (run-level verified/partial/failed/not_verified)
 internal/llm         LlamaServer (engine lifecycle) + OpenAI-compatible client
                      + Backend contract + LlamaBackend + selection (v1.1.5Z)
 internal/native/engine  SHEYTAN native engine: protocol (v4), supervised runtime,
@@ -109,10 +113,14 @@ internal/contextplan context budget authority (+ measured PromptBytes)
 internal/contextcache content-keyed LRU cache, single-flight coalescing,
                     oversized-entry guard
 internal/continuum   chapter rollover (wired post-run since v1.1.4Z)
-internal/lab         Coding Lab (policy, runner, verifier, repair)
+internal/lab         Coding Lab (policy, runner, verifier, repair,
+                     safe anchored edits: read_file/edit_file)
 internal/sandbox     Job-Object code-exec governor
 internal/proc        process spawn/kill-tree + environment sanitization
 internal/tools       17 agent tools
+internal/projectintel persistent per-project intelligence (measured
+                     languages/commands/layout + Lab-verified build/test
+                     commands + lessons; card injected per run)
 internal/memory      M1–M7 trust-classed store (append-aware cache)
 internal/recall      BM25 recall + feedback steering (cached corpus stats)
 internal/research    multi-provider search
@@ -248,6 +256,9 @@ ctest --test-dir native/engine/build         # 12 suites: engine, protocol, host
                                               #    Python reference), generate
 # Go↔C++ integration (skips when the host binary is not built):
 go test -tags headless ./internal/native/engine/ -run 'TestRealCppHostEndToEnd|TestRealCppHostModelLifecycle|TestRealCppHostPhase4|TestRealCppHostPhase5'
+#   Phase 6 regressions inside that set: PromptOwnership (the run-34703102794
+#   dangling-prompt defect — 6 pipelined distinct prompts must report their own
+#   token counts) and LaneRecycling (20 sequential generations on one host)
 # Fixtures regenerate (deterministic; the reference comparison depends on them):
 python3 native/engine/tests/reference/make_fixture.py
 # Measured performance evidence (prints the measured table):
@@ -287,7 +298,11 @@ A button is not a feature. An endpoint is not a feature. A compile is not a feat
 3. Native engine packaging: build + ship shtn-engine-host in the
    portable layout (bin/) with an update path (updater pattern).
 4. Vision pipeline verification with a real mmproj projector
-5. Tool-calling reliability tuning with larger instruct models
+5. Phase 6 follow-ups: extend the failure classifier from measured
+   end-to-end runs (tune categories/hints against real small-model
+   transcripts); grow EvidenceCollector coverage (lint commands, more
+   tool kinds); project-intelligence lessons from orchestrator
+   failure→repair pairs (currently: Lab-verified commands only)
 6. Continuum rollover exercise under real long sessions (it is wired +
    unit-tested; it has not yet been observed in a real multi-hour thread)
 7. Context Engine foundations (PLANNED work — see ARCHITECTURE.md

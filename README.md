@@ -148,8 +148,11 @@ cgo) and the full rationale are documented in
 | **Engine lifecycle** | Automatic download → launch → `/health` readiness → `ready`; bounded auto-restart (3 attempts, exponential backoff); deliberate stop suppression; port-conflict adoption; compat ladder (4 launch profiles); one-shot self-update when a model needs a newer engine; scheduled update loop (daily/weekly/monthly) |
 | **Engine states** | `idle / downloading / starting / ready / running / busy / stopping / stopped / failed` — backend-authoritative, fanned out over every activity WebSocket; the UI never invents them |
 | **Agent loop** | Streaming responses with think-tag splitting and native `reasoning_content`; tool calls with argument validation; tool-result follow-up turns; iteration cap (default 25); per-run time budget (default 60 min); abort with partial-result preservation; regenerate; timeout-vs-abort distinguished in the UI |
+| **Reliability (Phase 6)** | Every tool failure diagnosed into 14 categories with a category-specific repair hint fed back to the model (re-plan, never blind retry); loop guard detects repeated identical calls (warning on first repeat, refusal past the bound) with run-level tool-call (200) and wall-clock (30 min) budgets; failure tally and per-tool call stats on every run |
+| **Verification (Phase 6)** | Run-level verification verdict computed from objective evidence only: `verified / partially_verified / failed / not_verified`. Lab verify actions and explicit build/test outcomes count; everything else contributes nothing. A completion claim with no evidence reports `not_verified` — model prose is never proof |
 | **Tools** | 17 registered tools: `shell`, `files`, `codeExec` (Job-Object sandboxed), `webSearch`, `git`, `browser`, `dataAnalysis`, `json`, `archive`, `fetch`, `diff`, `screenshot`, `linux`, `coding_lab`, `research`, `memory` (+ sandbox override). Tool schemas are measured exactly before windowing |
-| **Coding Lab** | Isolated workspace copies (symlinks skipped, `.git` excluded), lexical command policy (dangerous/network/interactive/escape denylists + expansion-token hardening), 2 MiB bounded output, sanitized environment (secrets scrubbed, `HOME` pinned to the workspace), objective verification (trivial `echo`-style checks rejected), bounded repair loop with repeat-command detection, patch export, snapshot-before-promote |
+| **Coding Lab** | Isolated workspace copies (symlinks skipped, `.git` excluded), lexical command policy (dangerous/network/interactive/escape denylists + expansion-token hardening), 2 MiB bounded output, sanitized environment (secrets scrubbed, `HOME` pinned to the workspace), objective verification (trivial `echo`-style checks rejected), bounded repair loop with repeat-command detection, patch export, snapshot-before-promote; safe anchored edits (`read_file` bounded line-numbered views, `edit_file` requires the anchor to occur exactly once — stale or ambiguous anchors are refused, writes are atomic and re-verified, every edit invalidates verification) |
+| **Project intelligence (Phase 6)** | Persistent per-project facts: measured languages, build system, layout, Lab-verified build/test commands (verified beats inferred, never clobbered), bounded lessons. The compact card is injected into every run so the model starts knowing the project instead of re-discovering it |
 | **Attachments** | Content-addressed staging (sha256, symlink-safe, no exec bits), size/count/processing/chunk caps, text normalization + paragraph-boundary chunking, cached retrieval with provenance headers, image classification into the vision pipeline |
 | **Context** | Measured context plan (system / tools / recall / attachments / history sections with priorities); history windowing to the budget; content-keyed LRU cache (entries + bytes + TTL bounds); overflow surfaces as a visible error instead of an engine rejection |
 | **Long context** | Continuum chapter rollover: when a session crosses the pressure threshold, facts/decisions/threads are distilled into a framework and the conversation continues in a fresh chapter session (the UI follows automatically) |
@@ -235,7 +238,9 @@ sheytan-local-agent serve --port 8765
 # one-shot headless agent turn
 sheytan-local-agent ask "summarize ./notes" --session work
 
-# multi-agent planner/executor/critic pipeline (CLI)
+# multi-agent planner/executor/critic pipeline (CLI; the critic judges
+# against the run's objective verification verdict, not executor prose,
+# and all inter-agent hand-offs are bounded excerpts)
 sheytan-local-agent ask "..." --multi
 
 # health, diagnostics, engine update

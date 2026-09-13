@@ -26,6 +26,10 @@ function SettingsPanel() {
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [models, setModels] = useState<Model[]>([]);
   const [presets, setPresets] = useState<Preset[]>([]);
+  // v1.1.5Z Phase 6: the backend currently serving generation ("native" |
+  // "llama") — reported by /api/models so the local model list can mark the
+  // serving model honestly instead of guessing from llamaRunning.
+  const [servingBackend, setServingBackend] = useState<string>("");
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [sysinfo, setSysinfo] = useState<SysInfo | null>(null);
 
@@ -52,6 +56,10 @@ function SettingsPanel() {
       // backend or an interrupted deploy could still surface null — never
       // let a null list crash the whole React tree again.
       setModels(modelResponse.local ?? []);
+      // v1.1.5Z Phase 6: honest engine status — remember which backend
+      // serves generation so the model list can say "currently serving"
+      // truthfully instead of guessing from llamaRunning.
+      setServingBackend(modelResponse.backend ?? "");
       setPresets(nextPresets ?? []);
       setTools(nextTools ?? []);
       setSysinfo(nextSysinfo);
@@ -298,6 +306,11 @@ function SettingsPanel() {
                 {models.map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.name}
+                    {model.serving
+                      ? ` — currently serving${
+                          servingBackend === "native" ? " (native engine)" : " (llama.cpp)"
+                        }`
+                      : ""}
                   </option>
                 ))}
               </select>
