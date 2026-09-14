@@ -1,8 +1,9 @@
-# SHEYTAN™ Local-Agent
+# SHEYTAN-LA™ (SHEYTAN Local Agent)
 
 > **A local-first AI software-engineering laboratory.**
 >
 > The model proposes. The tools execute. The laboratory verifies.
+> SHEYTAN calculates the best runtime for the machine, the model and the task.
 
 SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built around Go, React/TypeScript, Wails v3, managed llama.cpp inference, controlled tools, isolated coding workspaces, research, memory, recall, and objective verification.
 
@@ -11,9 +12,11 @@ SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built
 Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
-Application:      SHEYTAN-Local-Agent
-Current release:  v1.1.9
+Application:      SHEYTAN-LA (SHEYTAN Local Agent)
+Current release:  v1.2.0
 Codename:         Zeta
+Executable:       SHEYTAN-LA.exe
+AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
 ```
 
@@ -67,6 +70,33 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.2.0 — SHEYTAN-LA Unified Product Upgrade
+
+**The productisation release: vision readiness you can trust, hardware intelligence, evidence-based recommendations, a polished chat surface, SHEYTAN-LA Windows identity, an installer and a verified update path. Same architecture — no subsystems were rebuilt or replaced.**
+
+| Area | What it does |
+|---|---|
+| **Vision readiness pipeline (P0)** | A real state machine — `unsupported → supported → projector-missing → projector-found → loading → ready` (plus `degraded` / `failed`) — derived from GGUF architecture detection, projector discovery/pairing and the engine's own verified boot. The UI can no longer claim "Vision: Yes" from a filename: `ready` appears only when the engine is actually serving WITH the paired mmproj, and `degraded` is reported when the projector failed with every launch profile and the engine fell back to text-only. Per-model state is exposed on `/api/models`; the runtime state lives on `/api/engine` |
+| **mmproj as a first-class asset** | `/api/models` now carries `visionState`, `visionReason`, `mmprojPath`, `mmprojName`, `mmprojSizeBytes` and `mmprojVerified` per model — the ModelPackage view (language model + projector + capabilities + resource estimate) without breaking the existing model representation. A projector GPU-offload posture (`auto`/`on`/`off`) reaches the engine as `--no-mmproj-offload` through the existing capability adapter, which verifies flags against the actual engine build |
+| **Model picker upgrade (P0)** | Fact grid now shows Text / Vision (state machine badge with evidence tooltip) / Tools / Native / Context / RAM / VRAM, plus the technical details block: architecture, file size, recommended context, projector name + size + verification state, and the "Why" evidence line. The Recommended chip says "Recommended for your device" — derived from the measured RAM ratio |
+| **Chat polish (P0)** | Assistant messages render real Markdown (GFM tables, lists, links) with syntax-highlighted code blocks and one-click code copy; every completed message gains a hover Copy action; images sent through the vision wire format render inline; the composer sends on Enter, newlines on Shift+Enter, auto-grows, accepts pasted images and drag/dropped files (fed through the SAME attachment backend — no second upload path), shows image thumbnails and warns honestly when images are staged for a model without a verified projector. Streaming keeps the rAF-coalescing pipeline untouched — markdown parsing happens once per completed message, never per token |
+| **Intelligent autoscroll** | The conversation follows the stream only while the user stays near the bottom; scrolling up suspends the follow and surfaces a "↓ Latest" affordance |
+| **Agent progressive disclosure (P0)** | The activity feed groups into run phases — Plan / Execution / Repair / Verification / Run — derived from the event types the backend already emits (nothing new invented); failed phases are highlighted and auto-opened, and a Raw toggle shows the unfiltered feed |
+| **Hardware intelligence (P0)** | New `internal/hardware` consolidates the EXISTING `internal/sysinfo` probes plus backend capability evidence (Vulkan presence beside the engine binary, native selection, installed engine tag) into one measured profile. Unavailable values stay unknown — never fabricated |
+| **Recommendation engine (P0)** | New `internal/recommendation` — task-aware runtime profiles (chat, coding, research, vision, agent, low-power, maximum) resolve context/threads/GPU layers/ubatch/flash-attention/KV-quant/projector placement from measured inputs, clamped by the model's training limit and resource verdict ladder, with an explicit Reasons list citing every input. The pipeline contract is Detected → Calculated → Recommended → Applied → Measured → Compared → Verified: predictions are labelled predicted; only `/api/perf` speaks in measured numbers |
+| **Explain-why UI (P0)** | Every recommendation carries expandable reasoning (Environment Centre "Why (N)", Performance "Why these values"), and predicted effects are separated from telemetry |
+| **Three settings levels (P0)** | Settings → Performance gains Simple / Performance / Advanced. Simple shows Quiet / Balanced / Maximum postures (real task profiles resolved by the recommendation engine), recommended context, and automatic Vision/GPU. Performance keeps the existing measure → recommend → verify cards. Advanced points at the raw engine controls in the Advanced tab (single location, no duplication) |
+| **Dedicated Vision & Updates settings (P0/P1)** | New **Vision** tab: enable toggle, projector override (Automatic + detected files), projector GPU offload posture, and the DETECTED PROJECTOR evidence card (file, size, family, status). New **Updates** tab: current/latest version, channel, check-now, and a download-&-verify stage action |
+| **Environment Centre (P0)** | New **System** view + `/api/environment`: device (CPU/RAM/GPU/storage/identity), runtime (engine phase, verified model, context, vision readiness, engine tag) and the recommendation verdict with Apply — all values are real telemetry |
+| **Verified health (P0)** | `/api/health` reports one evidence-backed check per subsystem — engine, model, context, vision, GPU, storage, network, verification, Coding Lab, firewall, application identity — with the underlying proof under each expandable row. Green never means assumed; the identity check honestly reports "code signature: none (unsigned developer build)" |
+| **SHEYTAN-LA identity (P1)** | Windows version resources become ProductName `SHEYTAN-LA`, FileDescription `SHEYTAN Local Agent`, CompanyName `Parsaetak`, InternalName/OriginalFilename `SHEYTAN-LA(.exe)`; the process registers AppUserModelID `Parsaetak.SHEYTAN-LA` before the first window (taskbar, jump lists, notifications); the desktop window title is `SHEYTAN-LA — SHEYTAN Local Agent`; CI builds `SHEYTAN-LA.exe` and the portable zip is `SHEYTAN-LA-vX.Y.Z-windows-x64.zip`. No Authenticode signature is faked anywhere |
+| **Firewall integration (P1)** | New `internal/platform` firewall manager: explicit, idempotent, removable `netsh advfirewall` rules scoped to the exact process image path + one TCP port, with unit-locked argument vectors and honest `ErrUnsupportedPlatform` behaviour off-Windows. Loopback-first architecture needs no rule by default — the default posture creates none |
+| **Unified installer (P1)** | `packaging/nsis/installer.nsi` — a per-machine NSIS installer built by CI (`SHEYTAN-LA-vX.Y.Z-windows-x64-installer.exe`): shortcuts, AUMID registration, version-aware upgrades, clean uninstall that preserves models/sessions/config, and user data declared through the app's own `SHEYTAN_DATA_DIR` override. Models are NEVER bundled |
+| **Verified update system (P1)** | New app updater (`internal/updater/appupdate`): the release pipeline publishes a `release-manifest.json`; the app checks installed vs latest with proper version ordering (including prerelease ordering), downloads ONLY a manifest-verified artifact (SHA-256 + size), stages it under `updates/staging/` and hands installation to the user — never executes, never touches user data. States: unknown / up-to-date / update-available / ready / failed |
+| **GitHub release factory (P1)** | `build-desktop.yml` now also builds and verifies the NSIS installer, generates SHA256SUMS.txt, generates and validates release-manifest.json, publishes all artifacts only after payload verification, and re-verifies the published release (installer + checksums + manifest present) before declaring success |
+| **First-run experience (P1)** | The model picker offers "Use recommended setup": detect device → apply the recommended configuration → pick the smallest fitting model → start the engine. The normal user should need zero configuration knowledge for the first successful chat |
+| **Documentation** | README / agent.md / ARCHITECTURE / UPDATE / worklog updated for shipped items only; limitations (no code signing, MSIX not produced, firewall Windows-only) documented honestly |
 
 ## v1.1.9 — CI Output Fix, Mode-Aware Product Surface, Explicit Model States
 

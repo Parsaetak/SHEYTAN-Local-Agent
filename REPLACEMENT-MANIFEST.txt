@@ -1,80 +1,99 @@
-SHEYTAN-Local-Agent v1.1.9 — Replacement Manifest
+SHEYTAN-Local-Agent v1.2.0 — Replacement Manifest
 =================================================
-Base: main @ 63c88dd (v1.1.8)
-Package: SHEYTAN-Local-Agent-v1.1.9-UPDATE.zip
+Base: main @ ac63b88 (v1.1.9)
+Package: SHEYTAN-Local-Agent-v1.2.0-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
-The exact per-file change map (with reasons), the DO NOT TOUCH list,
-the root cause of Actions run 34791882219, the executed automated
+The exact per-file change map (with reasons), the DELETE list, the
+DO NOT TOUCH list, the safe-apply procedure, the executed automated
 checks and the known limitations live in UPDATE.md.
 
 [PACKAGE METADATA]
   UPDATE.md
-    status:   modified
+    status:   replaced
     purpose:  This replacement package's exact change map
   REPLACEMENT-MANIFEST.txt
-    status:   modified
+    status:   replaced
     purpose:  This manifest
   REPLACEMENT-SHA256.txt
-    status:   modified
+    status:   replaced
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  web/static/assets/AgentBody-NepkaVWP.js — regenerated embedded build (new hash set)
-  web/static/assets/AgentHeader-CjbPNa0Q.js — regenerated embedded build
-  web/static/assets/AgentSidebar-CAXlKFQx.js — regenerated embedded build
-  web/static/assets/LabPanel-B5Xf1JtL.js — regenerated embedded build
-  web/static/assets/ResearchPanel-BK1_HHZQ.js — regenerated embedded build
-  web/static/assets/SettingsPanel-DGL5poUh.js — regenerated embedded build
-  web/static/assets/index-DNeAa-xT.js — regenerated embedded build
-  web/static/assets/index--nFue_yD.css — regenerated embedded build
+  SHEYTAN-LA.bat — renamed launcher (legacy-name fallback)
+  internal/api/environment.go — Environment Centre + verified health endpoints
+  internal/api/recommendation.go — recommendation endpoint
+  internal/api/update.go — application update endpoints
+  internal/api/visioninfo.go — per-model vision fields on /api/models
+  internal/hardware/hardware.go — unified hardware intelligence layer
+  internal/platform/firewall.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
+  internal/platform/identity_other.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
+  internal/platform/identity_windows.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
+  internal/platform/platform.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
+  internal/platform/platform_test.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
+  internal/recommendation/recommendation.go — evidence-based recommendation engine
+  internal/recommendation/recommendation_test.go — evidence-based recommendation engine + tests
+  internal/updater/appupdate.go — manifest-verified application updater
+  internal/updater/appupdate_test.go — manifest-verified application updater + tests
+  internal/vision/states.go — vision readiness state machine
+  internal/vision/states_test.go — vision readiness state machine + tests
+  packaging/nsis/installer.nsi — NSIS installer (per-machine, AUMID, data-preserving)
+  src/SettingsVisionUpdates.tsx — Simple postures, task profiles, Vision tab, Updates tab
+  src/SystemPanel.tsx — Environment Centre (System) view
+  src/vision.ts — shared vision state badge renderer
+  web/static/assets/AgentBody-CyMQd0oP.js — regenerated embedded build (new hash set)
+  web/static/assets/AgentHeader-Dezw4syJ.js — regenerated embedded build (new hash set)
+  web/static/assets/AgentSidebar-D2AIsqsa.js — regenerated embedded build (new hash set)
+  web/static/assets/LabPanel-DNdaVwnC.js — regenerated embedded build (new hash set)
+  web/static/assets/ResearchPanel-DVSjuNFM.js — regenerated embedded build (new hash set)
+  web/static/assets/SettingsPanel-C5otSLaN.js — regenerated embedded build (new hash set)
+  web/static/assets/SystemPanel-CzupHX9T.js — regenerated embedded build (new hash set)
+  web/static/assets/index-CTp-kOgC.js — regenerated embedded build (new hash set)
+  web/static/assets/index-DJQM74Q8.css — regenerated embedded build (new hash set)
+  web/static/assets/vision-Dw0T2tjy.js — regenerated embedded build (new hash set)
 
 [MODIFIED FILES]
-  .github/workflows/build-desktop.yml — CI fix (run 34791882219): audit job outputs map steps.identity.outputs.APP_VERSION/APP_VERSION_FULL/APP_CODENAME; identity step fails fast on any empty release identity value; no hardcoded version reintroduced
-  package.json — canonical version 1.1.8 → 1.1.9 (single version source)
-  package-lock.json — root + packages[""].version aligned to 1.1.9
-  internal/config/config.go — AppVersion = "1.1.9" (repaired by release-version.mjs)
-  build/config.yml — productVersion: "1.1.9" (repaired by release-version.mjs)
-  SIGNATURE — first line SHEYTAN-Local-Agent v1.1.9 (repaired by release-version.mjs)
-  src/workspace.ts — WorkspaceLayer.modes + visibleWorkspaceLayers(mode); agent layer label "Workspace"
-  src/App.tsx — mode-aware navigation; hidden-machinery fallback; quieter topbar/sidebar chrome
-  src/AgentSidebar.tsx — mode-voiced sessions heading (CHAT vs AGENT)
-  src/AgentBody.tsx — unified model <select> option builder; session-ID row + always-on engine detail line removed; runtime-model-facts class
-  src/ModelPicker.tsx — explicit model states (ready/loading/incompatible/available); Context/RAM/Tools/Vision/Native fact grid; "Choose a model" empty state; no Remove (no deletion API)
-  src/SettingsPanel.tsx — llama.cpp EngineCard moved Performance → Advanced
-  src/PerfStrip.tsx — /api/perf polling paused while document.hidden + visibilitychange refresh
-  src/styles.css — --border-soft defined; flat background (gradients/grid overlay removed); softened shadows; CSS collision fixed; model-card-grid + state chip styles
-  README.md — v1.1.9 section + version header
-  agent.md — v1.1.9 next-agent notes + release line
-  ARCHITECTURE.md — section I.8d (v1.1.9 surfaces truth table)
-  worklog.md — v1.1.9 entry appended
-  web/static/.vite/manifest.json — regenerated by npm run build
-  web/static/index.html — regenerated by npm run build
+  .github/workflows/build-desktop.yml
+  ARCHITECTURE.md
+  README.md
+  SIGNATURE
+  agent.md
+  build/config.yml
+  internal/api/engine.go
+  internal/api/perf.go
+  internal/api/perf_linux.go
+  internal/api/perf_windows.go
+  internal/api/server.go
+  internal/api/server_native_test.go
+  internal/api/sessioncontext.go
+  internal/config/config.go
+  internal/desktop/desktop.go
+  internal/llm/llama.go
+  package-lock.json
+  package.json
+  scripts/build-and-zip.sh
+  scripts/gen-syso/main.go
+  src/ActivityStream.tsx
+  src/AgentBody.tsx
+  src/App.tsx
+  src/MessageStream.tsx
+  src/ModelPicker.tsx
+  src/SettingsPanel.tsx
+  src/api.ts
+  src/styles.css
+  src/workspace.ts
+  web/static/.vite/manifest.json
+  web/static/index.html
+  worklog.md
 
-[DELETED FILES — present in base, NOT in this package]
-  web/static/assets/AgentBody-awTTu9zQ.js — stale bundle (superseded by AgentBody-NepkaVWP.js)
-  web/static/assets/AgentHeader-Dn6xTymr.js — stale bundle (superseded by AgentHeader-CjbPNa0Q.js)
-  web/static/assets/AgentSidebar-CBUfNisf.js — stale bundle (superseded by AgentSidebar-CAXlKFQx.js)
-  web/static/assets/LabPanel-9j9sFDtD.js — stale bundle (superseded by LabPanel-B5Xf1JtL.js)
-  web/static/assets/ResearchPanel-CUNUWyb_.js — stale bundle (superseded by ResearchPanel-BK1_HHZQ.js)
-  web/static/assets/SettingsPanel-Du3qtveG.js — stale bundle (superseded by SettingsPanel-DGL5poUh.js)
-  web/static/assets/index-8J2XQ2Ww.js — stale bundle (superseded by index-DNeAa-xT.js)
-  web/static/assets/index-DkPxM2o7.css — stale bundle (superseded by index--nFue_yD.css)
-
-[DO NOT TOUCH]
-  internal/agent, internal/tools, internal/lab, internal/research,
-  internal/memory, internal/recall, internal/computer, internal/skills,
-  internal/contextplan, internal/contextcache, internal/chunking,
-  internal/ctxtelemetry, internal/continuum, internal/llm,
-  internal/installer, native/engine, internal/native/engine,
-  internal/mcp, internal/scheduler (internal/scheduler/scheduler.go),
-  internal/multiagent, internal/pipeline, internal/sessions,
-  internal/attachments, internal/sandbox, internal/proc,
-  internal/api (perf.go/logs.go/netcheck and all other handlers),
-  src/store.ts, src/LogViewer.tsx, src/MessageStream.tsx,
-  src/ActivityStream.tsx, src/api.ts, src/config.ts, src/agent-init.ts,
-  src/settings-shared.tsx, src/SettingsPerformance.tsx, src/layers.css,
-  src/settings.css, src/motion.css, scripts/gen-syso,
-  build/sheytan.ico, sheytan-local-agent.bat — all byte-identical to
-  the v1.1.8 base. See UPDATE.md §5 for the rationale.
+[DELETED FILES (present in base, NOT in this package)]
+  sheytan-local-agent.bat
+  web/static/assets/AgentBody-NepkaVWP.js
+  web/static/assets/AgentHeader-CjbPNa0Q.js
+  web/static/assets/AgentSidebar-CAXlKFQx.js
+  web/static/assets/LabPanel-B5Xf1JtL.js
+  web/static/assets/ResearchPanel-BK1_HHZQ.js
+  web/static/assets/SettingsPanel-DGL5poUh.js
+  web/static/assets/index--nFue_yD.css
+  web/static/assets/index-DNeAa-xT.js

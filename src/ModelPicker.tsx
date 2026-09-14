@@ -1,7 +1,8 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { api, type Model } from "./api";
 import { useRuntimeStore } from "./store";
+import { visionBadge } from "./vision";
 
 // v1.1.9: the model chooser is one of the clearest surfaces in the
 // product. One card per local GGUF with the facts that drive a decision:
@@ -117,6 +118,9 @@ function ModelCard({
   const vramEstimate = formatBytes(model.estimatedVRAMBytes);
   const ctxMax = formatContext(model.contextLength);
 
+  // v1.2.0: the evidence-backed vision state (never a filename guess).
+  const vision = visionBadge(model.visionState, model.visionReason, model.mmprojName);
+
   // v1.1.9: explicit state machine per card (see ModelState above).
   const state: ModelState = model.serving
     ? "ready"
@@ -191,9 +195,16 @@ function ModelCard({
         {classification && state !== "incompatible" ? (
           <span
             className={`model-chip class-${classification}`}
-            title={CLASS_TITLE[classification]}
+            title={
+              classification === "recommended"
+                ? CLASS_TITLE[classification] +
+                  " Based on this machine's measured RAM."
+                : CLASS_TITLE[classification]
+            }
           >
-            {CLASS_LABEL[classification]}
+            {classification === "recommended"
+              ? "Recommended for your device"
+              : CLASS_LABEL[classification]}
           </span>
         ) : null}
       </header>
@@ -204,15 +215,21 @@ function ModelCard({
         <span className="model-card-facts">No GGUF metadata</span>
       )}
 
-      {/* v1.1.9: the at-a-glance fact grid — exactly the fields that
-          decide whether this model is usable. "—" means the backend did
-          not report a value; nothing is fabricated. */}
+      {/* v1.2.0: the at-a-glance fact grid — Text / Vision / Tools /
+          Native / Context / RAM / VRAM. "—" means the backend did not
+          report a value; nothing is fabricated. */}
       <div className="model-card-grid">
-        <span>Context</span>
-        <strong>{ctxMax || "—"}</strong>
+        <span>Text</span>
+        <strong>✓</strong>
 
-        <span>RAM</span>
-        <strong>{ramEstimate || "—"}</strong>
+        <span
+          title={vision.title}
+        >
+          Vision
+        </span>
+        <strong className={`vision-value tone-${vision.tone}`}>
+          {vision.symbol ? `${vision.symbol} ${vision.label}` : vision.label}
+        </strong>
 
         <span
           title={
@@ -223,18 +240,7 @@ function ModelCard({
         >
           Tools
         </span>
-        <strong>{model.chatTemplate ? "Yes" : "—"}</strong>
-
-        <span
-          title={
-            model.multimodal
-              ? "A vision projector (mmproj) is paired with this model."
-              : "No vision projector paired with this model."
-          }
-        >
-          Vision
-        </span>
-        <strong>{model.multimodal ? "Yes" : "No"}</strong>
+        <strong>{model.chatTemplate ? "✓" : "—"}</strong>
 
         <span
           title={
@@ -245,7 +251,16 @@ function ModelCard({
         >
           Native
         </span>
-        <strong>{model.nativeBackend ? "Supported" : "—"}</strong>
+        <strong>{model.nativeBackend ? "✓" : "—"}</strong>
+
+        <span>Context</span>
+        <strong>{ctxMax || "—"}</strong>
+
+        <span>RAM</span>
+        <strong>{ramEstimate || "—"}</strong>
+
+        <span>VRAM</span>
+        <strong>{vramEstimate || "—"}</strong>
       </div>
 
       {gpuAvailable && (
@@ -298,6 +313,33 @@ function ModelCard({
             <strong>{model.nativeReason}</strong>
           </div>
         )}
+
+        {model.visionState && (
+          <div className="model-detail-row">
+            <span>Vision state</span>
+            <strong title={vision.title}>{vision.label}</strong>
+          </div>
+        )}
+
+        {model.mmprojName && (
+          <div className="model-detail-row">
+            <span>Projector</span>
+            <strong title={model.mmprojPath}>
+              {model.mmprojName}
+              {model.mmprojSizeBytes
+                ? ` · ${formatBytes(model.mmprojSizeBytes) || ""}`
+                : ""}
+              {model.mmprojVerified ? " · verified" : ""}
+            </strong>
+          </div>
+        )}
+
+        {model.visionReason && (
+          <div className="model-detail-row">
+            <span>Why</span>
+            <strong>{model.visionReason}</strong>
+          </div>
+        )}
       </details>
 
       <footer className="model-card-actions">
@@ -338,8 +380,65 @@ const ModelPicker = function ModelPicker({
   const sysinfo = useRuntimeStore((state) => state.sysinfo);
   const refreshModels = useRuntimeStore((state) => state.refreshModels);
   const engineAlive = useRuntimeStore((state) => state.engine?.state);
+  const engineState = useRuntimeStore((state) => state.engine);
 
   const localModels = models?.local ?? [];
+
+  // v1.2.0 first-run: one click applies the recommended configuration and
+  // starts the engine. Only offered when a real recommendation exists.
+  const [onboardingBusy, setOnboardingBusy] = useState(false);
+
+  const useRecommended = useCallback(async () => {
+    setOnboardingBusy(true);
+
+    try {
+      const payload = await api.recommendation("", "chat");
+      const rec = payload.recommended;
+      const serving =
+        models?.local.find((m) => m.serving) ??
+        models?.local.find(
+          (m) => m.serving === false && m.id === activeModel,
+        );
+
+      const best =
+        models?.local
+          .filter((m) => !m.serving)
+          .sort((a, b) => {
+            const ra = a.estimatedMemoryBytes ?? Number.MAX_SAFE_INTEGER;
+            const rb = b.estimatedMemoryBytes ?? Number.MAX_SAFE_INTEGER;
+            return ra - rb;
+          })[0] ?? null;
+
+      const target = serving?.id ?? best?.id ?? null;
+
+      if (rec) {
+        await api.updateConfig({
+          llm: {
+            numCtx: rec.context,
+            numThread: rec.threads,
+            numGpu: rec.gpuLayers,
+            ubatchSize: rec.ubatchSize,
+          },
+          gpuAutoOffload: rec.gpuAutoOffload,
+          flashAttention: rec.flashAttention,
+          kvCacheQuant: rec.kvCacheQuant,
+          visionMmprojOffload: rec.mmprojOffload,
+          runtimeProfile: rec.task,
+        });
+      }
+
+      if (target) {
+        onUse(target);
+      } else if (engineState?.state === "idle" || !engineAlive) {
+        await api.llama("start");
+        await refreshModels();
+      }
+    } catch {
+      // surfaced through the runtime store error surfaces
+    } finally {
+      setOnboardingBusy(false);
+    }
+  }, [models, activeModel, onUse, engineAlive, engineState, refreshModels]);
 
   const sorted = useMemo(() => {
     // Serving model first, then alphabetical — a stable, predictable list.
@@ -411,20 +510,41 @@ const ModelPicker = function ModelPicker({
           </button>
         </div>
       ) : (
-        <div className="model-picker-grid">
-          {sorted.map((model) => (
-            <ModelCard
-              key={model.id}
-              model={model}
-              active={model.serving || model.id === activeModel}
-              busy={busy}
-              totalRamBytes={totalRamBytes}
-              gpuAvailable={gpuAvailable}
-              canUse={engineAlive !== "downloading"}
-              onUse={onUse}
-            />
-          ))}
-        </div>
+        <>
+          {localModels.length > 0 ? (
+            <div className="model-picker-onboarding">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void useRecommended()}
+                disabled={onboardingBusy || busy}
+                title="Apply the recommended configuration for this machine, pick the smallest fitting model, and start the engine."
+              >
+                {onboardingBusy ? "Applying recommended setup…" : "Use recommended setup"}
+              </button>
+
+              <span>
+                Detects this device, applies the best-fitting configuration,
+                verifies the engine, and starts the conversation.
+              </span>
+            </div>
+          ) : null}
+
+          <div className="model-picker-grid">
+            {sorted.map((model) => (
+              <ModelCard
+                key={model.id}
+                model={model}
+                active={model.serving || model.id === activeModel}
+                busy={busy}
+                totalRamBytes={totalRamBytes}
+                gpuAvailable={gpuAvailable}
+                canUse={engineAlive !== "downloading"}
+                onUse={onUse}
+              />
+            ))}
+          </div>
+        </>
       )}
     </section>
   );

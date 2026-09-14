@@ -6,7 +6,51 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.1.9` (CI output-name fix + mode-aware navigation + explicit model states on top of v1.1.8; see the v1.1.9 notes below. The v1.1.8 Chat/Agent separation + model picker + CI release-identity fix, the v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+Current release: `v1.2.0` (SHEYTAN-LA unified product upgrade: vision readiness state machine, hardware intelligence, evidence-based recommendation engine, chat markdown/composer polish, Environment Centre, verified health, SHEYTAN-LA Windows identity + AUMID, NSIS installer, manifest-verified app updater, release checksums; see the v1.2.0 notes below — all prior notes remain authoritative). Prior line: `v1.1.9` (CI output-name fix + mode-aware navigation + explicit model states on top of v1.1.8; see the v1.1.9 notes below. The v1.1.8 Chat/Agent separation + model picker + CI release-identity fix, the v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+
+**v1.2.0 notes for the next agent:**
+
+- VISION STATE MACHINE — `internal/vision/states.go` is the single
+  authority: `unsupported/supported/projector-missing/projector-found/
+  projector-verified/loading/ready/degraded/failed`. Pre-boot state comes
+  from `vision.EvaluateModel` (override wins if it exists; a paired mmproj
+  beats the architecture allow-list; the allow-list is CONSERVATIVE —
+  extend `visionArchs` only for arches llama.cpp mtmd actually supports).
+  `ready` is ONLY reachable through a verified boot WITH the projector
+  (llama.go setVision call sites at the setState(StateReady) paths).
+  `/api/models` carries per-model `visionFields`; `/api/engine` carries
+  the runtime block. The UI renders via `src/vision.ts visionBadge()` —
+  do not invent states client-side.
+- RECOMMENDATIONS — `internal/recommendation.Recommend` owns
+  Detected→Calculated→Recommended. It never mutates config: the UI applies
+  through the existing `PUT /api/config` and measures through `/api/perf`.
+  New task profiles must be added to `Tasks()` (single source) and stay
+  explainable — every branch must append a reason or a note.
+- SETTINGS — the Performance tab has three LEVELS (Simple/Performance/
+  Advanced) in `PerformanceLevel` (SettingsPanel.tsx); Simple postures are
+  task profiles (low-power/chat/maximum). New performance surfaces belong
+  in the right LEVEL, not all three.
+- IDENTITY — `internal/platform` owns OS integration: AUMID
+  `Parsaetak.SHEYTAN-LA` is set in `desktop.Run` BEFORE the first window.
+  Windows version resources come from `config.AppShortName /
+  AppDescription / AppPublisher / ExecutableName` via gen-syso. The
+  firewall manager creates NOTHING by default (loopback needs none) and
+  its netsh argument vectors are unit-locked — changing scope is a
+  reviewed security decision.
+- UPDATES — `internal/updater/appupdate.go`: the release manifest
+  (`release-manifest.json`, produced by CI) is authoritative; downloads
+  are SHA-256 verified BEFORE staging under `<DataDir>/updates/staging`;
+  nothing is ever auto-executed. `/api/update/status|check|download` keep
+  the last check in `Server.lastAppUpdate` (atomic.Value).
+- RELEASE ARTIFACTS — CI now produces `SHEYTAN-LA-v<ver>-windows-x64.zip`,
+  `SHEYTAN-LA-v<ver>-windows-x64-installer.exe` (NSIS,
+  packaging/nsis/installer.nsi), `SHA256SUMS.txt` and
+  `release-manifest.json`. The Linux artifact keeps its existing name.
+  Signing is still NOT configured — the installer verification step
+  REPORTS Authenticode status honestly instead of failing or faking.
+- The vision retry contract is unchanged: one text-only fallback when the
+  projector fails with every profile — now surfaced as `degraded` with a
+  reason instead of a silent downgrade.
 
 **v1.1.9 notes for the next agent:**
 

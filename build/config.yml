@@ -1,9 +1,9 @@
 info:
-  productName: "SHEYTAN Local Agent"
-  productIdentifier: "com.sheytan.localagent"
-  productVersion: "1.1.9"
-  companyName: "SHEYTAN"
-  productDescription: "SHEYTAN Local Agent — native local AI agent runtime"
+  productName: "SHEYTAN-LA"
+  productIdentifier: "com.parsaetak.sheytan-la"
+  productVersion: "1.2.0"
+  companyName: "Parsaetak"
+  productDescription: "SHEYTAN Local Agent — native local AI agent runtime (SHEYTAN-LA)"
 
 dev_mode:
   root_path: .

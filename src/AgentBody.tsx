@@ -1,6 +1,9 @@
 import {
   type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
+  type KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -15,6 +18,7 @@ import ActivityStream from "./ActivityStream";
 import ModelPicker from "./ModelPicker";
 import PerfStrip from "./PerfStrip";
 import { useRuntimeStore } from "./store";
+import { visionBadge } from "./vision";
 
 // engineBadge maps the authoritative backend engine states to a visible
 // label + severity. The UI NEVER invents a state: unknown backend states
@@ -333,14 +337,149 @@ function AgentBody() {
       return;
     }
 
-    void uploadFiles(files).catch(() => {
-      // Store exposes the upload error.
-    });
+    stageWithPreviews(files);
   }
 
   const onPickFiles = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  // v1.2.0 — composer image support. Paste and drag/drop feed the SAME
+  // existing upload backend (store.uploadFiles → /api/attachments) — no
+  // second upload implementation. Image previews are client-side object
+  // URLs keyed by name+size, revoked when the attachment is removed.
+  const previewMapRef = useRef<Map<string, string>>(new Map());
+  const [, forcePreviewTick] = useState(0);
+
+  const previewFor = useCallback(
+    (attachment: { name: string; size: number }): string | undefined => {
+      return previewMapRef.current.get(`${attachment.name}:${attachment.size}`);
+    },
+    [],
+  );
+
+  const registerPreviews = useCallback((files: File[]) => {
+    let added = false;
+
+    for (const file of files) {
+      if (file.type.startsWith("image/")) {
+        const url = URL.createObjectURL(file);
+        previewMapRef.current.set(`${file.name}:${file.size}`, url);
+        added = true;
+      }
+    }
+
+    if (added) {
+      forcePreviewTick((tick) => tick + 1);
+    }
+  }, []);
+
+  const stageWithPreviews = useCallback(
+    (files: File[]) => {
+      registerPreviews(files);
+      void uploadFiles(files).catch(() => {
+        // Store exposes the upload error.
+      });
+    },
+    [registerPreviews, uploadFiles],
+  );
+
+  useEffect(() => {
+    const map = previewMapRef.current;
+
+    return () => {
+      for (const url of map.values()) {
+        URL.revokeObjectURL(url);
+      }
+      map.clear();
+    };
+  }, []);
+
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(event.clipboardData?.files ?? []);
+      if (files.length === 0 || !activeSessionId) {
+        return; // normal text paste
+      }
+      event.preventDefault();
+      stageWithPreviews(files);
+    },
+    [activeSessionId, stageWithPreviews],
+  );
+
+  const handleDrop = useCallback(
+    (event: DragEvent<HTMLElement>) => {
+      event.preventDefault();
+      setDragActive(false);
+
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length === 0 || !activeSessionId) {
+        return;
+      }
+      stageWithPreviews(files);
+    },
+    [activeSessionId, stageWithPreviews],
+  );
+
+  const [dragActive, setDragActive] = useState(false);
+
+  const handleDragOver = useCallback((event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (event.dataTransfer?.types?.includes("Files")) {
+      setDragActive(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    setDragActive(false);
+  }, []);
+
+  // v1.2.0: Enter sends, Shift+Enter inserts a newline (Ctrl/Cmd+Enter
+  // still works for muscle memory), and the textarea auto-grows to the
+  // content up to a bounded height.
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const autoGrow = useCallback(() => {
+    const el = composerRef.current;
+    if (!el) {
+      return;
+    }
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+  }, []);
+
+  useEffect(() => {
+    autoGrow();
+  }, [message, autoGrow]);
+
+  const handleComposerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        event.currentTarget.form?.requestSubmit();
+      }
+    },
+    [],
+  );
+
+  // v1.2.0: the runtime vision state of the SERVING engine (not a guess
+  // from model names). The composer uses it for the honest image hint.
+  const vision = visionBadge(
+    engine?.visionState,
+    engine?.visionReason,
+    engine?.visionProjectorName,
+  );
+  const visionUsable =
+    vision.tone === "good" || engine?.visionState === "projector-found";
+
+  const canAttach = Boolean(activeSessionId) && !attachmentsUploading;
 
   useEffect(() => {
     function handleNewSessionRequest() {
@@ -357,8 +496,6 @@ function AgentBody() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createSession]);
-
-  const canAttach = Boolean(activeSessionId) && !attachmentsUploading;
 
   return (
     <>
@@ -396,6 +533,16 @@ function AgentBody() {
             >
               {pickerOpen ? "Hide models" : "All models"}
             </button>
+
+            {/* v1.2.0: the runtime vision badge — Ready only when the engine
+                is actually serving with a verified projector. */}
+            <span
+              className={`vision-chip tone-${vision.tone}`}
+              title={vision.title}
+            >
+              <span className="vision-chip-symbol">{vision.symbol}</span>
+              Vision {vision.label}
+            </span>
           </div>
         )}
 
@@ -641,7 +788,17 @@ function AgentBody() {
         )}
       </section>
 
-      <form className="composer" onSubmit={handleSubmit}>
+      <form
+        className={`composer${dragActive ? " drag-active" : ""}`}
+        onSubmit={handleSubmit}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+      >
+        {dragActive ? (
+          <div className="composer-drop-hint">Drop images or files to attach</div>
+        ) : null}
+
         {pendingAttachments.length > 0 || attachmentsUploading ? (
           <div className="composer-attachments">
             {attachmentsUploading ? (
@@ -652,9 +809,33 @@ function AgentBody() {
               <AttachmentChip
                 key={attachment.id}
                 attachment={attachment}
-                onRemove={(id) => void removePendingAttachment(id)}
+                previewUrl={previewFor(attachment)}
+                onRemove={(id) => {
+                  const url = previewMapRef.current.get(
+                    `${attachment.name}:${attachment.size}`,
+                  );
+                  if (url) {
+                    URL.revokeObjectURL(url);
+                    previewMapRef.current.delete(
+                      `${attachment.name}:${attachment.size}`,
+                    );
+                  }
+                  void removePendingAttachment(id);
+                }}
               />
             ))}
+          </div>
+        ) : null}
+
+        {/* v1.2.0: honest vision gating — an image staged for a model whose
+            engine has NO projector gets a visible warning, not a silent
+            downgrade. Text attachments are unaffected. */}
+        {pendingAttachments.some((a) => a.kind === "image") &&
+        !visionUsable &&
+        engine?.visionState !== undefined ? (
+          <div className="composer-vision-hint" role="status">
+            {vision.symbol} The served model has no verified vision projector
+            ({vision.label.toLowerCase()}) — images will be ignored.
           </div>
         ) : null}
 
@@ -669,6 +850,7 @@ function AgentBody() {
           />
 
           <textarea
+            ref={composerRef}
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             placeholder={
@@ -679,13 +861,18 @@ function AgentBody() {
                   : "Describe what SHEYTAN should forge..."
             }
             disabled={!activeSessionId || running}
-            rows={3}
+            rows={1}
             onKeyDown={(event) => {
+              // v1.2.0: Enter = send, Shift+Enter = newline. Ctrl/Cmd+Enter
+              // keeps its historical send binding.
               if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
+                return;
               }
+              handleComposerKeyDown(event);
             }}
+            onPaste={handlePaste}
           />
 
           <div className="composer-footer">
@@ -695,14 +882,14 @@ function AgentBody() {
                 className="text-button"
                 onClick={onPickFiles}
                 disabled={!canAttach}
-                title="Attach files (text, code, images)"
+                title="Attach files (text, code, images) — or paste / drag images"
               >
                 {attachmentsUploading ? "Staging…" : "＋ Attach"}
               </button>
 
               <span>
                 {activeSessionId
-                  ? "Ctrl/Cmd + Enter to run"
+                  ? "Enter to send · Shift+Enter for newline"
                   : "Create a session first"}
               </span>
             </div>

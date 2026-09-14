@@ -17,8 +17,20 @@ import (
 
 const (
         AppName     = "SHEYTAN-Local-Agent"
-        AppVersion  = "1.1.9"
+        AppVersion  = "1.2.0"
         AppCodename = "Zeta"
+)
+
+// v1.2.0 product identity: the short product name (SHEYTAN-LA) used on
+// window titles, taskbars, notifications, installers and update artifacts.
+// The full name stays the canonical config identity; the short name is the
+// product face.
+const (
+        AppShortName      = "SHEYTAN-LA"
+        AppDescription    = "SHEYTAN Local Agent"
+        AppUserModelID    = "Parsaetak.SHEYTAN-LA"
+        AppPublisher      = "Parsaetak"
+        ExecutableName    = "SHEYTAN-LA.exe"
 )
 
 // legacyDefaultLLMBaseURL is the pre-v1.1.3Z hardcoded local endpoint.
@@ -178,6 +190,19 @@ type Config struct {
         // Vision.
         VisionEnabled bool   `json:"visionEnabled" yaml:"visionEnabled"`
         VisionMMProj  string `json:"visionMmproj" yaml:"visionMmproj"`
+
+        // VisionMMProjOffload (v1.2.0) is the projector GPU-offload posture:
+        // "auto" (engine default), "on", or "off" (appends
+        // --no-mmproj-offload, verified by the capability adapter).
+        VisionMMProjOffload string `json:"visionMmprojOffload" yaml:"visionMmprojOffload"`
+
+        // RuntimeProfile (v1.2.0) names the active task-aware runtime
+        // profile (chat | coding | research | vision | agent | low-power |
+        // maximum). It records what the user selected so the UI can show
+        // WHY the recommended values were applied; it never changes engine
+        // behaviour on its own — the applied values live in the LLM/GPU
+        // fields above.
+        RuntimeProfile string `json:"runtimeProfile" yaml:"runtimeProfile"`
 
         // Resource retention.
         MaxWorkspaceMB  int `json:"maxWorkspaceMb" yaml:"maxWorkspaceMb"`

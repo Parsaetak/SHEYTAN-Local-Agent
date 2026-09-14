@@ -27,6 +27,12 @@ import {
   RecommendedCard,
   type PerfBaseline,
 } from "./SettingsPerformance";
+import {
+  SimplePerformanceCard,
+  TaskProfileCard,
+  UpdatesCard,
+  VisionCard,
+} from "./SettingsVisionUpdates";
 
 type SaveState = "idle" | "loading" | "saved" | "error";
 
@@ -37,9 +43,11 @@ type SettingsTab =
   | "general"
   | "models"
   | "performance"
+  | "vision"
   | "generation"
   | "tools"
   | "network"
+  | "updates"
   | "logs"
   | "advanced";
 
@@ -47,9 +55,11 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "General" },
   { id: "models", label: "Models" },
   { id: "performance", label: "Performance" },
+  { id: "vision", label: "Vision" },
   { id: "generation", label: "Generation" },
   { id: "tools", label: "Tools" },
   { id: "network", label: "Network" },
+  { id: "updates", label: "Updates" },
   { id: "logs", label: "Logs" },
   { id: "advanced", label: "Advanced" },
 ];
@@ -1242,26 +1252,20 @@ function SettingsPanel() {
         {/* Live Metrics (v1.1.9: advanced engine tuning → Advanced) */}
         {/* ======================================================== */}
         {activeTab === "performance" ? (
-          <>
-            <EngineProfileCard perf={perf} />
-
-            <RecommendedCard config={config} perf={perf} save={save} />
-
-            <ContextCard
-              config={config}
-              perf={perf}
-              save={save}
-              updateLocalLLM={updateLocalLLM}
-              updateConfigLocal={updateConfigLocal}
-            />
-
-            <LiveMetricsCard
-              perf={perf}
-              baseline={baseline}
-              clearBaseline={() => setBaseline(null)}
-            />
-          </>
+          <PerformanceLevel config={config} save={save} perf={perf} baseline={baseline} clearBaseline={() => setBaseline(null)} updateLocalLLM={updateLocalLLM} updateConfigLocal={updateConfigLocal} />
         ) : null}
+
+        {/* ======================================================== */}
+        {/* VISION */}
+        {/* ======================================================== */}
+        {activeTab === "vision" && config ? (
+          <VisionCard config={config} />
+        ) : null}
+
+        {/* ======================================================== */}
+        {/* UPDATES */}
+        {/* ======================================================== */}
+        {activeTab === "updates" ? <UpdatesCard /> : null}
 
         {/* ======================================================== */}
         {/* GENERATION */}
@@ -1553,6 +1557,126 @@ function SettingsPanel() {
         {activeTab === "logs" ? <LogsCard /> : null}
       </div>
     </div>
+  );
+}
+
+// v1.2.0 — three settings LEVELS for the Performance tab. Simple exposes
+// postures, not knobs; Performance keeps the measure → recommend → verify
+// cards; Advanced points at the raw engine controls (Advanced tab — one
+// location, no duplication). The choice persists per device.
+type PerfLevel = "simple" | "performance" | "advanced";
+
+const PERF_LEVEL_KEY = "shtn:perf-level";
+
+type SaveFn2 = (patch: Record<string, unknown>) => Promise<void>;
+
+function PerformanceLevel({
+  config,
+  save,
+  perf,
+  baseline,
+  clearBaseline,
+  updateLocalLLM,
+  updateConfigLocal,
+}: {
+  config: RuntimeConfig | null;
+  save: SaveFn2;
+  perf: PerfSnapshot | null;
+  baseline: PerfBaseline | null;
+  clearBaseline: () => void;
+  updateLocalLLM: <K extends keyof LLMConfig>(
+    key: K,
+    value: LLMConfig[K],
+  ) => void;
+  updateConfigLocal: <K extends keyof RuntimeConfig>(
+    key: K,
+    value: RuntimeConfig[K],
+  ) => void;
+}) {
+  const [level, setLevel] = useState<PerfLevel>(() => {
+    const stored = localStorage.getItem(PERF_LEVEL_KEY);
+    return stored === "simple" || stored === "advanced" ? stored : "performance";
+  });
+
+  const select = (next: PerfLevel) => {
+    setLevel(next);
+    localStorage.setItem(PERF_LEVEL_KEY, next);
+  };
+
+  return (
+    <>
+      <div className="level-switch" role="tablist" aria-label="Settings level">
+        {(
+          [
+            ["simple", "Simple"],
+            ["performance", "Performance"],
+            ["advanced", "Advanced"],
+          ] as [PerfLevel, string][]
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`level-switch-button${level === id ? " active" : ""}`}
+            onClick={() => select(id)}
+            role="tab"
+            aria-selected={level === id}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {level === "simple" && config ? (
+        <>
+          <SimplePerformanceCard config={config} save={save} />
+          <TaskProfileCard config={config} save={save} />
+        </>
+      ) : null}
+
+      {level === "performance" ? (
+        <>
+          <EngineProfileCard perf={perf} />
+
+          {config ? (
+            <RecommendedCard config={config} perf={perf} save={save} />
+          ) : null}
+
+          {config ? (
+            <ContextCard
+              config={config}
+              perf={perf}
+              save={save}
+              updateLocalLLM={updateLocalLLM}
+              updateConfigLocal={updateConfigLocal}
+            />
+          ) : null}
+
+          <LiveMetricsCard
+            perf={perf}
+            baseline={baseline}
+            clearBaseline={clearBaseline}
+          />
+        </>
+      ) : null}
+
+      {level === "advanced" ? (
+        <section className="settings-card settings-card-wide">
+          <div className="settings-card-heading">
+            <div>
+              <span className="eyebrow">ADVANCED</span>
+              <h3>Raw engine controls</h3>
+            </div>
+          </div>
+
+          <span className="runtime-hint">
+            Threads, batch sizes, KV quantisation, flash attention, mlock and
+            the llama.cpp binary live in the Advanced tab — every option there
+            is adapter-verified against the actual engine build before it
+            reaches the launch arguments.
+          </span>
+        </section>
+      ) : null}
+    </>
   );
 }
 

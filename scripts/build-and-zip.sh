@@ -35,8 +35,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VERSION="1.1.4"
-APP_NAME="sheytan-local-agent"
+# v1.2.0: the version is DERIVED from package.json (the canonical source)
+# instead of a hardcoded literal that could drift (it silently sat at
+# 1.1.4 through v1.1.5-v1.1.9).
+VERSION="$(node scripts/release-version.mjs --env | sed -n 's/^APP_VERSION=//p')"
+test -n "$VERSION"
+APP_NAME="SHEYTAN-LA"
 STAGE_DIR="dist-stage/$APP_NAME"
 GH_STAGE_DIR="dist-stage/$APP_NAME-github"
 DIST_DIR="/home/z/my-project/download"

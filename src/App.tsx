@@ -16,6 +16,7 @@ const AgentSidebar = lazy(() => import("./AgentSidebar"));
 const LabPanel = lazy(() => import("./LabPanel"));
 const ResearchPanel = lazy(() => import("./ResearchPanel"));
 const SettingsPanel = lazy(() => import("./SettingsPanel"));
+const SystemPanel = lazy(() => import("./SystemPanel"));
 
 function PanelLoading({ label }: { label: string }) {
   return (
@@ -128,7 +129,7 @@ function App() {
         </div>
 
         <div className="topbar-meta">
-          <span>{appVersion ?? "v1.1.9"}</span>
+          <span>{appVersion ?? "v1.2.0"}</span>
         </div>
       </header>
 
@@ -196,6 +197,10 @@ function App() {
             ) : effectiveView === "research" ? (
               <Suspense fallback={<PanelLoading label="Research" />}>
                 <ResearchPanel />
+              </Suspense>
+            ) : effectiveView === "system" ? (
+              <Suspense fallback={<PanelLoading label="System Centre" />}>
+                <SystemPanel />
               </Suspense>
             ) : (
               <Suspense fallback={<PanelLoading label="Settings" />}>

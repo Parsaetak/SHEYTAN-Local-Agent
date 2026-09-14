@@ -1960,3 +1960,28 @@ Work Log:
 
 Stage Summary:
 - v1.1.9 complete per the release brief; automated checks green with two documented environment exceptions (GTK-dependent vet of third-party wails packages; sandbox hang of the untouched test_host); no architecture changes; Chat/Agent separation completed at the navigation layer; model states made explicit; engine tuning relocated to Advanced.
+
+---
+Task ID: v1.2.0
+Agent: release-implementation
+Task: v1.2.0 — SHEYTAN-LA unified product upgrade (vision readiness pipeline, hardware intelligence, recommendation engine, chat/composer polish, agent progressive disclosure, settings levels, Environment Centre, verified health, SHEYTAN-LA identity, installer, app updater, release factory, docs, ZIP delivery).
+
+Work Log:
+- Live audit: HEAD ac63b88 verified; two full audits (frontend + backend) mapped existing vision pairing (internal/vision), capability adapter, rAF streaming, updater (engine-only), workflow job graph, identity gaps (no AUMID, no NSIS, no checksums, no SHEYTAN-LA short name, gen-syso lowercase mismatch).
+- Vision state machine: internal/vision/states.go (9 states, conservative mtmd arch allow-list, EvaluateModel evidence rules); llama.go records loading/ready/degraded/failed at pairing, verified boot, text-only retry and terminal failure; --no-mmproj-offload posture via config.VisionMMProjOffload (adapter-verified).
+- /api/models gains per-model visionFields (state/reason/mmproj path/name/size/verified); /api/engine gains the runtime vision block (visionState/reason/projector/name/bytes/active).
+- internal/hardware: measured-only profile over sysinfo + Vulkan/native/engine-tag evidence; PoolBytes mirrors llm.AssessContextResource.
+- internal/recommendation: 7 task profiles; threads/ubatch/flash-attn/KV-quant/GPU posture from measured inputs; context clamped by model limit + verified engine window + resource ladder; explicit Reasons + Notes; predictions labelled predicted.
+- internal/platform: AUMID Parsaetak.SHEYTAN-LA (windows syscall + honest ErrUnsupportedPlatform elsewhere); firewall manager with unit-locked netsh arg vectors, idempotent apply/remove/status, default = no rule (loopback-first).
+- internal/updater/appupdate: release-manifest.json schema, version ordering incl. prerelease, SHA-256(+size)-verified staging under updates/staging; never executes artifacts.
+- /api/environment (System Centre), /api/health (11 evidence-backed checks incl. honest unsigned-identity report), /api/recommendation, /api/update/status|check|download.
+- Frontend: vision.ts badge helper; ModelPicker Text/Vision/Tools/Native/Context/RAM/VRAM grid + "Recommended for your device" + projector details + "Use recommended setup" onboarding; MessageStream markdown (react-markdown+remark-gfm+rehype-highlight, hand-rolled token theme), code copy, message copy, inline images, stick-to-bottom autoscroll + jump affordance; composer Enter/Shift+Enter, auto-grow, paste + drag/drop through the existing upload path, image previews (object URLs), honest vision gating hint; ActivityStream phase grouping (Plan/Execution/Repair/Verification/Run) with Raw toggle; Settings Performance three levels (Simple postures / measure-recommend-verify / Advanced pointer), new Vision and Updates tabs; System workspace view (SystemPanel) wired through workspace.ts + App.tsx.
+- Identity: gen-syso ProductName SHEYTAN-LA / FileDescription "SHEYTAN Local Agent" / CompanyName Parsaetak / SHEYTAN-LA.exe; desktop title + AUMID; SHEYTAN-LA.bat launcher (legacy fallback); build/config.yml identity; CI builds SHEYTAN-LA.exe, portable zip renamed SHEYTAN-LA-v<ver>-windows-x64.zip.
+- Release factory: NSIS installer job (packaging/nsis/installer.nsi — per-machine, AUMID, SHEYTAN_DATA_DIR, clean uninstall preserving data), installer verification, SHA256SUMS.txt, release-manifest.json generation + validation, publish-after-verification, release asset re-verification (zip + installer + checksums + manifest).
+- Version 1.1.9 → 1.2.0 via package.json + release-version.mjs (config.go, build/config.yml, SIGNATURE repaired; --check green); build-and-zip.sh now derives VERSION from package.json (was hardcoded 1.1.4).
+- Docs: README v1.2.0 section + SHEYTAN-LA header; ARCHITECTURE Part II.9; agent.md v1.2.0 next-agent notes; worklog (this entry); UPDATE.md rewritten for v1.2.0.
+- Checks executed: release-version --check OK; go test -tags headless ./... 36 pkgs ok; go vet clean; npm typecheck OK; oxlint 0/0; npm run build OK (web/static regenerated, SystemPanel/vision chunks present).
+- Known limitations (documented, not faked): no Authenticode signing (certificates unavailable; pipeline reports status honestly); MSIX/AppInstaller not produced; firewall apply/verify and AUMID syscall are Windows-only paths exercised by construction + unit-locked arg vectors on Linux; CI not triggered from this environment (no push access).
+
+Stage Summary:
+- v1.2.0 complete per the release brief: strongest real subset implemented, all existing subsystems preserved (rAF streaming, capability adapter, session/attachment/lab/research/continuum machinery untouched), no second runtime/telemetry/frontend/database introduced.

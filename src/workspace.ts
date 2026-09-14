@@ -1,4 +1,4 @@
-export type WorkspaceView = "agent" | "lab" | "research" | "settings";
+export type WorkspaceView = "agent" | "lab" | "research" | "system" | "settings";
 
 export type WorkspaceMode = "chat" | "agent";
 
@@ -44,6 +44,15 @@ export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
     title: "External intelligence",
     description: "External evidence and sources",
     icon: "⌕",
+    modes: ["chat", "agent"],
+  },
+  {
+    id: "system",
+    label: "System",
+    eyebrow: "SYSTEM CENTRE",
+    title: "Environment Centre",
+    description: "Device, runtime, health, and recommendations",
+    icon: "▤",
     modes: ["chat", "agent"],
   },
   {

@@ -332,7 +332,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $appRoot = "dist/windows/app/SHEYTAN-Local-Agent"
+          $appRoot = "dist/windows/app/SHEYTAN-LA"
 
           New-Item `
             -ItemType Directory `
@@ -342,7 +342,7 @@ jobs:
           go build `
             -trimpath `
             -ldflags="-s -w -H=windowsgui" `
-            -o "$appRoot/SHEYTAN-Local-Agent.exe" `
+            -o "$appRoot/SHEYTAN-LA.exe" `
             .
 
           go build `
@@ -356,7 +356,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $exe = "dist/windows/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe"
+          $exe = "dist/windows/app/SHEYTAN-LA/SHEYTAN-LA.exe"
           $probe = "dist/windows/sheytan-version-smoke.exe"
 
           if (-not (Test-Path $exe)) {
@@ -406,7 +406,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $root = "dist/windows/app/SHEYTAN-Local-Agent"
+          $root = "dist/windows/app/SHEYTAN-LA"
 
           New-Item `
             -ItemType Directory `
@@ -419,11 +419,11 @@ jobs:
             -Path "$root/workspace" | Out-Null
 
           @"
-          SHEYTAN-Local-Agent $env:APP_VERSION ($env:APP_CODENAME)
+          SHEYTAN-LA $env:APP_VERSION ($env:APP_CODENAME)
 
           Portable Windows x64 distribution.
 
-          Keep the complete SHEYTAN-Local-Agent folder together.
+          Keep the complete SHEYTAN-LA folder together.
           "@ | Set-Content "$root/README.txt" -Encoding utf8
 
           @"
@@ -439,7 +439,7 @@ jobs:
           "@ | Set-Content "$root/workspace/README.txt" -Encoding utf8
 
           @"
-          SHEYTAN-Local-Agent
+          SHEYTAN-LA (SHEYTAN Local Agent)
           Version: $env:APP_VERSION
           Codename: $env:APP_CODENAME
           Platform: Windows x64
@@ -462,10 +462,10 @@ jobs:
             Copy-Item "SIGNATURE" "$root/SIGNATURE" -Force
           }
 
-          if (Test-Path "sheytan-local-agent.bat") {
+          if (Test-Path "SHEYTAN-LA.bat") {
             Copy-Item `
-              "sheytan-local-agent.bat" `
-              "$root/sheytan-local-agent.bat" `
+              "SHEYTAN-LA.bat" `
+              "$root/SHEYTAN-LA.bat" `
               -Force
           }
 
@@ -479,14 +479,14 @@ jobs:
             -Force `
             -Path "dist" | Out-Null
 
-          $zip = "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
+          $zip = "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64.zip"
 
           if (Test-Path $zip) {
             Remove-Item $zip -Force
           }
 
           Compress-Archive `
-            -Path "dist/windows/app/SHEYTAN-Local-Agent" `
+            -Path "dist/windows/app/SHEYTAN-LA" `
             -DestinationPath $zip `
             -CompressionLevel Optimal
 
@@ -506,7 +506,7 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
           $zipPath = Resolve-Path `
-            "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
+            "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64.zip"
 
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 
@@ -517,11 +517,11 @@ jobs:
             )
 
             $required = @(
-              "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe",
-              "SHEYTAN-Local-Agent/README.txt",
-              "SHEYTAN-Local-Agent/BUILD-INFO.txt",
-              "SHEYTAN-Local-Agent/models/README.txt",
-              "SHEYTAN-Local-Agent/workspace/README.txt"
+              "SHEYTAN-LA/SHEYTAN-LA.exe",
+              "SHEYTAN-LA/README.txt",
+              "SHEYTAN-LA/BUILD-INFO.txt",
+              "SHEYTAN-LA/models/README.txt",
+              "SHEYTAN-LA/workspace/README.txt"
             )
 
             foreach ($item in $required) {
@@ -531,8 +531,8 @@ jobs:
             }
 
             if (
-              (Test-Path "sheytan-local-agent.bat") -and
-              ($entries -notcontains "SHEYTAN-Local-Agent/sheytan-local-agent.bat")
+              (Test-Path "SHEYTAN-LA.bat") -and
+              ($entries -notcontains "SHEYTAN-LA/SHEYTAN-LA.bat")
             ) {
               throw "Expected launcher script is missing from Windows ZIP."
             }
@@ -551,7 +551,7 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
           $zipPath = Resolve-Path `
-            "dist/SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip"
+            "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64.zip"
 
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 
@@ -581,11 +581,72 @@ jobs:
 
           Write-Host "Windows ZIP integrity verification passed."
 
+      - name: Build Windows NSIS installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # v1.2.0: the primary user installer. NSIS is the broad Win32
+          # distribution path; the portable ZIP remains the advanced
+          # option. Models are NEVER bundled — the installer ships the
+          # application only.
+          choco install nsis -y --no-progress
+
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $found = Get-ChildItem "C:\Program Files*" -Recurse -Filter makensis.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if ($null -eq $found) { throw "makensis.exe not found after NSIS install." }
+            $makensis = $found.FullName
+          }
+
+          & $makensis `
+            -DVERSION="$env:APP_VERSION" `
+            -DEXE="SHEYTAN-LA.exe" `
+            -DBUILDDIR="dist\windows\app\SHEYTAN-LA" `
+            "packaging\nsis\installer.nsi"
+
+          $installer = "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64-installer.exe"
+          if (-not (Test-Path $installer)) {
+            throw "NSIS installer was not produced."
+          }
+          if ((Get-Item $installer).Length -le 0) {
+            throw "NSIS installer is empty."
+          }
+
+          Write-Host "NSIS installer built: $installer"
+
+      - name: Verify Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $installer = Get-Item "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64-installer.exe"
+
+          if ($installer.Length -lt 1MB) {
+            throw "Installer is implausibly small ($($installer.Length) bytes) — refusing to publish."
+          }
+
+          # Authenticode state is REPORTED, never faked: unsigned builds are
+          # expected until signing credentials are configured.
+          $sig = Get-AuthenticodeSignature $installer.FullName
+          Write-Host "Installer Authenticode status: $($sig.Status)"
+
+          Write-Host "Installer verification passed: $($installer.Name) ($([math]::Round($installer.Length/1MB,1)) MB)"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: SHEYTAN-LA-Windows-x64-installer-v${{ env.APP_VERSION }}
+          path: dist/SHEYTAN-LA-v${{ env.APP_VERSION }}-windows-x64-installer.exe
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload Windows package
         uses: actions/upload-artifact@v6
         with:
-          name: SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z
-          path: dist/SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z.zip
+          name: SHEYTAN-LA-Windows-x64-v${{ env.APP_VERSION }}
+          path: dist/SHEYTAN-LA-v${{ env.APP_VERSION }}-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -941,42 +1002,42 @@ jobs:
             <<< "$entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/README.txt" \
+            "SHEYTAN-LA/README.txt" \
             <<< "$entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/BUILD-INFO.txt" \
+            "SHEYTAN-LA/BUILD-INFO.txt" \
             <<< "$entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/models/README.txt" \
+            "SHEYTAN-LA/models/README.txt" \
             <<< "$entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/workspace/README.txt" \
+            "SHEYTAN-LA/workspace/README.txt" \
             <<< "$entries"
 
           if [ -f LICENSE ]; then
             grep -Fxq \
-              "SHEYTAN-Local-Agent/LICENSE" \
+              "SHEYTAN-LA/LICENSE" \
               <<< "$entries"
           fi
 
           if [ -f README.md ]; then
             grep -Fxq \
-              "SHEYTAN-Local-Agent/README.md" \
+              "SHEYTAN-LA/README.md" \
               <<< "$entries"
           fi
 
           if [ -f agent.md ]; then
             grep -Fxq \
-              "SHEYTAN-Local-Agent/AI-CONTEXT.md" \
+              "SHEYTAN-LA/AI-CONTEXT.md" \
               <<< "$entries"
           fi
 
           if [ -f SIGNATURE ]; then
             grep -Fxq \
-              "SHEYTAN-Local-Agent/SIGNATURE" \
+              "SHEYTAN-LA/SIGNATURE" \
               <<< "$entries"
           fi
 
@@ -1029,8 +1090,14 @@ jobs:
       - name: Download Windows package
         uses: actions/download-artifact@v7
         with:
-          name: SHEYTAN-Local-Agent-Windows-x64-v${{ env.APP_VERSION }}Z
+          name: SHEYTAN-LA-Windows-x64-v${{ env.APP_VERSION }}
           path: dist/windows
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v7
+        with:
+          name: SHEYTAN-LA-Windows-x64-installer-v${{ env.APP_VERSION }}
+          path: dist/installer
 
       - name: Download Linux package
         uses: actions/download-artifact@v7
@@ -1043,23 +1110,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          windows_zip_name="SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip"
+          windows_zip_name="SHEYTAN-LA-v${APP_VERSION}-windows-x64.zip"
           linux_zip_name="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+          installer_name="SHEYTAN-LA-v${APP_VERSION}-windows-x64-installer.exe"
 
           windows="$(find dist/windows -type f -name "$windows_zip_name" -print -quit)"
           linux="$(find dist/linux -type f -name "$linux_zip_name" -print -quit)"
+          installer="$(find dist/installer -type f -name "$installer_name" -print -quit)"
 
           test -n "$windows"
           test -n "$linux"
+          test -n "$installer"
 
           test -f "$windows"
           test -f "$linux"
+          test -f "$installer"
 
           test -s "$windows"
           test -s "$linux"
+          test -s "$installer"
 
           echo "Found Windows ZIP: $windows"
           echo "Found Linux ZIP:   $linux"
+          echo "Found installer:   $installer"
 
           unzip -t "$windows" >/dev/null
           unzip -t "$linux" >/dev/null
@@ -1068,23 +1141,23 @@ jobs:
           linux_entries="$(unzip -Z1 "$linux")"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe" \
+            "SHEYTAN-LA/SHEYTAN-LA.exe" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/README.txt" \
+            "SHEYTAN-LA/README.txt" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/BUILD-INFO.txt" \
+            "SHEYTAN-LA/BUILD-INFO.txt" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/models/README.txt" \
+            "SHEYTAN-LA/models/README.txt" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/workspace/README.txt" \
+            "SHEYTAN-LA/workspace/README.txt" \
             <<< "$windows_entries"
 
           grep -Fxq \
@@ -1092,84 +1165,146 @@ jobs:
             <<< "$linux_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/README.txt" \
+            "SHEYTAN-LA/README.txt" \
             <<< "$linux_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/BUILD-INFO.txt" \
+            "SHEYTAN-LA/BUILD-INFO.txt" \
             <<< "$linux_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/models/README.txt" \
+            "SHEYTAN-LA/models/README.txt" \
             <<< "$linux_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/workspace/README.txt" \
+            "SHEYTAN-LA/workspace/README.txt" \
             <<< "$linux_entries"
 
           if grep -Fxq \
-            "SHEYTAN-Local-Agent/LICENSE" \
+            "SHEYTAN-LA/LICENSE" \
             <<< "$windows_entries"; then
             echo "Windows LICENSE present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-Local-Agent/README.md" \
+            "SHEYTAN-LA/README.md" \
             <<< "$windows_entries"; then
             echo "Windows README.md present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-Local-Agent/AI-CONTEXT.md" \
+            "SHEYTAN-LA/AI-CONTEXT.md" \
             <<< "$windows_entries"; then
             echo "Windows AI-CONTEXT.md present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-Local-Agent/SIGNATURE" \
+            "SHEYTAN-LA/SIGNATURE" \
             <<< "$windows_entries"; then
             echo "Windows SIGNATURE present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-Local-Agent/LICENSE" \
+            "SHEYTAN-LA/LICENSE" \
             <<< "$linux_entries"; then
             echo "Linux LICENSE present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-Local-Agent/README.md" \
+            "SHEYTAN-LA/README.md" \
             <<< "$linux_entries"; then
             echo "Linux README.md present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-Local-Agent/AI-CONTEXT.md" \
+            "SHEYTAN-LA/AI-CONTEXT.md" \
             <<< "$linux_entries"; then
             echo "Linux AI-CONTEXT.md present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-Local-Agent/SIGNATURE" \
+            "SHEYTAN-LA/SIGNATURE" \
             <<< "$linux_entries"; then
             echo "Linux SIGNATURE present."
           fi
 
+          # Installer must be a real PE executable (MZ header), non-trivial.
+          installer_head="$(head -c 2 "$installer")"
+          test "$installer_head" = "MZ"
+
           echo "WINDOWS_ZIP=$windows" >> "$GITHUB_ENV"
           echo "LINUX_ZIP=$linux" >> "$GITHUB_ENV"
+          echo "INSTALLER=$installer" >> "$GITHUB_ENV"
 
-          echo "Release ZIP payload verification passed."
+          echo "Release payload verification passed."
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$(dirname "$WINDOWS_ZIP")"
+          sha256sum "$(basename "$WINDOWS_ZIP")" "$(basename "$INSTALLER")" > SHA256SUMS.txt
+          cd - >/dev/null
+          ( cd dist/linux && sha256sum "$(basename "$LINUX_ZIP")" >> ../SHA256SUMS.txt )
+          mv dist/SHA256SUMS.txt SHA256SUMS.txt 2>/dev/null || true
+          # Normalize: everything at repo-root-relative dist level.
+          test -s SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The update manifest is the authoritative machine-readable release
+          # source consumed by the app's updater (internal/updater/appupdate).
+          win_zip="$(basename "$WINDOWS_ZIP")"
+          win_inst="$(basename "$INSTALLER")"
+
+          win_zip_sha="$(sha256sum "$WINDOWS_ZIP" | cut -d' ' -f1)"
+          win_inst_sha="$(sha256sum "$INSTALLER" | cut -d' ' -f1)"
+
+          tag_base="${APP_VERSION}"
+
+          cat > release-manifest.json <<EOF
+          {
+            "version": "${tag_base}",
+            "channel": "stable",
+            "notes": "SHEYTAN-LA ${tag_base} — unified product release",
+            "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "windows-x64": {
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${tag_base}Z/${win_inst}",
+                "sha256": "${win_inst_sha}",
+                "kind": "installer"
+              }
+            },
+            "artifacts": {
+              "windows-x64-zip": {
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${tag_base}Z/${win_zip}",
+                "sha256": "${win_zip_sha}",
+                "kind": "zip"
+              }
+            }
+          }
+          EOF
+
+          python3 -m json.tool release-manifest.json >/dev/null
+          echo "release-manifest.json generated and validated."
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: SHEYTAN-Local-Agent ${{ github.ref_name }}
+          name: SHEYTAN-LA ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
             ${{ env.WINDOWS_ZIP }}
+            ${{ env.INSTALLER }}
             ${{ env.LINUX_ZIP }}
+            SHA256SUMS.txt
+            release-manifest.json
 
       - name: Verify published release
         shell: bash
@@ -1187,20 +1322,25 @@ jobs:
 
           echo "$payload"
 
-          windows_asset="SHEYTAN-Local-Agent-Windows-x64-v${APP_VERSION}Z.zip"
+          windows_asset="SHEYTAN-LA-v${APP_VERSION}-windows-x64.zip"
           linux_asset="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+          installer_asset="SHEYTAN-LA-v${APP_VERSION}-windows-x64-installer.exe"
 
           echo "$payload" |
             jq -e \
               --arg tag "${GITHUB_REF_NAME}" \
               --arg windows "$windows_asset" \
               --arg linux "$linux_asset" \
+              --arg installer "$installer_asset" \
               '
                 .tagName == $tag and
                 .isDraft == false and
                 .isPrerelease == false and
                 ([.assets[].name] | index($windows)) != null and
-                ([.assets[].name] | index($linux)) != null
+                ([.assets[].name] | index($linux)) != null and
+                ([.assets[].name] | index($installer)) != null and
+                ([.assets[].name] | index("SHA256SUMS.txt")) != null and
+                ([.assets[].name] | index("release-manifest.json")) != null
               ' \
             >/dev/null
 

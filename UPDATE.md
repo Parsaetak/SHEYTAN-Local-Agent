@@ -1,46 +1,56 @@
-# UPDATE.md — v1.1.9 CI Output Fix, Mode-Aware Surface & Explicit Model States Replacement Package
+# UPDATE.md — v1.2.0 SHEYTAN-LA Unified Product Upgrade Replacement Package
 
-**Release:** `v1.1.9` (codename Zeta) · **Base:** `main @ 63c88dd` (`v1.1.8`)
+**Release:** `v1.2.0` (codename Zeta) · **Base:** `main @ ac63b88` (`v1.1.9`)
 **Date:** 2026-09-14
+**Package:** `SHEYTAN-Local-Agent-v1.2.0-UPDATE.zip`
 
 This package is a COMPLETE REPLACEMENT of the repository state. Apply it by
 replacing the whole tree (or, file-by-file, by following the exact map
 below). Every path is relative to the repository root.
 
-v1.1.9 is a focused maintenance release over v1.1.8 — the same Go +
-React/TypeScript + Wails + llama.cpp/native-engine architecture, no new
-frameworks, no rebuilt subsystems. It ships: (1) the GitHub Actions
-release-metadata failure of run `34791882219` is fixed — the audit job's
-outputs now map the exact `APP_*` names the identity step writes, and the
-identity step fails fast when any release identity value is empty; (2) the
-Chat/Agent separation is completed — navigation is mode-aware (Chat hides
-the Coding Lab), the sidebar speaks in the mode's voice, and hidden
-machinery falls back to the workspace; (3) the model chooser gains an
-explicit per-card state (Ready / Loading / Incompatible / Available) and an
-aligned Context/RAM/Tools/Vision/Native fact grid; (4) the llama.cpp engine
-tuning card moved from Performance to Advanced Settings (nothing removed);
-(5) a minimalist UI pass (flat background, softened shadows, defined
-`--border-soft`, CSS collision fix, quieter topbar/panel) and a targeted
-optimisation pass (perf polling pauses while hidden, duplicated model
-select builder unified). No architecture was rebuilt; nothing was claimed
-that was not executed.
+v1.2.0 turns SHEYTAN into the unified **SHEYTAN-LA** product without
+rebuilding any subsystem: (1) the vision readiness pipeline is a real
+evidence-backed state machine (`internal/vision/states.go`) exposed through
+`/api/models` and `/api/engine` — "Ready" only appears when the engine is
+serving WITH a verified projector, "Degraded" when the projector failed with
+every profile and the engine fell back to text-only; (2) mmproj becomes a
+first-class asset (state, evidence, size and verification per model, plus an
+adapter-verified projector GPU-offload posture); (3) the model picker, chat
+surface and composer are polished (markdown + highlighted code + copy,
+inline images, Enter-to-send, paste/drag-drop through the EXISTING upload
+backend, intelligent autoscroll) while the rAF streaming coalescing is
+untouched; (4) Agent mode groups activity into Plan / Execution / Repair /
+Verification phases; (5) new `internal/hardware` and
+`internal/recommendation` packages deliver measured hardware intelligence
+and explainable task-aware runtime profiles; (6) Settings gains three
+Performance LEVELS, a dedicated Vision tab and an Updates tab; (7) a new
+System view (Environment Centre) plus `/api/health` report evidence-backed
+state for every consequential subsystem; (8) the product becomes
+SHEYTAN-LA — `SHEYTAN-LA.exe` Windows identity, AppUserModelID
+`Parsaetak.SHEYTAN-LA`, NSIS installer, SHA-256-verified release manifest
+and staged-update machinery, all produced by the GitHub release factory.
+No second runtime, telemetry system, frontend framework, database or cloud
+service was introduced; every limitation (no Authenticode signing, no MSIX,
+Windows-only firewall paths) is documented honestly.
 
 ## 1. DELETE
 
-Stale Vite bundles superseded by the regenerated embedded build. These
-files existed in the base tree and are NOT shipped in this package; the
-new hashed set is referenced by `web/static/index.html`.
+Stale Vite bundles superseded by the regenerated embedded build, and the
+legacy launcher superseded by the renamed SHEYTAN-LA launcher. These files
+existed in the base tree and are NOT shipped in this package; the new hashed
+set is referenced by `web/static/index.html`.
 
 | Path | Why |
 |---|---|
-| `web/static/assets/AgentBody-awTTu9zQ.js` | stale bundle (superseded by `AgentBody-NepkaVWP.js`) |
-| `web/static/assets/AgentHeader-Dn6xTymr.js` | stale bundle (superseded by `AgentHeader-CjbPNa0Q.js`) |
-| `web/static/assets/AgentSidebar-CBUfNisf.js` | stale bundle (superseded by `AgentSidebar-CAXlKFQx.js`) |
-| `web/static/assets/LabPanel-9j9sFDtD.js` | stale bundle (superseded by `LabPanel-B5Xf1JtL.js`) |
-| `web/static/assets/ResearchPanel-CUNUWyb_.js` | stale bundle (superseded by `ResearchPanel-BK1_HHZQ.js`) |
-| `web/static/assets/SettingsPanel-Du3qtveG.js` | stale bundle (superseded by `SettingsPanel-DGL5poUh.js`) |
-| `web/static/assets/index-8J2XQ2Ww.js` | stale bundle (superseded by `index-DNeAa-xT.js`) |
-| `web/static/assets/index-DkPxM2o7.css` | stale bundle (superseded by `index--nFue_yD.css`) |
+| `web/static/assets/AgentBody-NepkaVWP.js` | stale bundle (superseded by `AgentBody-gUOngzB2.js`) |
+| `web/static/assets/AgentHeader-CjbPNa0Q.js` | stale bundle (superseded by `AgentHeader-BLpYPa1a.js`) |
+| `web/static/assets/AgentSidebar-CAXlKFQx.js` | stale bundle (superseded by `AgentSidebar-DxAszNFR.js`) |
+| `web/static/assets/LabPanel-B5Xf1JtL.js` | stale bundle (superseded by `LabPanel-IAovuBwW.js`) |
+| `web/static/assets/ResearchPanel-BK1_HHZQ.js` | stale bundle (superseded by `ResearchPanel-CzUQatci.js`) |
+| `web/static/assets/SettingsPanel-DGL5poUh.js` | stale bundle (superseded by `SettingsPanel-DDjHHTKY.js`) |
+| `web/static/assets/index-DNeAa-xT.js` | stale bundle (superseded by `index-C5shaEHo.js`) |
+| `web/static/assets/index--nFue_yD.css` | stale bundle (superseded by `index-DJQM74Q8.css`) |
+| `sheytan-local-agent.bat` | legacy launcher; replaced by `SHEYTAN-LA.bat` (which still falls back to a legacy exe name) |
 
 Nothing else was deleted. No source file, test, tool, or subsystem was
 removed in this release.
@@ -53,48 +63,86 @@ this package (they are also listed under MODIFY with per-file reasons).
 | Path | Reason |
 |---|---|
 | `UPDATE.md` | this release's change map |
-| `REPLACEMENT-MANIFEST.txt` | regenerated for v1.1.9 |
-| `REPLACEMENT-SHA256.txt` | regenerated for v1.1.9 |
+| `REPLACEMENT-MANIFEST.txt` | regenerated for v1.2.0 |
+| `REPLACEMENT-SHA256.txt` | regenerated for v1.2.0 |
 | `web/static/index.html` | regenerated — references the new hashed bundle set |
 | `web/static/.vite/manifest.json` | regenerated by `npm run build` |
+| `SIGNATURE` | first line repaired to `SHEYTAN-Local-Agent v1.2.0` by `release-version.mjs` |
 
 ## 3. MODIFY
 
 | Path | Change |
 |---|---|
-| `.github/workflows/build-desktop.yml` | **The CI fix (run `34791882219`).** The audit job's `outputs:` previously declared `version: steps.identity.outputs.version` (and `version_full` / `codename`), but the identity step writes `APP_VERSION` / `APP_VERSION_FULL` / `APP_CODENAME` to `$GITHUB_OUTPUT` — so every `needs.audit.outputs.*` resolved to an empty string and Linux/Windows failed release-metadata verification. The audit outputs now map `steps.identity.outputs.APP_VERSION` / `APP_VERSION_FULL` / `APP_CODENAME`. Additionally the identity step now FAILS FAST (with a `::error::` annotation, exit 1) if any of the three identity values is empty, before any build job starts. The version derivation chain is unchanged: `package.json` → `release-version.mjs --env` → identity step → audit outputs → `needs.audit.outputs.*` → Linux/Windows environment. No hardcoded version was reintroduced |
-| `package.json` | Canonical version `1.1.8` → `1.1.9` (the ONLY manual version edit; every other surface is repaired by the script) |
-| `package-lock.json` | root + `packages[""].version` aligned to `1.1.9` |
-| `internal/config/config.go` | `AppVersion = "1.1.9"` (repaired by `release-version.mjs`) |
-| `build/config.yml` | `productVersion: "1.1.9"` (repaired by `release-version.mjs`) |
-| `SIGNATURE` | first line `SHEYTAN-Local-Agent v1.1.9` (repaired by `release-version.mjs`) |
-| `src/workspace.ts` | `WorkspaceLayer` gained `modes: readonly WorkspaceMode[]`; Coding Lab is `["agent"]`, Workspace/Research/Settings are `["chat","agent"]`; new `visibleWorkspaceLayers(mode)` filter; agent layer label is now "Workspace" (the Agent MODE is the header switch — no name collision); Settings title simplified |
-| `src/App.tsx` | navigation is mode-aware via `visibleWorkspaceLayers(mode)`; when the restored hash points at machinery the current mode hides (e.g. Coding Lab while Chat), the workspace falls back to the visible workspace layer; the verbose "LAYER / Only the active workspace loads…" sidebar info block was dropped (non-agent layers no longer render sidebar filler); topbar shows a status dot with a tooltip instead of persistent status text; sidebar footer trimmed to one line; version fallback `v1.1.9` |
-| `src/AgentSidebar.tsx` | the sessions heading eyebrow speaks in the mode's voice (`CHAT` vs `AGENT`) — same sessions underneath |
-| `src/AgentBody.tsx` | the duplicated model `<select>` option builder (chat rail + runtime panel) was unified into one shared `modelSelectOptions()` helper; the raw session-ID row was removed from the runtime panel (session identity is bookkeeping, not product UI — actions remain); the always-on engine detail line was removed (degraded-startup and phase hints remain); the runtime panel's model facts use the renamed `runtime-model-facts` class |
-| `src/ModelPicker.tsx` | **Model chooser redesign.** Per-card explicit `ModelState`: `ready` (backend is serving it) / `loading` (a switch to THIS model is in flight) / `incompatible` (estimated footprint > total host RAM) / `available`, plus the unchanged Recommended / Compatible / Limited sizing hint. Cards render an aligned two-column fact grid — Context / RAM / Tools / Vision / Native — where Tools derives ONLY from `chatTemplate` (the honest prerequisite signal) and unknown values render "—"; nothing is fabricated. The Use button is disabled with an explanatory tooltip for ready/incompatible/busy states. The no-models empty state now says "Choose a model" with an Open models folder action. There is still deliberately NO Remove action — no model-deletion API exists |
-| `src/SettingsPanel.tsx` | the llama.cpp EngineCard (threads, GPU offload, flash attention, mlock, KV quant, …) moved from the Performance tab to **Advanced**; Performance now reads measure → recommend → verify (Engine profile → Recommended → Context → Live metrics); `touchesEngine` restart logic unchanged and tab-independent; no functionality removed |
-| `src/PerfStrip.tsx` | `/api/perf` fetches are skipped while `document.hidden` (the strip is invisible; the endpoint performs real host measurement work) and a `visibilitychange` listener refreshes immediately on return; the 4 s interval, N/A contract and metric set are unchanged |
-| `src/styles.css` | `--border-soft` is now DEFINED (five component blocks referenced it; it previously fell back to currentColor); the decorative body radial gradients and the fixed background grid overlay (`body::before`/`::after`) were removed — flat `var(--background)`; `.workspace` radial gradient removed; `--shadow` softened; the `.model-card-facts` CSS collision resolved (runtime panel facts renamed `.runtime-model-facts`; the picker keeps `.model-card-facts`); new `.model-card-grid` fact-grid styles; new `.class-loading` / `.class-incompatible` chip styles and the dimmed `.state-incompatible` card; all animations remain transform/opacity-only |
-| `README.md` | version header + v1.1.9 section (shipped items only) |
-| `agent.md` | release line + v1.1.9 next-agent notes (CI output-name contract, mode-aware navigation contract, model-state honesty contract, EngineCard relocation, CSS token/collision notes) |
-| `ARCHITECTURE.md` | new section I.8d — v1.1.9 surfaces truth table |
-| `worklog.md` | v1.1.9 entry appended (phase history preserved) |
-| `web/static/.vite/manifest.json` | regenerated by `npm run build` |
-| `web/static/index.html` | regenerated by `npm run build` |
+| `package.json` | Canonical version `1.1.9` → `1.2.0` (the ONLY manual version edit); adds react-markdown / remark-gfm / rehype-highlight |
+| `package-lock.json` | aligned to `1.2.0` + new markdown dependency tree |
+| `internal/config/config.go` | `AppVersion = "1.2.0"` (repaired by script); new identity constants (`AppShortName SHEYTAN-LA`, `AppDescription`, `AppUserModelID`, `AppPublisher`, `ExecutableName`); new fields `VisionMMProjOffload` and `RuntimeProfile` |
+| `build/config.yml` | `productVersion: "1.2.0"` + productName `SHEYTAN-LA` + company `Parsaetak` |
+| `.github/workflows/build-desktop.yml` | Windows exe is `SHEYTAN-LA.exe` in `SHEYTAN-LA/`; portable zip renamed `SHEYTAN-LA-v<ver>-windows-x64.zip`; new NSIS installer build + verification steps; installer artifact upload; release job downloads and verifies the installer, generates `SHA256SUMS.txt`, generates and validates `release-manifest.json`, publishes all five assets only after payload verification, and re-verifies the published release (installer + checksums + manifest present). Version derivation chain unchanged: `package.json` → `release-version.mjs --env` → audit outputs |
+| `internal/vision/states.go` (new) | the vision readiness state machine: nine states, conservative mtmd architecture allow-list, `EvaluateModel` evidence rules (override validated, pairing beats allow-list), `InspectProjector` measurement |
+| `internal/vision/states_test.go` (new) | state machine coverage with real GGUF fixtures |
+| `internal/llm/llama.go` | vision state transitions recorded at pairing (loading), verified boot (ready — the ONLY path to ready), text-only retry (degraded) and terminal failure; `VisionStatus()` runtime block; `--no-mmproj-offload` posture; `VulkanAvailable` export shared with the hardware layer |
+| `internal/api/visioninfo.go` (new) | per-model vision fields for `/api/models` |
+| `internal/api/server.go` | modelInfo embeds the vision fields; handleModels evaluates pre-boot state and upgrades the serving model to runtime truth; routes registered for `/api/environment`, `/api/health`, `/api/recommendation`, `/api/update/*`; `lastAppUpdate` cache |
+| `internal/api/engine.go` | engineSnapshot vision block (state/reason/projector/name/bytes/active) |
+| `internal/api/environment.go` (new) | Environment Centre payload + verified health (11 evidence-backed checks; identity reports the truth: unsigned developer build) |
+| `internal/api/recommendation.go` (new) | GET `/api/recommendation?model=&task=` — recommendation + current values + available profiles; nothing mutates config here |
+| `internal/api/update.go` (new) | `/api/update/status` `/check` `/download` — manifest check and verified staging; never executes artifacts |
+| `internal/hardware/hardware.go` (new) | unified hardware intelligence over the existing sysinfo probe + backend evidence |
+| `internal/recommendation/recommendation.go` (new) | task-aware profiles, clamps and resource ladder, Reasons/Notes, predicted-vs-measured separation |
+| `internal/recommendation/recommendation_test.go` (new) | evidence-grounded, clamp, step-down, low-power, vision and engine-capability tests |
+| `internal/platform/*` (new) | OS-integration abstraction: AUMID (windows syscall / honest unsupported elsewhere), firewall rule model + unit-locked netsh argument vectors + idempotent apply/remove/status |
+| `internal/updater/appupdate.go` (new) | app manifest schema, version ordering (incl. prerelease), SHA-256+size verified staging under `updates/staging`, `StageIsValid` re-verification |
+| `internal/updater/appupdate_test.go` (new) | ordering, check, check-failure, refusal without digest, verified staging + tamper refusal tests |
+| `internal/desktop/desktop.go` | AUMID registered before the first window; window title `SHEYTAN-LA — SHEYTAN Local Agent` |
+| `internal/api/perf*.go` | touch-ups alongside the recommendation wiring (gofmt/signature alignment) |
+| `src/vision.ts` (new) | shared vision badge renderer — the UI maps the backend state machine 1:1, invents nothing |
+| `src/api.ts` | Model + EngineSnapshot vision fields; config `visionMmprojOffload` + `runtimeProfile`; Environment/Health/Recommendation/Update payload types + client methods |
+| `src/ModelPicker.tsx` | fact grid Text/Vision/Tools/Native/Context/RAM/VRAM; state-machine Vision badge with evidence tooltip; "Recommended for your device"; details rows for projector + reasons; "Use recommended setup" first-run action |
+| `src/MessageStream.tsx` | markdown rendering (GFM + highlighting), code-block copy, per-message copy, inline images, stick-to-bottom autoscroll + jump-to-latest |
+| `src/AgentBody.tsx` | chat-rail Vision chip; composer Enter/Shift+Enter + auto-grow + paste + drag/drop (existing upload backend, object-URL previews) + honest vision gating hint |
+| `src/ActivityStream.tsx` | progressive disclosure: Plan/Execution/Repair/Verification/Run phase grouping derived from existing event types; Raw toggle |
+| `src/SettingsPanel.tsx` | three Performance LEVELS (Simple / Performance / Advanced) with persistence; new Vision and Updates tabs wired |
+| `src/SettingsVisionUpdates.tsx` (new) | SimplePerformanceCard (Quiet/Balanced/Maximum postures via real task profiles), TaskProfileCard, VisionCard (controls + DETECTED PROJECTOR card), UpdatesCard (check + download-&-verify) |
+| `src/SystemPanel.tsx` (new) | Environment Centre view: Device / Runtime / Recommendation (Apply + Why) / verified health checks |
+| `src/workspace.ts` + `src/App.tsx` | new `system` workspace layer (both modes), lazy SystemPanel wiring |
+| `src/styles.css` | v1.2.0 surfaces: vision chips/tones, markdown + code blocks + hljs tokens, message meta/copy, images, jump-to-latest, composer drag/vision hint, activity phases, level switch, posture/profile grids, Environment Centre, health checks, onboarding |
+| `SHEYTAN-LA.bat` (replaces `sheytan-local-agent.bat`) | launcher for `SHEYTAN-LA.exe` with legacy-name fallback |
+| `scripts/gen-syso/main.go` | Windows version resources per the identity contract (ProductName SHEYTAN-LA, FileDescription "SHEYTAN Local Agent", CompanyName Parsaetak, InternalName/OriginalFilename SHEYTAN-LA(.exe)); no signature claimed |
+| `scripts/build-and-zip.sh` | VERSION now DERIVED from package.json via `release-version.mjs --env` (was hardcoded 1.1.4); app name SHEYTAN-LA |
+| `packaging/nsis/installer.nsi` (new) | per-machine NSIS installer: shortcuts, AUMID registration, version-aware upgrades, clean uninstall preserving models/sessions/config, `SHEYTAN_DATA_DIR` user-data declaration; models NEVER bundled |
+| `README.md` | SHEYTAN-LA product header + v1.2.0 section (shipped items only) |
+| `agent.md` | release line + v1.2.0 next-agent notes (state-machine authority, recommendation contract, settings levels, platform identity, update staging, release artifacts) |
+| `ARCHITECTURE.md` | new Part II.9 — v1.2.0 product surfaces (implemented) |
+| `worklog.md` | v1.2.0 entry appended (phase history preserved) |
 
 ## 4. ADD
 
 | Path | Purpose |
 |---|---|
-| `web/static/assets/AgentBody-NepkaVWP.js` | regenerated embedded build (new hash set) |
-| `web/static/assets/AgentHeader-CjbPNa0Q.js` | regenerated embedded build |
-| `web/static/assets/AgentSidebar-CAXlKFQx.js` | regenerated embedded build |
-| `web/static/assets/LabPanel-B5Xf1JtL.js` | regenerated embedded build |
-| `web/static/assets/ResearchPanel-BK1_HHZQ.js` | regenerated embedded build |
-| `web/static/assets/SettingsPanel-DGL5poUh.js` | regenerated embedded build |
-| `web/static/assets/index-DNeAa-xT.js` | regenerated embedded build |
-| `web/static/assets/index--nFue_yD.css` | regenerated embedded build |
+| `internal/vision/states.go` + `states_test.go` | vision readiness state machine + tests |
+| `internal/api/visioninfo.go` | per-model vision fields |
+| `internal/api/environment.go` | Environment Centre + verified health endpoints |
+| `internal/api/recommendation.go` | recommendation endpoint |
+| `internal/api/update.go` | application update endpoints |
+| `internal/hardware/hardware.go` | unified hardware intelligence layer |
+| `internal/recommendation/recommendation.go` + test | evidence-based recommendation engine + tests |
+| `internal/platform/platform.go`, `identity_windows.go`, `identity_other.go`, `firewall.go`, `platform_test.go` | OS-integration abstraction (AUMID + firewall) + tests |
+| `internal/updater/appupdate.go` + test | manifest-verified application updater + tests |
+| `src/vision.ts` | shared vision badge renderer |
+| `src/SettingsVisionUpdates.tsx` | Simple postures, task profiles, Vision tab, Updates tab |
+| `src/SystemPanel.tsx` | Environment Centre view |
+| `packaging/nsis/installer.nsi` | NSIS installer script |
+| `SHEYTAN-LA.bat` | renamed launcher |
+| `web/static/assets/AgentBody-gUOngzB2.js` | regenerated embedded build (new hash set) |
+| `web/static/assets/AgentHeader-BLpYPa1a.js` | regenerated embedded build |
+| `web/static/assets/AgentSidebar-DxAszNFR.js` | regenerated embedded build |
+| `web/static/assets/LabPanel-IAovuBwW.js` | regenerated embedded build |
+| `web/static/assets/ResearchPanel-CzUQatci.js` | regenerated embedded build |
+| `web/static/assets/SettingsPanel-DDjHHTKY.js` | regenerated embedded build |
+| `web/static/assets/SystemPanel-7HYAXm8y.js` | regenerated embedded build |
+| `web/static/assets/vision-Dw0T2tjy.js` | regenerated embedded build (shared vision helper chunk) |
+| `web/static/assets/index-C5shaEHo.js` | regenerated embedded build |
+| `web/static/assets/index-DJQM74Q8.css` | regenerated embedded build |
 
 ## 5. DO NOT TOUCH
 
@@ -104,144 +152,70 @@ architecture decision:
 - The agent loop and orchestrator (`internal/agent`) — planning, tool
   calls, verification, reliability gates.
 - The tool registry and every tool implementation (`internal/tools`,
-  `internal/lab`, `internal/research`, `internal/memory`,
-  `internal/recall`, `internal/computer`, `internal/skills`, ...).
+  `internal/lab`, `internal/research`, `internal/memory`, `internal/recall`,
+  `internal/computer`, `internal/skills`, ...).
 - Coding Lab execution model, policy, safe-edit, repair and verifier
   (`internal/lab`).
 - Context planning/protection, budget pipeline, context cache, chunking
   (`internal/contextplan`, `internal/contextcache`, `internal/chunking`,
   `internal/ctxtelemetry`, `internal/continuum`).
-- Engine lifecycle and the llama.cpp integration contract
-  (`internal/llm`, `internal/installer`) — including the
-  compatibility-level logic (`shouldRetryFullSpeed` and its
-  regression-locked gates) and the persisted capability profile,
-  preserved exactly from v1.1.7/v1.1.8.
-- The native C++ engine (`native/engine`, `internal/native/engine`) —
-  zero bytes changed.
+- The engine capability adapter and compatibility ladder
+  (`internal/llm/capability.go`, `shouldRetryFullSpeed`, persisted
+  capability profile) — v1.2.0 only ADDS the projector-offload flag and
+  vision state recording; the repair semantics are untouched.
+- The rAF streaming coalescing in `src/store.ts` — v1.2.0 changed no store
+  logic; markdown parsing happens on completed messages only.
+- The native C++ engine (`native/engine`) — zero bytes changed.
 - MCP bridge, scheduler, multi-agent, pipeline, sessions, attachments,
-  sandbox/proc security restrictions, config copy-on-write
-  (`internal/config` semantics — only the version constant changed).
-- The perf telemetry ring and `/api/perf`, `/api/logs`, `/api/netcheck`
-  surfaces (`internal/api/perf.go`, `internal/logging`,
-  `internal/netcheck`) — the strip is a consumer, not a new system.
-- The in-app log viewer (`src/LogViewer.tsx`, Settings → Logs) — live
-  tail, pause, auto-scroll, search, filters, copy, bounded memory and
-  secret redaction all preserved unchanged.
-- The store's session/model/engine wiring (`src/store.ts`) — v1.1.9
-  changed no store logic; the mode fields from v1.1.8 are reused as-is.
-- Windows branding, icons, `.syso` generation, launcher
-  (`scripts/gen-syso`, `build/sheytan.ico`, `sheytan-local-agent.bat`).
-- The lazy-loaded workspace architecture (`App.tsx` Suspense/lazy
-  boundaries per layer) — v1.1.9 kept every lazy boundary and only
-  adjusted content inside them.
+  sandbox/proc security restrictions, config copy-on-write semantics
+  (`internal/config` — new optional fields only, defaults preserve legacy
+  behaviour: empty offload = engine default, empty profile = chat).
+- `/api/perf`, `/api/logs`, `/api/netcheck` contracts and the perf
+  telemetry ring — the recommendation engine reads them, never replaces
+  them.
+- The in-app log viewer (`src/LogViewer.tsx`) — unchanged.
+- Windows branding, icons, `.syso` generation mechanics
+  (`scripts/gen-syso` — only the identity strings changed).
 
-## 6. Root cause of Actions run `34791882219` — and the exact fix
+## 6. How to apply this update safely
 
-**Root cause.** Linux and Windows failed during release metadata
-verification with empty identity values. The audit job declared
+1. Back up nothing that matters for the update itself — `models/`,
+   `workspace/`, `sessions/` and `config.json` are never touched by any
+   file in this package. Still, take a normal backup before updating.
+2. Check out the base commit (`ac63b88`) clean, then replace the whole
+   tree with this package (or copy file-by-file following sections 1–4).
+3. Delete exactly the files listed in section 1 (stale bundles + legacy
+   launcher).
+4. Run `npm install` (new markdown dependencies), then
+   `node scripts/release-version.mjs --check` — it must pass without
+   repairs (version metadata agrees everywhere: 1.2.0).
+5. Verify with the standard gates: `npm run typecheck && npm run lint &&
+   npm run build`, `go test -tags headless ./...`, `go vet -tags headless
+   ./...`. All gates pass on the shipped tree (36 Go packages, oxlint 0/0,
+   tsc clean, vite build regenerated `web/static`).
+6. Windows: run `go run ./scripts/gen-syso` before `go build` to embed the
+   SHEYTAN-LA version resources.
 
-```yaml
-outputs:
-  version:      ${{ steps.identity.outputs.version }}
-  version_full: ${{ steps.identity.outputs.version_full }}
-  codename:     ${{ steps.identity.outputs.codename }}
-```
+## 7. Known limitations (documented honestly)
 
-but the identity step (step id `identity`) writes the keys that
-`release-version.mjs --env` emits — `APP_VERSION`, `APP_VERSION_FULL`,
-`APP_CODENAME` — to `$GITHUB_OUTPUT`. GitHub Actions job outputs are
-key-exact: `steps.identity.outputs.version` does not exist, so all three
-audit outputs resolved to the empty string. Every downstream job then
-received `APP_VERSION=` / `APP_VERSION_FULL=` / `APP_CODENAME=`, and the
-metadata greps (`grep -F "AppVersion  = \"$APP_VERSION\""` etc.) failed
-against empty patterns.
-
-**Exact fix:**
-
-1. The audit job's `outputs:` now map the EXACT keys the identity step
-   writes:
-
-   ```yaml
-   outputs:
-     version:      ${{ steps.identity.outputs.APP_VERSION }}
-     version_full: ${{ steps.identity.outputs.APP_VERSION_FULL }}
-     codename:     ${{ steps.identity.outputs.APP_CODENAME }}
-   ```
-
-2. An early failure was added inside the identity step: after the parse
-   loop, if any of `APP_VERSION`, `APP_VERSION_FULL`, `APP_CODENAME` is
-   empty, the step emits a `::error::` annotation ("Release identity did
-   not resolve…") and exits 1 — BEFORE any expensive build job starts.
-   An unresolved identity is now a loud, immediate audit failure instead
-   of a cryptic downstream metadata mismatch.
-
-3. No hardcoded release version was reintroduced. `package.json` remains
-   the single version source, and the complete flow is exactly:
-
-   ```text
-   package.json
-       ↓
-   release-version.mjs --env
-       ↓
-   identity step outputs (APP_*)
-       ↓
-   audit job outputs (version / version_full / codename)
-       ↓
-   needs.audit.outputs.*
-       ↓
-   Linux / Windows environment
-   ```
-
-## 7. Automated checks ACTUALLY executed (environment: Linux x64 sandbox, Go 1.26.0, Node v24.19.0)
-
-| Check | Command | Result |
-|---|---|---|
-| Release metadata consistency | `node scripts/release-version.mjs --check` | PASS — `package.json` 1.1.9 → config.go / build/config.yml / SIGNATURE / workflow marker all consistent |
-| Release identity emission | `node scripts/release-version.mjs --env` | PASS — prints `APP_VERSION=1.1.9`, `APP_VERSION_FULL=1.1.9`, `APP_CODENAME=Zeta` |
-| TypeScript | `npm run typecheck` | PASS — `tsc --noEmit`, no errors |
-| Lint | `npm run lint` | PASS — oxlint: 0 warnings, 0 errors (25 files, 96 rules) |
-| Frontend build | `npm run build` | PASS — `tsc -b && vite build && sync:web`; embedded `web/static` regenerated |
-| Go vet | `go vet ./...` (via `go vet` on all first-party packages) | PASS for every first-party package. The only failures are the third-party Wails shell packages (`github.com/wailsapp/wails/v3/internal/...`) whose CGO type-check requires the GTK4/WebKitGTK system libraries; CI installs `libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev` before vet/build — see Known limitations |
-| Go test | `go test -tags headless ./...` | PASS — exit 0, all 34 test packages green (the `headless` tag excludes only the GTK desktop window shell, which is not part of the tested surface and is unchanged by v1.1.9) |
-| Native C++ tests | cmake/ctest path unavailable in sandbox; Makefile build + direct test binaries | 11 of 12 test binaries PASS (test_engine "all checks passed", test_forward, test_generate, test_protocol, test_gguf, test_model, test_sampler, test_scheduler, test_tensor, test_tokenizer, test_kv_cache). `test_host` could not complete in this sandbox (hangs in the slow-fixture generation phase; partial run showed host-load/generate frame assertions failing) — `native/engine` is bit-identical to v1.1.8, so this is a sandbox/timing limitation, NOT a v1.1.9 regression. CI's `ctest` run on ubuntu-24.04 remains the authoritative path |
-
-## 8. Known limitations
-
-- **No Windows runtime acceptance was performed** (no Windows machine in
-  scope). The Windows-facing surfaces changed in this release are the
-  same files as the Linux-facing ones (shared React frontend, workflow
-  YAML); the Windows job's verification steps are exactly the greps the
-  CI fix repairs.
-- **Go vet on the Wails shell packages requires GTK system libraries**
-  that this Linux sandbox cannot install (no root). CI installs them
-  explicitly. All first-party packages vet clean.
-- **`test_host` (native engine) could not complete in this sandbox** —
-  it exercises the slow generation fixture and hangs under the sandbox's
-  resource limits; the code is byte-identical to v1.1.8 for everything
-  under `native/engine/`.
-- **No manual runtime acceptance phase was run.** Verification is the
-  automated suite in section 7 only, consistent with the release brief.
-- The model card "Tools" row derives from `chatTemplate` — the honest
-  prerequisite signal the backend reports. A dedicated tool-capability
-  field does not exist in `/api/models`; when the backend adds one, the
-  card should consume it instead of the template heuristic.
-- "Remove" is still deliberately absent from the model picker — no
-  model-deletion API exists (the models folder is user-managed).
-
-## 9. ZIP / package identity
-
-- Package file: `SHEYTAN-Local-Agent-v1.1.9-UPDATE.zip`
-- Base state: `main @ 63c88dd8b265bb5ca164c880954e2b1aab87f545` (v1.1.8)
-- Resulting version: `1.1.9` (codename Zeta) — `package.json` is the
-  single version source; `internal/config/config.go`, `build/config.yml`
-  and `SIGNATURE` are repaired by `scripts/release-version.mjs`.
-- The package contains `UPDATE.md` (this file),
-  `REPLACEMENT-MANIFEST.txt` (the per-file change map) and
-  `REPLACEMENT-SHA256.txt` (SHA-256 of every packaged file), plus every
-  changed source/configuration/documentation file listed in sections
-  1–4. The repository root also carries a byte-identical copy of the
-  ZIP for immediate commit.
-- Apply order: replace the listed DELETE / REPLACE / MODIFY / ADD files
-  over a clean checkout of the base commit, then run the section 7
-  checks (`release-version.mjs --check`, `npm run typecheck`, `npm run
-  lint`, `npm run build`, `go test ./...`, `go vet ./...`).
+- **No Authenticode signature.** No certificate is configured; the
+  installer verification step REPORTS signature status and the health view
+  reports "code signature: none (unsigned developer build)". Nothing in
+  the product claims to be signed. CI is structured so signing credentials
+  can be added later through GitHub Secrets without workflow surgery.
+- **MSIX/AppInstaller is NOT produced.** The installer strategy is NSIS
+  (primary) + portable ZIP (advanced). MSIX remains a possible future path
+  and is claimed nowhere.
+- **Firewall rules are Windows-only and created on explicit request only.**
+  The engine binds loopback by default, which Windows Firewall does not
+  filter — the default posture creates NO rule. The netsh argument vectors
+  are unit-locked; apply/remove/status return honest
+  `ErrUnsupportedPlatform` on other systems.
+- **CI was not triggered from the authoring environment** (no push access);
+  the exact gate set shipped in this package was executed locally and is
+  listed in section 6. The workflow changes are YAML-validated and follow
+  the job-graph contracts the v1.1.9 run established.
+- **Vision "ready" requires a real boot.** Pre-boot states (supported /
+  projector-found / …) describe evidence, not a running multimodal engine;
+  only the engine's verified startup with the projector promotes the state
+  to ready.

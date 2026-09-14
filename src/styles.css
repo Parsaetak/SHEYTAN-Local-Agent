@@ -3156,3 +3156,642 @@ body::before {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ==========================================================================
+   v1.2.0 — SHEYTAN-LA product surfaces: vision states, chat markdown,
+   composer image support, phase-grouped activity, posture/profile cards,
+   Environment Centre, health checks, update surface.
+   ========================================================================== */
+
+/* --- Vision state chips & values ------------------------------------- */
+.vision-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 4px 10px;
+
+  border: 1px solid var(--border);
+  border-radius: 999px;
+
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.vision-chip-symbol {
+  font-weight: 700;
+}
+
+.vision-chip.tone-good {
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+  color: var(--green);
+}
+
+.vision-chip.tone-warn {
+  border-color: color-mix(in srgb, var(--yellow) 45%, transparent);
+  color: var(--yellow);
+}
+
+.vision-chip.tone-bad {
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+  color: var(--red-hot);
+}
+
+.vision-value.tone-good {
+  color: var(--green);
+}
+
+.vision-value.tone-warn {
+  color: var(--yellow);
+}
+
+.vision-value.tone-bad {
+  color: var(--red-hot);
+}
+
+/* --- Markdown message content ---------------------------------------- */
+.message-markdown {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.message-markdown p {
+  margin: 0;
+}
+
+.message-markdown ul,
+.message-markdown ol {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+
+.message-markdown table {
+  width: 100%;
+
+  border-collapse: collapse;
+
+  font-size: 12.5px;
+}
+
+.message-markdown th,
+.message-markdown td {
+  padding: 6px 8px;
+
+  border: 1px solid var(--border);
+}
+
+.message-markdown th {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.message-markdown blockquote {
+  margin: 4px 0;
+
+  padding: 2px 12px;
+
+  border-left: 2px solid var(--accent);
+  color: var(--text-secondary);
+}
+
+.message-markdown a {
+  color: var(--blue);
+}
+
+.message-markdown :not(pre) > code {
+  padding: 1.5px 5px;
+
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+/* --- Code blocks ------------------------------------------------------ */
+.code-block {
+  overflow: hidden;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #0a0b10;
+}
+
+.code-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 5px 10px;
+
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.code-block-lang {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.code-block pre code {
+  background: transparent;
+  padding: 0;
+}
+
+/* highlight.js token colors (scoped, dark theme) */
+.code-block .hljs-keyword,
+.code-block .hljs-selector-tag,
+.code-block .hljs-literal,
+.code-block .hljs-section {
+  color: #ff7b72;
+}
+
+.code-block .hljs-string,
+.code-block .hljs-attr,
+.code-block .hljs-selector-attr {
+  color: #a5d6ff;
+}
+
+.code-block .hljs-title,
+.code-block .hljs-name,
+.code-block .hljs-title.function_ {
+  color: #d2a8ff;
+}
+
+.code-block .hljs-number,
+.code-block .hljs-built_in {
+  color: #79c0ff;
+}
+
+.code-block .hljs-comment,
+.code-block .hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.code-block .hljs-type,
+.code-block .hljs-class .hljs-title {
+  color: #ffa657;
+}
+
+/* --- Message meta: copy button, feedback alignment --------------------- */
+.message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+
+  margin-top: 6px;
+}
+
+.copy-button {
+  padding: 2px 8px;
+
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+
+  opacity: 0;
+  transition: opacity var(--dur-2, 120ms) ease, color var(--dur-2, 120ms) ease;
+}
+
+.message-row:hover .copy-button,
+.copy-button:focus-visible {
+  opacity: 1;
+}
+
+.copy-button:hover {
+  color: var(--text-primary);
+}
+
+/* --- Inline images ----------------------------------------------------- */
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  margin-top: 8px;
+}
+
+.message-image {
+  max-width: min(320px, 100%);
+  max-height: 240px;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+
+  object-fit: contain;
+}
+
+.attachment-chip-thumb {
+  width: 26px;
+  height: 26px;
+
+  border-radius: 6px;
+
+  object-fit: cover;
+}
+
+/* --- Jump to latest ---------------------------------------------------- */
+.conversation-panel {
+  position: relative;
+}
+
+.jump-to-latest {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+
+  padding: 6px 14px;
+
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-solid);
+
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.jump-to-latest:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong, var(--accent));
+}
+
+/* --- Composer: drag/drop + vision hint --------------------------------- */
+.composer {
+  position: relative;
+}
+
+.composer.drag-active {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -6px;
+  border-radius: var(--radius);
+}
+
+.composer-drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--panel-solid) 82%, transparent);
+
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+
+  pointer-events: none;
+}
+
+.composer-vision-hint {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+
+  border: 1px solid color-mix(in srgb, var(--yellow) 40%, transparent);
+  border-radius: 8px;
+
+  color: var(--yellow);
+  font-size: 11.5px;
+}
+
+/* --- Activity phases (progressive disclosure) --------------------------- */
+.activity-phase {
+  margin-bottom: 8px;
+  overflow: hidden;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.activity-phase > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 7px 10px;
+
+  background: rgba(255, 255, 255, 0.02);
+
+  cursor: pointer;
+  list-style: none;
+}
+
+.activity-phase > summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-phase-title {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.activity-phase-status {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.activity-phase.phase-failed {
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+
+.activity-phase.phase-failed .activity-phase-status {
+  color: var(--red-hot);
+}
+
+.activity-item.activity-item-failed .activity-marker span {
+  color: var(--red-hot);
+}
+
+.activity-item .activity-marker span {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.panel-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --- Level switch (Simple / Performance / Advanced) --------------------- */
+.level-switch {
+  display: inline-flex;
+  gap: 2px;
+
+  margin-bottom: 14px;
+  padding: 3px;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.level-switch-button {
+  padding: 6px 16px;
+
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.level-switch-button:hover {
+  color: var(--text-primary);
+}
+
+.level-switch-button.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-primary);
+}
+
+/* --- Posture & profile cards -------------------------------------------- */
+.posture-grid,
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+
+  margin-bottom: 12px;
+}
+
+.posture-card,
+.profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  padding: 12px 14px;
+
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.015);
+
+  color: var(--text-secondary);
+  text-align: left;
+
+  transition: border-color var(--dur-2, 120ms) ease, transform var(--dur-2, 120ms) ease;
+}
+
+.posture-card strong,
+.profile-card strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.posture-card span,
+.profile-card span {
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.posture-card:hover,
+.profile-card:hover {
+  border-color: var(--border-strong, var(--accent));
+}
+
+.posture-card.active,
+.profile-card.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.posture-card:disabled,
+.profile-card:disabled {
+  opacity: 0.55;
+}
+
+/* --- Environment Centre -------------------------------------------------- */
+.system-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.env-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+
+  margin: 10px 0;
+}
+
+.env-reasons {
+  margin: 8px 0;
+}
+
+.env-reasons > summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.env-reasons ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.env-reasons li + li {
+  margin-top: 4px;
+}
+
+.env-loading {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+/* --- Health checks -------------------------------------------------------- */
+.health-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  margin: 10px 0;
+}
+
+.health-check {
+  overflow: hidden;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.health-check > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 8px 12px;
+
+  cursor: pointer;
+  list-style: none;
+}
+
+.health-check > summary::-webkit-details-marker {
+  display: none;
+}
+
+.health-check-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.health-check-symbol {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+
+  border-radius: 6px;
+
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.health-check-state {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.health-check.state-ok {
+  border-color: color-mix(in srgb, var(--green) 26%, transparent);
+}
+
+.health-check.state-warn {
+  border-color: color-mix(in srgb, var(--yellow) 30%, transparent);
+}
+
+.health-check.state-fail {
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+
+.tone-good {
+  color: var(--green);
+}
+
+.tone-warn {
+  color: var(--yellow);
+}
+
+.tone-bad {
+  color: var(--red-hot);
+}
+
+.tone-neutral {
+  color: var(--text-muted);
+}
+
+.health-check-evidence {
+  margin: 0;
+  padding: 0 12px 10px;
+
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* --- Picker onboarding ------------------------------------------------- */
+.model-picker-onboarding {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+
+  margin-bottom: 14px;
+  padding: 12px 16px;
+
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.model-picker-onboarding > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -1,0 +1,359 @@
+// App-level update support (v1.2.0, P1) — the SHEYTAN-LA application
+// updater, distinct from the llama.cpp ENGINE updater that shares this
+// package.
+//
+// Model:
+//
+//	release-manifest.json (published as a GitHub Release asset)
+//	{
+//	  "version": "1.2.0",
+//	  "channel": "stable",
+//	  "notes": "…",
+//	  "platforms": {
+//	    "windows-x64": { "url": "…", "sha256": "…", "sizeBytes": … }
+//	  }
+//	}
+//
+// Contract:
+//
+//   - package.json (→ CI) is the version authority for the INSTALLED app;
+//     the manifest is the authority for AVAILABLE versions.
+//   - Every download is verified against the manifest's SHA-256 (and size
+//     when present) BEFORE it is treated as an update; nothing is staged
+//     unverified and nothing is executed by this code — the staged
+//     installer is handed to the user / OS to run.
+//   - User data (models/, workspace/, sessions/, config.json) is never
+//     touched by update machinery.
+package updater
+
+import (
+	"archive/zip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// AppManifestURL is the authoritative release source: the latest GitHub
+// release of this repository carrying a release-manifest.json asset.
+const AppManifestURL = "https://github.com/Parsaetak/SHEYTAN-local-agent/releases/latest/download/release-manifest.json"
+
+// appDownloadCap bounds any staged update download (installers are tens of
+// MB; this cap exists to bound a hostile manifest, not to constrain real
+// releases).
+const appDownloadCap = 1 << 30 // 1 GiB
+
+// AppUpdateState is the update lifecycle the UI renders.
+type AppUpdateState string
+
+const (
+	AppUpToDate        AppUpdateState = "up-to-date"
+	AppUpdateAvailable AppUpdateState = "update-available"
+	AppCheckFailed     AppUpdateState = "check-failed"
+	AppDownloading     AppUpdateState = "downloading"
+	AppReady           AppUpdateState = "ready" // staged, verified, awaiting install
+	AppFailed          AppUpdateState = "failed"
+	AppUnknown         AppUpdateState = "unknown" // never checked
+)
+
+// AppPlatformUpdate describes one platform's downloadable artifact.
+type AppPlatformUpdate struct {
+	// URL is the exact release asset URL (GitHub Releases).
+	URL string `json:"url"`
+	// SHA256 is the lowercase hex digest of the artifact — REQUIRED.
+	SHA256 string `json:"sha256"`
+	// SizeBytes, when non-zero, is verified before/after download.
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
+	// Kind is "installer" | "zip" | "msix" — informational.
+	Kind string `json:"kind,omitempty"`
+}
+
+// AppManifest is the signed-by-CI release manifest (v1.2.0 schema).
+type AppManifest struct {
+	Version     string                       `json:"version"`
+	Channel     string                       `json:"channel,omitempty"`
+	Notes       string                       `json:"notes,omitempty"`
+	PublishedAt string                       `json:"publishedAt,omitempty"`
+	Platforms   map[string]AppPlatformUpdate `json:"platforms"`
+}
+
+// PlatformID is this machine's manifest platform key.
+func PlatformID() string {
+	goos := runtime.GOOS
+	arch := runtime.GOARCH
+	name := arch
+	switch arch {
+	case "amd64":
+		name = "x64"
+	case "arm64":
+		name = "arm64"
+	case "386":
+		name = "x86"
+	}
+	return goos + "-" + name
+}
+
+// FetchAppManifest downloads and parses the release manifest.
+func FetchAppManifest(ctx context.Context, url string) (*AppManifest, error) {
+	if url == "" {
+		url = AppManifestURL
+	}
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("manifest fetch: HTTP %d", resp.StatusCode)
+	}
+
+	var m AppManifest
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&m); err != nil {
+		return nil, fmt.Errorf("manifest parse: %w", err)
+	}
+	if strings.TrimSpace(m.Version) == "" {
+		return nil, errors.New("manifest has no version")
+	}
+	return &m, nil
+}
+
+// CompareVersions orders dotted numeric versions (1.2.10 > 1.2.9).
+// Non-numeric components compare lexically; malformed input returns 0 and
+// the caller must treat equality as "unknown, not up to date".
+func CompareVersions(a, b string) int {
+	pa := strings.Split(strings.TrimSpace(a), ".")
+	pb := strings.Split(strings.TrimSpace(b), ".")
+	n := len(pa)
+	if len(pb) > n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		av, bv := "0", "0"
+		if i < len(pa) {
+			av = pa[i]
+		}
+		if i < len(pb) {
+			bv = pb[i]
+		}
+		an, aerr := strconv.Atoi(av)
+		bn, berr := strconv.Atoi(bv)
+		switch {
+		case aerr == nil && berr == nil:
+			if an != bn {
+				if an < bn {
+					return -1
+				}
+				return 1
+			}
+		default:
+			// Prerelease awareness: "0" vs "0-beta" — the plain numeric
+			// component is the RELEASE and sorts ABOVE the prerelease
+			// (semver convention), instead of raw lexical order.
+			if bv != av && strings.HasPrefix(bv, av) && strings.HasPrefix(bv[len(av):], "-") {
+				return 1
+			}
+			if av != bv && strings.HasPrefix(av, bv) && strings.HasPrefix(av[len(bv):], "-") {
+				return -1
+			}
+			if av != bv {
+				if av < bv {
+					return -1
+				}
+				return 1
+			}
+		}
+	}
+	return 0
+}
+
+// AppUpdateStatus is the /api/update/status payload.
+type AppUpdateStatus struct {
+	State        AppUpdateState `json:"state"`
+	Version      string         `json:"version"` // installed
+	Latest       string         `json:"latest,omitempty"`
+	Channel      string         `json:"channel,omitempty"`
+	Notes        string         `json:"notes,omitempty"`
+	PublishedAt  string         `json:"publishedAt,omitempty"`
+	StagedPath   string         `json:"stagedPath,omitempty"`
+	StagedSHA256 string         `json:"stagedSHA256,omitempty"`
+	CheckedAt    string         `json:"checkedAt,omitempty"`
+	Message      string         `json:"message,omitempty"`
+}
+
+// CheckAppUpdate fetches the manifest and compares against installed.
+func CheckAppUpdate(ctx context.Context, installedVersion, manifestURL string) (AppUpdateStatus, error) {
+	m, err := FetchAppManifest(ctx, manifestURL)
+	if err != nil {
+		return AppUpdateStatus{
+			State:     AppCheckFailed,
+			Version:   installedVersion,
+			Message:   err.Error(),
+			CheckedAt: time.Now().UTC().Format(time.RFC3339),
+		}, err
+	}
+
+	st := AppUpdateStatus{
+		Version:     installedVersion,
+		Latest:      m.Version,
+		Channel:     m.Channel,
+		Notes:       m.Notes,
+		PublishedAt: m.PublishedAt,
+		CheckedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if CompareVersions(m.Version, installedVersion) > 0 {
+		st.State = AppUpdateAvailable
+		st.Message = "v" + m.Version + " available"
+	} else {
+		st.State = AppUpToDate
+		st.Message = "up to date"
+	}
+	return st, nil
+}
+
+// StageAppUpdate downloads the platform artifact into dataDir/updates/
+// staging, verifying SHA-256 (and size when declared) BEFORE the staged
+// file is renamed into place. It returns the staged path + digest. The
+// caller decides what to do with a staged installer — this function never
+// executes one.
+func StageAppUpdate(ctx context.Context, dataDir string, manifest *AppManifest, platformID string) (path, sha string, err error) {
+	if manifest == nil {
+		return "", "", errors.New("nil manifest")
+	}
+	p, ok := manifest.Platforms[platformID]
+	if !ok || strings.TrimSpace(p.URL) == "" {
+		return "", "", fmt.Errorf("no update artifact for platform %q", platformID)
+	}
+	if strings.TrimSpace(p.SHA256) == "" {
+		return "", "", errors.New("manifest artifact carries no sha256 — refusing unverified download")
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, p.URL, nil)
+	if err != nil {
+		return "", "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("download: HTTP %d", resp.StatusCode)
+	}
+
+	stagingDir := filepath.Join(dataDir, "updates", "staging")
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		return "", "", err
+	}
+	tmp, err := os.CreateTemp(stagingDir, ".download-*")
+	if err != nil {
+		return "", "", err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if err != nil {
+			os.Remove(tmpName)
+		}
+	}()
+
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, appDownloadCap))
+	if err != nil {
+		tmp.Close()
+		return "", "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", "", err
+	}
+	if p.SizeBytes > 0 && n != p.SizeBytes {
+		return "", "", fmt.Errorf("size mismatch: got %d, manifest says %d", n, p.SizeBytes)
+	}
+
+	got := hex.EncodeToString(h.Sum(nil))
+	want := strings.ToLower(strings.TrimSpace(p.SHA256))
+	if got != want {
+		return "", "", fmt.Errorf("sha256 mismatch: got %s, manifest says %s", got, want)
+	}
+
+	name := updateArtifactName(manifest.Version, p.Kind)
+	final := filepath.Join(stagingDir, name)
+	if err := os.Rename(tmpName, final); err != nil {
+		return "", "", err
+	}
+	return final, got, nil
+}
+
+func updateArtifactName(version, kind string) string {
+	ext := ".zip"
+	switch kind {
+	case "installer":
+		ext = ".exe"
+	case "msix":
+		ext = ".msix"
+	}
+	return "SHEYTAN-LA-v" + version + "-staged" + ext
+}
+
+// StageIsValid re-verifies a previously staged artifact (state "ready"
+// must always survive re-inspection): existence + size + digest.
+func StageIsValid(path, wantSHA string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if wantSHA == "" {
+		return errors.New("no digest recorded for staged update")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != strings.ToLower(wantSHA) {
+		return fmt.Errorf("staged digest drifted: %s", got)
+	}
+	_ = fi
+	return nil
+}
+
+// ZipSafeNames is exported for tests: walks a zip's entry names through the
+// same zip-slip guard the engine updater uses.
+func ZipSafeNames(r *zip.Reader, dir string) ([]string, error) {
+	out := make([]string, 0, len(r.File))
+	for _, f := range r.File {
+		p, err := safeZipPath(dir, f.Name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}

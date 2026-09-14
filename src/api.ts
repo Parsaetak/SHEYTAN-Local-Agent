@@ -70,6 +70,169 @@ export interface Preset {
   num_ctx?: number;
 }
 
+// v1.2.0 — Environment Centre / health / recommendation / update payloads.
+// Every field below is backend-measured or backend-derived; the UI renders
+// unknown values as "—" instead of inventing them.
+
+export interface HardwareCPU {
+  name: string;
+  physicalCores?: number;
+  logicalCores?: number;
+  frequencyMHz?: number;
+}
+
+export interface HardwareRAM {
+  totalBytes: number;
+  freeBytes?: number;
+  availableBytes?: number;
+}
+
+export interface HardwareStorage {
+  totalBytes?: number;
+  freeBytes?: number;
+  path?: string;
+}
+
+export interface HardwareGPU {
+  vendor?: string;
+  name?: string;
+  vramBytes?: number;
+  driverVer?: string;
+}
+
+export interface HardwareBackend {
+  engineBinary?: string;
+  vulkan: boolean;
+  nativeEnabled: boolean;
+  engineTag?: string;
+}
+
+export interface EnvironmentPayload {
+  device: {
+    os: string;
+    arch: string;
+    cpu: HardwareCPU;
+    ram: HardwareRAM;
+    storage: HardwareStorage;
+    gpus: HardwareGPU[];
+    backend: HardwareBackend;
+    identity: {
+      product: string;
+      shortName: string;
+      appUserModelId?: string;
+      platform: string;
+    };
+  };
+  runtime: {
+    engineState: string;
+    enginePhase?: string;
+    provider: string;
+    backend: string;
+    model?: string;
+    context?: number;
+    verified: boolean;
+    vision: {
+      state: string;
+      reason?: string;
+      active: boolean;
+      projector?: string;
+      bytes?: number;
+    };
+    engineTag?: string;
+  };
+  recommendation: {
+    task: string;
+    applied: boolean;
+    context?: number;
+    threads?: number;
+    gpuLayers?: number;
+    summary: string;
+    reasons?: string[];
+  };
+  generatedAt: string;
+}
+
+export interface HealthCheck {
+  id: string;
+  label: string;
+  state: "ok" | "warn" | "fail" | "unknown" | "na";
+  evidence: string;
+}
+
+export interface HealthPayload {
+  overall: "ok" | "warn" | "fail";
+  checks: HealthCheck[];
+  generatedAt: string;
+}
+
+export interface TaskProfileInfo {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface RuntimeRecommendation {
+  task: string;
+  context: number;
+  threads: number;
+  threadsBatch: number;
+  gpuLayers: number;
+  ubatchSize: number;
+  flashAttention: boolean;
+  kvCacheQuant: string;
+  gpuAutoOffload: boolean;
+  mmprojOffload: string;
+  projectorDevice: string;
+  cacheReuse?: number;
+  predicted: {
+    totalBytes?: number;
+    kvBytes?: number;
+    class?: string;
+    speed?: string;
+    vramBytes?: number;
+  };
+  reasons: string[];
+  notes?: string[];
+}
+
+export interface RecommendationPayload {
+  task: string;
+  current: {
+    model?: string;
+    context?: number;
+    threads?: number;
+    ubatchSize?: number;
+    gpuLayers?: number;
+    gpuAutoOffload: boolean;
+    flashAttention: boolean;
+    kvCacheQuant?: string;
+    mmprojOffload?: string;
+    runtimeProfile?: string;
+  };
+  recommended?: RuntimeRecommendation;
+  available: TaskProfileInfo[];
+}
+
+export interface AppUpdateStatus {
+  state:
+    | "up-to-date"
+    | "update-available"
+    | "check-failed"
+    | "downloading"
+    | "ready"
+    | "failed"
+    | "unknown";
+  version: string;
+  latest?: string;
+  channel?: string;
+  notes?: string;
+  publishedAt?: string;
+  stagedPath?: string;
+  stagedSHA256?: string;
+  checkedAt?: string;
+  message?: string;
+}
+
 export interface Model {
   id: string;
   name: string;
@@ -97,6 +260,16 @@ export interface Model {
   chatTemplate?: boolean;
   nativeReason?: string;
   estimatedVRAMBytes?: number;
+  // v1.2.0 vision readiness state machine + projector evidence. The UI
+  // renders exactly what the backend derived from GGUF architecture,
+  // projector discovery and (when serving) the verified engine boot —
+  // never from filenames alone.
+  visionState?: string;
+  visionReason?: string;
+  mmprojPath?: string;
+  mmprojName?: string;
+  mmprojSizeBytes?: number;
+  mmprojVerified?: boolean;
 }
 
 export interface ModelsResponse {
@@ -205,6 +378,11 @@ export interface RuntimeConfig {
 
   visionEnabled: boolean;
   visionMmproj: string;
+  // v1.2.0: projector GPU-offload posture (auto | on | off) and the
+  // active task-aware runtime profile id (chat | coding | research |
+  // vision | agent | low-power | maximum).
+  visionMmprojOffload: string;
+  runtimeProfile: string;
 
   maxWorkspaceMb: number;
   maxSessionsKept: number;
@@ -452,6 +630,15 @@ export interface EngineSnapshot {
   verifiedModel?: string;
   verifiedContext?: number;
   degraded?: boolean;
+  // v1.2.0 runtime vision readiness block (loading | ready | degraded |
+  // failed | projector-found | projector-missing | supported |
+  // unsupported) with the evidence reason and measured projector size.
+  visionState?: string;
+  visionReason?: string;
+  visionProjector?: string;
+  visionProjectorName?: string;
+  visionProjectorBytes?: number;
+  visionActive?: boolean;
   logs?: string[];
   cacheStats?: {
     entries: number;
@@ -980,6 +1167,48 @@ export const api = {
   // SHEYTAN is local-first).
   netcheck(): Promise<NetDiagResult> {
     return request<NetDiagResult>("/netcheck", undefined, 20_000);
+  },
+
+  // v1.2.0: Environment Centre — the unified device/runtime/recommendation
+  // view over existing telemetry.
+  environment(): Promise<EnvironmentPayload> {
+    return request<EnvironmentPayload>("/environment", undefined, 20_000);
+  },
+
+  // v1.2.0: verified health — one check per subsystem WITH evidence.
+  health(): Promise<HealthPayload> {
+    return request<HealthPayload>("/health", undefined, 20_000);
+  },
+
+  // v1.2.0: evidence-based runtime recommendation for a model + task
+  // profile (Detected → Calculated → Recommended; applying stays explicit).
+  recommendation(model = "", task = ""): Promise<RecommendationPayload> {
+    const q = new URLSearchParams();
+    if (model) q.set("model", model);
+    if (task) q.set("task", task);
+    const qs = q.toString();
+    return request<RecommendationPayload>(
+      `/recommendation${qs ? `?${qs}` : ""}`,
+      undefined,
+      30_000,
+    );
+  },
+
+  // v1.2.0: application update surface (manifest-verified).
+  updateStatus(): Promise<AppUpdateStatus> {
+    return request<AppUpdateStatus>("/update/status");
+  },
+
+  updateCheck(): Promise<AppUpdateStatus> {
+    return request<AppUpdateStatus>("/update/check", { method: "POST" }, 60_000);
+  },
+
+  updateDownload(): Promise<AppUpdateStatus> {
+    return request<AppUpdateStatus>(
+      "/update/download",
+      { method: "POST" },
+      LONG_OPERATION_TIMEOUT_MS,
+    );
   },
 
   lab(): Promise<LabListResponse> {

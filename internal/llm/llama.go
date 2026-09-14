@@ -90,6 +90,15 @@ type LlamaServer struct {
         // Empty when the engine runs text-only.
         mmproj string
 
+        // visionState / visionReason carry the v1.2.0 vision readiness state
+        // machine for the RUNNING (or last) boot: loading → ready when the
+        // projector survives a verified boot, degraded after the bounded
+        // text-only retry, failed when an explicit override could not resolve
+        // or the boot failed outright. Between boots it holds the evidence-
+        // backed capability evaluation for the configured model. Guarded by mu.
+        visionState  vision.State
+        visionReason string
+
         // engineUpdateTried prevents repeated engine self-updates during one
         // application run.
         engineUpdateTried bool
@@ -478,6 +487,31 @@ func (s *LlamaServer) startLocked() error {
         s.mmproj = mmproj
         s.mu.Unlock()
 
+        // v1.2.0: seed the vision state machine from the pre-boot evidence
+        // evaluation (architecture + projector discovery + override check)
+        // BEFORE the engine starts, so the UI shows honest states at every
+        // point of the boot instead of guessing from filenames.
+        var modelArch string
+        if capsModel := ResolveModelCapabilities(cfg, modelPath); capsModel != nil {
+                modelArch = capsModel.Arch
+        }
+        eval := vision.EvaluateModel(cfg.ModelsDir, modelPath, cfg.VisionMMProj, modelArch)
+        if !cfg.VisionEnabled {
+                reason := eval.Reason
+                if reason == "" {
+                        reason = "vision disabled in settings"
+                } else {
+                        reason += " — vision disabled in settings"
+                }
+                s.setVision(eval.State, reason)
+        } else {
+                s.setVision(eval.State, eval.Reason)
+        }
+        if cfg.VisionEnabled && mmproj != "" {
+                s.setVision(vision.StateLoading,
+                        "projector "+filepath.Base(mmproj)+" paired — verifying with engine boot")
+        }
+
         visionRetryDone := false
 
         for {
@@ -571,6 +605,13 @@ func (s *LlamaServer) startLocked() error {
                                         s.startedAt = time.Now()
                                         s.mu.Unlock()
 
+                                        // v1.2.0: the projector survived a VERIFIED
+                                        // boot — the only honest path to ready.
+                                        if mmproj != "" {
+                                                s.setVision(vision.StateReady,
+                                                        "mmproj verified: engine serving with the paired projector "+filepath.Base(mmproj))
+                                        }
+
                                         s.setState(StateReady)
                                         return nil
                                 }
@@ -633,6 +674,13 @@ func (s *LlamaServer) startLocked() error {
                                         s.startedAt = time.Now()
                                         s.mu.Unlock()
 
+                                        // v1.2.0: verified boot WITH the projector
+                                        // — vision is genuinely ready.
+                                        if mmproj != "" {
+                                                s.setVision(vision.StateReady,
+                                                        "mmproj verified: engine serving with the paired projector "+filepath.Base(mmproj))
+                                        }
+
                                         s.setState(StateReady)
                                         return nil
                                 }
@@ -677,6 +725,12 @@ func (s *LlamaServer) startLocked() error {
                         s.mmproj = ""
                         s.mu.Unlock()
 
+                        // v1.2.0: the projector is REAL but the engine
+                        // rejected it with every launch profile — a degraded,
+                        // honestly-reported state, never a silent failure.
+                        s.setVision(vision.StateDegraded,
+                                "projector "+projectName+" failed with every launch profile; running text-only")
+
                         s.logf(
                                 "all profiles failed with the vision projector — retrying text-only",
                         )
@@ -689,6 +743,13 @@ func (s *LlamaServer) startLocked() error {
 
                         s.setState(StateStarting)
                         continue
+                }
+
+                // v1.2.0: terminal boot failure — keep the vision story
+                // honest about what died.
+                if state, _ := s.visionSnapshot(); state == vision.StateLoading {
+                        s.setVision(vision.StateFailed,
+                                "engine boot failed while loading the vision projector")
                 }
 
                 s.setState(StateFailed)
@@ -711,6 +772,82 @@ func (s *LlamaServer) ProjectorPath() string {
         defer s.mu.Unlock()
 
         return s.mmproj
+}
+
+// setVision records a vision state-machine transition (v1.2.0). Every
+// caller passes a reason grounded in real evidence: pairing, a verified
+// boot, projector rejection, or an unresolvable override.
+func (s *LlamaServer) setVision(state vision.State, reason string) {
+        s.mu.Lock()
+        s.visionState = state
+        s.visionReason = reason
+        s.mu.Unlock()
+}
+
+// visionSnapshot reads the current vision state under the lock.
+func (s *LlamaServer) visionSnapshot() (vision.State, string) {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        return s.visionState, s.visionReason
+}
+
+// VisionStatus is the runtime vision readiness surface consumed by
+// /api/engine (v1.2.0). Ready is only ever reported because the engine is
+// actually serving WITH the projector; the projector byte size is measured
+// from disk at snapshot time.
+type VisionStatus struct {
+        Active         bool         `json:"active"`
+        State          vision.State `json:"state"`
+        Reason         string       `json:"reason,omitempty"`
+        Projector      string       `json:"projector,omitempty"`
+        ProjectorName  string       `json:"projectorName,omitempty"`
+        ProjectorBytes int64        `json:"projectorBytes,omitempty"`
+}
+
+// VisionStatus returns the current vision readiness of the engine. Before
+// the first boot it reports the evidence-backed capability evaluation for
+// the configured model; during a boot it reports loading; after a verified
+// boot with the projector it reports ready.
+func (s *LlamaServer) VisionStatus() VisionStatus {
+        state, reason := s.visionSnapshot()
+
+        s.mu.Lock()
+        mmproj := s.mmproj
+        alive := aliveStates[s.state]
+        engineReady := s.state == StateReady || s.state == StateRunning ||
+                s.state == StateBusy
+        s.mu.Unlock()
+
+        if !state.Known() {
+                state = vision.StateSupported
+                reason = "no boot has evaluated vision yet"
+        }
+
+        // A projector in flight on a verified engine is READY — the engine
+        // state machine only reaches Ready after /health + model
+        // verification succeeded with that exact launch configuration.
+        if alive && mmproj != "" && state == vision.StateLoading && engineReady {
+                state = vision.StateReady
+                reason = "mmproj verified: engine serving with the paired projector " +
+                        filepath.Base(mmproj)
+        }
+
+        vs := VisionStatus{
+                Active: alive && mmproj != "",
+                State:  state,
+                Reason: reason,
+        }
+
+        if mmproj != "" {
+                vs.Projector = mmproj
+                vs.ProjectorName = filepath.Base(mmproj)
+                if fi, err := os.Stat(mmproj); err == nil {
+                        vs.ProjectorBytes = fi.Size()
+                }
+        }
+
+        return vs
 }
 
 // Pid returns the engine subprocess pid.
@@ -900,6 +1037,16 @@ func (s *LlamaServer) buildArgsWithCaps(
 
         if mmproj != "" {
                 base = append(base, "--mmproj", mmproj)
+
+                // v1.2.0: explicit projector offload posture. "off" appends
+                // --no-mmproj-offload (recent llama.cpp builds); "auto" and
+                // "on" add nothing — the engine default is to offload the
+                // projector when VRAM allows. An unsupported flag is caught
+                // by the capability adapter's verified repair path, so this
+                // never hard-codes an assumption about the engine build.
+                if cfg.VisionMMProjOffload == "off" {
+                        base = append(base, "--no-mmproj-offload")
+                }
         }
 
         if cfg.LLM.Mirostat > 0 {
@@ -1579,6 +1726,13 @@ func (s *LlamaServer) autoGPUOffload(cfg *config.Config) bool {
 }
 
 func (s *LlamaServer) hasVulkanBackend(cfg *config.Config) bool {
+        return VulkanAvailable(cfg)
+}
+
+// VulkanAvailable reports whether a Vulkan backend sits beside the engine
+// binary named by cfg (v1.2.0: shared with the hardware intelligence layer
+// so GPU-posture recommendations rest on the same evidence as launch).
+func VulkanAvailable(cfg *config.Config) bool {
         bin := cfg.LlamaBinPath
 
         if bin == "" {

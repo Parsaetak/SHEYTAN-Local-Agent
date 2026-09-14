@@ -1,6 +1,10 @@
 {
+  "_vision-Dw0T2tjy.js": {
+    "file": "assets/vision-Dw0T2tjy.js",
+    "name": "vision"
+  },
   "index.html": {
-    "file": "assets/index-DNeAa-xT.js",
+    "file": "assets/index-CTp-kOgC.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -10,23 +14,25 @@
       "src/AgentSidebar.tsx",
       "src/LabPanel.tsx",
       "src/ResearchPanel.tsx",
-      "src/SettingsPanel.tsx"
+      "src/SettingsPanel.tsx",
+      "src/SystemPanel.tsx"
     ],
     "css": [
-      "assets/index--nFue_yD.css"
+      "assets/index-DJQM74Q8.css"
     ]
   },
   "src/AgentBody.tsx": {
-    "file": "assets/AgentBody-NepkaVWP.js",
+    "file": "assets/AgentBody-CyMQd0oP.js",
     "name": "AgentBody",
     "src": "src/AgentBody.tsx",
     "isDynamicEntry": true,
     "imports": [
-      "index.html"
+      "index.html",
+      "_vision-Dw0T2tjy.js"
     ]
   },
   "src/AgentHeader.tsx": {
-    "file": "assets/AgentHeader-CjbPNa0Q.js",
+    "file": "assets/AgentHeader-Dezw4syJ.js",
     "name": "AgentHeader",
     "src": "src/AgentHeader.tsx",
     "isDynamicEntry": true,
@@ -35,7 +41,7 @@
     ]
   },
   "src/AgentSidebar.tsx": {
-    "file": "assets/AgentSidebar-CAXlKFQx.js",
+    "file": "assets/AgentSidebar-D2AIsqsa.js",
     "name": "AgentSidebar",
     "src": "src/AgentSidebar.tsx",
     "isDynamicEntry": true,
@@ -44,7 +50,7 @@
     ]
   },
   "src/LabPanel.tsx": {
-    "file": "assets/LabPanel-B5Xf1JtL.js",
+    "file": "assets/LabPanel-DNdaVwnC.js",
     "name": "LabPanel",
     "src": "src/LabPanel.tsx",
     "isDynamicEntry": true,
@@ -53,7 +59,7 @@
     ]
   },
   "src/ResearchPanel.tsx": {
-    "file": "assets/ResearchPanel-BK1_HHZQ.js",
+    "file": "assets/ResearchPanel-DVSjuNFM.js",
     "name": "ResearchPanel",
     "src": "src/ResearchPanel.tsx",
     "isDynamicEntry": true,
@@ -62,9 +68,19 @@
     ]
   },
   "src/SettingsPanel.tsx": {
-    "file": "assets/SettingsPanel-DGL5poUh.js",
+    "file": "assets/SettingsPanel-C5otSLaN.js",
     "name": "SettingsPanel",
     "src": "src/SettingsPanel.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "index.html",
+      "_vision-Dw0T2tjy.js"
+    ]
+  },
+  "src/SystemPanel.tsx": {
+    "file": "assets/SystemPanel-CzupHX9T.js",
+    "name": "SystemPanel",
+    "src": "src/SystemPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html"
