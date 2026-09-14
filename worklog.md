@@ -1940,3 +1940,23 @@ Work Log:
 
 Stage Summary:
 - v1.1.8 complete per the release brief; automated checks green; no architecture changes; native engine and all subsystems untouched.
+
+---
+Task ID: v1.1.9
+Agent: release-implementation
+Task: v1.1.9 — CI output fix, Chat/Agent separation completion, minimalist UI, model states, settings refinement, targeted optimisation, docs, ZIP delivery.
+
+Work Log:
+- CI run 34791882219 root cause: audit job outputs mapped steps.identity.outputs.version/version_full/codename while the identity step writes APP_VERSION/APP_VERSION_FULL/APP_CODENAME — needs.audit.outputs.* resolved empty. Fixed the mapping to the APP_* names and added a fail-fast ::error:: assertion when any identity value is empty (build-desktop.yml).
+- Version bump 1.1.8 → 1.1.9: package.json edited once; internal/config/config.go, build/config.yml, SIGNATURE repaired by scripts/release-version.mjs (sync mode), then --check verified.
+- Mode-aware navigation: workspace.ts WorkspaceLayer.modes + visibleWorkspaceLayers(); App.tsx filters nav (Chat hides Coding Lab) and falls back to the workspace when the restored hash points at hidden machinery; agent layer label "Workspace"; AgentSidebar eyebrow CHAT/AGENT.
+- Model chooser redesign (ModelPicker.tsx): explicit ModelState ready/loading/incompatible/available; aligned Context/RAM/Tools/Vision/Native fact grid; Tools derived only from chatTemplate; "—" for unknown; "Choose a model" empty state; still no Remove (no deletion API).
+- Settings: llama.cpp EngineCard moved Performance → Advanced (touchesEngine logic untouched).
+- Minimalist pass (styles.css): --border-soft token defined (was referenced but undeclared); body gradients + grid overlay removed; shadows softened; .model-card-facts collision fixed via .runtime-model-facts rename; topbar status text → dot+tooltip; session-ID row and engine detail line removed from runtime panel; sidebar footer trimmed.
+- Optimisation: PerfStrip skips /api/perf while document.hidden (+visibilitychange refresh); duplicated model <select> option builder unified in AgentBody.
+- Docs: README v1.1.9 section, agent.md v1.1.9 notes, ARCHITECTURE I.8d, UPDATE.md rewritten for v1.1.9.
+- Checks: release-version --check OK; typecheck OK; oxlint 0/0; npm run build OK (web/static regenerated); go test -tags headless ./... exit 0 (34 pkgs); go vet clean on first-party pkgs (Wails shell pkgs need GTK libs absent in sandbox); native C++: 11/12 test binaries pass (test_host hangs on slow fixture in sandbox; native/engine byte-identical to v1.1.8).
+- Packaged SHEYTAN-Local-Agent-v1.1.9-UPDATE.zip (UPDATE.md + REPLACEMENT-MANIFEST.txt + REPLACEMENT-SHA256.txt + all changed files) and copied a byte-identical copy to the repository root.
+
+Stage Summary:
+- v1.1.9 complete per the release brief; automated checks green with two documented environment exceptions (GTK-dependent vet of third-party wails packages; sandbox hang of the untouched test_host); no architecture changes; Chat/Agent separation completed at the navigation layer; model states made explicit; engine tuning relocated to Advanced.

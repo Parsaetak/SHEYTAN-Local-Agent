@@ -5,8 +5,8 @@ import {
   getWorkspaceHref,
   getWorkspaceLayer,
   parseWorkspaceHash,
+  visibleWorkspaceLayers,
   type WorkspaceView,
-  WORKSPACE_LAYERS,
 } from "./workspace";
 import { useRuntimeStore } from "./store";
 
@@ -40,6 +40,9 @@ function SidebarLayerLoading() {
 function App() {
   const appVersion = useRuntimeStore((state) => state.app?.appVersion ?? null);
   const connection = useRuntimeStore((state) => state.connection);
+  // v1.1.9: the navigation is mode-aware — Chat hides Agent machinery
+  // (Coding Lab) so the primary surface stays minimal.
+  const mode = useRuntimeStore((state) => state.mode);
 
   const [view, setView] = useState<WorkspaceView>(() => parseWorkspaceHash());
 
@@ -74,15 +77,26 @@ function App() {
     setView(nextView);
   }
 
-  const activeLayer = getWorkspaceLayer(view);
+  const layer = getWorkspaceLayer(view);
+
+  // v1.1.9: if the restored view belongs to machinery the current mode
+  // hides (e.g. Coding Lab while in Chat), fall back to the workspace.
+  const visibleLayers = visibleWorkspaceLayers(mode);
+  const viewVisible = visibleLayers.some((candidate) => candidate.id === view);
+  const activeLayer = viewVisible
+    ? layer
+    : (visibleLayers[0] ?? getWorkspaceLayer("agent"));
+  const effectiveView = viewVisible ? view : activeLayer.id;
 
   // v1.1.6 §13: a consistent SHEYTAN identity on every workspace layer
   // (window title / taskbar). "SHEYTAN", "SHEYTAN — Settings", … — never
   // generic shell or localhost strings.
   useEffect(() => {
     document.title =
-      view === "agent" ? "SHEYTAN" : `SHEYTAN — ${activeLayer.label}`;
-  }, [view, activeLayer.label]);
+      effectiveView === "agent"
+        ? "SHEYTAN"
+        : `SHEYTAN — ${activeLayer.label}`;
+  }, [effectiveView, activeLayer.label]);
 
   const statusLabel =
     connection === "connected"
@@ -105,36 +119,35 @@ function App() {
           </div>
         </div>
 
-        <div className="topbar-status">
+        <div className="topbar-status" title={statusLabel}>
           <span
             className={`status-dot ${
               connection === "connected" ? "ready" : ""
             }`}
           />
-
-          <span>{statusLabel}</span>
         </div>
 
         <div className="topbar-meta">
-          <span>{appVersion ?? "v1.1.8"}</span>
+          <span>{appVersion ?? "v1.1.9"}</span>
         </div>
       </header>
 
       <div className="app-body">
         <aside className="sidebar">
-          {/* v1.1.8: navigation de-chromed — one label per item, no
-              repeated headings, no per-item descriptions. */}
+          {/* v1.1.9: mode-aware navigation — Chat surfaces Workspace,
+              Research, and Settings; Agent adds Coding Lab. One label per
+              item, no repeated headings, no per-item descriptions. */}
           <nav className="app-navigation m-stagger" aria-label="Workspace">
-            {WORKSPACE_LAYERS.map((layer, index) => (
+            {visibleLayers.map((layer, index) => (
               <button
                 type="button"
                 key={layer.id}
                 className={`app-navigation-item m-press ${
-                  view === layer.id ? "active" : ""
+                  effectiveView === layer.id ? "active" : ""
                 }`}
                 style={{ "--stagger-index": index } as CSSProperties}
                 onClick={() => changeView(layer.id)}
-                aria-pressed={view === layer.id}
+                aria-pressed={effectiveView === layer.id}
               >
                 <span className="app-navigation-icon">{layer.icon}</span>
 
@@ -145,32 +158,23 @@ function App() {
             ))}
           </nav>
 
-          {view === "agent" ? (
+          {effectiveView === "agent" ? (
             <Suspense fallback={<SidebarLayerLoading />}>
               <AgentSidebar />
             </Suspense>
-          ) : (
-            <div className="sidebar-layer-info">
-              <span className="eyebrow">LAYER</span>
-              <strong>{activeLayer.title}</strong>
-              <span>
-                Only the active workspace loads its domain UI and data.
-              </span>
-            </div>
-          )}
+          ) : null}
 
           <div className="sidebar-footer">
-            <span>SHEYTAN™ Local-Agent</span>
-            <span>Native runtime · offline</span>
+            <span>SHEYTAN Local-Agent</span>
           </div>
         </aside>
 
-        <main className="workspace" key={view}>
+        <main className="workspace" key={effectiveView}>
           <section className="workspace-header view-transition-header">
             <div>
               <span className="eyebrow">{activeLayer.eyebrow}</span>
 
-              {view === "agent" ? (
+              {effectiveView === "agent" ? (
                 <Suspense fallback={<h1>{activeLayer.title}</h1>}>
                   <AgentHeader />
                 </Suspense>
@@ -181,15 +185,15 @@ function App() {
           </section>
 
           <div className="view-transition">
-            {view === "agent" ? (
+            {effectiveView === "agent" ? (
               <Suspense fallback={<PanelLoading label="Agent" />}>
                 <AgentBody />
               </Suspense>
-            ) : view === "lab" ? (
+            ) : effectiveView === "lab" ? (
               <Suspense fallback={<PanelLoading label="Coding Lab" />}>
                 <LabPanel />
               </Suspense>
-            ) : view === "research" ? (
+            ) : effectiveView === "research" ? (
               <Suspense fallback={<PanelLoading label="Research" />}>
                 <ResearchPanel />
               </Suspense>

@@ -1163,10 +1163,21 @@ function SettingsPanel() {
           </>
         ) : null}
 
-        {/* v1.1.8: Advanced collects host/diagnostic detail that does not
-            need to sit in the middle of everyday settings. */}
+        {/* v1.1.9: Advanced collects host/diagnostic detail and highly
+            technical engine options that do not need to sit in the
+            middle of everyday settings. Nothing was removed — the
+            llama.cpp engine card moved here from Performance so the
+            performance tab reads as measure → recommend → verify. */}
         {activeTab === "advanced" ? (
           <>
+            <EngineCard
+              config={config}
+              perf={perf}
+              save={save}
+              updateLocalLLM={updateLocalLLM}
+              updateConfigLocal={updateConfigLocal}
+            />
+
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>
@@ -1227,22 +1238,14 @@ function SettingsPanel() {
         ) : null}
 
         {/* ======================================================== */}
-        {/* PERFORMANCE: Engine profile → Recommended → Engine → */}
-        {/* Context → Live Metrics */}
+        {/* PERFORMANCE: Engine profile → Recommended → Context → */}
+        {/* Live Metrics (v1.1.9: advanced engine tuning → Advanced) */}
         {/* ======================================================== */}
         {activeTab === "performance" ? (
           <>
             <EngineProfileCard perf={perf} />
 
             <RecommendedCard config={config} perf={perf} save={save} />
-
-            <EngineCard
-              config={config}
-              perf={perf}
-              save={save}
-              updateLocalLLM={updateLocalLLM}
-              updateConfigLocal={updateConfigLocal}
-            />
 
             <ContextCard
               config={config}

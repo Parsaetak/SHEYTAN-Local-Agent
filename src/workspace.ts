@@ -1,5 +1,7 @@
 export type WorkspaceView = "agent" | "lab" | "research" | "settings";
 
+export type WorkspaceMode = "chat" | "agent";
+
 export type WorkspaceLayer = {
   id: WorkspaceView;
   label: string;
@@ -7,15 +9,21 @@ export type WorkspaceLayer = {
   title: string;
   description: string;
   icon: string;
+  // v1.1.9: which top-level modes surface this layer in the navigation.
+  // Coding Lab is Agent machinery — Chat stays a calm conversation
+  // surface and does not offer it. Everything else is available in both
+  // modes; the underlying runtime is shared either way.
+  modes: readonly WorkspaceMode[];
 };
 
 const AGENT_LAYER: WorkspaceLayer = {
   id: "agent",
-  label: "Agent",
-  eyebrow: "AGENT",
-  title: "Forge a new task",
+  label: "Workspace",
+  eyebrow: "WORKSPACE",
+  title: "SHEYTAN",
   description: "Interactive local intelligence",
   icon: "◈",
+  modes: ["chat", "agent"],
 };
 
 export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
@@ -27,6 +35,7 @@ export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
     title: "Autonomous engineering",
     description: "Execute, verify, and repair",
     icon: "◆",
+    modes: ["agent"],
   },
   {
     id: "research",
@@ -35,16 +44,26 @@ export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
     title: "External intelligence",
     description: "External evidence and sources",
     icon: "⌕",
+    modes: ["chat", "agent"],
   },
   {
     id: "settings",
     label: "Settings",
     eyebrow: "SETTINGS",
-    title: "Runtime control",
+    title: "Settings",
     description: "Models, engine, agent, and integrations",
     icon: "⚙",
+    modes: ["chat", "agent"],
   },
 ] as const;
+
+// v1.1.9: the navigation is mode-aware — Chat hides Agent machinery
+// (Coding Lab) without touching the layers themselves.
+export function visibleWorkspaceLayers(
+  mode: WorkspaceMode,
+): readonly WorkspaceLayer[] {
+  return WORKSPACE_LAYERS.filter((layer) => layer.modes.includes(mode));
+}
 
 export function isWorkspaceView(value: string): value is WorkspaceView {
   return WORKSPACE_LAYERS.some((layer) => layer.id === value);

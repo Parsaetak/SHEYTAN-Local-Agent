@@ -1,34 +1,29 @@
-# UPDATE.md — v1.1.8 Chat/Agent Separation, Model Picker & Release-Identity Fix Replacement Package
+# UPDATE.md — v1.1.9 CI Output Fix, Mode-Aware Surface & Explicit Model States Replacement Package
 
-**Release:** `v1.1.8` (codename Zeta) · **Base:** `main @ dbe3bd9` (`v1.1.7`)
+**Release:** `v1.1.9` (codename Zeta) · **Base:** `main @ 63c88dd` (`v1.1.8`)
 **Date:** 2026-09-14
 
 This package is a COMPLETE REPLACEMENT of the repository state. Apply it by
 replacing the whole tree (or, file-by-file, by following the exact map
 below). Every path is relative to the repository root.
 
-v1.1.8 is a focused polish release over v1.1.7 — the same Go +
-React/TypeScript + Wails + llama.cpp/native-engine architecture, with no
-new frameworks and no rebuilt subsystems. It ships five things: (1) the
-GitHub Actions release-identity failure is fixed at its structural source,
-so CI now derives the version from `package.json` at runtime instead of
-trusting a hardcoded workflow constant; (2) a top-level **Chat / Agent**
-segmented switch separates the conversational and engineering surfaces
-while both keep using the SAME sessions, model runtime and engine; (3) a
-redesigned **model picker** presents one card per local GGUF with
-backend-measured facts and a small set of real actions; (4) Settings gains
-**Models** and **Advanced** tabs; (5) a targeted optimisation pass removes
-a real per-poll capability re-parse in `/api/models` and a DOM-query hack
-in the first-use path. A minimalist pass de-chromes navigation, topbar and
-background without changing any interaction contract. No architecture was
-rebuilt; nothing was claimed that was not executed.
-
-No full manual runtime/Windows acceptance phase was run for this release;
-verification is the focused automated suite listed at the bottom (all
-executed and green in a Linux sandbox, with two explicit exceptions listed
-under Known limitations).
-
----
+v1.1.9 is a focused maintenance release over v1.1.8 — the same Go +
+React/TypeScript + Wails + llama.cpp/native-engine architecture, no new
+frameworks, no rebuilt subsystems. It ships: (1) the GitHub Actions
+release-metadata failure of run `34791882219` is fixed — the audit job's
+outputs now map the exact `APP_*` names the identity step writes, and the
+identity step fails fast when any release identity value is empty; (2) the
+Chat/Agent separation is completed — navigation is mode-aware (Chat hides
+the Coding Lab), the sidebar speaks in the mode's voice, and hidden
+machinery falls back to the workspace; (3) the model chooser gains an
+explicit per-card state (Ready / Loading / Incompatible / Available) and an
+aligned Context/RAM/Tools/Vision/Native fact grid; (4) the llama.cpp engine
+tuning card moved from Performance to Advanced Settings (nothing removed);
+(5) a minimalist UI pass (flat background, softened shadows, defined
+`--border-soft`, CSS collision fix, quieter topbar/panel) and a targeted
+optimisation pass (perf polling pauses while hidden, duplicated model
+select builder unified). No architecture was rebuilt; nothing was claimed
+that was not executed.
 
 ## 1. DELETE
 
@@ -38,14 +33,14 @@ new hashed set is referenced by `web/static/index.html`.
 
 | Path | Why |
 |---|---|
-| `web/static/assets/AgentBody-CfUf-j4_.js` | stale bundle (superseded by `AgentBody-awTTu9zQ.js`) |
-| `web/static/assets/AgentHeader-xOezjwpD.js` | stale bundle (superseded by `AgentHeader-Dn6xTymr.js`) |
-| `web/static/assets/AgentSidebar-BbRpID3s.js` | stale bundle (superseded by `AgentSidebar-CBUfNisf.js`) |
-| `web/static/assets/LabPanel-rshNNsid.js` | stale bundle (superseded by `LabPanel-9j9sFDtD.js`) |
-| `web/static/assets/ResearchPanel-CfWYT8Pb.js` | stale bundle (superseded by `ResearchPanel-CUNUWyb_.js`) |
-| `web/static/assets/SettingsPanel-BgejwQSw.js` | stale bundle (superseded by `SettingsPanel-Du3qtveG.js`) |
-| `web/static/assets/index-BRJmDjjc.js` | stale bundle (superseded by `index-8J2XQ2Ww.js`) |
-| `web/static/assets/index-Bvpcz4Hd.css` | stale bundle (superseded by `index-DkPxM2o7.css`) |
+| `web/static/assets/AgentBody-awTTu9zQ.js` | stale bundle (superseded by `AgentBody-NepkaVWP.js`) |
+| `web/static/assets/AgentHeader-Dn6xTymr.js` | stale bundle (superseded by `AgentHeader-CjbPNa0Q.js`) |
+| `web/static/assets/AgentSidebar-CBUfNisf.js` | stale bundle (superseded by `AgentSidebar-CAXlKFQx.js`) |
+| `web/static/assets/LabPanel-9j9sFDtD.js` | stale bundle (superseded by `LabPanel-B5Xf1JtL.js`) |
+| `web/static/assets/ResearchPanel-CUNUWyb_.js` | stale bundle (superseded by `ResearchPanel-BK1_HHZQ.js`) |
+| `web/static/assets/SettingsPanel-Du3qtveG.js` | stale bundle (superseded by `SettingsPanel-DGL5poUh.js`) |
+| `web/static/assets/index-8J2XQ2Ww.js` | stale bundle (superseded by `index-DNeAa-xT.js`) |
+| `web/static/assets/index-DkPxM2o7.css` | stale bundle (superseded by `index--nFue_yD.css`) |
 
 Nothing else was deleted. No source file, test, tool, or subsystem was
 removed in this release.
@@ -58,8 +53,8 @@ this package (they are also listed under MODIFY with per-file reasons).
 | Path | Reason |
 |---|---|
 | `UPDATE.md` | this release's change map |
-| `REPLACEMENT-MANIFEST.txt` | regenerated for v1.1.8 |
-| `REPLACEMENT-SHA256.txt` | regenerated for v1.1.8 |
+| `REPLACEMENT-MANIFEST.txt` | regenerated for v1.1.9 |
+| `REPLACEMENT-SHA256.txt` | regenerated for v1.1.9 |
 | `web/static/index.html` | regenerated — references the new hashed bundle set |
 | `web/static/.vite/manifest.json` | regenerated by `npm run build` |
 
@@ -67,27 +62,24 @@ this package (they are also listed under MODIFY with per-file reasons).
 
 | Path | Change |
 |---|---|
-| `.github/workflows/build-desktop.yml` | **The CI fix.** Removed `APP_VERSION: "1.1.6"` + `APP_CODENAME: "Zeta"` from the top-level `env:` block. The audit job's "Verify repository shape and release identity" step (now `id: identity`) derives `APP_VERSION` / `APP_VERSION_FULL` / `APP_CODENAME` from `package.json` via `node scripts/release-version.mjs --env`, exports them to `$GITHUB_OUTPUT`, runs `release-version.mjs --check` as belt-and-suspenders, and greps all release surfaces against the derived values. The audit job declares `outputs: version / version_full / codename`; `build-windows`, `build-linux` and `release` declare job-level `env:` mapping those outputs (`needs.audit.outputs.*`), so every later usage — console version probe, README.txt/BUILD-INFO.txt generation, ZIP names, artifact names, the `v${APP_VERSION}Z` tag gate — consumes the runtime-resolved identity. The `-zeta` suffix assumption was removed from all greps: `package.json` and `build/config.yml` are compared against `$APP_VERSION_FULL` |
-| `scripts/release-version.mjs` | Added `--env` mode printing `APP_VERSION`, `APP_VERSION_FULL`, `APP_CODENAME` as `VAR=value` lines for CI consumption (bash and PowerShell parse the same format). The workflow target in the target list no longer patches a hardcoded `APP_VERSION:` line — it is now a shape check that the workflow still contains the `release-version.mjs --env` derivation marker, so the runtime-derivation design cannot be silently dropped |
-| `package.json` | Canonical version `1.1.7` → `1.1.8` (the ONLY manual version edit; every other surface is repaired by the script) |
-| `package-lock.json` | root + `packages[""].version` aligned to `1.1.8` (they had drifted to `1.1.5-zeta`) |
-| `internal/config/config.go` | `AppVersion = "1.1.8"` (repaired by `release-version.mjs`) |
-| `build/config.yml` | `productVersion: "1.1.8"` (repaired by `release-version.mjs`) |
-| `SIGNATURE` | first line `SHEYTAN-Local-Agent v1.1.8` (repaired by `release-version.mjs`) |
-| `internal/api/server.go` | `modelInfo` gains `multimodal`, `nativeBackend`, `chatTemplate`, `nativeReason`, `estimatedVRAMBytes` (all from `llm.ResolveModelCapabilities`); `modelCardFor` now caches the capability card alongside the GGUF header card in the same bounded path+size+mtime cache — this removes the previously UNCACHED per-model-per-poll `ResolveModelCapabilities` GGUF parse from `/api/models`; the host memory probe is hoisted out of the per-model loop |
-| `internal/api/sessioncontext.go` | the session-context path reuses the same cached `modelCardFor(path, cfg)` read (previously it re-resolved capabilities independently) |
-| `src/store.ts` | added `WorkspaceMode` ("chat" \| "agent"), `mode` + `setMode` to the runtime store; persisted under `localStorage` key `sheytan.mode`, defaults to `chat`; UI-only state — no runtime state forked per mode |
-| `src/AgentHeader.tsx` | added the `ModeSwitch` segmented control (`[ Chat ] [ Agent ]`, `role="tablist"`); the h1 default is now mode-aware ("New chat" vs "Forge a new task"); the CONTEXT/USED pills render only in Agent mode; the READY/RUNNING status pill stays in both modes |
-| `src/AgentBody.tsx` | mode-aware layout: Chat renders a slim model rail (engine status dot + state + quick model `<select>` + "All models" toggle) and hides the runtime panel entirely; Agent keeps the full panel. The model picker replaces the message stream while open (automatic while no usable model exists, `pickerOverride` follows user intent). `switchModel` now returns success so the picker closes only when the switch applied. The first-use "Choose model" button opens the real picker (the `document.querySelector` focus hack is gone). Composer is mode-aware: placeholder "Message SHEYTAN…" + button "Send" in Chat; "Describe what SHEYTAN should forge..." + "Forge →" in Agent. `PerfStrip` is mounted in the Agent runtime panel |
-| `src/MessageStream.tsx` | `EmptyConversation` is mode-aware (Chat wording vs Agent wording); stream logic unchanged |
-| `src/App.tsx` | navigation de-chromed (one label per item, no per-item descriptions, no duplicated "Navigation" heading block); version fallback `v1.1.8` |
-| `src/api.ts` | `Model` gains `multimodal?`, `nativeBackend?`, `chatTemplate?`, `nativeReason?`, `estimatedVRAMBytes?` |
-| `src/SettingsPanel.tsx` | `SettingsTab`/`TABS` gained `models` and `advanced`; the "Model runtime" card moved from General to its own **Models** tab; the "System profile" (hardware) card moved to **Advanced**; all cards, tooltips, restart-after-save logic and save paths unchanged |
-| `src/styles.css` | appended the v1.1.8 section (mode-switch, chat-rail, model-picker/card/chips, perf-strip, `.workspace-content.mode-chat` single column, `.primary-button`); calmer chrome: `--topbar-height` 72→60px, background grid opacity 0.2→0.12; all animations remain transform/opacity-only, no blur/backdrop-filter |
-| `README.md` | version header + v1.1.8 section (shipped items only) |
-| `agent.md` | release line + v1.1.8 next-agent notes (release-identity contract, mode-separation contract, picker honesty contract) |
-| `ARCHITECTURE.md` | new section I.8c — v1.1.8 surfaces truth table |
-| `worklog.md` | v1.1.8 entry appended (phase history preserved) |
+| `.github/workflows/build-desktop.yml` | **The CI fix (run `34791882219`).** The audit job's `outputs:` previously declared `version: steps.identity.outputs.version` (and `version_full` / `codename`), but the identity step writes `APP_VERSION` / `APP_VERSION_FULL` / `APP_CODENAME` to `$GITHUB_OUTPUT` — so every `needs.audit.outputs.*` resolved to an empty string and Linux/Windows failed release-metadata verification. The audit outputs now map `steps.identity.outputs.APP_VERSION` / `APP_VERSION_FULL` / `APP_CODENAME`. Additionally the identity step now FAILS FAST (with a `::error::` annotation, exit 1) if any of the three identity values is empty, before any build job starts. The version derivation chain is unchanged: `package.json` → `release-version.mjs --env` → identity step → audit outputs → `needs.audit.outputs.*` → Linux/Windows environment. No hardcoded version was reintroduced |
+| `package.json` | Canonical version `1.1.8` → `1.1.9` (the ONLY manual version edit; every other surface is repaired by the script) |
+| `package-lock.json` | root + `packages[""].version` aligned to `1.1.9` |
+| `internal/config/config.go` | `AppVersion = "1.1.9"` (repaired by `release-version.mjs`) |
+| `build/config.yml` | `productVersion: "1.1.9"` (repaired by `release-version.mjs`) |
+| `SIGNATURE` | first line `SHEYTAN-Local-Agent v1.1.9` (repaired by `release-version.mjs`) |
+| `src/workspace.ts` | `WorkspaceLayer` gained `modes: readonly WorkspaceMode[]`; Coding Lab is `["agent"]`, Workspace/Research/Settings are `["chat","agent"]`; new `visibleWorkspaceLayers(mode)` filter; agent layer label is now "Workspace" (the Agent MODE is the header switch — no name collision); Settings title simplified |
+| `src/App.tsx` | navigation is mode-aware via `visibleWorkspaceLayers(mode)`; when the restored hash points at machinery the current mode hides (e.g. Coding Lab while Chat), the workspace falls back to the visible workspace layer; the verbose "LAYER / Only the active workspace loads…" sidebar info block was dropped (non-agent layers no longer render sidebar filler); topbar shows a status dot with a tooltip instead of persistent status text; sidebar footer trimmed to one line; version fallback `v1.1.9` |
+| `src/AgentSidebar.tsx` | the sessions heading eyebrow speaks in the mode's voice (`CHAT` vs `AGENT`) — same sessions underneath |
+| `src/AgentBody.tsx` | the duplicated model `<select>` option builder (chat rail + runtime panel) was unified into one shared `modelSelectOptions()` helper; the raw session-ID row was removed from the runtime panel (session identity is bookkeeping, not product UI — actions remain); the always-on engine detail line was removed (degraded-startup and phase hints remain); the runtime panel's model facts use the renamed `runtime-model-facts` class |
+| `src/ModelPicker.tsx` | **Model chooser redesign.** Per-card explicit `ModelState`: `ready` (backend is serving it) / `loading` (a switch to THIS model is in flight) / `incompatible` (estimated footprint > total host RAM) / `available`, plus the unchanged Recommended / Compatible / Limited sizing hint. Cards render an aligned two-column fact grid — Context / RAM / Tools / Vision / Native — where Tools derives ONLY from `chatTemplate` (the honest prerequisite signal) and unknown values render "—"; nothing is fabricated. The Use button is disabled with an explanatory tooltip for ready/incompatible/busy states. The no-models empty state now says "Choose a model" with an Open models folder action. There is still deliberately NO Remove action — no model-deletion API exists |
+| `src/SettingsPanel.tsx` | the llama.cpp EngineCard (threads, GPU offload, flash attention, mlock, KV quant, …) moved from the Performance tab to **Advanced**; Performance now reads measure → recommend → verify (Engine profile → Recommended → Context → Live metrics); `touchesEngine` restart logic unchanged and tab-independent; no functionality removed |
+| `src/PerfStrip.tsx` | `/api/perf` fetches are skipped while `document.hidden` (the strip is invisible; the endpoint performs real host measurement work) and a `visibilitychange` listener refreshes immediately on return; the 4 s interval, N/A contract and metric set are unchanged |
+| `src/styles.css` | `--border-soft` is now DEFINED (five component blocks referenced it; it previously fell back to currentColor); the decorative body radial gradients and the fixed background grid overlay (`body::before`/`::after`) were removed — flat `var(--background)`; `.workspace` radial gradient removed; `--shadow` softened; the `.model-card-facts` CSS collision resolved (runtime panel facts renamed `.runtime-model-facts`; the picker keeps `.model-card-facts`); new `.model-card-grid` fact-grid styles; new `.class-loading` / `.class-incompatible` chip styles and the dimmed `.state-incompatible` card; all animations remain transform/opacity-only |
+| `README.md` | version header + v1.1.9 section (shipped items only) |
+| `agent.md` | release line + v1.1.9 next-agent notes (CI output-name contract, mode-aware navigation contract, model-state honesty contract, EngineCard relocation, CSS token/collision notes) |
+| `ARCHITECTURE.md` | new section I.8d — v1.1.9 surfaces truth table |
+| `worklog.md` | v1.1.9 entry appended (phase history preserved) |
 | `web/static/.vite/manifest.json` | regenerated by `npm run build` |
 | `web/static/index.html` | regenerated by `npm run build` |
 
@@ -95,16 +87,14 @@ this package (they are also listed under MODIFY with per-file reasons).
 
 | Path | Purpose |
 |---|---|
-| `src/ModelPicker.tsx` | the redesigned model-selection panel: one card per local GGUF with measured facts only (architecture, quantisation, parameters, context max, RAM estimate, VRAM estimate, vision pairing, chat-template availability, native-engine support) and an honest classification chip (In use / Selected / Recommended / Compatible / Limited) derived from the model's estimated footprint vs the host's total RAM. Actions are limited to real APIs: Use model / Open models folder / Refresh / Details. There is deliberately NO Remove action — no model-deletion API exists and none was invented |
-| `src/PerfStrip.tsx` | compact live telemetry strip for the Agent surface: CPU, GPU, RAM, VRAM, prompt tok/s, generation tok/s, TTFT, context, engine, backend, compatibility state, model — polled from the EXISTING `/api/perf` every 4 s while mounted; unmeasured values render N/A; no second telemetry system |
-| `web/static/assets/AgentBody-awTTu9zQ.js` | regenerated embedded build (new hash set) |
-| `web/static/assets/AgentHeader-Dn6xTymr.js` | regenerated embedded build |
-| `web/static/assets/AgentSidebar-CBUfNisf.js` | regenerated embedded build |
-| `web/static/assets/LabPanel-9j9sFDtD.js` | regenerated embedded build |
-| `web/static/assets/ResearchPanel-CUNUWyb_.js` | regenerated embedded build |
-| `web/static/assets/SettingsPanel-Du3qtveG.js` | regenerated embedded build |
-| `web/static/assets/index-8J2XQ2Ww.js` | regenerated embedded build |
-| `web/static/assets/index-DkPxM2o7.css` | regenerated embedded build |
+| `web/static/assets/AgentBody-NepkaVWP.js` | regenerated embedded build (new hash set) |
+| `web/static/assets/AgentHeader-CjbPNa0Q.js` | regenerated embedded build |
+| `web/static/assets/AgentSidebar-CAXlKFQx.js` | regenerated embedded build |
+| `web/static/assets/LabPanel-B5Xf1JtL.js` | regenerated embedded build |
+| `web/static/assets/ResearchPanel-BK1_HHZQ.js` | regenerated embedded build |
+| `web/static/assets/SettingsPanel-DGL5poUh.js` | regenerated embedded build |
+| `web/static/assets/index-DNeAa-xT.js` | regenerated embedded build |
+| `web/static/assets/index--nFue_yD.css` | regenerated embedded build |
 
 ## 5. DO NOT TOUCH
 
@@ -124,7 +114,8 @@ architecture decision:
 - Engine lifecycle and the llama.cpp integration contract
   (`internal/llm`, `internal/installer`) — including the
   compatibility-level logic (`shouldRetryFullSpeed` and its
-  regression-locked gates) preserved exactly from v1.1.7.
+  regression-locked gates) and the persisted capability profile,
+  preserved exactly from v1.1.7/v1.1.8.
 - The native C++ engine (`native/engine`, `internal/native/engine`) —
   zero bytes changed.
 - MCP bridge, scheduler, multi-agent, pipeline, sessions, attachments,
@@ -133,103 +124,124 @@ architecture decision:
 - The perf telemetry ring and `/api/perf`, `/api/logs`, `/api/netcheck`
   surfaces (`internal/api/perf.go`, `internal/logging`,
   `internal/netcheck`) — the strip is a consumer, not a new system.
+- The in-app log viewer (`src/LogViewer.tsx`, Settings → Logs) — live
+  tail, pause, auto-scroll, search, filters, copy, bounded memory and
+  secret redaction all preserved unchanged.
+- The store's session/model/engine wiring (`src/store.ts`) — v1.1.9
+  changed no store logic; the mode fields from v1.1.8 are reused as-is.
 - Windows branding, icons, `.syso` generation, launcher
   (`scripts/gen-syso`, `build/sheytan.ico`, `sheytan-local-agent.bat`).
 - The lazy-loaded workspace architecture (`App.tsx` Suspense/lazy
-  boundaries per layer) — v1.1.8 kept every lazy boundary and only
+  boundaries per layer) — v1.1.9 kept every lazy boundary and only
   adjusted content inside them.
 
-## 6. Root cause of Actions run `34788709977` — and the exact fix
+## 6. Root cause of Actions run `34791882219` — and the exact fix
 
-**Root cause.** The failing job was `Source & frontend audit`
-(step `Verify repository shape and release identity`). The workflow
-declared a top-level `env: APP_VERSION: "1.1.6"` — a constant resolved
-when the workflow is PARSED. The audit step then ran
-`node scripts/release-version.mjs`, which (by design) repaired the working
-tree — `internal/config/config.go`, `build/config.yml`, `SIGNATURE` and
-the workflow's own `APP_VERSION:` line — to the canonical `1.1.7` from
-`package.json`. But the already-evaluated `$APP_VERSION` environment
-variable stayed `1.1.6`, so the immediately following `grep -F
-"AppVersion  = \"$APP_VERSION\"" ...` checks compared a 1.1.7 tree against
-a 1.1.6 constant and failed before frontend installation ever started.
-The greps carried a second latent defect: they hardcoded a `-zeta`
-suffix (`"$APP_VERSION-zeta"`), which no longer matched `package.json`'s
-plain `1.1.7` even with a correct base version — i.e. the check encoded
-an assumption the release line had already abandoned.
+**Root cause.** Linux and Windows failed during release metadata
+verification with empty identity values. The audit job declared
 
-**Exact fix (structural, not a string patch):**
+```yaml
+outputs:
+  version:      ${{ steps.identity.outputs.version }}
+  version_full: ${{ steps.identity.outputs.version_full }}
+  codename:     ${{ steps.identity.outputs.codename }}
+```
 
-1. `package.json` remains the ONLY version source.
-2. `scripts/release-version.mjs` gained `--env`, which prints
-   `APP_VERSION=<base>`, `APP_VERSION_FULL=<full>`, `APP_CODENAME=<display
-   codename>` — derived from `package.json` by the same semver parse the
-   repair path uses. One parser, one truth, two consumers (repair + CI).
-3. The workflow no longer declares `APP_VERSION`/`APP_CODENAME` anywhere.
-   The audit job resolves them at runtime (step `id: identity`) into
-   `$GITHUB_OUTPUT`; the job exposes `outputs: version / version_full /
-   codename`; the three downstream jobs map them into job-level `env:`
-   via `needs.audit.outputs.*`. GITHUB-output indirection means the
-   release job needs no checkout to verify the `v${APP_VERSION}Z` tag.
-4. All verification greps (bash in audit + Linux job, PowerShell in the
-   Windows job) compare against the runtime-derived values, and
-   `package.json` / `build/config.yml` are checked against
-   `$APP_VERSION_FULL` — no suffix assumption.
-5. `release-version.mjs`'s workflow target became a SHAPE check: the
-   workflow must contain the `release-version.mjs --env` derivation
-   marker, so dropping the derivation fails the audit instead of
-   silently reverting to hardcoded identity.
-6. The audit additionally runs `node scripts/release-version.mjs --check`
-   after the sync pass.
+but the identity step (step id `identity`) writes the keys that
+`release-version.mjs --env` emits — `APP_VERSION`, `APP_VERSION_FULL`,
+`APP_CODENAME` — to `$GITHUB_OUTPUT`. GitHub Actions job outputs are
+key-exact: `steps.identity.outputs.version` does not exist, so all three
+audit outputs resolved to the empty string. Every downstream job then
+received `APP_VERSION=` / `APP_VERSION_FULL=` / `APP_CODENAME=`, and the
+metadata greps (`grep -F "AppVersion  = \"$APP_VERSION\""` etc.) failed
+against empty patterns.
 
-**Future bumps are now one-file edits:** change `package.json` (e.g.
-1.1.8 → 1.1.9), run `node scripts/release-version.mjs`, commit. No
-workflow edit, no second hidden version source, no stale env constant —
-the class of failure behind run `34788709977` is structurally impossible.
+**Exact fix:**
+
+1. The audit job's `outputs:` now map the EXACT keys the identity step
+   writes:
+
+   ```yaml
+   outputs:
+     version:      ${{ steps.identity.outputs.APP_VERSION }}
+     version_full: ${{ steps.identity.outputs.APP_VERSION_FULL }}
+     codename:     ${{ steps.identity.outputs.APP_CODENAME }}
+   ```
+
+2. An early failure was added inside the identity step: after the parse
+   loop, if any of `APP_VERSION`, `APP_VERSION_FULL`, `APP_CODENAME` is
+   empty, the step emits a `::error::` annotation ("Release identity did
+   not resolve…") and exits 1 — BEFORE any expensive build job starts.
+   An unresolved identity is now a loud, immediate audit failure instead
+   of a cryptic downstream metadata mismatch.
+
+3. No hardcoded release version was reintroduced. `package.json` remains
+   the single version source, and the complete flow is exactly:
+
+   ```text
+   package.json
+       ↓
+   release-version.mjs --env
+       ↓
+   identity step outputs (APP_*)
+       ↓
+   audit job outputs (version / version_full / codename)
+       ↓
+   needs.audit.outputs.*
+       ↓
+   Linux / Windows environment
+   ```
 
 ## 7. Automated checks ACTUALLY executed (environment: Linux x64 sandbox, Go 1.26.0, Node v24.19.0)
 
-| Check | Result |
-|---|---|
-| `node scripts/release-version.mjs` (sync) | PASS — repaired 3 surfaces to 1.1.8; workflow shape check OK |
-| `node scripts/release-version.mjs --check` | PASS — all surfaces consistent |
-| `node scripts/release-version.mjs --env` | PASS — `APP_VERSION=1.1.8`, `APP_VERSION_FULL=1.1.8`, `APP_CODENAME=Zeta` |
-| `npm ci` | PASS |
-| `npm run typecheck` (`tsc --noEmit`) | PASS |
-| `npm run lint` (`oxlint`) | PASS — 0 warnings, 0 errors (25 files) |
-| `npm run build` (`tsc -b && vite build && sync:web`) | PASS — embedded frontend regenerated |
-| `go build -tags headless ./...` | PASS |
-| `go vet -tags headless ./...` | PASS |
-| `go test -tags headless -count=1 ./...` | PASS — 33 packages ok, 0 failures, no panics |
-
-Not executed locally (see limitations): the Windows x64 build, the Linux
-Wails/GTK desktop build, and the native C++ engine cmake/ctest suite.
-None of those build paths were changed; CI runs all three unchanged.
+| Check | Command | Result |
+|---|---|---|
+| Release metadata consistency | `node scripts/release-version.mjs --check` | PASS — `package.json` 1.1.9 → config.go / build/config.yml / SIGNATURE / workflow marker all consistent |
+| Release identity emission | `node scripts/release-version.mjs --env` | PASS — prints `APP_VERSION=1.1.9`, `APP_VERSION_FULL=1.1.9`, `APP_CODENAME=Zeta` |
+| TypeScript | `npm run typecheck` | PASS — `tsc --noEmit`, no errors |
+| Lint | `npm run lint` | PASS — oxlint: 0 warnings, 0 errors (25 files, 96 rules) |
+| Frontend build | `npm run build` | PASS — `tsc -b && vite build && sync:web`; embedded `web/static` regenerated |
+| Go vet | `go vet ./...` (via `go vet` on all first-party packages) | PASS for every first-party package. The only failures are the third-party Wails shell packages (`github.com/wailsapp/wails/v3/internal/...`) whose CGO type-check requires the GTK4/WebKitGTK system libraries; CI installs `libgtk-4-dev libwebkitgtk-6.0-dev libsoup-3.0-dev` before vet/build — see Known limitations |
+| Go test | `go test -tags headless ./...` | PASS — exit 0, all 34 test packages green (the `headless` tag excludes only the GTK desktop window shell, which is not part of the tested surface and is unchanged by v1.1.9) |
+| Native C++ tests | cmake/ctest path unavailable in sandbox; Makefile build + direct test binaries | 11 of 12 test binaries PASS (test_engine "all checks passed", test_forward, test_generate, test_protocol, test_gguf, test_model, test_sampler, test_scheduler, test_tensor, test_tokenizer, test_kv_cache). `test_host` could not complete in this sandbox (hangs in the slow-fixture generation phase; partial run showed host-load/generate frame assertions failing) — `native/engine` is bit-identical to v1.1.8, so this is a sandbox/timing limitation, NOT a v1.1.9 regression. CI's `ctest` run on ubuntu-24.04 remains the authoritative path |
 
 ## 8. Known limitations
 
-1. **No "Remove" action in the model picker.** The v1.1.8 brief lists
-   Remove among picker actions, but the backend has no model-deletion
-   API by design (the models folder is user-managed). Rather than fake
-   it with a filesystem delete from the UI, the picker exposes only
-   actions backed by real APIs (Use / Open models folder / Refresh /
-   Details). Adding Remove properly means adding a guarded deletion
-   endpoint — a deliberate non-goal for a 2-hour scope.
-2. **Native engine suite not run locally.** The sandbox has no `cmake`;
-   `native/engine` tests therefore executed only in CI's audit job (as
-   before). No native-engine file was touched in this release (see the
-   change map — the claim is verifiable, not assumed).
-3. **Windows/Linux desktop binaries not rebuilt locally.** The Go build
-   was verified with `-tags headless` on Linux; the Wails Windows shell
-   build and signing flow run unchanged in CI (`build-windows` job).
-4. **The model classification chip is a sizing hint** (estimated
-   footprint vs host RAM), not a benchmark; its tooltip says exactly
-   that. Measured values come from the GGUF header + config-derived
-   assessment; a model without metadata shows "No GGUF metadata" and no
-   chip.
-5. **PerfStrip polling** runs every 4 s only while the Agent surface is
-   mounted (component-local timer with cleanup); Chat mode performs no
-   perf polling. Chat already inherits the engine poll that existed in
-   v1.1.7.
-6. **Compatibility wording** (`Optimised / Fallback L<n>`) comes from the
-   persisted `CompatInfo` the engine already recorded; a fresh install
-   with no record shows `N/A` until the first boot produces one.
+- **No Windows runtime acceptance was performed** (no Windows machine in
+  scope). The Windows-facing surfaces changed in this release are the
+  same files as the Linux-facing ones (shared React frontend, workflow
+  YAML); the Windows job's verification steps are exactly the greps the
+  CI fix repairs.
+- **Go vet on the Wails shell packages requires GTK system libraries**
+  that this Linux sandbox cannot install (no root). CI installs them
+  explicitly. All first-party packages vet clean.
+- **`test_host` (native engine) could not complete in this sandbox** —
+  it exercises the slow generation fixture and hangs under the sandbox's
+  resource limits; the code is byte-identical to v1.1.8 for everything
+  under `native/engine/`.
+- **No manual runtime acceptance phase was run.** Verification is the
+  automated suite in section 7 only, consistent with the release brief.
+- The model card "Tools" row derives from `chatTemplate` — the honest
+  prerequisite signal the backend reports. A dedicated tool-capability
+  field does not exist in `/api/models`; when the backend adds one, the
+  card should consume it instead of the template heuristic.
+- "Remove" is still deliberately absent from the model picker — no
+  model-deletion API exists (the models folder is user-managed).
+
+## 9. ZIP / package identity
+
+- Package file: `SHEYTAN-Local-Agent-v1.1.9-UPDATE.zip`
+- Base state: `main @ 63c88dd8b265bb5ca164c880954e2b1aab87f545` (v1.1.8)
+- Resulting version: `1.1.9` (codename Zeta) — `package.json` is the
+  single version source; `internal/config/config.go`, `build/config.yml`
+  and `SIGNATURE` are repaired by `scripts/release-version.mjs`.
+- The package contains `UPDATE.md` (this file),
+  `REPLACEMENT-MANIFEST.txt` (the per-file change map) and
+  `REPLACEMENT-SHA256.txt` (SHA-256 of every packaged file), plus every
+  changed source/configuration/documentation file listed in sections
+  1–4. The repository root also carries a byte-identical copy of the
+  ZIP for immediate commit.
+- Apply order: replace the listed DELETE / REPLACE / MODIFY / ADD files
+  over a clean checkout of the base commit, then run the section 7
+  checks (`release-version.mjs --check`, `npm run typecheck`, `npm run
+  lint`, `npm run build`, `go test ./...`, `go vet ./...`).

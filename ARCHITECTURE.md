@@ -128,6 +128,20 @@ the CI release identity derivation-only. Verified rows:
 | Performance strip | `src/PerfStrip.tsx` | IMPLEMENTED | compact 4 s polling of the EXISTING `/api/perf` snapshot into the Agent surface; N/A for anything unmeasured; no new telemetry pipeline |
 | Settings tabs: Models / Advanced | `src/SettingsPanel.tsx` | IMPLEMENTED | `SettingsTab`/`TABS` gained `models` (provider + model runtime card) and `advanced` (system profile/hardware card); all other tabs and the card/tooltips system unchanged |
 
+## I.8d — v1.1.9: CI output-name fix, mode-aware navigation, explicit model states (IMPLEMENTED)
+
+v1.1.9 changes no architecture. It repairs a CI output-mapping defect,
+completes the Chat/Agent separation at the navigation layer, and makes
+model-card states explicit. Verified rows:
+
+| Surface | Package(s)/File(s) | Status | Notes |
+|---|---|---|---|
+| CI output-name fix (run `34791882219`) | `.github/workflows/build-desktop.yml` | IMPLEMENTED | the audit job's `outputs:` referenced `steps.identity.outputs.version`/`version_full`/`codename`, but the identity step writes `APP_VERSION`/`APP_VERSION_FULL`/`APP_CODENAME` (the exact keys from `release-version.mjs --env`) — so every `needs.audit.outputs.*` resolved to "" and Linux/Windows failed release-metadata verification. The audit outputs now map the `APP_*` names, and the identity step fails fast with a `::error::` annotation when any identity value is empty, BEFORE any build job starts. The derivation chain is unchanged: `package.json` → `release-version.mjs --env` → identity step → audit outputs → `needs.audit.outputs.*` → Linux/Windows environment |
+| Mode-aware navigation | `src/workspace.ts` (`WorkspaceLayer.modes`, `visibleWorkspaceLayers`), `src/App.tsx`, `src/AgentSidebar.tsx` | IMPLEMENTED | Chat hides the Coding Lab (Agent machinery); Research/Settings remain in both modes. `App.tsx` falls back to the workspace view when the restored hash points at a hidden layer. The agent layer label is "Workspace" (the Agent MODE is the header switch). Sidebar sessions heading speaks in the mode's voice. Runtime wiring untouched |
+| Explicit model states + fact grid | `src/ModelPicker.tsx`, `src/styles.css` | IMPLEMENTED | per-card `ModelState`: ready (serving) / loading (busy switch targeting this model) / incompatible (estimated footprint > total host RAM) / available; the Recommended/Compatible/Limited sizing hint is unchanged. Cards render an aligned Context/RAM/Tools/Vision/Native grid; Tools derives only from `chatTemplate` and unknown values render "—" (no fabrication). No-model empty state: "Choose a model" + Open models folder. Still no Remove action (no deletion API) |
+| Settings: engine tuning → Advanced | `src/SettingsPanel.tsx` | IMPLEMENTED | the llama.cpp EngineCard moved from the Performance tab to Advanced; `touchesEngine` restart logic unchanged and tab-independent. Performance reads measure → recommend → verify |
+| Minimalist UI + targeted optimisation | `src/styles.css`, `src/AgentBody.tsx`, `src/PerfStrip.tsx` | IMPLEMENTED | background gradients and the body grid overlay removed; shadows softened; `--border-soft` defined (was referenced but never declared); `.runtime-model-facts` renamed (collided with the picker's `.model-card-facts`); duplicated model `<select>` option builder unified; PerfStrip skips `/api/perf` fetches while `document.hidden` and refreshes on visibilitychange |
+
 ## I.9 — The SHEYTAN Native AI Engine architecture (v1.1.5Z, IMPLEMENTED foundation + model loading)
 
 The target engine stack is now wired at the foundation level:

@@ -3,15 +3,17 @@ import { useMemo } from "react";
 import { api, type Model } from "./api";
 import { useRuntimeStore } from "./store";
 
-// v1.1.8: the redesigned model-selection panel. One card per local GGUF
-// with only the facts that drive a decision — identity, size class,
-// context, memory estimate, and measured capabilities. Every number here
-// is backend-sourced (/api/models + /api/sysinfo); nothing is invented.
+// v1.1.9: the model chooser is one of the clearest surfaces in the
+// product. One card per local GGUF with the facts that drive a decision:
+// identity, size class, context, memory, tool/vision capability, native
+// support, and an honest compatibility hint. Every number here is
+// backend-sourced (/api/models + /api/sysinfo); nothing is invented, and
+// unknown values render as "—".
 //
 // "Remove" is deliberately NOT offered: there is no model-deletion API
 // by design (the models folder is user-managed), so the picker only
-// exposes actions that actually exist — Use / Open folder / Refresh /
-// Details.
+// exposes actions that actually exist — Use / Open models folder /
+// Refresh / Details.
 
 function formatBytes(bytes: number | undefined): string {
   if (!bytes || bytes <= 0) {
@@ -38,47 +40,55 @@ function formatContext(tokens: number | undefined): string {
   return String(tokens);
 }
 
-// classification derives the honest suitability chip from measured
+// v1.1.9: explicit card states. The UI never guesses: "Ready" means the
+// backend is serving this model right now, "Loading" means a switch to
+// this exact model is in flight, "Incompatible" means the measured
+// estimate exceeds total host RAM (it cannot fit), and everything else
+// is "Available".
+type ModelState = "ready" | "loading" | "incompatible" | "available";
+
+// classification derives the honest suitability hint from measured
 // values: the model's estimated footprint against the HOST's total RAM.
 // It is a sizing hint, not a benchmark — the tooltip says exactly that.
-type Classification = "serving" | "recommended" | "compatible" | "limited";
+type Classification = "recommended" | "compatible" | "limited";
 
-function classify(
-  model: Model,
-  totalRamBytes: number | undefined,
-): Classification | null {
-  if (model.serving) {
-    return "serving";
-  }
-
+function classify(model: Model, totalRamBytes: number | undefined) {
   const need = model.estimatedMemoryBytes ?? 0;
 
   if (need <= 0 || !totalRamBytes || totalRamBytes <= 0) {
-    return null;
+    return { classification: null as Classification | null, overRam: false };
   }
 
   const ratio = need / totalRamBytes;
 
+  if (ratio > 1) {
+    return { classification: null as Classification | null, overRam: true };
+  }
+
   if (ratio <= 0.6) {
-    return "recommended";
+    return {
+      classification: "recommended" as Classification,
+      overRam: false,
+    };
   }
 
   if (ratio <= 0.85) {
-    return "compatible";
+    return {
+      classification: "compatible" as Classification,
+      overRam: false,
+    };
   }
 
-  return "limited";
+  return { classification: "limited" as Classification, overRam: false };
 }
 
 const CLASS_LABEL: Record<Classification, string> = {
-  serving: "In use",
   recommended: "Recommended",
   compatible: "Compatible",
   limited: "Limited",
 };
 
 const CLASS_TITLE: Record<Classification, string> = {
-  serving: "The active backend is serving this model right now.",
   recommended: "Estimated footprint fits comfortably in host RAM.",
   compatible: "Estimated footprint fits host RAM with little headroom.",
   limited: "Estimated footprint exceeds comfortable host RAM — expect slowdowns.",
@@ -102,10 +112,19 @@ function ModelCard({
   canUse: boolean;
   onUse: (id: string) => void;
 }) {
-  const classification = classify(model, totalRamBytes);
+  const { classification, overRam } = classify(model, totalRamBytes);
   const ramEstimate = formatBytes(model.estimatedMemoryBytes);
   const vramEstimate = formatBytes(model.estimatedVRAMBytes);
   const ctxMax = formatContext(model.contextLength);
+
+  // v1.1.9: explicit state machine per card (see ModelState above).
+  const state: ModelState = model.serving
+    ? "ready"
+    : busy && active
+      ? "loading"
+      : overRam
+        ? "incompatible"
+        : "available";
 
   // Honest "selected" marker: configured but not yet being served.
   const selected = active && !model.serving;
@@ -120,17 +139,21 @@ function ModelCard({
     facts.push(model.parameterInfo);
   }
 
-  if (ctxMax) {
-    facts.push(`Context ${ctxMax}`);
-  }
+  const useDisabled =
+    state === "ready" || state === "incompatible" || busy || !canUse;
 
-  if (ramEstimate) {
-    facts.push(`RAM ${ramEstimate}`);
-  }
+  const useTitle =
+    state === "ready"
+      ? "This model is already being served."
+      : state === "incompatible"
+        ? "The estimated memory footprint exceeds total host RAM."
+        : busy
+          ? "A model operation is already running."
+          : undefined;
 
   return (
     <article
-      className={`model-card${model.serving ? " serving" : ""}`}
+      className={`model-card state-${state}${model.serving ? " serving" : ""}`}
       data-testid={`model-card-${model.id}`}
     >
       <header className="model-card-head">
@@ -138,21 +161,39 @@ function ModelCard({
           {model.name}
         </strong>
 
-        {classification ? (
+        {state === "ready" ? (
           <span
-            className={`model-chip class-${classification}`}
-            title={CLASS_TITLE[classification]}
+            className="model-chip class-serving"
+            title="The engine is serving this model right now."
           >
-            {CLASS_LABEL[classification]}
+            Ready
           </span>
-        ) : null}
-
-        {selected ? (
+        ) : state === "loading" ? (
+          <span className="model-chip class-loading" title="Loading this model into the engine.">
+            Loading
+          </span>
+        ) : state === "incompatible" ? (
+          <span
+            className="model-chip class-incompatible"
+            title="Estimated memory exceeds total host RAM — the model cannot fit."
+          >
+            Incompatible
+          </span>
+        ) : selected ? (
           <span
             className="model-chip class-serving"
             title="This model is configured and will serve on the next engine start."
           >
             Selected
+          </span>
+        ) : null}
+
+        {classification && state !== "incompatible" ? (
+          <span
+            className={`model-chip class-${classification}`}
+            title={CLASS_TITLE[classification]}
+          >
+            {CLASS_LABEL[classification]}
           </span>
         ) : null}
       </header>
@@ -163,34 +204,57 @@ function ModelCard({
         <span className="model-card-facts">No GGUF metadata</span>
       )}
 
-      <div className="model-card-chips">
-        {gpuAvailable && (
+      {/* v1.1.9: the at-a-glance fact grid — exactly the fields that
+          decide whether this model is usable. "—" means the backend did
+          not report a value; nothing is fabricated. */}
+      <div className="model-card-grid">
+        <span>Context</span>
+        <strong>{ctxMax || "—"}</strong>
+
+        <span>RAM</span>
+        <strong>{ramEstimate || "—"}</strong>
+
+        <span
+          title={
+            model.chatTemplate
+              ? "The architecture ships a usable chat template — the prerequisite for tool calling."
+              : "No chat template detected, so tool calling is unlikely to work."
+          }
+        >
+          Tools
+        </span>
+        <strong>{model.chatTemplate ? "Yes" : "—"}</strong>
+
+        <span
+          title={
+            model.multimodal
+              ? "A vision projector (mmproj) is paired with this model."
+              : "No vision projector paired with this model."
+          }
+        >
+          Vision
+        </span>
+        <strong>{model.multimodal ? "Yes" : "No"}</strong>
+
+        <span
+          title={
+            model.nativeBackend
+              ? model.nativeReason || "The native C++ engine can execute this architecture."
+              : "The native C++ engine cannot execute this architecture."
+          }
+        >
+          Native
+        </span>
+        <strong>{model.nativeBackend ? "Supported" : "—"}</strong>
+      </div>
+
+      {gpuAvailable && (
+        <div className="model-card-chips">
           <span className="model-chip" title="This machine exposes a usable GPU for offload.">
             GPU offload available
           </span>
-        )}
-
-        {model.multimodal && (
-          <span className="model-chip" title="A vision projector (mmproj) is paired with this model.">
-            Vision
-          </span>
-        )}
-
-        {model.chatTemplate && (
-          <span className="model-chip" title="The architecture ships a usable chat template — the prerequisite for tool calling.">
-            Chat template
-          </span>
-        )}
-
-        {model.nativeBackend && (
-          <span
-            className="model-chip"
-            title={model.nativeReason || "The native C++ engine can execute this architecture."}
-          >
-            Native: Supported
-          </span>
-        )}
-      </div>
+        </div>
+      )}
 
       <details className="model-card-details">
         <summary>Details</summary>
@@ -240,17 +304,15 @@ function ModelCard({
         <button
           type="button"
           className="primary-button"
-          disabled={model.serving || busy || !canUse}
+          disabled={useDisabled}
           onClick={() => onUse(model.id)}
-          title={
-            model.serving
-              ? "This model is already being served."
-              : busy
-                ? "A model operation is already running."
-                : undefined
-          }
+          title={useTitle}
         >
-          {model.serving ? "In use" : busy ? "Working…" : "Use model"}
+          {state === "ready"
+            ? "In use"
+            : state === "loading"
+              ? "Loading…"
+              : "Use model"}
         </button>
       </footer>
     </article>
@@ -333,13 +395,20 @@ const ModelPicker = function ModelPicker({
 
       {sorted.length === 0 ? (
         <div className="model-picker-empty">
-          <strong>No GGUF models found</strong>
+          <strong>Choose a model</strong>
 
           <span>
-            Place model files in the models folder, then refresh. The picker
-            reads each file&apos;s header to show architecture, context, and
-            memory facts.
+            Place a GGUF model in the models folder, then refresh. No valid
+            model is configured yet, so requests cannot run.
           </span>
+
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void api.openModelsFolder().catch(() => {})}
+          >
+            Open models folder
+          </button>
         </div>
       ) : (
         <div className="model-picker-grid">

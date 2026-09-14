@@ -38,6 +38,10 @@ const AgentSidebar = memo(function AgentSidebar() {
 
   const selectSession = useRuntimeStore((state) => state.selectSession);
 
+  // v1.1.9: the sidebar speaks in the voice of the active mode — same
+  // sessions underneath, different framing.
+  const mode = useRuntimeStore((state) => state.mode);
+
   function requestNewSession() {
     window.dispatchEvent(new CustomEvent("sheytan:new-session"));
   }
@@ -46,7 +50,7 @@ const AgentSidebar = memo(function AgentSidebar() {
     <>
       <div className="sidebar-heading sidebar-heading-secondary">
         <div>
-          <span className="eyebrow">AGENT</span>
+          <span className="eyebrow">{mode === "chat" ? "CHAT" : "AGENT"}</span>
 
           <strong>Sessions</strong>
         </div>

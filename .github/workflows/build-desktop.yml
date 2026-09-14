@@ -33,10 +33,17 @@ jobs:
     name: Source & frontend audit
     runs-on: ubuntu-24.04
 
+    # v1.1.9: the identity step emits APP_VERSION / APP_VERSION_FULL /
+    # APP_CODENAME (exactly as release-version.mjs --env names them). Run
+    # 34791882219 failed because these mappings pointed at lowercase names
+    # (steps.identity.outputs.version) that the step never writes, so every
+    # needs.audit.outputs.* resolved to an empty string and the Linux/Windows
+    # release-metadata verification failed on empty APP_VERSION. The output
+    # names here MUST match the keys written to GITHUB_OUTPUT below.
     outputs:
-      version: ${{ steps.identity.outputs.version }}
-      version_full: ${{ steps.identity.outputs.version_full }}
-      codename: ${{ steps.identity.outputs.codename }}
+      version: ${{ steps.identity.outputs.APP_VERSION }}
+      version_full: ${{ steps.identity.outputs.APP_VERSION_FULL }}
+      codename: ${{ steps.identity.outputs.APP_CODENAME }}
 
     steps:
       - name: Checkout
@@ -86,8 +93,17 @@ jobs:
             esac
           done <<< "$identity_out"
 
+          # v1.1.9: fail fast here — before any expensive build job starts —
+          # if the release identity did not resolve. An empty value used to
+          # surface only later as a cryptic metadata-verification failure in
+          # Linux/Windows (root cause of run 34791882219).
+          if [ -z "${APP_VERSION:-}" ] || [ -z "${APP_VERSION_FULL:-}" ] || [ -z "${APP_CODENAME:-}" ]; then
+            echo "::error::Release identity did not resolve. APP_VERSION, APP_VERSION_FULL and APP_CODENAME must all be non-empty after 'release-version.mjs --env'."
+            exit 1
+          fi
+
           # The identity step must be tagged so needs-outputs can read it
-          # (id: identity above).
+          # (id: identity above). Job outputs map from the APP_* names.
           echo "Resolved identity: $APP_VERSION / $APP_VERSION_FULL / $APP_CODENAME"
 
           # Belt and suspenders: the repaired tree must pass check mode.

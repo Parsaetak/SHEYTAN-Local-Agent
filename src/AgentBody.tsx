@@ -87,6 +87,30 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+// v1.1.9: shared option builder — the chat rail and the agent runtime
+// panel previously duplicated identical <select> option JSX.
+function modelSelectOptions(
+  localModels: ReturnType<typeof useRuntimeStore.getState>["models"],
+) {
+  const models = localModels?.local ?? [];
+
+  return (
+    <>
+      <option value="">
+        {models.length === 0 ? "No local GGUF models found" : "Select local model"}
+      </option>
+
+      {models.map((model) => (
+        <option key={model.id} value={model.id}>
+          {model.name}
+          {model.quantization ? ` · ${model.quantization}` : ""}
+          {model.parameterInfo ? ` · ${model.parameterInfo}` : ""}
+        </option>
+      ))}
+    </>
+  );
+}
+
 function AgentBody() {
   const models = useRuntimeStore((state) => state.models);
   const sessions = useRuntimeStore((state) => state.sessions);
@@ -362,19 +386,7 @@ function AgentBody() {
               }
               aria-label="Model"
             >
-              <option value="">
-                {localModels.length === 0
-                  ? "No local GGUF models found"
-                  : "Select local model"}
-              </option>
-
-              {localModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.name}
-                  {model.quantization ? ` · ${model.quantization}` : ""}
-                  {model.parameterInfo ? ` · ${model.parameterInfo}` : ""}
-                </option>
-              ))}
+              {modelSelectOptions(models)}
             </select>
 
             <button
@@ -458,12 +470,6 @@ function AgentBody() {
               </span>
             )}
 
-            {engine?.detail ? (
-              <span className="runtime-hint engine-detail" title={engine.detail}>
-                {engine.detail}
-              </span>
-            ) : null}
-
             <div className="header-actions">
               <button
                 type="button"
@@ -538,20 +544,9 @@ function AgentBody() {
                 config?.provider !== "local" ||
                 localModels.length === 0
               }
+              aria-label="Model"
             >
-              <option value="">
-                {localModels.length === 0
-                  ? "No local GGUF models found"
-                  : "Select local model"}
-              </option>
-
-              {localModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.name}
-                  {model.quantization ? ` · ${model.quantization}` : ""}
-                  {model.parameterInfo ? ` · ${model.parameterInfo}` : ""}
-                </option>
-              ))}
+              {modelSelectOptions(models)}
             </select>
 
             <div className="session-detail">
@@ -566,9 +561,11 @@ function AgentBody() {
             </div>
 
             {/* v1.1.6 §10: the model card facts — backend-measured, no
-                engine internals during normal startup. */}
+                engine internals during normal startup. v1.1.9: renamed
+                class (runtime-model-facts) — it previously collided with
+                the picker's inline facts line of the same name. */}
             {selectedModelCard && (
-              <div className="model-card-facts">
+              <div className="runtime-model-facts">
                 {selectedModelCard.architecture && (
                   <div className="session-detail">
                     <span>Architecture</span>
@@ -609,15 +606,11 @@ function AgentBody() {
             ) : null}
           </div>
 
+          {/* v1.1.9: session identity is bookkeeping, not product UI — the
+              raw ID moved out of sight (sessions live in the sidebar);
+              only the actions remain. */}
           <div className="runtime-section">
             <span className="eyebrow">SESSION</span>
-
-            <div className="session-detail">
-              <span>ID</span>
-              <strong>
-                {activeSessionId ? activeSessionId.slice(0, 16) : "None"}
-              </strong>
-            </div>
 
             <div className="header-actions">
               <button

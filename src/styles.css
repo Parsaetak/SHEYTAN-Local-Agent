@@ -22,9 +22,9 @@
   --yellow: #ffd166;
   --blue: #69a7ff;
 
-  --shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+  --shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
 
-  --shadow-red: 0 0 45px rgba(255, 32, 32, 0.14);
+  --shadow-red: 0 0 32px rgba(255, 32, 32, 0.1);
 
   --font-sans:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -54,6 +54,11 @@
   --warning: var(--yellow);
   --error: var(--red-hot);
   --focus: var(--blue);
+
+  /* v1.1.9: this token was referenced in five component blocks but was
+     never defined — borders silently fell back to currentColor. One
+     quiet hairline alias, defined once. */
+  --border-soft: var(--line-soft);
 }
 
 *,
@@ -83,50 +88,10 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
 
-  background:
-    radial-gradient(
-      circle at 82% 4%,
-      rgba(255, 20, 20, 0.055),
-      transparent 27%
-    ),
-    radial-gradient(circle at 8% 92%, rgba(125, 0, 0, 0.045), transparent 28%),
-    var(--background);
-}
-
-body::before {
-  content: "";
-
-  position: fixed;
-  inset: 0;
-
-  z-index: -3;
-
-  pointer-events: none;
-
-  opacity: 0.2;
-
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
-
-  background-size: 36px 36px;
-
-  mask-image: linear-gradient(to bottom, black, transparent 86%);
-}
-
-body::after {
-  content: "";
-
-  position: fixed;
-  inset: 0;
-
-  z-index: -4;
-
-  pointer-events: none;
-
-  background:
-    radial-gradient(circle at 50% 15%, rgba(255, 0, 0, 0.025), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.008), transparent 22%);
+  /* v1.1.9: flat, calm background. The decorative radial gradients and
+     the fixed grid overlay (body::before/::after) were removed — the
+     premium look comes from typography and spacing, not noise. */
+  background: var(--background);
 }
 
 button,
@@ -745,7 +710,9 @@ textarea:focus-visible {
   color: var(--text-soft);
 }
 
-.model-card-facts {
+/* v1.1.9: renamed from .model-card-facts (which the model picker uses
+   for its inline facts line) — the two fought over one class. */
+.runtime-model-facts {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -756,7 +723,7 @@ textarea:focus-visible {
   border-top: 1px solid var(--line-soft);
 }
 
-.model-card-facts .session-detail {
+.runtime-model-facts .session-detail {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -770,12 +737,6 @@ textarea:focus-visible {
   flex-direction: column;
 
   overflow: hidden;
-
-  background: radial-gradient(
-    circle at 78% 16%,
-    rgba(255, 32, 32, 0.038),
-    transparent 27%
-  );
 }
 
 .workspace-header {
@@ -2972,6 +2933,34 @@ body::before {
   font-size: 12px;
 }
 
+/* v1.1.9: the at-a-glance fact grid on every model card — label/value
+   pairs aligned in two columns so numbers read down cleanly. */
+.model-card-grid {
+  display: grid;
+
+  grid-template-columns: auto 1fr;
+
+  gap: 4px 16px;
+
+  padding: 8px 0;
+
+  border-top: 1px solid var(--border-soft);
+
+  font-size: 12px;
+}
+
+.model-card-grid span {
+  color: var(--text-muted);
+}
+
+.model-card-grid strong {
+  color: var(--text-secondary);
+
+  font-weight: 500;
+
+  text-align: right;
+}
+
 .model-card-chips {
   display: flex;
 
@@ -2999,6 +2988,28 @@ body::before {
   border-color: var(--line-red);
 
   color: var(--accent-strong);
+}
+
+/* v1.1.9: explicit model states — loading and incompatible render as
+   first-class chips next to Ready / Available. */
+.model-chip.class-loading {
+  border-color: rgba(105, 167, 255, 0.35);
+
+  color: var(--blue);
+}
+
+.model-chip.class-incompatible {
+  border-color: rgba(255, 32, 32, 0.4);
+
+  color: var(--error);
+}
+
+.model-card.state-incompatible {
+  opacity: 0.72;
+}
+
+.model-card.state-incompatible:hover {
+  border-color: rgba(255, 32, 32, 0.3);
 }
 
 .model-chip.class-recommended {

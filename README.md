@@ -12,7 +12,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-Local-Agent
-Current release:  v1.1.8
+Current release:  v1.1.9
 Codename:         Zeta
 Branch:           main
 ```
@@ -67,6 +67,20 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.1.9 — CI Output Fix, Mode-Aware Product Surface, Explicit Model States
+
+**A focused maintenance release. Same Go + React/TypeScript + Wails + llama.cpp/native-engine architecture; nothing was rebuilt.**
+
+| Area | What it does |
+|---|---|
+| **CI fix (run `34791882219`)** | Linux and Windows failed release-metadata verification because the audit job's outputs were declared as `steps.identity.outputs.version` / `version_full` / `codename` while the identity step actually writes `APP_VERSION` / `APP_VERSION_FULL` / `APP_CODENAME` — every `needs.audit.outputs.*` resolved to an empty string. The audit outputs now map the exact `APP_*` names the step emits, and the identity step fails fast (with a `::error::` annotation) if any release identity value is empty, so a broken derivation stops the run BEFORE any build job starts. The version flow is unchanged: `package.json` → `release-version.mjs --env` → identity step → audit outputs → `needs.audit.outputs.*` → Linux/Windows environment |
+| **Chat / Agent separation completed** | The `[ Chat │ Agent ]` segmented switch stays in the workspace header. v1.1.9 finishes the separation: the sidebar navigation is mode-aware (Chat hides the Coding Lab — planning/verification/pipeline machinery stays Agent-side), the sessions sidebar speaks in the mode's voice, and viewing hidden machinery while in Chat falls back to the workspace. Chat surface: Model, Conversation, Input, Send/Stop, Attachments. Agent surface: Task, Model, Context, Tools, Activity, Verification, Result via the runtime panel, activity stream and Lab. Both modes reuse the SAME sessions, model runtime and engine |
+| **Model chooser: explicit states + fact grid** | Each model card now shows an aligned fact grid (Context / RAM / Tools / Vision / Native) plus quantisation and parameters on the facts line, and an explicit state: **Ready** (backend is serving it), **Loading** (a switch to this model is in flight), **Incompatible** (measured footprint exceeds total host RAM), **Available**, plus the Recommended / Compatible / Limited sizing hint. Unknown values render as "—" — nothing is fabricated. The no-models empty state says "Choose a model" with an Open models folder action. There is still deliberately NO Remove action — no deletion API exists |
+| **Settings: engine tuning moved to Advanced** | The llama.cpp engine card (threads, GPU offload, flash attention, mlock, KV quant, …) moved from Performance to **Advanced**. Performance now reads as measure → recommend → verify (Engine profile, Recommended, Context, Live metrics). Nothing was removed — all functionality remains |
+| **Minimalist UI pass** | Removed the decorative background gradients and the fixed grid overlay; softened shadows; fixed an undefined `--border-soft` token (five component blocks referenced a token that was never declared); fixed a CSS collision where the runtime panel's model facts and the picker's facts line shared one class; dropped the persistent status text in the topbar (the dot remains, with a tooltip), the raw session-ID row and the engine detail line from the Agent panel; trimmed the sidebar footer. Animations remain transform/opacity-only |
+| **Targeted optimisation** | `/api/perf` polling in the performance strip now pauses while the window is hidden and refreshes immediately on return; the duplicated model `<select>` option builder in `AgentBody` was unified into one shared function |
+| **Documentation** | README / agent.md / ARCHITECTURE / UPDATE updated for shipped items only |
 
 ## v1.1.8 — Chat/Agent Separation, Model Picker, Release-Metadata Fix, Minimalist Pass
 

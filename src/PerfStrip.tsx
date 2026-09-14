@@ -97,6 +97,13 @@ const PerfStrip = function PerfStrip() {
     let cancelled = false;
 
     async function poll() {
+      // v1.1.9: skip the fetch while the window is hidden — the strip is
+      // invisible anyway, and /api/perf performs real host measurement
+      // work. The next visible tick refreshes immediately.
+      if (document.hidden) {
+        return;
+      }
+
       try {
         const snapshot = await api.perf();
 
@@ -108,11 +115,19 @@ const PerfStrip = function PerfStrip() {
       }
     }
 
+    function handleVisibility() {
+      if (!document.hidden) {
+        void poll();
+      }
+    }
+
     void poll();
     timerRef.current = window.setInterval(poll, POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibility);
 
       if (timerRef.current !== null) {
         window.clearInterval(timerRef.current);

@@ -1,12 +1,12 @@
-SHEYTAN-Local-Agent v1.1.8 — Replacement Manifest
+SHEYTAN-Local-Agent v1.1.9 — Replacement Manifest
 =================================================
-Base: main @ dbe3bd9 (v1.1.7)
-Package: SHEYTAN-Local-Agent-v1.1.8-UPDATE.zip
+Base: main @ 63c88dd (v1.1.8)
+Package: SHEYTAN-Local-Agent-v1.1.9-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
 The exact per-file change map (with reasons), the DO NOT TOUCH list,
-the root cause of Actions run 34788709977, the executed automated
+the root cause of Actions run 34791882219, the executed automated
 checks and the known limitations live in UPDATE.md.
 
 [PACKAGE METADATA]
@@ -21,41 +21,60 @@ checks and the known limitations live in UPDATE.md.
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  src/ModelPicker.tsx — redesigned model-selection panel (measured facts, honest classification, real actions only)
-  src/PerfStrip.tsx — compact /api/perf telemetry strip for the Agent surface (N/A contract preserved)
-  web/static/assets/* (new hashed Vite bundles)
+  web/static/assets/AgentBody-NepkaVWP.js — regenerated embedded build (new hash set)
+  web/static/assets/AgentHeader-CjbPNa0Q.js — regenerated embedded build
+  web/static/assets/AgentSidebar-CAXlKFQx.js — regenerated embedded build
+  web/static/assets/LabPanel-B5Xf1JtL.js — regenerated embedded build
+  web/static/assets/ResearchPanel-BK1_HHZQ.js — regenerated embedded build
+  web/static/assets/SettingsPanel-DGL5poUh.js — regenerated embedded build
+  web/static/assets/index-DNeAa-xT.js — regenerated embedded build
+  web/static/assets/index--nFue_yD.css — regenerated embedded build
 
 [MODIFIED FILES]
-  .github/workflows/build-desktop.yml — CI release-identity fix: runtime derivation from package.json (audit job outputs), no hardcoded APP_VERSION/APP_CODENAME, no -zeta assumption
-  scripts/release-version.mjs — --env identity mode + workflow shape check
-  package.json — version 1.1.8 (the only manual version edit)
-  package-lock.json — root + packages[""] version aligned to 1.1.8
-  internal/config/config.go — AppVersion 1.1.8 (script-repaired)
-  build/config.yml — productVersion 1.1.8 (script-repaired)
-  SIGNATURE — SHEYTAN-Local-Agent v1.1.8 (script-repaired)
-  internal/api/server.go — cached model capability resolution; per-model multimodal/native/chatTemplate facts on /api/models
-  internal/api/sessioncontext.go — reuses the cached card+caps read
-  src/store.ts — WorkspaceMode (chat|agent) + setMode, persisted
-  src/AgentHeader.tsx — ModeSwitch segmented control; mode-aware pills
-  src/AgentBody.tsx — Chat/Agent layouts, model rail, picker integration, mode-aware composer, PerfStrip mount
-  src/MessageStream.tsx — mode-aware empty state
-  src/App.tsx — de-chromed navigation, version fallback 1.1.8
-  src/api.ts — Model capability fields
-  src/SettingsPanel.tsx — Models and Advanced tabs
-  src/styles.css — v1.1.8 design section (mode switch, chat rail, model picker, perf strip) + calmer chrome
-  README.md — v1.1.8 section + version header
-  agent.md — v1.1.8 next-agent notes
-  ARCHITECTURE.md — I.8c v1.1.8 truth table
-  web/static/.vite/manifest.json — regenerated
-  web/static/index.html — regenerated
+  .github/workflows/build-desktop.yml — CI fix (run 34791882219): audit job outputs map steps.identity.outputs.APP_VERSION/APP_VERSION_FULL/APP_CODENAME; identity step fails fast on any empty release identity value; no hardcoded version reintroduced
+  package.json — canonical version 1.1.8 → 1.1.9 (single version source)
+  package-lock.json — root + packages[""].version aligned to 1.1.9
+  internal/config/config.go — AppVersion = "1.1.9" (repaired by release-version.mjs)
+  build/config.yml — productVersion: "1.1.9" (repaired by release-version.mjs)
+  SIGNATURE — first line SHEYTAN-Local-Agent v1.1.9 (repaired by release-version.mjs)
+  src/workspace.ts — WorkspaceLayer.modes + visibleWorkspaceLayers(mode); agent layer label "Workspace"
+  src/App.tsx — mode-aware navigation; hidden-machinery fallback; quieter topbar/sidebar chrome
+  src/AgentSidebar.tsx — mode-voiced sessions heading (CHAT vs AGENT)
+  src/AgentBody.tsx — unified model <select> option builder; session-ID row + always-on engine detail line removed; runtime-model-facts class
+  src/ModelPicker.tsx — explicit model states (ready/loading/incompatible/available); Context/RAM/Tools/Vision/Native fact grid; "Choose a model" empty state; no Remove (no deletion API)
+  src/SettingsPanel.tsx — llama.cpp EngineCard moved Performance → Advanced
+  src/PerfStrip.tsx — /api/perf polling paused while document.hidden + visibilitychange refresh
+  src/styles.css — --border-soft defined; flat background (gradients/grid overlay removed); softened shadows; CSS collision fixed; model-card-grid + state chip styles
+  README.md — v1.1.9 section + version header
+  agent.md — v1.1.9 next-agent notes + release line
+  ARCHITECTURE.md — section I.8d (v1.1.9 surfaces truth table)
+  worklog.md — v1.1.9 entry appended
+  web/static/.vite/manifest.json — regenerated by npm run build
+  web/static/index.html — regenerated by npm run build
 
-[DELETED FILES]
-  web/static/assets/ — 8 stale hashed Vite bundles superseded by the
-  regenerated embedded build (exact list in UPDATE.md §1)
+[DELETED FILES — present in base, NOT in this package]
+  web/static/assets/AgentBody-awTTu9zQ.js — stale bundle (superseded by AgentBody-NepkaVWP.js)
+  web/static/assets/AgentHeader-Dn6xTymr.js — stale bundle (superseded by AgentHeader-CjbPNa0Q.js)
+  web/static/assets/AgentSidebar-CBUfNisf.js — stale bundle (superseded by AgentSidebar-CAXlKFQx.js)
+  web/static/assets/LabPanel-9j9sFDtD.js — stale bundle (superseded by LabPanel-B5Xf1JtL.js)
+  web/static/assets/ResearchPanel-CUNUWyb_.js — stale bundle (superseded by ResearchPanel-BK1_HHZQ.js)
+  web/static/assets/SettingsPanel-Du3qtveG.js — stale bundle (superseded by SettingsPanel-DGL5poUh.js)
+  web/static/assets/index-8J2XQ2Ww.js — stale bundle (superseded by index-DNeAa-xT.js)
+  web/static/assets/index-DkPxM2o7.css — stale bundle (superseded by index--nFue_yD.css)
 
-[UNCHANGED]
-  Everything else — including agent orchestration, tool system, Coding
-  Lab, context planning/protection, memory/recall, research,
-  attachments, MCP, scheduler, native engine, llama.cpp integration,
-  security restrictions, config copy-on-write, Windows branding (see
-  UPDATE.md §5 DO NOT TOUCH).
+[DO NOT TOUCH]
+  internal/agent, internal/tools, internal/lab, internal/research,
+  internal/memory, internal/recall, internal/computer, internal/skills,
+  internal/contextplan, internal/contextcache, internal/chunking,
+  internal/ctxtelemetry, internal/continuum, internal/llm,
+  internal/installer, native/engine, internal/native/engine,
+  internal/mcp, internal/scheduler (internal/scheduler/scheduler.go),
+  internal/multiagent, internal/pipeline, internal/sessions,
+  internal/attachments, internal/sandbox, internal/proc,
+  internal/api (perf.go/logs.go/netcheck and all other handlers),
+  src/store.ts, src/LogViewer.tsx, src/MessageStream.tsx,
+  src/ActivityStream.tsx, src/api.ts, src/config.ts, src/agent-init.ts,
+  src/settings-shared.tsx, src/SettingsPerformance.tsx, src/layers.css,
+  src/settings.css, src/motion.css, scripts/gen-syso,
+  build/sheytan.ico, sheytan-local-agent.bat — all byte-identical to
+  the v1.1.8 base. See UPDATE.md §5 for the rationale.
