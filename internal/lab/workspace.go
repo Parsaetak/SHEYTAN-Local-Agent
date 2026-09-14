@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -35,6 +36,14 @@ type WorkspaceManager struct {
 
 // NewWorkspaceManager creates a manager rooted at root. The root is made
 // absolute and created immediately so later task creation is deterministic.
+//
+// v1.2.0: the root is stored in CANONICAL OS form (symlinks and Windows
+// 8.3 short names such as RUNNER~1 resolved to their long form through the
+// same resolution the path checks use). Every workspace path derived from
+// the root then shares one comparable representation — previously a root
+// reached through a short name made every canonicalization of an existing
+// child path disagree with the raw string prefix and rejected valid
+// workspace paths on Windows CI.
 func NewWorkspaceManager(root string) (*WorkspaceManager, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, fmt.Errorf("lab: workspace root is empty")
@@ -57,8 +66,16 @@ func NewWorkspaceManager(root string) (*WorkspaceManager, error) {
 		)
 	}
 
+	canonical, err := canonicalPath(abs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"lab: canonicalize workspace root: %w",
+			err,
+		)
+	}
+
 	return &WorkspaceManager{
-		Root: abs,
+		Root: canonical,
 	}, nil
 }
 
@@ -110,6 +127,19 @@ func (m *WorkspaceManager) Create(
 	}
 
 	rootAbs = filepath.Clean(rootAbs)
+
+	// v1.2.0: compare the source in canonical form too — an 8.3 or
+	// symlinked source spelling would otherwise dodge the overlap check
+	// (or false-positive) against a canonical root.
+	sourceCanonical, err := canonicalPath(sourceAbs)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"lab: canonicalize source: %w",
+			err,
+		)
+	}
+
+	sourceAbs = sourceCanonical
 
 	// Never create a task workspace inside the source repository, and never
 	// use a workspace root that is inside the source repository.
@@ -308,7 +338,7 @@ func (m *WorkspaceManager) Remove(
 		return ErrInvalidWorkspace
 	}
 
-	pathAbs, err := filepath.Abs(workspace.Path)
+	pathAbs, err := canonicalPath(workspace.Path)
 	if err != nil {
 		return fmt.Errorf(
 			"lab: resolve workspace: %w",
@@ -316,9 +346,7 @@ func (m *WorkspaceManager) Remove(
 		)
 	}
 
-	pathAbs = filepath.Clean(pathAbs)
-
-	rootAbs, err := filepath.Abs(m.Root)
+	rootAbs, err := canonicalPath(m.Root)
 	if err != nil {
 		return fmt.Errorf(
 			"lab: resolve workspace root: %w",
@@ -326,10 +354,8 @@ func (m *WorkspaceManager) Remove(
 		)
 	}
 
-	rootAbs = filepath.Clean(rootAbs)
-
 	if !sameOrWithin(pathAbs, rootAbs) ||
-		pathAbs == rootAbs {
+		sameWord(pathAbs, rootAbs) {
 		return ErrInvalidWorkspace
 	}
 
@@ -346,6 +372,15 @@ func (m *WorkspaceManager) Remove(
 
 // PathFor returns a path inside the workspace after validating that it cannot
 // escape through absolute paths or .. components.
+//
+// v1.2.0: the workspace base is canonicalized through the same
+// resolution the escape check applies to the candidate. On Windows the
+// temp root is frequently reached through an 8.3 short name (RUNNER~1);
+// evaluating only the candidate produced two DIFFERENT spellings of the
+// same directory (short-name prefix vs long-name expansion) and rejected
+// perfectly valid workspace files. Canonicalizing both sides keeps the
+// jail exactly as strict — .., absolute and outside-root paths are still
+// refused — while comparing one representation.
 func (w *Workspace) PathFor(relative string) (string, error) {
 	if w == nil || w.Path == "" {
 		return "", ErrInvalidWorkspace
@@ -367,7 +402,16 @@ func (w *Workspace) PathFor(relative string) (string, error) {
 		return "", ErrInvalidWorkspace
 	}
 
-	base, err := filepath.Abs(w.Path)
+	// A rooted-but-absolute-less Windows path (\foo, \foo\bar) must be
+	// refused as well: it anchors at the volume root, not at the
+	// workspace. On Windows IsAbs("\\foo") is false — catch it before
+	// the join.
+	if runtime.GOOS == "windows" &&
+		strings.HasPrefix(normalized, string(filepath.Separator)) {
+		return "", ErrInvalidWorkspace
+	}
+
+	base, err := canonicalPath(w.Path)
 	if err != nil {
 		return "", fmt.Errorf(
 			"lab: resolve workspace: %w",
@@ -375,25 +419,14 @@ func (w *Workspace) PathFor(relative string) (string, error) {
 		)
 	}
 
-	base = filepath.Clean(base)
-
-	candidate, err := filepath.Abs(
+	candidate := filepath.Clean(
 		filepath.Join(
 			base,
 			normalized,
 		),
 	)
-	if err != nil {
-		return "", fmt.Errorf(
-			"lab: resolve workspace path: %w",
-			err,
-		)
-	}
 
-	candidate = filepath.Clean(candidate)
-
-	if !sameOrWithin(candidate, base) &&
-		candidate != base {
+	if !sameOrWithin(candidate, base) {
 		return "", ErrInvalidWorkspace
 	}
 
@@ -404,8 +437,7 @@ func (w *Workspace) PathFor(relative string) (string, error) {
 		return "", err
 	}
 
-	if !sameOrWithin(existing, base) &&
-		existing != base {
+	if !sameOrWithin(existing, base) {
 		return "", ErrInvalidWorkspace
 	}
 
@@ -425,27 +457,26 @@ func (m *WorkspaceManager) validateWorkspace(
 		return ErrInvalidWorkspace
 	}
 
-	rootAbs, err := filepath.Abs(m.Root)
+	// v1.2.0: every side of the comparison is canonicalized so the jail
+	// holds across short-name/symlink spellings instead of relying on
+	// string equality of differently-resolved forms.
+	rootAbs, err := canonicalPath(m.Root)
 	if err != nil {
 		return ErrInvalidWorkspace
 	}
 
-	pathAbs, err := filepath.Abs(workspace.Path)
+	pathAbs, err := canonicalPath(workspace.Path)
 	if err != nil {
 		return ErrInvalidWorkspace
 	}
 
-	sourceAbs, err := filepath.Abs(workspace.Source)
+	sourceAbs, err := canonicalPath(workspace.Source)
 	if err != nil {
 		return ErrInvalidSource
 	}
 
-	rootAbs = filepath.Clean(rootAbs)
-	pathAbs = filepath.Clean(pathAbs)
-	sourceAbs = filepath.Clean(sourceAbs)
-
 	if !sameOrWithin(pathAbs, rootAbs) ||
-		pathAbs == rootAbs {
+		sameWord(pathAbs, rootAbs) {
 		return ErrInvalidWorkspace
 	}
 
@@ -978,6 +1009,19 @@ func ensureDirectory(
 func resolveExistingPrefix(
 	path string,
 ) (string, error) {
+	_, resolved, err := resolveExistingPrefixPair(path)
+
+	return resolved, err
+}
+
+// resolveExistingPrefixPair returns BOTH spellings of the nearest existing
+// ancestor of path: the unresolved input spelling that is a string prefix
+// of the requested path, and its canonical form (EvalSymlinks — which on
+// Windows also expands 8.3 short names). Having both lets callers re-join
+// the unresolved remainder onto the canonical prefix.
+func resolveExistingPrefixPair(
+	path string,
+) (unresolved string, resolved string, err error) {
 	current := filepath.Clean(path)
 
 	for {
@@ -988,28 +1032,28 @@ func resolveExistingPrefix(
 				current,
 			)
 			if evalErr != nil {
-				return "", evalErr
+				return "", "", evalErr
 			}
 
 			abs, absErr := filepath.Abs(real)
 			if absErr != nil {
-				return "", absErr
+				return "", "", absErr
 			}
 
-			return filepath.Clean(abs), nil
+			return current, filepath.Clean(abs), nil
 		}
 
 		if !errors.Is(
 			err,
 			os.ErrNotExist,
 		) {
-			return "", err
+			return "", "", err
 		}
 
 		parent := filepath.Dir(current)
 
 		if parent == current {
-			return "", ErrInvalidWorkspace
+			return "", "", ErrInvalidWorkspace
 		}
 
 		current = parent
@@ -1055,7 +1099,7 @@ func sameOrWithin(
 	path = filepath.Clean(path)
 	root = filepath.Clean(root)
 
-	if path == root {
+	if sameWord(path, root) {
 		return true
 	}
 
@@ -1073,4 +1117,53 @@ func sameOrWithin(
 			".."+string(filepath.Separator),
 		) &&
 		rel != ""
+}
+
+// sameWord compares two path components under the OS path-comparison
+// rules: case-insensitive on Windows (NTFS is case-preserving but
+// case-insensitive), byte-exact elsewhere. Mirrors the standard library's
+// internal sameWord used by filepath.Rel.
+func sameWord(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+
+	return a == b
+}
+
+// canonicalPath resolves path to the single representation the OS itself
+// compares with: absolute, cleaned, and with every EXISTING prefix
+// resolved through EvalSymlinks. On Unix that resolves symlinked
+// directories; on Windows it additionally expands 8.3 short names
+// (RUNNER~1 → runneradmin) and mapped spellings to the long form.
+// Components that do not exist yet are kept verbatim on top of the
+// resolved prefix, so the result still describes the intended target.
+func canonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+
+	abs = filepath.Clean(abs)
+
+	unresolved, resolved, err := resolveExistingPrefixPair(abs)
+	if err != nil {
+		return "", err
+	}
+
+	if sameWord(unresolved, resolved) {
+		// Nothing on the path remaps: the absolute spelling is already
+		// canonical.
+		return abs, nil
+	}
+
+	// The nearest existing ancestor resolved to a different spelling
+	// (symlink, 8.3 short name, mapped root). Re-attach the remainder of
+	// the original path onto the canonical prefix.
+	tail, tailErr := filepath.Rel(unresolved, abs)
+	if tailErr != nil || tail == "." {
+		return resolved, nil
+	}
+
+	return filepath.Join(resolved, tail), nil
 }

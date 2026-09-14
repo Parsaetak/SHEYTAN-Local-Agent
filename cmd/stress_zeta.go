@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/releasecontract"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
 )
 
@@ -290,10 +292,20 @@ func stressZetaReleaseSurface() error {
 		)
 	}
 
-	// 3h. The workflow must build and validate the portable ZIPs.
+	// 3h. The workflow must build and validate the portable ZIPs and the
+	// NSIS installer — with names that agree with the SINGLE release
+	// artifact contract (internal/releasecontract). The check is
+	// two-sided: the contracted names must appear in the workflow, AND
+	// every `dist/…` artifact the workflow produces must be one the
+	// contract recognizes. That detects future renaming drift in either
+	// direction instead of pinning a second hard-coded copy of the
+	// naming truth here.
+	contract := releasecontract.For(config.AppVersion)
+
 	requiredWorkflowFragments := []string{
-		"SHEYTAN-Local-Agent-Windows-x64-v${env:APP_VERSION}Z.zip",
-		"SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip",
+		contract.WindowsZipWorkflowSlot,
+		contract.LinuxZipWorkflowSlot,
+		contract.WindowsInstallerSlot,
 		"Create Windows ZIP",
 		"Create Linux ZIP",
 		"Verify Windows ZIP",
@@ -314,13 +326,17 @@ func stressZetaReleaseSurface() error {
 		}
 	}
 
+	if err := checkWorkflowArtifactAgreement(w, contract); err != nil {
+		return err
+	}
+
 	// 3i. ZIPs must preserve the portable application folder structure.
-	for _, fragment := range []string{
-		"SHEYTAN-Local-Agent/SHEYTAN-Local-Agent.exe",
-		"SHEYTAN-Local-Agent/SHEYTAN-Local-Agent",
-		"SHEYTAN-Local-Agent/models/",
-		"SHEYTAN-Local-Agent/workspace/",
-	} {
+	// The expected entries are derived from the contract's app roots so
+	// a future identity rename updates one place, not two.
+	for _, fragment := range append(
+		contract.RequiredWindowsZipEntries(),
+		contract.RequiredLinuxZipEntries()...,
+	) {
 		if !strings.Contains(w, fragment) {
 			return fmt.Errorf(
 				"portable ZIP contract missing %q",
@@ -330,13 +346,14 @@ func stressZetaReleaseSurface() error {
 	}
 
 	// 3j. The workflow must perform frontend verification before the Go
-	// build, and the Windows package must ship the .bat launcher.
+	// build, and the Windows package must ship the launcher script under
+	// the contracted identity.
 	for _, fragment := range []string{
 		"npm run typecheck",
 		"npm run lint",
 		"npm run build",
 		"web/static/index.html",
-		"sheytan-local-agent.bat",
+		releasecontract.LauncherScript,
 	} {
 		if !strings.Contains(w, fragment) {
 			return fmt.Errorf(
@@ -356,6 +373,145 @@ func stressZetaReleaseSurface() error {
 	}
 
 	return nil
+}
+
+// checkWorkflowArtifactAgreement derives the artifact names the workflow
+// ACTUALLY produces and compares them against the release contract. The
+// generic regexes make no assumption about the current naming: if a future
+// release renames the artifacts in the workflow, this check fails until the
+// single contract (internal/releasecontract) is updated with it — the exact
+// drift that broke the v1.2.0 stress gate is now structurally impossible to
+// reintroduce silently.
+func checkWorkflowArtifactAgreement(
+	workflow string,
+	contract releasecontract.Contract,
+) error {
+	// Every artifact path the workflow writes under dist/ (PowerShell
+	// `${env:APP_VERSION}`, bash `${APP_VERSION}` and `${{ env.APP_VERSION }}`
+	// spellings are all captured by the placeholder wildcard).
+	artifactRe := regexp.MustCompile(`dist/[A-Za-z0-9._${}(){}:-]+?\.(?:zip|exe|msix)`)
+
+	found := map[string]bool{}
+	for _, m := range artifactRe.FindAllString(workflow, -1) {
+		found[m] = true
+	}
+
+	if len(found) == 0 {
+		return fmt.Errorf(
+			"desktop workflow produces no dist/ artifacts — packaging contract lost",
+		)
+	}
+
+	// The three contracted artifacts must appear somewhere in the
+	// workflow's dist/ output set (any version-slot spelling counts).
+	contracted := []string{
+		contract.WindowsZipWorkflowSlot,
+		contract.WindowsInstallerSlot,
+		contract.LinuxZipWorkflowSlot,
+	}
+
+	for _, want := range contracted {
+		matched := false
+
+		for got := range found {
+			if artifactNameMatchesSlot(got, want) {
+				matched = true
+				break
+			}
+		}
+
+		if !matched {
+			return fmt.Errorf(
+				"workflow artifacts %v disagree with the release contract %q — update internal/releasecontract and the workflow together",
+				sortedKeys(found),
+				want,
+			)
+		}
+	}
+
+	// No stale legacy naming may survive: any dist/ artifact still
+	// carrying the retired v1.1.x Windows identity means two competing
+	// contracts exist in the tree again.
+	for got := range found {
+		if strings.Contains(got, "SHEYTAN-Local-Agent-Windows-x64") {
+			return fmt.Errorf(
+				"stale legacy Windows artifact %q still produced by the workflow — the v1.2.0 contract renamed it to %q",
+				got,
+				contract.WindowsZipWorkflowSlot,
+			)
+		}
+	}
+
+	// The Windows staging directory must match the contracted app root:
+	// the portable ZIP and the NSIS installer both build from it.
+	if !strings.Contains(
+		workflow,
+		releasecontract.WindowsAppDir,
+	) {
+		return fmt.Errorf(
+			"workflow no longer stages the Windows application at %q — packaging identity drifted",
+			releasecontract.WindowsAppDir,
+		)
+	}
+
+	return nil
+}
+
+// artifactNameMatchesSlot reports whether a workflow artifact path is the
+// given contract slot with any version placeholder spelling.
+func artifactNameMatchesSlot(got, slot string) bool {
+	// Strip the dist/ staging prefix — the contract names are bare
+	// file names, the workflow references them under dist/.
+	got = strings.TrimPrefix(got, "dist/")
+
+	// Normalize both sides around the version placeholder: replace the
+	// version slot with a wildcard and compare the fixed skeleton.
+	skeleton := slot
+
+	for _, ph := range []string{
+		"${env:APP_VERSION}",
+		"${APP_VERSION}",
+		"${{ env.APP_VERSION }}",
+	} {
+		skeleton = strings.ReplaceAll(skeleton, ph, "*VERSION*")
+	}
+
+	gotSkeleton := got
+
+	for _, ph := range []string{
+		"${env:APP_VERSION}",
+		"${APP_VERSION}",
+		"${{ env.APP_VERSION }}",
+	} {
+		gotSkeleton = strings.ReplaceAll(gotSkeleton, ph, "*VERSION*")
+	}
+
+	if gotSkeleton == skeleton {
+		return true
+	}
+
+	// Fall back: the slot with any placeholder content collapsed.
+	collapse := func(s string) string {
+		re := regexp.MustCompile(`\$\{[^}]*\}`)
+		return re.ReplaceAllString(s, "*VERSION*")
+	}
+
+	return collapse(got) == collapse(slot)
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+
+	return out
 }
 
 // versionLessThan reports whether semantic version a < b.

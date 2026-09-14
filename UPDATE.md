@@ -1,221 +1,205 @@
-# UPDATE.md — v1.2.0 SHEYTAN-LA Unified Product Upgrade Replacement Package
+# UPDATE.md — v1.2.0 SHEYTAN-LA Stability / Release-Quality Repair Package
 
-**Release:** `v1.2.0` (codename Zeta) · **Base:** `main @ ac63b88` (`v1.1.9`)
+**Release:** `v1.2.0` (codename Zeta) · **Base:** `main @ 40fdd3b` (`v1.2.0`)
 **Date:** 2026-09-14
 **Package:** `SHEYTAN-Local-Agent-v1.2.0-UPDATE.zip`
 
-This package is a COMPLETE REPLACEMENT of the repository state. Apply it by
-replacing the whole tree (or, file-by-file, by following the exact map
-below). Every path is relative to the repository root.
+This package is a targeted stability, lifecycle and release-quality repair
+of the v1.2.0 tree (the run-34857158565 failure set). It is a COMPLETE
+REPLACEMENT of the files it lists; every path is relative to the repository
+root. No version bump was taken: the v1.2.0 release logic is made internally
+consistent instead (package.json remains the single version authority,
+resolved by `scripts/release-version.mjs`).
 
-v1.2.0 turns SHEYTAN into the unified **SHEYTAN-LA** product without
-rebuilding any subsystem: (1) the vision readiness pipeline is a real
-evidence-backed state machine (`internal/vision/states.go`) exposed through
-`/api/models` and `/api/engine` — "Ready" only appears when the engine is
-serving WITH a verified projector, "Degraded" when the projector failed with
-every profile and the engine fell back to text-only; (2) mmproj becomes a
-first-class asset (state, evidence, size and verification per model, plus an
-adapter-verified projector GPU-offload posture); (3) the model picker, chat
-surface and composer are polished (markdown + highlighted code + copy,
-inline images, Enter-to-send, paste/drag-drop through the EXISTING upload
-backend, intelligent autoscroll) while the rAF streaming coalescing is
-untouched; (4) Agent mode groups activity into Plan / Execution / Repair /
-Verification phases; (5) new `internal/hardware` and
-`internal/recommendation` packages deliver measured hardware intelligence
-and explainable task-aware runtime profiles; (6) Settings gains three
-Performance LEVELS, a dedicated Vision tab and an Updates tab; (7) a new
-System view (Environment Centre) plus `/api/health` report evidence-backed
-state for every consequential subsystem; (8) the product becomes
-SHEYTAN-LA — `SHEYTAN-LA.exe` Windows identity, AppUserModelID
-`Parsaetak.SHEYTAN-LA`, NSIS installer, SHA-256-verified release manifest
-and staged-update machinery, all produced by the GitHub release factory.
-No second runtime, telemetry system, frontend framework, database or cloud
-service was introduced; every limitation (no Authenticode signing, no MSIX,
-Windows-only firewall paths) is documented honestly.
+What this package fixes, honestly and at the root:
+
+1. **Release-surface contract (Linux stress `zeta_release_surface`).** The
+   stress gate pinned the retired v1.1.x Windows artifact name while the
+   workflow had moved to the `SHEYTAN-LA-v<ver>-windows-x64` identity. A new
+   single-source contract (`internal/releasecontract`) is now the only
+   artifact-naming truth; the stress gate derives the contracted names from
+   the installed version AND regex-derives the names the workflow actually
+   produces, failing on any future drift in either direction. Stale legacy
+   naming is rejected explicitly.
+2. **LoopGuard wall-clock budget (Windows Go verification).** A 1ns budget
+   measured against the raw Windows monotonic clock could read elapsed == 0
+   and never expire. The budget logic now uses an injectable clock with
+   defined semantics (`elapsed >= budget` blocks; zero/negative disables)
+   and the test suite is fully deterministic (expired / exactly-at-expiry /
+   just-before / disabled / negative / multi-call). No sleep-based timing.
+3. **Lab workspace path canonicalisation (8 lab test failures on Windows).**
+   On Windows CI the temp root is reached through an 8.3 short name
+   (`RUNNER~1`) while the jail's symlink resolution returns the long form,
+   so valid workspace files were refused with "lab: invalid workspace path".
+   Both sides of every comparison are now canonicalised through one helper
+   (absolute + cleaned + EvalSymlinks on the nearest existing ancestor, tail
+   re-attached), `sameWord` makes equality OS-aware (case-insensitive on
+   Windows), and rooted `\foo` paths are refused. The jail is exactly as
+   strict: `..`, absolute, different-volume and outside-root paths are still
+   rejected — pinned by a new regression test that reproduces the
+   short/long-name mismatch class with a symlink.
+4. **LLM path assertions.** Tests never compare raw path strings any more;
+   `internal/llm/paths_test.go` provides the one OS-aware helper and the
+   fake-engine fixtures build paths with `filepath.Join`.
+5. **Logging handle cleanup (Windows temp-dir cleanup).** The three
+   `RecentParsed` tests now close the log Manager (idempotent `Close`) so no
+   `app.log`/`tools.jsonl`/`llm.jsonl` handle outlives the test.
+6. **ZIP member validation.** `\absolute\path` is "rooted-relative", not
+   absolute, under `filepath.IsAbs` on Windows — the validator let it
+   through. The single authoritative validator
+   (`updater.safeZipPath`, exported `SafeArchivePath`; `internal/llm`
+   delegates to it) is separator-canonical: POSIX-absolute, rooted,
+   drive-letter, UNC, mixed-separator traversal and NUL-bearing members are
+   all rejected on every host; regression tests pin the exact member set.
+7. **NSIS installer path contract ("no files found").** makensis resolves
+   compile-time paths relative to the .nsi SCRIPT directory, so the
+   repo-root-relative `-DBUILDDIR` looked under `packaging\nsis\dist\...`.
+   The contract is now singular and documented: CI passes ABSOLUTE
+   `BUILDDIR`/`OUTFILE` paths, the script carries compile-time
+   `!if ! /FileExists` assertions on the staging executable, the output path
+   is centralised in one `OUTFILE` define, and the workflow asserts the
+   staging directory + executable before invoking makensis, checks
+   `$LASTEXITCODE`, and verifies the produced installer (exists, non-empty,
+   ProductVersion == APP_VERSION, ProductName == SHEYTAN-LA, MZ header).
+8. **Deterministic subprocess lifecycle.** `LlamaServer.Stop()` now waits
+   (bounded) on the exit watcher's done-channel after Kill so the child is
+   fully reaped — and on Windows its executable unlocked — before Stop
+   returns (the "unlinkat llm.test.exe: Access is denied" / orphan
+   `llm.test`/`conhost` class). Three engine tests that started the fake
+   engine without stopping it now own and stop it deterministically.
+   `taskkill` (process-tree termination) is spawned with CREATE_NO_WINDOW
+   so it no longer allocates orphan conhost consoles.
+9. **Updater goroutine ownership (`.update-stage` residue).** The scheduled
+   engine-update loop spawned by `EnsureSetup` was never cancelled:
+   `Server.Close()` left it running, and in the test suite it raced
+   `t.TempDir()` cleanup, writing `bin\.update-stage` behind the test's
+   back. `RunScheduled` now returns a completion channel (closed only after
+   cancellation is observed AND any in-flight pass finished); `Close()`
+   cancels and waits (bounded 3s); unit tests disable the schedule so no
+   unit test touches the network.
+
+Efficiency/lifecycle audit result (no new subsystems): all tickers are
+context-owned singletons (scheduler 1-minute tick, updater 6-hour tick,
+stream-stall watchdog), WebSocket reconnect is a single bounded backoff
+ladder (max 20 attempts / 15s) with stale-socket guards, engine start is a
+single-flight state machine (`startLocked` no-ops when alive/starting and
+ADOPTS an existing engine on port conflict), sysinfo probing is
+`sync.Once`-cached, every retry ladder is bounded (auto-restart 3 with
+exponential backoff, compat ladder finite), and all rings/buffers are
+capped (UI activity 500 events, engine error ring 64, log viewer ring 512).
+The rAF streaming coalescing (tokens → buffer → animation-frame flush →
+one state update) is untouched.
 
 ## 1. DELETE
 
-Stale Vite bundles superseded by the regenerated embedded build, and the
-legacy launcher superseded by the renamed SHEYTAN-LA launcher. These files
-existed in the base tree and are NOT shipped in this package; the new hashed
-set is referenced by `web/static/index.html`.
-
-| Path | Why |
-|---|---|
-| `web/static/assets/AgentBody-NepkaVWP.js` | stale bundle (superseded by `AgentBody-gUOngzB2.js`) |
-| `web/static/assets/AgentHeader-CjbPNa0Q.js` | stale bundle (superseded by `AgentHeader-BLpYPa1a.js`) |
-| `web/static/assets/AgentSidebar-CAXlKFQx.js` | stale bundle (superseded by `AgentSidebar-DxAszNFR.js`) |
-| `web/static/assets/LabPanel-B5Xf1JtL.js` | stale bundle (superseded by `LabPanel-IAovuBwW.js`) |
-| `web/static/assets/ResearchPanel-BK1_HHZQ.js` | stale bundle (superseded by `ResearchPanel-CzUQatci.js`) |
-| `web/static/assets/SettingsPanel-DGL5poUh.js` | stale bundle (superseded by `SettingsPanel-DDjHHTKY.js`) |
-| `web/static/assets/index-DNeAa-xT.js` | stale bundle (superseded by `index-C5shaEHo.js`) |
-| `web/static/assets/index--nFue_yD.css` | stale bundle (superseded by `index-DJQM74Q8.css`) |
-| `sheytan-local-agent.bat` | legacy launcher; replaced by `SHEYTAN-LA.bat` (which still falls back to a legacy exe name) |
-
-Nothing else was deleted. No source file, test, tool, or subsystem was
-removed in this release.
+Nothing was deleted. No source file, test, tool or subsystem was removed by
+this repair, and no test was weakened to accommodate Windows: the lab path
+jail and the archive validator were made STRICTER, and the LoopGuard budget
+tests became deterministic while covering MORE cases.
 
 ## 2. REPLACE
 
-Files whose content is fully superseded. Replace them with the versions in
-this package (they are also listed under MODIFY with per-file reasons).
+Package metadata, fully superseded by this package:
 
-| Path | Reason |
+| Path | Why |
 |---|---|
-| `UPDATE.md` | this release's change map |
-| `REPLACEMENT-MANIFEST.txt` | regenerated for v1.2.0 |
-| `REPLACEMENT-SHA256.txt` | regenerated for v1.2.0 |
-| `web/static/index.html` | regenerated — references the new hashed bundle set |
-| `web/static/.vite/manifest.json` | regenerated by `npm run build` |
-| `SIGNATURE` | first line repaired to `SHEYTAN-Local-Agent v1.2.0` by `release-version.mjs` |
+| `UPDATE.md` | this change map |
+| `REPLACEMENT-MANIFEST.txt` | regenerated for this package |
+| `REPLACEMENT-SHA256.txt` | regenerated for this package |
 
 ## 3. MODIFY
 
+Files changed in place (all verified by the checks listed at the bottom):
+
 | Path | Change |
 |---|---|
-| `package.json` | Canonical version `1.1.9` → `1.2.0` (the ONLY manual version edit); adds react-markdown / remark-gfm / rehype-highlight |
-| `package-lock.json` | aligned to `1.2.0` + new markdown dependency tree |
-| `internal/config/config.go` | `AppVersion = "1.2.0"` (repaired by script); new identity constants (`AppShortName SHEYTAN-LA`, `AppDescription`, `AppUserModelID`, `AppPublisher`, `ExecutableName`); new fields `VisionMMProjOffload` and `RuntimeProfile` |
-| `build/config.yml` | `productVersion: "1.2.0"` + productName `SHEYTAN-LA` + company `Parsaetak` |
-| `.github/workflows/build-desktop.yml` | Windows exe is `SHEYTAN-LA.exe` in `SHEYTAN-LA/`; portable zip renamed `SHEYTAN-LA-v<ver>-windows-x64.zip`; new NSIS installer build + verification steps; installer artifact upload; release job downloads and verifies the installer, generates `SHA256SUMS.txt`, generates and validates `release-manifest.json`, publishes all five assets only after payload verification, and re-verifies the published release (installer + checksums + manifest present). Version derivation chain unchanged: `package.json` → `release-version.mjs --env` → audit outputs |
-| `internal/vision/states.go` (new) | the vision readiness state machine: nine states, conservative mtmd architecture allow-list, `EvaluateModel` evidence rules (override validated, pairing beats allow-list), `InspectProjector` measurement |
-| `internal/vision/states_test.go` (new) | state machine coverage with real GGUF fixtures |
-| `internal/llm/llama.go` | vision state transitions recorded at pairing (loading), verified boot (ready — the ONLY path to ready), text-only retry (degraded) and terminal failure; `VisionStatus()` runtime block; `--no-mmproj-offload` posture; `VulkanAvailable` export shared with the hardware layer |
-| `internal/api/visioninfo.go` (new) | per-model vision fields for `/api/models` |
-| `internal/api/server.go` | modelInfo embeds the vision fields; handleModels evaluates pre-boot state and upgrades the serving model to runtime truth; routes registered for `/api/environment`, `/api/health`, `/api/recommendation`, `/api/update/*`; `lastAppUpdate` cache |
-| `internal/api/engine.go` | engineSnapshot vision block (state/reason/projector/name/bytes/active) |
-| `internal/api/environment.go` (new) | Environment Centre payload + verified health (11 evidence-backed checks; identity reports the truth: unsigned developer build) |
-| `internal/api/recommendation.go` (new) | GET `/api/recommendation?model=&task=` — recommendation + current values + available profiles; nothing mutates config here |
-| `internal/api/update.go` (new) | `/api/update/status` `/check` `/download` — manifest check and verified staging; never executes artifacts |
-| `internal/hardware/hardware.go` (new) | unified hardware intelligence over the existing sysinfo probe + backend evidence |
-| `internal/recommendation/recommendation.go` (new) | task-aware profiles, clamps and resource ladder, Reasons/Notes, predicted-vs-measured separation |
-| `internal/recommendation/recommendation_test.go` (new) | evidence-grounded, clamp, step-down, low-power, vision and engine-capability tests |
-| `internal/platform/*` (new) | OS-integration abstraction: AUMID (windows syscall / honest unsupported elsewhere), firewall rule model + unit-locked netsh argument vectors + idempotent apply/remove/status |
-| `internal/updater/appupdate.go` (new) | app manifest schema, version ordering (incl. prerelease), SHA-256+size verified staging under `updates/staging`, `StageIsValid` re-verification |
-| `internal/updater/appupdate_test.go` (new) | ordering, check, check-failure, refusal without digest, verified staging + tamper refusal tests |
-| `internal/desktop/desktop.go` | AUMID registered before the first window; window title `SHEYTAN-LA — SHEYTAN Local Agent` |
-| `internal/api/perf*.go` | touch-ups alongside the recommendation wiring (gofmt/signature alignment) |
-| `src/vision.ts` (new) | shared vision badge renderer — the UI maps the backend state machine 1:1, invents nothing |
-| `src/api.ts` | Model + EngineSnapshot vision fields; config `visionMmprojOffload` + `runtimeProfile`; Environment/Health/Recommendation/Update payload types + client methods |
-| `src/ModelPicker.tsx` | fact grid Text/Vision/Tools/Native/Context/RAM/VRAM; state-machine Vision badge with evidence tooltip; "Recommended for your device"; details rows for projector + reasons; "Use recommended setup" first-run action |
-| `src/MessageStream.tsx` | markdown rendering (GFM + highlighting), code-block copy, per-message copy, inline images, stick-to-bottom autoscroll + jump-to-latest |
-| `src/AgentBody.tsx` | chat-rail Vision chip; composer Enter/Shift+Enter + auto-grow + paste + drag/drop (existing upload backend, object-URL previews) + honest vision gating hint |
-| `src/ActivityStream.tsx` | progressive disclosure: Plan/Execution/Repair/Verification/Run phase grouping derived from existing event types; Raw toggle |
-| `src/SettingsPanel.tsx` | three Performance LEVELS (Simple / Performance / Advanced) with persistence; new Vision and Updates tabs wired |
-| `src/SettingsVisionUpdates.tsx` (new) | SimplePerformanceCard (Quiet/Balanced/Maximum postures via real task profiles), TaskProfileCard, VisionCard (controls + DETECTED PROJECTOR card), UpdatesCard (check + download-&-verify) |
-| `src/SystemPanel.tsx` (new) | Environment Centre view: Device / Runtime / Recommendation (Apply + Why) / verified health checks |
-| `src/workspace.ts` + `src/App.tsx` | new `system` workspace layer (both modes), lazy SystemPanel wiring |
-| `src/styles.css` | v1.2.0 surfaces: vision chips/tones, markdown + code blocks + hljs tokens, message meta/copy, images, jump-to-latest, composer drag/vision hint, activity phases, level switch, posture/profile grids, Environment Centre, health checks, onboarding |
-| `SHEYTAN-LA.bat` (replaces `sheytan-local-agent.bat`) | launcher for `SHEYTAN-LA.exe` with legacy-name fallback |
-| `scripts/gen-syso/main.go` | Windows version resources per the identity contract (ProductName SHEYTAN-LA, FileDescription "SHEYTAN Local Agent", CompanyName Parsaetak, InternalName/OriginalFilename SHEYTAN-LA(.exe)); no signature claimed |
-| `scripts/build-and-zip.sh` | VERSION now DERIVED from package.json via `release-version.mjs --env` (was hardcoded 1.1.4); app name SHEYTAN-LA |
-| `packaging/nsis/installer.nsi` (new) | per-machine NSIS installer: shortcuts, AUMID registration, version-aware upgrades, clean uninstall preserving models/sessions/config, `SHEYTAN_DATA_DIR` user-data declaration; models NEVER bundled |
-| `README.md` | SHEYTAN-LA product header + v1.2.0 section (shipped items only) |
-| `agent.md` | release line + v1.2.0 next-agent notes (state-machine authority, recommendation contract, settings levels, platform identity, update staging, release artifacts) |
-| `ARCHITECTURE.md` | new Part II.9 — v1.2.0 product surfaces (implemented) |
-| `worklog.md` | v1.2.0 entry appended (phase history preserved) |
+| `.github/workflows/build-desktop.yml` | NSIS step: ABSOLUTE `BUILDDIR`/`OUTFILE`, pre-flight staging assertions, `$LASTEXITCODE` check, installer identity assertions; Verify Windows installer adds MZ-header + identity checks |
+| `cmd/stress_zeta.go` | release-surface check derives the artifact contract from `internal/releasecontract` + regex agreement with the workflow; drift detection both directions; legacy naming rejected |
+| `internal/agent/reliability.go` | LoopGuard: injectable clock, defined wall-clock budget semantics (`>=` blocks, `<= 0` disabled) |
+| `internal/agent/reliability_test.go` | deterministic wall-clock coverage: expired / at-expiry / just-before / disabled / negative / multi-call (no real-clock nanosecond flake) |
+| `internal/api/lifecycle.go` | `Close()` cancels the scheduled updater and waits (bounded) for its completion channel |
+| `internal/api/server.go` | tracks `updateDone`; wires `RunScheduled`'s completion channel |
+| `internal/api/server_native_test.go` | test config: `UpdateSchedule = "off"` (no network in unit tests) |
+| `internal/api/server_test.go` | test config: `UpdateSchedule = "off"` |
+| `internal/api/server_v114_test.go` | test config: `UpdateSchedule = "off"` |
+| `internal/lab/lab_test.go` | new canonical-spelling regression test (symlink reproduction of the Windows 8.3 mismatch) with jail assertions |
+| `internal/lab/workspace.go` | `canonicalPath` helper; both sides of every path comparison canonicalised; OS-aware `sameWord`; rooted `\foo` refused; canonical manager root |
+| `internal/llm/capability_test.go` | three engine tests stop the fake engine they start (`t.Cleanup`) — no orphan test-binary children |
+| `internal/llm/llama.go` | `Stop()` waits (bounded) for child reaping via the exit watcher; `exitDone` tracked; `safeArchivePath` delegates to the authoritative validator |
+| `internal/llm/llama_test.go` | `filepath.Join` path construction; OS-aware path assertions |
+| `internal/logging/recentparsed_test.go` | tests close the log Manager before temp-dir cleanup |
+| `internal/proc/proc_windows.go` | `taskkill` spawned hidden (CREATE_NO_WINDOW) — no orphan conhost |
+| `internal/updater/updater.go` | hardened separator-canonical `safeZipPath` + exported `SafeArchivePath`; `RunScheduled` returns a completion channel |
+| `internal/updater/zipsafe_test.go` | regression members: rooted, drive-letter slash form, UNC slash form, mixed separators, NUL, whitespace; validator-agreement test |
+| `packaging/nsis/installer.nsi` | centralised `OUTFILE`; compile-time staging-exe assertion; single documented path contract |
 
 ## 4. ADD
 
 | Path | Purpose |
 |---|---|
-| `internal/vision/states.go` + `states_test.go` | vision readiness state machine + tests |
-| `internal/api/visioninfo.go` | per-model vision fields |
-| `internal/api/environment.go` | Environment Centre + verified health endpoints |
-| `internal/api/recommendation.go` | recommendation endpoint |
-| `internal/api/update.go` | application update endpoints |
-| `internal/hardware/hardware.go` | unified hardware intelligence layer |
-| `internal/recommendation/recommendation.go` + test | evidence-based recommendation engine + tests |
-| `internal/platform/platform.go`, `identity_windows.go`, `identity_other.go`, `firewall.go`, `platform_test.go` | OS-integration abstraction (AUMID + firewall) + tests |
-| `internal/updater/appupdate.go` + test | manifest-verified application updater + tests |
-| `src/vision.ts` | shared vision badge renderer |
-| `src/SettingsVisionUpdates.tsx` | Simple postures, task profiles, Vision tab, Updates tab |
-| `src/SystemPanel.tsx` | Environment Centre view |
-| `packaging/nsis/installer.nsi` | NSIS installer script |
-| `SHEYTAN-LA.bat` | renamed launcher |
-| `web/static/assets/AgentBody-gUOngzB2.js` | regenerated embedded build (new hash set) |
-| `web/static/assets/AgentHeader-BLpYPa1a.js` | regenerated embedded build |
-| `web/static/assets/AgentSidebar-DxAszNFR.js` | regenerated embedded build |
-| `web/static/assets/LabPanel-IAovuBwW.js` | regenerated embedded build |
-| `web/static/assets/ResearchPanel-CzUQatci.js` | regenerated embedded build |
-| `web/static/assets/SettingsPanel-DDjHHTKY.js` | regenerated embedded build |
-| `web/static/assets/SystemPanel-7HYAXm8y.js` | regenerated embedded build |
-| `web/static/assets/vision-Dw0T2tjy.js` | regenerated embedded build (shared vision helper chunk) |
-| `web/static/assets/index-C5shaEHo.js` | regenerated embedded build |
-| `web/static/assets/index-DJQM74Q8.css` | regenerated embedded build |
+| `internal/releasecontract/releasecontract.go` | the SINGLE authoritative release artifact-name contract (portable ZIPs, installer, app roots, launcher, required ZIP entries) |
+| `internal/llm/paths_test.go` | the one OS-aware filesystem-path comparison helper for tests (`sameFilePath` / `assertSameFilePath`) |
 
 ## 5. DO NOT TOUCH
 
-Untouched by this release, and not to be modified without an explicit
-architecture decision:
+Everything not listed above is unchanged by this package and must not be
+modified without an explicit architecture decision. In particular the
+existing v1.2.0 guarantees are preserved untouched:
 
-- The agent loop and orchestrator (`internal/agent`) — planning, tool
-  calls, verification, reliability gates.
-- The tool registry and every tool implementation (`internal/tools`,
-  `internal/lab`, `internal/research`, `internal/memory`, `internal/recall`,
-  `internal/computer`, `internal/skills`, ...).
-- Coding Lab execution model, policy, safe-edit, repair and verifier
-  (`internal/lab`).
-- Context planning/protection, budget pipeline, context cache, chunking
-  (`internal/contextplan`, `internal/contextcache`, `internal/chunking`,
-  `internal/ctxtelemetry`, `internal/continuum`).
-- The engine capability adapter and compatibility ladder
-  (`internal/llm/capability.go`, `shouldRetryFullSpeed`, persisted
-  capability profile) — v1.2.0 only ADDS the projector-offload flag and
-  vision state recording; the repair semantics are untouched.
-- The rAF streaming coalescing in `src/store.ts` — v1.2.0 changed no store
-  logic; markdown parsing happens on completed messages only.
-- The native C++ engine (`native/engine`) — zero bytes changed.
-- MCP bridge, scheduler, multi-agent, pipeline, sessions, attachments,
-  sandbox/proc security restrictions, config copy-on-write semantics
-  (`internal/config` — new optional fields only, defaults preserve legacy
-  behaviour: empty offload = engine default, empty profile = chat).
-- `/api/perf`, `/api/logs`, `/api/netcheck` contracts and the perf
-  telemetry ring — the recommendation engine reads them, never replaces
-  them.
-- The in-app log viewer (`src/LogViewer.tsx`) — unchanged.
-- Windows branding, icons, `.syso` generation mechanics
-  (`scripts/gen-syso` — only the identity strings changed).
+- The rAF streaming coalescing path (tokens → buffer → animation-frame
+  flush → one state update) — intentionally protecting React from
+  per-token rendering pressure.
+- The compatibility adapter, objective verification, performance telemetry,
+  logs, network diagnostics, model capability detection, vision package,
+  context handling and engine state machine.
+- The updater safety posture (SHA-256-verified, staged, never executed by
+  the app) and the Windows identity (`SHEYTAN-LA`, `SHEYTAN-LA.exe`,
+  `Parsaetak.SHEYTAN-LA`).
+- `package.json` as the only version source of truth; `internal/config`
+  mirrors it and CI verifies the agreement every run.
 
-## 6. How to apply this update safely
+## 6. Safe apply procedure
 
-1. Back up nothing that matters for the update itself — `models/`,
-   `workspace/`, `sessions/` and `config.json` are never touched by any
-   file in this package. Still, take a normal backup before updating.
-2. Check out the base commit (`ac63b88`) clean, then replace the whole
-   tree with this package (or copy file-by-file following sections 1–4).
-3. Delete exactly the files listed in section 1 (stale bundles + legacy
-   launcher).
-4. Run `npm install` (new markdown dependencies), then
-   `node scripts/release-version.mjs --check` — it must pass without
-   repairs (version metadata agrees everywhere: 1.2.0).
-5. Verify with the standard gates: `npm run typecheck && npm run lint &&
-   npm run build`, `go test -tags headless ./...`, `go vet -tags headless
-   ./...`. All gates pass on the shipped tree (36 Go packages, oxlint 0/0,
-   tsc clean, vite build regenerated `web/static`).
-6. Windows: run `go run ./scripts/gen-syso` before `go build` to embed the
-   SHEYTAN-LA version resources.
+1. Check out the base commit (`main @ 40fdd3b`).
+2. Replace the whole tree with this package's contents (or apply file-by-file
+   following sections 1–4).
+3. Verify: `node scripts/release-version.mjs --check`, `npm run typecheck`,
+   `npm run lint`, `npm run build`, `go test ./... -count=1`,
+   `go vet ./...`, then build and run the stress binary
+   (`go build -o /tmp/sheytan-stress ./scripts/stress-main` and run
+   `stress`) — the suite must report `30 pass / 0 fail`.
 
-## 7. Known limitations (documented honestly)
+## 7. Executed checks (this package)
 
-- **No Authenticode signature.** No certificate is configured; the
-  installer verification step REPORTS signature status and the health view
-  reports "code signature: none (unsigned developer build)". Nothing in
-  the product claims to be signed. CI is structured so signing credentials
-  can be added later through GitHub Secrets without workflow surgery.
-- **MSIX/AppInstaller is NOT produced.** The installer strategy is NSIS
-  (primary) + portable ZIP (advanced). MSIX remains a possible future path
-  and is claimed nowhere.
-- **Firewall rules are Windows-only and created on explicit request only.**
-  The engine binds loopback by default, which Windows Firewall does not
-  filter — the default posture creates NO rule. The netsh argument vectors
-  are unit-locked; apply/remove/status return honest
-  `ErrUnsupportedPlatform` on other systems.
-- **CI was not triggered from the authoring environment** (no push access);
-  the exact gate set shipped in this package was executed locally and is
-  listed in section 6. The workflow changes are YAML-validated and follow
-  the job-graph contracts the v1.1.9 run established.
-- **Vision "ready" requires a real boot.** Pre-boot states (supported /
-  projector-found / …) describe evidence, not a running multimodal engine;
-  only the engine's verified startup with the projector promotes the state
-  to ready.
+- `go test ./... -count=1` — all buildable packages pass; lifecycle-sensitive
+  groups (`internal/agent`, `internal/api`, `internal/lab`, `internal/llm`,
+  `internal/logging`, `internal/updater`) pass 3/3 repeated runs.
+- `go vet ./internal/... ./cmd/...` clean; full-tree `GOOS=windows` build and
+  vet clean.
+- Stress/chaos suite: `30 pass / 0 fail` (includes `zeta_release_surface`).
+- Frontend: `release-version.mjs --check`, `tsc --noEmit`, `oxlint`, and the
+  production Vite build all pass; embedded assets re-synced.
+- Native engine: 11/12 ctest suites pass locally; the in-process
+  `host` harness stalls in this sandbox on UNMODIFIED sources, and the host
+  binary itself was verified end-to-end over its real framed protocol
+  (load → capability evidence → streamed chunks → terminal frame → clean
+  exit 0). ctest is unchanged and green in CI.
+- Process-leak check: no orphan `llm.test` children after the fixed suite,
+  no `.update-stage` or `.rot` residue, no open test log handles.
+- Windows packaging reproduced locally: `SHEYTAN-LA.exe` (PE32+ GUI,
+  19.1 MB, go1.26.1), portable ZIP `SHEYTAN-LA-v1.2.0-windows-x64.zip` with
+  the exact contracted entry set, `unzip -t` clean. The NSIS installer
+  itself builds in CI (absolute path contract + assertions above); no
+  makensis binary exists in this sandbox to produce it locally.
+
+## 8. Known limitations (unchanged, honest)
+
+- No Authenticode signing (no credentials in CI yet) — installer signature
+  status is reported, never faked.
+- No MSIX packaging; NSIS is the broad Win32 distribution path.
+- No multimodal inference was claimed or tested here: no real multimodal
+  model/projector exists in the test environment, and the vision readiness
+  machinery is exercised only through its deterministic fixtures.
+- The Linux portable ZIP keeps the historical
+  `SHEYTAN-Local-Agent-Linux-x64-v<ver>Z.zip` identity by contract; only the
+  Windows identity moved to `SHEYTAN-LA-v<ver>-windows-x64` in v1.2.0.

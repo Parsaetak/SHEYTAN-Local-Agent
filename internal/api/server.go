@@ -62,7 +62,12 @@ type Server struct {
 
 	// updateCancel stops the scheduled engine-update loop on Close
 	// (v1.1.4Z: updater.RunScheduled existed with zero callers).
+	// updateDone is RunScheduled's completion channel: closed once the
+	// loop observed cancellation AND any in-flight pass finished —
+	// Close waits on it (bounded) so the updater can never outlive the
+	// server and write staging files behind its back.
 	updateCancel context.CancelFunc
+	updateDone   <-chan struct{}
 
 	// lastAppUpdate caches the newest app-update check (v1.2.0) so
 	// /api/update/status never blocks on the network. Written only by
@@ -294,9 +299,8 @@ func (s *Server) EnsureSetup() error {
 	sched := strings.ToLower(strings.TrimSpace(cfg.UpdateSchedule))
 	if sched != "off" && sched != "never" {
 		ctx, cancel := context.WithCancel(context.Background())
-		s.updateCancel = cancel
 
-		go updater.RunScheduled(
+		done := updater.RunScheduled(
 			ctx,
 			s.src,
 			s.llama,
@@ -307,6 +311,9 @@ func (s *Server) EnsureSetup() error {
 				_ = config.Save(next.ConfigPath(), next)
 			},
 		)
+
+		s.updateCancel = cancel
+		s.updateDone = done
 	}
 
 	return nil

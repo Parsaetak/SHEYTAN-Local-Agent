@@ -92,6 +92,78 @@ func TestWorkspaceIsolation(t *testing.T) {
 	}
 }
 
+// TestWorkspacePathForCanonicalSpelling is the v1.2.0 Windows regression:
+// the temp root on CI is reached through an 8.3 short name (RUNNER~1), so
+// the workspace path and its EvalSymlinks-resolved form are two DIFFERENT
+// spellings of the same directory. PathFor compared them as raw strings
+// and rejected every valid workspace file ("lab: invalid workspace path").
+//
+// On Unix the same mismatch class is reproduced with a symlink: the
+// workspace spelling goes through the link, the canonical form does not.
+// The security contract is pinned at the same time — .., absolute and
+// outside-root paths must still be refused across spellings.
+func TestWorkspacePathForCanonicalSpelling(t *testing.T) {
+	t.Parallel()
+
+	real := t.TempDir()
+
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink privileges unavailable on this Windows host")
+		}
+		t.Fatal(err)
+	}
+
+	manager, err := NewWorkspaceManager(link)
+	if err != nil {
+		t.Fatalf("NewWorkspaceManager: %v", err)
+	}
+
+	// The manager root must be canonicalized to the real path so every
+	// derived workspace shares one representation.
+	if manager.Root != real {
+		t.Fatalf("manager root = %q, want canonical %q", manager.Root, real)
+	}
+
+	workspace := &Workspace{
+		ID:     "canonical-test",
+		Path:   filepath.Join(link, "canonical-test"), // non-canonical spelling
+		Source: real,
+	}
+
+	if err := os.MkdirAll(workspace.Path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A nested, not-yet-existing file inside a non-canonical workspace
+	// spelling must resolve AND stay inside the jail.
+	got, err := workspace.PathFor("nested/file.txt")
+	if err != nil {
+		t.Fatalf("PathFor with non-canonical workspace spelling: %v", err)
+	}
+
+	want, wantErr := filepath.Abs(filepath.Join(real, "canonical-test", "nested", "file.txt"))
+	if wantErr != nil {
+		t.Fatal(wantErr)
+	}
+
+	if got != want {
+		t.Fatalf("PathFor = %q, want canonical %q", got, want)
+	}
+
+	// The jail still holds across spellings.
+	for _, escape := range []string{
+		filepath.Join("..", "escape"),
+		"..\\escape",
+		real,
+	} {
+		if _, err := workspace.PathFor(escape); !errors.Is(err, ErrInvalidWorkspace) {
+			t.Fatalf("escape %q must be refused, got %v", escape, err)
+		}
+	}
+}
+
 func TestRunnerSuccessAndFailure(t *testing.T) {
 	t.Parallel()
 

@@ -61,6 +61,7 @@ func newNativeTestServer(t *testing.T, engineBackend string) *httptest.Server {
 	cfg.Port = 0
 	cfg.Provider = "local"
 	cfg.LlamaAutoStart = false
+	cfg.UpdateSchedule = "off" // v1.2.0: no network in unit tests — the scheduled updater is owned and closed, never exercised here
 	cfg.EngineBackend = engineBackend
 
 	srv, err := New(cfg)

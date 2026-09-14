@@ -28,7 +28,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *config.Config) {
 	cfg.Host = "127.0.0.1"
 	cfg.Port = 0
 	cfg.Provider = "local"
-	cfg.LlamaAutoStart = false // no engine binary in tests — no prewarm noise
+	cfg.LlamaAutoStart = false
+	cfg.UpdateSchedule = "off" // v1.2.0: no network in unit tests — the scheduled updater is owned and closed, never exercised here // no engine binary in tests — no prewarm noise
 
 	srv, err := New(cfg)
 	if err != nil {

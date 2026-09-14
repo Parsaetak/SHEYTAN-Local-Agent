@@ -590,6 +590,14 @@ jobs:
           # distribution path; the portable ZIP remains the advanced
           # option. Models are NEVER bundled — the installer ships the
           # application only.
+          #
+          # PATH CONTRACT (v1.2.0): makensis resolves compile-time paths
+          # relative to the .nsi SCRIPT directory, not the invoking CWD —
+          # the previous repo-root-relative -DBUILDDIR made it look under
+          # packaging\nsis\dist\... and fail with "no files found". CI
+          # passes ABSOLUTE BUILDDIR/OUTFILE paths, which are unambiguous
+          # from any invocation context, and the script itself asserts the
+          # staging executable exists before compiling anything.
           choco install nsis -y --no-progress
 
           $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
@@ -600,21 +608,50 @@ jobs:
             $makensis = $found.FullName
           }
 
+          # Pre-flight assertions: refuse to invoke NSIS against a broken
+          # staging tree — the exact executable, at the exact stage path.
+          $repoRoot = (Get-Location).Path
+          $stagingDir = Join-Path $repoRoot "dist\windows\app\SHEYTAN-LA"
+          $stagingExe = Join-Path $stagingDir "SHEYTAN-LA.exe"
+
+          if (-not (Test-Path $stagingDir)) {
+            throw "NSIS staging directory missing: $stagingDir"
+          }
+          if (-not (Test-Path $stagingExe)) {
+            throw "NSIS staging executable missing: $stagingExe"
+          }
+
+          $installerPath = Join-Path $repoRoot "dist\SHEYTAN-LA-v${env:APP_VERSION}-windows-x64-installer.exe"
+
           & $makensis `
             -DVERSION="$env:APP_VERSION" `
             -DEXE="SHEYTAN-LA.exe" `
-            -DBUILDDIR="dist\windows\app\SHEYTAN-LA" `
+            -DBUILDDIR="$stagingDir" `
+            -DOUTFILE="$installerPath" `
             "packaging\nsis\installer.nsi"
 
-          $installer = "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64-installer.exe"
-          if (-not (Test-Path $installer)) {
+          if ($LASTEXITCODE -ne 0) {
+            throw "makensis exited with code $LASTEXITCODE."
+          }
+
+          # Post-build assertions: the installer must exist, be non-empty,
+          # and its version resource must carry the release identity.
+          if (-not (Test-Path $installerPath)) {
             throw "NSIS installer was not produced."
           }
-          if ((Get-Item $installer).Length -le 0) {
+          if ((Get-Item $installerPath).Length -le 0) {
             throw "NSIS installer is empty."
           }
 
-          Write-Host "NSIS installer built: $installer"
+          $versionInfo = (Get-Item $installerPath).VersionInfo
+          if ($versionInfo.ProductVersion -ne $env:APP_VERSION) {
+            throw "Installer ProductVersion '$($versionInfo.ProductVersion)' != APP_VERSION '$env:APP_VERSION'."
+          }
+          if ($versionInfo.ProductName -ne "SHEYTAN-LA") {
+            throw "Installer ProductName '$($versionInfo.ProductName)' != expected identity 'SHEYTAN-LA'."
+          }
+
+          Write-Host "NSIS installer built: $installerPath"
 
       - name: Verify Windows installer
         shell: pwsh
@@ -631,6 +668,22 @@ jobs:
           # expected until signing credentials are configured.
           $sig = Get-AuthenticodeSignature $installer.FullName
           Write-Host "Installer Authenticode status: $($sig.Status)"
+
+          # v1.2.0: structural inspection instead of trusting the exit
+          # code — the installer must be a valid PE carrying the identity.
+          $bytes = New-Object byte[] 2
+          $fs = [System.IO.File]::OpenRead($installer.FullName)
+          try { $null = $fs.Read($bytes, 0, 2) } finally { $fs.Dispose() }
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            throw "Installer is not a valid PE executable (missing MZ header)."
+          }
+
+          $vi = $installer.VersionInfo
+          if ($vi.ProductName -ne "SHEYTAN-LA") {
+            throw "Installer ProductName '$($vi.ProductName)' != expected identity 'SHEYTAN-LA'."
+          }
+
+          Write-Host "Installer identity: $($vi.ProductName) v$($vi.ProductVersion) ($([math]::Round($installer.Length/1MB,1)) MB)"
 
           Write-Host "Installer verification passed: $($installer.Name) ($([math]::Round($installer.Length/1MB,1)) MB)"
 

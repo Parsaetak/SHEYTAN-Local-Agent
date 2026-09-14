@@ -285,6 +285,13 @@ func TestEngineStartRepairsHistoricalRegression(t *testing.T) {
         t.Setenv("SHEYTAN_FAKE_ARGS_OUT", argsOut)
 
         s := NewLlamaServer(config.NewSource(cfg))
+
+        // Deterministic subprocess ownership: every started engine must be
+        // stopped before the test ends. The fake engine IS this test
+        // binary — a leaked child locks llm.test(.exe) and survives as an
+        // orphan (on Windows: "unlinkat llm.test.exe: Access is denied").
+        t.Cleanup(func() { _ = s.Stop() })
+
         if err := s.Start(); err != nil {
                 t.Fatalf("engine start with repair: %v", err)
         }
@@ -335,6 +342,10 @@ func TestEngineStartLegacyProfileStaysFlagForm(t *testing.T) {
         t.Setenv("SHEYTAN_FAKE_ARGS_OUT", argsOut)
 
         s := NewLlamaServer(config.NewSource(cfg))
+
+        // Deterministic subprocess ownership (see the repair test above).
+        t.Cleanup(func() { _ = s.Stop() })
+
         if err := s.Start(); err != nil {
                 t.Fatalf("legacy start: %v", err)
         }
@@ -354,6 +365,10 @@ func TestStartupVerificationRecordsModelAndContext(t *testing.T) {
         cfg.EngineCompat = 0
 
         s := NewLlamaServer(config.NewSource(cfg))
+
+        // Deterministic subprocess ownership (see the repair test above).
+        t.Cleanup(func() { _ = s.Stop() })
+
         if err := s.Start(); err != nil {
                 t.Fatalf("start: %v", err)
         }

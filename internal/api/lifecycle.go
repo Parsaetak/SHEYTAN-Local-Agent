@@ -12,7 +12,17 @@ func (s *Server) Close() {
 		return
 	}
 
-	// Cancel every active HTTP-triggered run first.
+	// Stop the scheduled engine-update loop FIRST and wait (bounded) for
+	// its in-flight pass to finish.
+	//
+	// v1.2.0: the updater goroutine was previously never cancelled — it
+	// outlived the server and, in the test suite, kept writing into the
+	// temp data dir while t.TempDir() cleanup ran RemoveAll, producing
+	// the observed "bin\.update-stage: The directory is not empty"
+	// failures. Deterministic ownership: cancel → wait → then tear down.
+	s.updateCancelIfNeeded()
+
+	// Cancel every active HTTP-triggered run.
 	//
 	// Do not hold runsMu while calling into the runtime; cancellation can
 	// cause callbacks/goroutines to touch the run registry.
@@ -55,5 +65,21 @@ func (s *Server) Close() {
 	// Release the shared runtime resources.
 	if s.stack != nil {
 		s.stack.Close()
+	}
+}
+
+// updateCancelIfNeeded cancels the scheduled engine-update loop and waits
+// up to 3 seconds for its completion signal. Safe on servers that never
+// started the loop.
+func (s *Server) updateCancelIfNeeded() {
+	if s.updateCancel != nil {
+		s.updateCancel()
+	}
+
+	if s.updateDone != nil {
+		select {
+		case <-s.updateDone:
+		case <-time.After(3 * time.Second):
+		}
 	}
 }

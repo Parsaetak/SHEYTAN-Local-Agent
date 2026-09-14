@@ -108,6 +108,7 @@ func TestFeedbackEndpointWritesRecallSteering(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
 	cfg.LlamaAutoStart = false
+	cfg.UpdateSchedule = "off" // v1.2.0: no network in unit tests — the scheduled updater is owned and closed, never exercised here
 
 	engine := recall.New(cfg.DataDir)
 

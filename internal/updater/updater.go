@@ -523,40 +523,61 @@ func checkAndApply(ctx context.Context, cfg *config.Config, eng Engine, force bo
 // (LastUpdateCheck) in place, so each pass runs on a PRIVATE copy that is
 // published back through the source — a published immutable value is never
 // mutated. Wired by api.Server.EnsureSetup (previously zero callers).
-func RunScheduled(ctx context.Context, src *config.Source, eng Engine, notify func(string), save func()) {
+//
+// v1.2.0 (deterministic shutdown): returns a done channel closed when the
+// loop has observed ctx cancellation AND any in-flight pass (including a
+// download/extract) has finished. The owner MUST cancel the context and
+// may wait on the channel — that is the whole ownership contract that
+// previously leaked an active updater goroutine past Server.Close and
+// raced test temp-directory cleanup with .update-stage writes.
+func RunScheduled(ctx context.Context, src *config.Source, eng Engine, notify func(string), save func()) <-chan struct{} {
         if notify == nil {
                 notify = func(string) {}
         }
         if save == nil {
                 save = func() {}
         }
-        pass := func() {
-                cur := src.Load()
-                mutable := *cur
 
-                msg, updated, err := CheckAndApply(ctx, &mutable, eng)
+        done := make(chan struct{})
 
-                src.Store(&mutable)
+        go func() {
+                defer close(done)
 
-                if err != nil {
-                        logging.Default().Warn("updater", "%s", msg)
-                } else if updated {
-                        logging.Default().Info("updater", "%s", msg)
+                pass := func() {
+                        cur := src.Load()
+                        mutable := *cur
+
+                        msg, updated, err := CheckAndApply(ctx, &mutable, eng)
+
+                        src.Store(&mutable)
+
+                        if err != nil {
+                                logging.Default().Warn("updater", "%s", msg)
+                        } else if updated {
+                                logging.Default().Info("updater", "%s", msg)
+                        }
+                        notify(msg)
+                        save()
                 }
-                notify(msg)
-                save()
-        }
-        go pass()
-        t := time.NewTicker(6 * time.Hour)
-        defer t.Stop()
-        for {
-                select {
-                case <-ctx.Done():
-                        return
-                case <-t.C:
+
+                if ctx.Err() == nil {
                         pass()
                 }
-        }
+
+                t := time.NewTicker(6 * time.Hour)
+                defer t.Stop()
+
+                for {
+                        select {
+                        case <-ctx.Done():
+                                return
+                        case <-t.C:
+                                pass()
+                        }
+                }
+        }()
+
+        return done
 }
 
 // downloadEngine fetches the release zip for `tag` and extracts only the
@@ -721,26 +742,66 @@ func extractZip(zipPath, dir string) error {
 }
 
 // safeZipPath validates one archive member and returns the absolute
-// extraction target (mirrors llm.safeArchivePath semantics).
+// extraction target.
+//
+// v1.2.0: THE single authoritative safe archive-path validator —
+// internal/llm delegates here so the engine updater and the app updater
+// can never disagree about what an extractable member looks like.
+//
+// The validator is separator-canonical: the member name is first viewed
+// with every backslash as a separator, so the checks hold regardless of
+// which OS the archive was created on. A member is accepted only when it
+// is a RELATIVE, CLEAN path that stays inside the extraction root.
+// Rejected:
+//   - POSIX-absolute members          "/absolute/path"
+//   - Windows-rooted members          "\absolute\path" (→ "/absolute/path")
+//   - drive-letter members            "C:\x" / "C:/x"
+//   - UNC members                     "\\server\share\path"
+//   - any ".." traversal              "../x", "..\x", "foo/../../x",
+//     mixed separators "..\/x"
+//   - empty, "." or NUL-bearing names
+//
+// The Windows-specific trap this fixes: "\absolute\path" is NOT absolute
+// under filepath.IsAbs on Windows (it is "rooted" without a volume), so
+// the previous IsAbs/VolumeName checks alone let it through.
 func safeZipPath(dir, name string) (string, error) {
         name = strings.TrimSpace(name)
+
         if name == "" {
                 return "", fmt.Errorf("zip contains an empty path")
         }
 
-        normalized := strings.ReplaceAll(name, "\\", "/")
-        clean := filepath.Clean(filepath.FromSlash(normalized))
+        if strings.ContainsRune(name, 0) {
+                return "", fmt.Errorf("zip path %q contains a NUL byte", name)
+        }
 
-        // A windows drive prefix survives FromSlash normalization as "C:/x";
-        // catch it before IsAbs/VolumeName miss the slash form.
-        if len(clean) >= 2 && clean[1] == ':' {
+        // Separator-canonical view: backslash becomes a separator on every
+        // host, so rooted/UNC/traversal shapes are visible everywhere.
+        unified := strings.ReplaceAll(name, "\\", "/")
+
+        // POSIX-absolute, Windows-rooted ("\x") and UNC ("\\srv/share")
+        // members all begin with a separator once unified.
+        if strings.HasPrefix(unified, "/") {
+                return "", fmt.Errorf("zip path %q is absolute", name)
+        }
+
+        // Drive-letter volumes: "C:/x" and "C:\x".
+        if len(unified) >= 2 && unified[1] == ':' {
                 return "", fmt.Errorf("zip path %q contains a volume", name)
         }
+
+        if unified == "." || unified == "" {
+                return "", fmt.Errorf("zip contains invalid path %q", name)
+        }
+
+        clean := filepath.Clean(filepath.FromSlash(unified))
 
         if clean == "." || clean == string(filepath.Separator) || clean == "" {
                 return "", fmt.Errorf("zip contains invalid path %q", name)
         }
 
+        // Belt and braces for host-native spellings that survive the
+        // unified view (device namespaces, reserved DOS forms).
         if filepath.IsAbs(clean) || filepath.VolumeName(clean) != "" {
                 return "", fmt.Errorf("zip path %q is absolute or contains a volume", name)
         }
@@ -750,17 +811,26 @@ func safeZipPath(dir, name string) (string, error) {
                 return "", err
         }
 
+        base = filepath.Clean(base)
+
         target := filepath.Join(base, clean)
         rel, err := filepath.Rel(base, target)
         if err != nil {
                 return "", err
         }
 
-        if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+        if rel == "" || rel == ".." ||
+                strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
                 return "", fmt.Errorf("zip path %q escapes extraction directory", name)
         }
 
         return target, nil
+}
+
+// SafeArchivePath is the exported view of the authoritative validator for
+// sibling packages (internal/llm engine downloads share the contract).
+func SafeArchivePath(dir, name string) (string, error) {
+        return safeZipPath(dir, name)
 }
 
 func humanWhen(t time.Time) string {

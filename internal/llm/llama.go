@@ -115,6 +115,13 @@ type LlamaServer struct {
         // auto-restart is suppressed while Stop() runs.
         stopping bool
 
+        // exitDone is the CURRENT process's watcher-done channel: closed by
+        // the watcher goroutine after cmd.Wait() has returned. Stop() waits
+        // on it (bounded) so a killed child is fully reaped — and on Windows
+        // its executable unlocked — before Stop reports completion.
+        // Guarded by mu. Nil when no process is owned.
+        exitDone chan struct{}
+
         // caps is the engine capability profile in force for the CURRENT or
         // last boot (Phase 7). Guarded by mu. Resolved per boot from the
         // persisted verified profile / --help detection, then persisted again
@@ -1232,13 +1239,14 @@ func (s *LlamaServer) launchArgs(
                 }
         }
 
-        s.mu.Lock()
-        s.cmd = cmd
-        s.mu.Unlock()
-
         exit := &procExit{
                 done: make(chan struct{}),
         }
+
+        s.mu.Lock()
+        s.cmd = cmd
+        s.exitDone = exit.done
+        s.mu.Unlock()
 
         go func() {
                 exit.err = cmd.Wait()
@@ -1249,6 +1257,7 @@ func (s *LlamaServer) launchArgs(
 
                 if latest {
                         s.cmd = nil
+                        s.exitDone = nil
                 }
 
                 wasAlive :=
@@ -1293,6 +1302,7 @@ func (s *LlamaServer) launchArgs(
 
                 if s.cmd == cmd {
                         s.cmd = nil
+                        s.exitDone = nil
                 }
 
                 s.mu.Unlock()
@@ -1841,17 +1851,27 @@ func (s *LlamaServer) adoptExisting(cfg *config.Config) bool {
 }
 
 // Stop terminates the subprocess gracefully: SIGTERM, bounded grace
-// period, then kill. The state machine walks stopping → stopped and the
-// exit watcher is allowed to observe the death without scheduling an
-// auto-restart (stopping arms the suppression flag).
+// period, then kill — followed by a BOUNDED wait until the exit watcher
+// reports cmd.Wait() has returned.
+//
+// v1.2.0 (Windows): Kill() only REQUESTS termination; the process object
+// (and the lock the dying process holds on its executable) survives until
+// Wait() reaps it. Stop() previously returned right after Kill, so the
+// fake-engine test binary could still be alive when `go test` tried to
+// remove or rewrite it — the observed "unlinkat llm.test.exe: Access is
+// denied" plus orphan llm.test/conhost processes. Deterministic ownership
+// means Stop does not return until the child is reaped or the bounded
+// wait is exhausted.
 func (s *LlamaServer) Stop() error {
         s.mu.Lock()
 
         cmd := s.cmd
+        done := s.exitDone
         s.stopping = true
 
         if cmd == nil || cmd.Process == nil {
                 s.cmd = nil
+                s.exitDone = nil
                 s.loaded = ""
                 s.mu.Unlock()
 
@@ -1865,11 +1885,19 @@ func (s *LlamaServer) Stop() error {
 
         _ = cmd.Process.Signal(syscall.SIGTERM)
 
-        // Bounded grace: poll the process exit (released by the watcher's
-        // close(exit.done)) instead of a blind sleep.
+        // Bounded grace: wait for the watcher's close(exit.done) — a real
+        // signal of Wait() completion — instead of blind-polling process
+        // identity. The 50ms fallback poll covers a watcher that has not
+        // observed the exit yet.
         deadline := time.Now().Add(4 * time.Second)
 
         for time.Now().Before(deadline) {
+                select {
+                case <-done:
+                        deadline = time.Time{} // already reaped
+                default:
+                }
+
                 s.mu.Lock()
                 alive := s.cmd == cmd
                 s.mu.Unlock()
@@ -1889,10 +1917,22 @@ func (s *LlamaServer) Stop() error {
                 _ = cmd.Process.Kill()
         }
 
+        // Reap deterministically: after Kill, the child must be observed
+        // exiting before this call returns (bounded — a wedged child must
+        // not hang the caller forever, but the OS gets a fair window to
+        // release the executable).
+        if done != nil {
+                select {
+                case <-done:
+                case <-time.After(5 * time.Second):
+                }
+        }
+
         s.mu.Lock()
 
         if s.cmd == cmd {
                 s.cmd = nil
+                s.exitDone = nil
         }
 
         s.loaded = ""
@@ -2075,81 +2115,17 @@ func (s *LlamaServer) logf(
         s.logBuf.add(line)
 }
 
-// safeArchivePath validates an archive member name and returns a path
-// guaranteed to remain inside dir.
+// safeArchivePath validates an archive member name and returns the
+// absolute extraction target.
 //
-// Archive entry names are normalized to forward slashes first so Windows
-// backslash traversal is treated exactly like Unix-style traversal.
-//
-// Examples rejected:
-//   - ../../outside.exe
-//   - ../outside.exe
-//   - /absolute/path
-//   - \\server\share\file
-//   - C:\outside.exe
-//   - C:/outside.exe
-//
-// Examples accepted:
-//   - llama-server.exe
-//   - bin/llama-server.exe
+// v1.2.0: this is a DELEGATION to the single authoritative validator
+// (updater.safeZipPath, exported as updater.SafeArchivePath). Keeping two
+// independent implementations invited exactly the kind of drift the
+// zip-slip hardening was meant to prevent; the contract now lives in one
+// place and covers POSIX-absolute, Windows-rooted, drive-letter, UNC and
+// mixed-separator members identically on every host.
 func safeArchivePath(dir, name string) (string, error) {
-        name = strings.TrimSpace(name)
-
-        if name == "" {
-                return "", fmt.Errorf("archive contains an empty path")
-        }
-
-        normalized := strings.ReplaceAll(name, "\\", "/")
-        cleanName := filepath.Clean(filepath.FromSlash(normalized))
-
-        if cleanName == "." ||
-                cleanName == string(filepath.Separator) ||
-                cleanName == "" {
-                return "", fmt.Errorf(
-                        "archive contains invalid path %q",
-                        name,
-                )
-        }
-
-        if filepath.IsAbs(cleanName) ||
-                filepath.VolumeName(cleanName) != "" {
-                return "", fmt.Errorf(
-                        "archive path %q is absolute or contains a volume",
-                        name,
-                )
-        }
-
-        base, err := filepath.Abs(dir)
-        if err != nil {
-                return "", fmt.Errorf(
-                        "resolve archive destination: %w",
-                        err,
-                )
-        }
-
-        target := filepath.Join(base, cleanName)
-
-        relative, err := filepath.Rel(base, target)
-        if err != nil {
-                return "", fmt.Errorf(
-                        "validate archive path %q: %w",
-                        name,
-                        err,
-                )
-        }
-
-        if relative == ".." ||
-                strings.HasPrefix(
-                        relative,
-                        ".."+string(filepath.Separator),
-                ) {
-                return "", fmt.Errorf(
-                        "archive path %q escapes extraction directory",
-                        name,
-                )
-        }
-
-        return target, nil
+        return updater.SafeArchivePath(dir, name)
 }
 
 // engineDownloadTimeout bounds one engine-binary download. The previous

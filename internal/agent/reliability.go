@@ -5,23 +5,23 @@
 // model or a cloud agent. The three components in this file are what make
 // that credible for the EXECUTION loop:
 //
-//   1. FailureClassification — every tool failure is diagnosed into an
-//      explicit category, and the recovery hint fed back to the model is
-//      chosen from the CATEGORY, not from the raw error text. A wrong
-//      path gets a filesystem hint; a refused connection gets a network
-//      hint; a rejected context window gets a context hint. The model
-//      re-plans against the diagnosis instead of retrying blind.
+//  1. FailureClassification — every tool failure is diagnosed into an
+//     explicit category, and the recovery hint fed back to the model is
+//     chosen from the CATEGORY, not from the raw error text. A wrong
+//     path gets a filesystem hint; a refused connection gets a network
+//     hint; a rejected context window gets a context hint. The model
+//     re-plans against the diagnosis instead of retrying blind.
 //
-//   2. LoopGuard — detects repetitive agent behaviour: the same tool
-//      called with the same arguments, the same failure recurring with
-//      no measurable progress. Repetition is answered with an explicit
-//      strategy-change instruction, and beyond a bound the run is
-//      terminated honestly instead of burning iterations.
+//  2. LoopGuard — detects repetitive agent behaviour: the same tool
+//     called with the same arguments, the same failure recurring with
+//     no measurable progress. Repetition is answered with an explicit
+//     strategy-change instruction, and beyond a bound the run is
+//     terminated honestly instead of burning iterations.
 //
-//   3. RunBudget — bounded attempts, tool calls, repair cycles and wall
-//      clock. The orchestrator already bounds iterations; this adds the
-//      finer-grained counters so a single runaway loop inside one
-//      iteration cannot consume the machine.
+//  3. RunBudget — bounded attempts, tool calls, repair cycles and wall
+//     clock. The orchestrator already bounds iterations; this adds the
+//     finer-grained counters so a single runaway loop inside one
+//     iteration cannot consume the machine.
 //
 // The design keeps the existing resource posture: nothing here retries
 // silently, nothing grows without a bound, and every intervention is
@@ -228,6 +228,21 @@ type callSignature struct {
 // LoopGuard detects repetitive agent behaviour across the tool calls of
 // one run. It is safe for concurrent use (the orchestrator executes tool
 // calls sequentially today, but nothing here assumes that).
+//
+// Wall-clock budget semantics (v1.2.0 repair):
+//
+//   - WallClock > 0  → the budget expires when elapsed >= WallClock. A fully
+//     consumed budget blocks, so a deadline is honored on the exact tick it
+//     is due instead of one whole scheduling granularity after it.
+//   - WallClock == 0 → the wall-clock budget is DISABLED (unbounded run);
+//     the per-call and total-call budgets still apply.
+//   - WallClock < 0  → also disabled; treated identically to zero.
+//
+// The clock is injectable (now field) so budget behaviour is deterministic
+// under test. Real time on Windows has coarse monotonic granularity — a
+// time.Nanosecond budget measured against the raw wall clock can read
+// elapsed == 0 and never expire, which is exactly the flake the injectable
+// clock removes from the test suite.
 type LoopGuard struct {
         mu sync.Mutex
 
@@ -241,11 +256,15 @@ type LoopGuard struct {
 
         // Configurable bounds (all defense-in-depth on top of the
         // orchestrator's own iteration bound).
-        MaxSameCall     int           // max executions of one signature
-        MaxToolCalls    int           // max total tool calls in one run
-        MaxRepeatStrikes int          // max repeated-signature interventions
-        WallClock       time.Duration // max wall time for tool execution
-        started         time.Time
+        MaxSameCall      int           // max executions of one signature
+        MaxToolCalls     int           // max total tool calls in one run
+        MaxRepeatStrikes int           // max repeated-signature interventions
+        WallClock        time.Duration // max wall time for tool execution
+        started          time.Time
+
+        // now is the time source. Never nil after NewLoopGuard; tests may
+        // replace it to advance time deterministically.
+        now func() time.Time
 }
 
 // DefaultLoopGuardBounds keeps a single runaway pattern bounded without
@@ -261,16 +280,36 @@ const (
 
 // NewLoopGuard returns a guard with the default bounds.
 func NewLoopGuard() *LoopGuard {
-        return &LoopGuard{
-                calls:           make(map[callSignature]int),
-                results:         make(map[callSignature]string),
-                warned:          make(map[callSignature]bool),
+        g := &LoopGuard{
+                calls:            make(map[callSignature]int),
+                results:          make(map[callSignature]string),
+                warned:           make(map[callSignature]bool),
                 MaxSameCall:      DefaultMaxSameCall,
-                MaxToolCalls:    DefaultMaxToolCalls,
+                MaxToolCalls:     DefaultMaxToolCalls,
                 MaxRepeatStrikes: DefaultMaxRepeatStrikes,
-                WallClock:       DefaultLoopWallClock,
-                started:         time.Now(),
+                WallClock:        DefaultLoopWallClock,
         }
+
+        g.now = time.Now
+        g.started = g.now()
+
+        return g
+}
+
+// elapsedWallClock returns how much of the wall-clock budget has been
+// consumed, using the injectable time source.
+func (g *LoopGuard) elapsedWallClock() time.Duration {
+        return g.now().Sub(g.started)
+}
+
+// wallClockExhausted reports whether the wall-clock budget is enabled and
+// fully consumed. Budget semantics are documented on LoopGuard.
+func (g *LoopGuard) wallClockExhausted() bool {
+        if g.WallClock <= 0 {
+                return false // disabled (zero or negative budget)
+        }
+
+        return g.elapsedWallClock() >= g.WallClock
 }
 
 // normalizeArgs produces a stable representation of raw JSON tool
@@ -364,12 +403,12 @@ func (g *LoopGuard) Observe(tool, args string) Observation {
                 }
         }
 
-        if elapsed := time.Since(g.started); g.WallClock > 0 && elapsed > g.WallClock {
+        if g.wallClockExhausted() {
                 return Observation{
                         Repeat: true,
                         Block: fmt.Sprintf(
                                 "Error: run wall-clock budget exhausted (%v of tool execution). Stop calling tools and produce your final answer from what you have.",
-                                elapsed.Round(time.Second),
+                                g.elapsedWallClock().Round(time.Second),
                         ),
                 }
         }

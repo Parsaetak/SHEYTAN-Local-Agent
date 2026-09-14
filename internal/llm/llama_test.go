@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -151,12 +152,16 @@ func fakeEngineConfig(t *testing.T, mode string) (*config.Config, string) {
 
 	// A fake but structurally valid model file: ResolveModelPath only
 	// requires an existing .gguf file in the models dir.
-	modelPath := dir + "/models"
+	// v1.2.0: build the paths with the OS separator (filepath.Join), not
+	// string concatenation — a forward-slash spelling on Windows made the
+	// test's EXPECTED model path differ from the runtime's OS-canonical
+	// "loaded model" report. See sameFilePath below.
+	modelPath := filepath.Join(dir, "models")
 	if err := os.MkdirAll(modelPath, 0o755); err != nil {
 		t.Fatalf("models dir: %v", err)
 	}
 
-	modelFile := modelPath + "/fake-model.gguf"
+	modelFile := filepath.Join(modelPath, "fake-model.gguf")
 	if err := os.WriteFile(modelFile, []byte("fake gguf payload"), 0o644); err != nil {
 		t.Fatalf("model file: %v", err)
 	}
@@ -203,9 +208,8 @@ func TestEngineStartReachesReady(t *testing.T) {
 		t.Fatal("ready engine must count as alive/running")
 	}
 
-	if got := srv.LoadedModel(); got != modelFile {
-		t.Fatalf("loaded model = %q, want %q", got, modelFile)
-	}
+	// v1.2.0: OS-aware canonical comparison — never raw path strings.
+	assertSameFilePath(t, srv.LoadedModel(), modelFile)
 
 	if srv.Pid() <= 0 {
 		t.Fatal("ready engine must expose a pid")
@@ -232,7 +236,7 @@ func TestEngineStartFailsWithNoModel(t *testing.T) {
 	cfg, _ := fakeEngineConfig(t, "")
 
 	dir := t.TempDir()
-	cfg.ModelsDir = dir + "/empty-models"
+	cfg.ModelsDir = filepath.Join(dir, "empty-models")
 
 	srv := NewLlamaServer(config.NewSource(cfg))
 

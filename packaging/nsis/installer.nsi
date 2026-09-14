@@ -3,7 +3,26 @@
 ; ============================================================================
 ; Built by CI (.github/workflows/build-desktop.yml) on the windows runner:
 ;
-;   makensis -DVERSION=<ver> -DEXE=SHEYTAN-LA.exe -DBUILDDIR=<staging> installer.nsi
+;   makensis -DVERSION=<ver> -DEXE=SHEYTAN-LA.exe \
+;            -DBUILDDIR=<ABSOLUTE staging dir> \
+;            -DOUTFILE=<ABSOLUTE installer path> \
+;            packaging\nsis\installer.nsi
+;
+; PATH CONTRACT (v1.2.0 — exactly ONE convention):
+;   makensis resolves compile-time paths (File, OutFile, icons) relative
+;   to the .nsi SCRIPT directory, not the invoking working directory. The
+;   v1.2.0 CI run passed a repo-root-relative BUILDDIR, makensis looked
+;   for packaging\nsis\dist\windows\... and failed with "no files found".
+;   CI now passes ABSOLUTE BUILDDIR / OUTFILE paths, which are unambiguous
+;   from any invocation context. The defaults below remain script-relative
+;   so a developer can build the installer from a checkout with no flags:
+;
+;   cd packaging/nsis && makensis installer.nsi
+;
+; Compile-time assertions below refuse to build anything when the staging
+; executable or directory is missing, so a path-contract break fails the
+; installer build immediately with a precise message instead of a generic
+; "no files found".
 ;
 ; Contract:
 ;   - installs the APPLICATION ONLY (exe + license + readme); models are
@@ -28,8 +47,24 @@ ManifestDPIAware true
 !ifndef EXE
   !define EXE "SHEYTAN-LA.exe"
 !endif
+; Staging directory holding the packaged application. Script-relative by
+; default; CI passes an ABSOLUTE path (see path contract above).
 !ifndef BUILDDIR
   !define BUILDDIR "..\dist\windows\app\SHEYTAN-LA"
+!endif
+; Installer output path. Script-relative by default; CI passes an ABSOLUTE
+; path. Derived from the same release identity the workflow and the
+; stress contract use (SHEYTAN-LA-v<ver>-windows-x64-installer.exe).
+!ifndef OUTFILE
+  !define OUTFILE "..\..\dist\SHEYTAN-LA-v${VERSION}-windows-x64-installer.exe"
+!endif
+
+; --- compile-time assertions: fail fast, fail precisely --------------------
+; NSIS 3 compile-time /FileExists with unary ! (not): the installer build
+; aborts with the exact missing path instead of a per-File "no files
+; found" error further down.
+!if ! /FileExists "${BUILDDIR}\${EXE}"
+  !error "NSIS: staging executable not found: ${BUILDDIR}\${EXE} (build the portable application first; pass an ABSOLUTE -DBUILDDIR from CI)"
 !endif
 
 !include "MUI2.nsh"
@@ -43,7 +78,7 @@ ManifestDPIAware true
 !define UNINSTKEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA"
 
 Name "${DESCRIPTION} v${VERSION}"
-OutFile "..\..\dist\SHEYTAN-LA-v${VERSION}-windows-x64-installer.exe"
+OutFile "${OUTFILE}"
 InstallDir "$PROGRAMFILES64\SHEYTAN-LA"
 InstallDirRegKey HKLM "${REGKEY}" "InstallDir"
 RequestExecutionLevel admin

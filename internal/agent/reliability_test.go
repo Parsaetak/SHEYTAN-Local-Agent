@@ -134,13 +134,117 @@ func TestLoopGuardToolCallBudget(t *testing.T) {
         }
 }
 
-func TestLoopGuardWallClockBudget(t *testing.T) {
-        g := NewLoopGuard()
-        g.WallClock = time.Nanosecond
+// fakeClock returns a deterministic time source advancing only when the
+// test moves it. Wall-clock budget logic must never depend on the host
+// scheduler: on Windows the monotonic clock is coarse enough that a
+// nanosecond budget measured with the real clock can read elapsed == 0.
+func fakeClock(start time.Time) (*time.Time, func() time.Time) {
+        current := start
+        return &current, func() time.Time { return current }
+}
 
-        if obs := g.Observe("t", `{}`); obs.Block == "" {
-                t.Fatal("expired wall clock must block")
-        }
+func TestLoopGuardWallClockBudget(t *testing.T) {
+        base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+        t.Run("already expired blocks immediately", func(t *testing.T) {
+                at, now := fakeClock(base)
+                g := NewLoopGuard()
+                g.now = now
+                g.started = *at
+                g.WallClock = time.Minute
+
+                *at = base.Add(time.Minute) // exactly at expiry
+
+                if obs := g.Observe("t", `{}`); obs.Block == "" {
+                        t.Fatal("wall clock exactly at expiry must block")
+                }
+        })
+
+        t.Run("well past expiry blocks", func(t *testing.T) {
+                at, now := fakeClock(base)
+                g := NewLoopGuard()
+                g.now = now
+                g.started = *at
+                g.WallClock = time.Minute
+
+                *at = base.Add(2 * time.Hour)
+
+                if obs := g.Observe("t", `{}`); obs.Block == "" {
+                        t.Fatal("expired wall clock must block")
+                }
+        })
+
+        t.Run("just before expiry does not block", func(t *testing.T) {
+                at, now := fakeClock(base)
+                g := NewLoopGuard()
+                g.now = now
+                g.started = *at
+                g.WallClock = time.Minute
+
+                *at = base.Add(time.Minute - time.Nanosecond)
+
+                obs := g.Observe("t", `{}`)
+
+                if obs.Block != "" {
+                        t.Fatalf("budget not yet exhausted must not block: %q", obs.Block)
+                }
+
+                if strings.Contains(obs.Warn, "wall-clock") {
+                        t.Fatalf("wall-clock exhaustion leaked into the warning: %q", obs.Warn)
+                }
+        })
+
+        t.Run("zero budget is disabled", func(t *testing.T) {
+                at, now := fakeClock(base)
+                g := NewLoopGuard()
+                g.now = now
+                g.started = *at
+                g.WallClock = 0 // disabled
+
+                *at = base.Add(100 * time.Hour)
+
+                if obs := g.Observe("t", `{}`); obs.Block != "" {
+                        t.Fatalf("disabled budget must never block on wall clock: %q", obs.Block)
+                }
+        })
+
+        t.Run("negative budget is disabled", func(t *testing.T) {
+                at, now := fakeClock(base)
+                g := NewLoopGuard()
+                g.now = now
+                g.started = *at
+                g.WallClock = -time.Second
+
+                *at = base.Add(100 * time.Hour)
+
+                if obs := g.Observe("t", `{}`); obs.Block != "" {
+                        t.Fatalf("negative budget must behave as disabled: %q", obs.Block)
+                }
+        })
+
+        t.Run("budget applies across multiple calls", func(t *testing.T) {
+                at, now := fakeClock(base)
+                g := NewLoopGuard()
+                g.now = now
+                g.started = *at
+                g.WallClock = 30 * time.Second
+
+                // Three distinct calls, each consuming 10s of budget.
+                for i := 0; i < 3; i++ {
+                        *at = base.Add(time.Duration(i) * 10 * time.Second)
+
+                        if obs := g.Observe("t", fmt.Sprintf(`{"i":%d}`, i)); obs.Block != "" {
+                                t.Fatalf("call %d within budget was blocked: %q", i, obs.Block)
+                        }
+                }
+
+                // 30s consumed — the next call is past the budget.
+                *at = base.Add(30 * time.Second)
+
+                if obs := g.Observe("t", `{"i":99}`); obs.Block == "" {
+                        t.Fatal("call after the budget was consumed must block")
+                }
+        })
 }
 
 func TestLoopGuardSameResultDetection(t *testing.T) {
@@ -466,80 +570,80 @@ func TestLoopGuardBlocksRunawayLoop(t *testing.T) {
 }
 
 func TestProjectCardInjectedBeforeRun(t *testing.T) {
-	server, _ := newFakeEngine(t, func(turn int, body map[string]any) string {
-		return sseChunk("working with the project facts.") + sseDone
-	})
+        server, _ := newFakeEngine(t, func(turn int, body map[string]any) string {
+                return sseChunk("working with the project facts.") + sseDone
+        })
 
-	cfg := remoteConfig(t, server.URL)
-	client := llm.NewClient(config.NewSource(cfg))
-	orch := New(config.NewSource(cfg), client)
+        cfg := remoteConfig(t, server.URL)
+        client := llm.NewClient(config.NewSource(cfg))
+        orch := New(config.NewSource(cfg), client)
 
-	orch.SetProjectCard(func() string {
-		return "## PROJECT INTELLIGENCE (measured facts)\n- Languages: Go\n- Test command (verified in Lab): go test ./... -count=1"
-	})
+        orch.SetProjectCard(func() string {
+                return "## PROJECT INTELLIGENCE (measured facts)\n- Languages: Go\n- Test command (verified in Lab): go test ./... -count=1"
+        })
 
-	result, err := orch.RunDetailed(context.Background(), []llm.Message{
-		{Role: "user", Content: "fix the test"},
-	}, func(_ Activity) {})
-	if err != nil {
-		t.Fatalf("RunDetailed: %v", err)
-	}
+        result, err := orch.RunDetailed(context.Background(), []llm.Message{
+                {Role: "user", Content: "fix the test"},
+        }, func(_ Activity) {})
+        if err != nil {
+                t.Fatalf("RunDetailed: %v", err)
+        }
 
-	if !strings.Contains(result.Text, "project facts") {
-		t.Fatalf("final text = %q", result.Text)
-	}
+        if !strings.Contains(result.Text, "project facts") {
+                t.Fatalf("final text = %q", result.Text)
+        }
 }
 
 func TestProjectCardInjectionPosition(t *testing.T) {
-	var gotMessages []llm.Message
+        var gotMessages []llm.Message
 
-	server, _ := newFakeEngine(t, func(turn int, body map[string]any) string {
-		if msgs, ok := body["messages"].([]any); ok && turn == 1 {
-			for _, m := range msgs {
-				msg, _ := m.(map[string]any)
-				role, _ := msg["role"].(string)
-				content, _ := msg["content"].(string)
-				gotMessages = append(gotMessages, llm.Message{Role: role, Content: content})
-			}
-		}
+        server, _ := newFakeEngine(t, func(turn int, body map[string]any) string {
+                if msgs, ok := body["messages"].([]any); ok && turn == 1 {
+                        for _, m := range msgs {
+                                msg, _ := m.(map[string]any)
+                                role, _ := msg["role"].(string)
+                                content, _ := msg["content"].(string)
+                                gotMessages = append(gotMessages, llm.Message{Role: role, Content: content})
+                        }
+                }
 
-		return sseChunk("ok") + sseDone
-	})
+                return sseChunk("ok") + sseDone
+        })
 
-	cfg := remoteConfig(t, server.URL)
-	client := llm.NewClient(config.NewSource(cfg))
-	orch := New(config.NewSource(cfg), client)
+        cfg := remoteConfig(t, server.URL)
+        client := llm.NewClient(config.NewSource(cfg))
+        orch := New(config.NewSource(cfg), client)
 
-	orch.SetProjectCard(func() string {
-		return "## PROJECT INTELLIGENCE\n- Languages: Go"
-	})
+        orch.SetProjectCard(func() string {
+                return "## PROJECT INTELLIGENCE\n- Languages: Go"
+        })
 
-	if _, err := orch.RunDetailed(context.Background(), []llm.Message{
-		{Role: "user", Content: "do the thing"},
-	}, func(_ Activity) {}); err != nil {
-		t.Fatalf("RunDetailed: %v", err)
-	}
+        if _, err := orch.RunDetailed(context.Background(), []llm.Message{
+                {Role: "user", Content: "do the thing"},
+        }, func(_ Activity) {}); err != nil {
+                t.Fatalf("RunDetailed: %v", err)
+        }
 
-	// Find the card, assert it is a system message positioned before the
-	// final user message (not after it, where the model would miss it).
-	cardIdx := -1
-	userIdx := -1
+        // Find the card, assert it is a system message positioned before the
+        // final user message (not after it, where the model would miss it).
+        cardIdx := -1
+        userIdx := -1
 
-	for i, m := range gotMessages {
-		if strings.Contains(m.Content, "PROJECT INTELLIGENCE") {
-			cardIdx = i
-		}
+        for i, m := range gotMessages {
+                if strings.Contains(m.Content, "PROJECT INTELLIGENCE") {
+                        cardIdx = i
+                }
 
-		if m.Role == "user" && m.Content == "do the thing" {
-			userIdx = i
-		}
-	}
+                if m.Role == "user" && m.Content == "do the thing" {
+                        userIdx = i
+                }
+        }
 
-	if cardIdx < 0 {
-		t.Fatalf("project card never reached the engine: %+v", gotMessages)
-	}
+        if cardIdx < 0 {
+                t.Fatalf("project card never reached the engine: %+v", gotMessages)
+        }
 
-	if userIdx >= 0 && cardIdx > userIdx {
-		t.Fatalf("project card injected AFTER the user message (idx %d > %d)", cardIdx, userIdx)
-	}
+        if userIdx >= 0 && cardIdx > userIdx {
+                t.Fatalf("project card injected AFTER the user message (idx %d > %d)", cardIdx, userIdx)
+        }
 }

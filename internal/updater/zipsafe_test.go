@@ -8,8 +8,11 @@ import (
 	"testing"
 )
 
-// TestSafeZipPathRejectsTraversal pins the v1.1.4Z zip-slip fix: the
-// updater's extractZip previously joined member names with no validation.
+// TestSafeZipPathRejectsTraversal pins the v1.1.4Z zip-slip fix and the
+// v1.2.0 Windows hardening: the updater's extractZip previously joined
+// member names with no validation, and the first separator-canonical
+// rewrite still accepted "\absolute\path" because filepath.IsAbs reports
+// ROOTED-RELATIVE Windows paths as non-absolute.
 func TestSafeZipPathRejectsTraversal(t *testing.T) {
 	dir := t.TempDir()
 
@@ -17,9 +20,18 @@ func TestSafeZipPathRejectsTraversal(t *testing.T) {
 		"../../outside.exe",
 		"../outside.exe",
 		"/absolute/path",
-		`C:\outside.exe`,
-		`\\server\share\file`,
+		`\absolute\path`,
+		`C:\absolute\path`,
+		`C:/absolute/path`,
+		`\\server\share\path`,
+		`//server/share/path`,
 		`bin/../../escape`,
+		`..\outside`,
+		`foo/../../outside`,
+		`..\/mixed`,
+		`..\..\mixed\escape`,
+		"NUL-bearing\x00path",
+		"   ",
 	}
 
 	for _, name := range blocked {
@@ -32,6 +44,8 @@ func TestSafeZipPathRejectsTraversal(t *testing.T) {
 		"llama-server.exe",
 		"bin/llama-server.exe",
 		`sub\dir\dll.dll`,
+		"deep/nested/asset.data",
+		"...",
 	}
 
 	for _, name := range allowed {
@@ -42,8 +56,36 @@ func TestSafeZipPathRejectsTraversal(t *testing.T) {
 		}
 
 		rel, err := filepath.Rel(dir, target)
-		if err != nil || strings.HasPrefix(rel, "..") {
+		if err != nil || rel == ".." ||
+			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			t.Errorf("member %q resolved outside dir: %s", name, target)
+		}
+	}
+}
+
+// TestLLMAndUpdaterValidatorsAgree pins the single-validator contract:
+// internal/llm's engine-archive validator must accept and reject exactly
+// the same member set as the updater's.
+func TestLLMAndUpdaterValidatorsAgree(t *testing.T) {
+	dir := t.TempDir()
+
+	members := []string{
+		"ok.exe",
+		"../escape.exe",
+		"/absolute/path",
+		`C:\bad\path`,
+		`\\unc\share\x`,
+		`sub\dir\dll.dll`,
+		"",
+	}
+
+	for _, name := range members {
+		_, errUpdater := safeZipPath(dir, name)
+		_, errLLM := SafeArchivePath(dir, name)
+
+		if (errUpdater == nil) != (errLLM == nil) {
+			t.Errorf("validators disagree for %q: updater=%v llm=%v",
+				name, errUpdater, errLLM)
 		}
 	}
 }

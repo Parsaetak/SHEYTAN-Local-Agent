@@ -1,6 +1,6 @@
-SHEYTAN-Local-Agent v1.2.0 — Replacement Manifest
-=================================================
-Base: main @ ac63b88 (v1.1.9)
+SHEYTAN-Local-Agent v1.2.0 — Stability Repair Replacement Manifest
+===================================================================
+Base: main @ 40fdd3b (v1.2.0, run-34857158565 failure set)
 Package: SHEYTAN-Local-Agent-v1.2.0-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
@@ -20,80 +20,85 @@ checks and the known limitations live in UPDATE.md.
     status:   replaced
     purpose:  SHA-256 of every file in this package
 
-[NEW FILES]
-  SHEYTAN-LA.bat — renamed launcher (legacy-name fallback)
-  internal/api/environment.go — Environment Centre + verified health endpoints
-  internal/api/recommendation.go — recommendation endpoint
-  internal/api/update.go — application update endpoints
-  internal/api/visioninfo.go — per-model vision fields on /api/models
-  internal/hardware/hardware.go — unified hardware intelligence layer
-  internal/platform/firewall.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
-  internal/platform/identity_other.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
-  internal/platform/identity_windows.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
-  internal/platform/platform.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
-  internal/platform/platform_test.go — OS integration: AUMID identity + scoped firewall rules (+ tests)
-  internal/recommendation/recommendation.go — evidence-based recommendation engine
-  internal/recommendation/recommendation_test.go — evidence-based recommendation engine + tests
-  internal/updater/appupdate.go — manifest-verified application updater
-  internal/updater/appupdate_test.go — manifest-verified application updater + tests
-  internal/vision/states.go — vision readiness state machine
-  internal/vision/states_test.go — vision readiness state machine + tests
-  packaging/nsis/installer.nsi — NSIS installer (per-machine, AUMID, data-preserving)
-  src/SettingsVisionUpdates.tsx — Simple postures, task profiles, Vision tab, Updates tab
-  src/SystemPanel.tsx — Environment Centre (System) view
-  src/vision.ts — shared vision state badge renderer
-  web/static/assets/AgentBody-CyMQd0oP.js — regenerated embedded build (new hash set)
-  web/static/assets/AgentHeader-Dezw4syJ.js — regenerated embedded build (new hash set)
-  web/static/assets/AgentSidebar-D2AIsqsa.js — regenerated embedded build (new hash set)
-  web/static/assets/LabPanel-DNdaVwnC.js — regenerated embedded build (new hash set)
-  web/static/assets/ResearchPanel-DVSjuNFM.js — regenerated embedded build (new hash set)
-  web/static/assets/SettingsPanel-C5otSLaN.js — regenerated embedded build (new hash set)
-  web/static/assets/SystemPanel-CzupHX9T.js — regenerated embedded build (new hash set)
-  web/static/assets/index-CTp-kOgC.js — regenerated embedded build (new hash set)
-  web/static/assets/index-DJQM74Q8.css — regenerated embedded build (new hash set)
-  web/static/assets/vision-Dw0T2tjy.js — regenerated embedded build (new hash set)
-
 [MODIFIED FILES]
   .github/workflows/build-desktop.yml
-  ARCHITECTURE.md
-  README.md
-  SIGNATURE
-  agent.md
-  build/config.yml
-  internal/api/engine.go
-  internal/api/perf.go
-  internal/api/perf_linux.go
-  internal/api/perf_windows.go
+    NSIS build: ABSOLUTE BUILDDIR/OUTFILE path contract, pre-flight staging
+    assertions, LASTEXITCODE check, installer identity + MZ-header
+    verification.
+  cmd/stress_zeta.go
+    zeta_release_surface derives the artifact contract from
+    internal/releasecontract and regex-verifies workflow agreement
+    (naming-drift detection in both directions; legacy naming rejected).
+  internal/agent/reliability.go
+    LoopGuard wall-clock budget: injectable clock, >= semantics, zero or
+    negative disables. No behaviour change for real budgets.
+  internal/agent/reliability_test.go
+    Deterministic wall-clock coverage (expired / at-expiry / just-before /
+    disabled / negative / multi-call). Replaces the flaky real-clock 1ns
+    test with MORE cases, none weaker.
+  internal/api/lifecycle.go
+    Server.Close cancels the scheduled engine-update loop and waits
+    (bounded 3s) for its completion channel.
   internal/api/server.go
+    Tracks updateDone; wires RunScheduled's completion channel.
   internal/api/server_native_test.go
-  internal/api/sessioncontext.go
-  internal/config/config.go
-  internal/desktop/desktop.go
+    UpdateSchedule = "off" in test config (no network in unit tests).
+  internal/api/server_test.go
+    UpdateSchedule = "off" in test config.
+  internal/api/server_v114_test.go
+    UpdateSchedule = "off" in test config.
+  internal/lab/lab_test.go
+    TestWorkspacePathForCanonicalSpelling: reproduces the Windows 8.3
+    short-name/long-name mismatch class via symlink; jail still rejects
+    escapes across spellings.
+  internal/lab/workspace.go
+    canonicalPath helper (Abs + Clean + EvalSymlinks on the nearest
+    existing ancestor, tail re-attached); both comparison sides
+    canonicalised in PathFor/validateWorkspace/Remove/Create;
+    OS-aware sameWord equality; rooted \foo refused; manager root
+    canonicalised at construction. Isolation unchanged or stricter.
+  internal/llm/capability_test.go
+    Three engine tests own and stop the fake engine they start
+    (t.Cleanup(s.Stop)) — no orphan test-binary children.
   internal/llm/llama.go
-  package-lock.json
-  package.json
-  scripts/build-and-zip.sh
-  scripts/gen-syso/main.go
-  src/ActivityStream.tsx
-  src/AgentBody.tsx
-  src/App.tsx
-  src/MessageStream.tsx
-  src/ModelPicker.tsx
-  src/SettingsPanel.tsx
-  src/api.ts
-  src/styles.css
-  src/workspace.ts
-  web/static/.vite/manifest.json
-  web/static/index.html
-  worklog.md
+    Stop() waits (bounded 5s) on the exit watcher's done channel after
+    Kill — deterministic child reaping; exitDone tracked with s.cmd;
+    safeArchivePath delegates to the single authoritative validator.
+  internal/llm/llama_test.go
+    OS-canonical path construction (filepath.Join) and assertions.
+  internal/logging/recentparsed_test.go
+    Tests close the log Manager (idempotent Close) so no file handle
+    outlives the test on Windows.
+  internal/proc/proc_windows.go
+    taskkill spawned with CREATE_NO_WINDOW — no orphan conhost consoles.
+  internal/updater/updater.go
+    safeZipPath: separator-canonical validation (POSIX-absolute, rooted,
+    drive-letter, UNC, mixed-separator traversal, NUL all rejected);
+    exported SafeArchivePath as the single authoritative validator;
+    RunScheduled returns a done channel closed after cancellation AND
+    in-flight pass completion.
+  internal/updater/zipsafe_test.go
+    Regression members for every rejected shape + allowed relative
+    shapes; llm/updater validator-agreement test.
+  packaging/nsis/installer.nsi
+    Centralised OUTFILE define; compile-time staging-exe assertion
+    (!if ! /FileExists); one documented path contract (script-relative
+    defaults, ABSOLUTE paths from CI).
 
-[DELETED FILES (present in base, NOT in this package)]
-  sheytan-local-agent.bat
-  web/static/assets/AgentBody-NepkaVWP.js
-  web/static/assets/AgentHeader-CjbPNa0Q.js
-  web/static/assets/AgentSidebar-CAXlKFQx.js
-  web/static/assets/LabPanel-B5Xf1JtL.js
-  web/static/assets/ResearchPanel-BK1_HHZQ.js
-  web/static/assets/SettingsPanel-DGL5poUh.js
-  web/static/assets/index--nFue_yD.css
-  web/static/assets/index-DNeAa-xT.js
+[NEW FILES]
+  internal/releasecontract/releasecontract.go
+    Single authoritative release artifact-name contract (portable ZIPs,
+    NSIS installer, app roots, launcher, required ZIP entries).
+  internal/llm/paths_test.go
+    One OS-aware filesystem-path comparison helper for tests.
+
+[DELETED FILES]
+  None. Nothing was removed by this repair.
+
+[UNCHANGED — DO NOT TOUCH]
+  Everything not listed above, in particular: the rAF streaming coalescing
+  path; the compatibility adapter; objective verification; performance
+  telemetry; logs; network diagnostics; model capability detection; the
+  vision package; context handling; the engine state machine; updater
+  safety; the Windows identity (SHEYTAN-LA / SHEYTAN-LA.exe /
+  Parsaetak.SHEYTAN-LA); package.json as the version source of truth.
