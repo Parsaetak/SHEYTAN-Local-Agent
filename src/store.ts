@@ -23,6 +23,31 @@ import { activityWebSocketURL } from "./config";
 export type ConnectionState =
   "idle" | "connecting" | "connected" | "disconnected" | "error";
 
+// v1.1.8: top-level mode separation. Chat is the calm conversation
+// surface; Agent is the engineering/action surface. Both reuse the same
+// sessions, model runtime, and engine infrastructure underneath — only
+// the exposed controls differ.
+export type WorkspaceMode = "chat" | "agent";
+
+const MODE_STORAGE_KEY = "sheytan.mode";
+
+function initialWorkspaceMode(): WorkspaceMode {
+  try {
+    const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
+    return stored === "agent" ? "agent" : "chat";
+  } catch {
+    return "chat";
+  }
+}
+
+function persistWorkspaceMode(mode: WorkspaceMode): void {
+  try {
+    window.localStorage.setItem(MODE_STORAGE_KEY, mode);
+  } catch {
+    // Storage can be unavailable (private mode) — mode stays in memory.
+  }
+}
+
 export type ActivityEvent = {
   id: string;
   type: string;
@@ -122,6 +147,10 @@ type RuntimeState = {
   connectActivity: () => void;
   disconnectActivity: () => void;
   clearActivity: () => void;
+
+  // v1.1.8: Chat / Agent mode switch (persisted per device).
+  mode: WorkspaceMode;
+  setMode: (mode: WorkspaceMode) => void;
 };
 
 const MAX_ACTIVITY_EVENTS = 500;
@@ -1355,6 +1384,15 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     set({
       activity: [],
     });
+  },
+
+  // v1.1.8: mode switch — a UI-only concern, so it lives at the end of
+  // the store with its localStorage persistence. Sessions, model state,
+  // and the engine are untouched: Chat and Agent share one runtime.
+  mode: initialWorkspaceMode(),
+  setMode: (mode) => {
+    persistWorkspaceMode(mode);
+    set({ mode });
   },
 }));
 

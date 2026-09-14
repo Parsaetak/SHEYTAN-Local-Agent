@@ -12,6 +12,8 @@ import { api, type EngineState, type RuntimeConfig } from "./api";
 import { initializeAgent } from "./agent-init";
 import MessageStream, { AttachmentChip } from "./MessageStream";
 import ActivityStream from "./ActivityStream";
+import ModelPicker from "./ModelPicker";
+import PerfStrip from "./PerfStrip";
 import { useRuntimeStore } from "./store";
 
 // engineBadge maps the authoritative backend engine states to a visible
@@ -128,6 +130,19 @@ function AgentBody() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [showActivity, setShowActivity] = useState(false);
 
+  // v1.1.8: Chat / Agent mode surfaces. Both modes share THIS component's
+  // session/model/engine wiring — only what is VISIBLE differs. Chat gets
+  // a slim model rail and the full-screen picker; Agent keeps the runtime
+  // panel, activity, and telemetry.
+  const mode = useRuntimeStore((state) => state.mode);
+  const chatMode = mode === "chat";
+
+  // Picker visibility: automatic when no usable model exists, overridable
+  // by the user (null = follow the automatic state).
+  const [pickerOverride, setPickerOverride] = useState<boolean | null>(null);
+  const needPicker = (models?.local ?? []).length === 0 || !config?.model;
+  const pickerOpen = pickerOverride ?? needPicker;
+
   useEffect(() => {
     let cancelled = false;
 
@@ -225,9 +240,11 @@ function AgentBody() {
     }
   }
 
-  async function switchModel(nextModel: string) {
+  // v1.1.8: returns success so the model picker can close itself only
+  // when the switch actually applied.
+  async function switchModel(nextModel: string): Promise<boolean> {
     if (!nextModel || nextModel === config?.model || modelBusy) {
-      return;
+      return false;
     }
 
     setModelBusy(true);
@@ -246,12 +263,16 @@ function AgentBody() {
 
       await api.llama("start");
       await refreshModels();
+
+      return true;
     } catch (switchError) {
       setModelError(
         switchError instanceof Error
           ? switchError.message
           : "Unable to switch model.",
       );
+
+      return false;
     } finally {
       setModelBusy(false);
     }
@@ -317,9 +338,78 @@ function AgentBody() {
 
   return (
     <>
-      <section className="workspace-content">
-        <MessageStream />
+      <section
+        className={`workspace-content${chatMode ? " mode-chat" : ""}`}
+      >
+        {chatMode && (
+          <div className="chat-rail">
+            <span
+              className={`status-dot severity-${badge.severity} ${
+                badge.busy ? "pulsing" : ""
+              }`}
+            />
 
+            <span className="chat-rail-state">{badge.label}</span>
+
+            <select
+              className="runtime-select chat-rail-select"
+              value={config?.model ?? ""}
+              onChange={(event) => void switchModel(event.target.value)}
+              disabled={
+                modelBusy ||
+                config?.provider !== "local" ||
+                localModels.length === 0
+              }
+              aria-label="Model"
+            >
+              <option value="">
+                {localModels.length === 0
+                  ? "No local GGUF models found"
+                  : "Select local model"}
+              </option>
+
+              {localModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name}
+                  {model.quantization ? ` · ${model.quantization}` : ""}
+                  {model.parameterInfo ? ` · ${model.parameterInfo}` : ""}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setPickerOverride(!pickerOpen)}
+            >
+              {pickerOpen ? "Hide models" : "All models"}
+            </button>
+          </div>
+        )}
+
+        {/* v1.1.8: the model picker owns the content area whenever it is
+            open (automatic while no usable model exists). Otherwise the
+            conversation stream fills the same space. */}
+        {pickerOpen ? (
+          <ModelPicker
+            activeModel={
+              config?.model ?? engine?.model ?? activeSession?.model ?? null
+            }
+            busy={modelBusy}
+            onUse={(id) => {
+              void switchModel(id).then((applied) => {
+                if (applied) {
+                  setPickerOverride(false);
+                }
+              });
+            }}
+            onClose={() => setPickerOverride(false)}
+          />
+        ) : (
+          <MessageStream />
+        )}
+
+        {!chatMode && (
         <aside className="runtime-panel">
           <div className="panel-heading">
             <div>
@@ -399,7 +489,8 @@ function AgentBody() {
           </div>
 
           {/* v1.1.6 §10 first use: when no valid model exists, give the
-              user a clear path instead of a dead dropdown. */}
+              user a clear path instead of a dead dropdown. v1.1.8: the
+              button opens the real model picker (no DOM query hack). */}
           {localModels.length === 0 && !config?.model && (
             <div className="runtime-section first-use">
               <span className="eyebrow">GET STARTED</span>
@@ -415,13 +506,7 @@ function AgentBody() {
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={() => {
-                    const select = document.querySelector<HTMLSelectElement>(
-                      ".runtime-panel .runtime-select",
-                    );
-                    select?.focus();
-                    select?.click();
-                  }}
+                  onClick={() => setPickerOverride(true)}
                 >
                   Choose model
                 </button>
@@ -554,8 +639,13 @@ function AgentBody() {
             </div>
           </div>
 
+          {/* v1.1.8: compact live telemetry in the Agent surface — same
+              /api/perf source as the diagnostic HUD, never fabricated. */}
+          <PerfStrip />
+
           {showActivity ? <ActivityStream /> : null}
         </aside>
+        )}
       </section>
 
       <form className="composer" onSubmit={handleSubmit}>
@@ -589,9 +679,11 @@ function AgentBody() {
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             placeholder={
-              activeSessionId
-                ? "Describe what SHEYTAN should forge..."
-                : "Create a session to begin..."
+              !activeSessionId
+                ? "Create a session to begin..."
+                : chatMode
+                  ? "Message SHEYTAN..."
+                  : "Describe what SHEYTAN should forge..."
             }
             disabled={!activeSessionId || running}
             rows={3}
@@ -649,7 +741,7 @@ function AgentBody() {
                   className="send-button"
                   disabled={!activeSessionId || !message.trim() || loading}
                 >
-                  Forge →
+                  {chatMode ? "Send" : "Forge →"}
                 </button>
               )}
             </div>

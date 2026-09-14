@@ -177,17 +177,28 @@ function StreamingBubble() {
 
 function EmptyConversation() {
   const engineState = useRuntimeStore((state) => state.engine?.state);
+  // v1.1.8: mode-aware empty state — Chat invites conversation, Agent
+  // invites a task. Same stream, same runtime underneath.
+  const mode = useRuntimeStore((state) => state.mode);
+  const chat = mode === "chat";
+
+  const engineLive =
+    engineState === "ready" || engineState === "running" || engineState === "busy";
 
   return (
     <div className="conversation-empty">
       <div className="activity-empty-mark">✦</div>
 
-      <strong>Conversation ready</strong>
+      <strong>{chat ? "Ready when you are" : "Conversation ready"}</strong>
 
       <span>
-        {engineState === "ready" || engineState === "running" || engineState === "busy"
-          ? "Engine is live. Send a task below to begin."
-          : "Send a task below — the engine starts automatically."}
+        {!engineLive
+          ? chat
+            ? "Send a message below — the engine starts automatically."
+            : "Send a task below — the engine starts automatically."
+          : chat
+            ? "Engine is live. Say hello, ask anything, or attach files."
+            : "Engine is live. Send a task below to begin."}
       </span>
     </div>
   );

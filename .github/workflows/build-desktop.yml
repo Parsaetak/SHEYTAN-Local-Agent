@@ -18,16 +18,25 @@ concurrency:
 permissions:
   contents: read
 
+# v1.1.8: the release identity is NOT hardcoded here anymore. package.json
+# is the single source of truth; the audit job resolves it at runtime
+# (scripts/release-version.mjs --env) and every other job consumes it via
+# needs-outputs. A version bump therefore only touches package.json + the
+# derived surfaces the script repairs — a stale env constant can never
+# desync CI again (root cause of run 34788709977).
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
-  APP_VERSION: "1.1.6"
-  APP_CODENAME: "Zeta"
 
 jobs:
   audit:
     name: Source & frontend audit
     runs-on: ubuntu-24.04
+
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      version_full: ${{ steps.identity.outputs.version_full }}
+      codename: ${{ steps.identity.outputs.codename }}
 
     steps:
       - name: Checkout
@@ -41,6 +50,7 @@ jobs:
           package-manager-cache: true
 
       - name: Verify repository shape and release identity
+        id: identity
         shell: bash
         run: |
           set -euo pipefail
@@ -63,9 +73,29 @@ jobs:
 
           node scripts/release-version.mjs
 
+          # v1.1.8: derive the release identity from package.json (the one
+          # canonical source) instead of trusting a workflow env constant.
+          identity_out="$(node scripts/release-version.mjs --env)"
+
+          while IFS='=' read -r key value; do
+            case "$key" in
+              APP_VERSION | APP_VERSION_FULL | APP_CODENAME)
+                export "$key=$value"
+                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$identity_out"
+
+          # The identity step must be tagged so needs-outputs can read it
+          # (id: identity above).
+          echo "Resolved identity: $APP_VERSION / $APP_VERSION_FULL / $APP_CODENAME"
+
+          # Belt and suspenders: the repaired tree must pass check mode.
+          node scripts/release-version.mjs --check
+
           grep -F "AppVersion  = \"$APP_VERSION\"" internal/config/config.go
-          grep -F "\"version\": \"$APP_VERSION-zeta\"" package.json
-          grep -F "productVersion: \"$APP_VERSION-zeta\"" build/config.yml
+          grep -F "\"version\": \"$APP_VERSION_FULL\"" package.json
+          grep -F "productVersion: \"$APP_VERSION_FULL\"" build/config.yml
           grep -F "SHEYTAN-Local-Agent v$APP_VERSION" SIGNATURE
 
       - name: Install frontend dependencies
@@ -110,6 +140,13 @@ jobs:
   build-windows:
     name: Windows x64
     needs: audit
+
+    # v1.1.8: identity flows from the audit job's runtime resolution of
+    # package.json — no local hardcoded version can drift here either.
+    env:
+      APP_VERSION: ${{ needs.audit.outputs.version }}
+      APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
+      APP_CODENAME: ${{ needs.audit.outputs.codename }}
     runs-on: windows-latest
 
     steps:
@@ -184,12 +221,12 @@ jobs:
             @{
               Label   = "package.json version"
               Path    = "package.json"
-              Pattern = '"version": "' + $env:APP_VERSION + '-zeta"'
+              Pattern = '"version": "' + $env:APP_VERSION_FULL + '"'
             },
             @{
               Label   = "build/config.yml productVersion"
               Path    = "build/config.yml"
-              Pattern = 'productVersion: "' + $env:APP_VERSION + '-zeta"'
+              Pattern = 'productVersion: "' + $env:APP_VERSION_FULL + '"'
             },
             @{
               Label   = "SIGNATURE first line"
@@ -539,6 +576,13 @@ jobs:
   build-linux:
     name: Linux x64
     needs: audit
+
+    # v1.1.8: identity flows from the audit job's runtime resolution of
+    # package.json — no local hardcoded version can drift here either.
+    env:
+      APP_VERSION: ${{ needs.audit.outputs.version }}
+      APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
+      APP_CODENAME: ${{ needs.audit.outputs.codename }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -615,8 +659,8 @@ jobs:
           set -euo pipefail
 
           grep -F "AppVersion  = \"$APP_VERSION\"" internal/config/config.go
-          grep -F "\"version\": \"$APP_VERSION-zeta\"" package.json
-          grep -F "productVersion: \"$APP_VERSION-zeta\"" build/config.yml
+          grep -F "\"version\": \"$APP_VERSION_FULL\"" package.json
+          grep -F "productVersion: \"$APP_VERSION_FULL\"" build/config.yml
           grep -F "SHEYTAN-Local-Agent v$APP_VERSION" SIGNATURE
 
       - name: Install frontend dependencies
@@ -935,6 +979,14 @@ jobs:
     needs:
       - build-windows
       - build-linux
+      - audit
+
+    # v1.1.8: the release job consumes the audit job's runtime-resolved
+    # identity (package.json) — it needs no checkout to verify the tag.
+    env:
+      APP_VERSION: ${{ needs.audit.outputs.version }}
+      APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
+      APP_CODENAME: ${{ needs.audit.outputs.codename }}
 
     # v1.1.4Z: version-agnostic gate — the job runs for any v* tag and the
     # first step verifies the tag equals v${APP_VERSION}Z. The previous

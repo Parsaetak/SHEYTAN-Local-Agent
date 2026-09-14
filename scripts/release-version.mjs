@@ -9,11 +9,18 @@
  *   - internal/config/config.go            ->  AppVersion  = "1.1.3"        (base version)
  *   - build/config.yml                     ->  productVersion: "1.1.3-zeta"  (full version)
  *   - SIGNATURE                            ->  SHEYTAN-Local-Agent v1.1.3     (base version)
- *   - .github/workflows/build-desktop.yml  ->  APP_VERSION: "1.1.3"           (base version)
+ *
+ * v1.1.8: the workflow NO LONGER carries a hardcoded APP_VERSION. CI derives
+ * the release identity at runtime from package.json via `--env`, so version
+ * metadata has exactly one source and can never drift between files again.
+ * The workflow is still audited here (shape check) to prove the derivation
+ * step has not been dropped.
  *
  * Usage:
  *   node scripts/release-version.mjs            # sync mode (default): repair drift in place
  *   node scripts/release-version.mjs --check    # verify only: exit 1 on any drift
+ *   node scripts/release-version.mjs --env      # print APP_VERSION / APP_VERSION_FULL /
+ *                                               # APP_CODENAME as VAR=value lines (CI consumption)
  *
  * Designed for CI: zero dependencies, CRLF-safe, never rewrites a file that
  * is already correct, and emits GitHub Actions ::error:: annotations in
@@ -30,6 +37,7 @@ const repoRoot = join(
 );
 
 const CHECK_ONLY = process.argv.includes("--check");
+const PRINT_ENV = process.argv.includes("--env");
 
 const targets = [
   {
@@ -59,11 +67,16 @@ const targets = [
     describe: (v) => `first line = "SHEYTAN-Local-Agent v${v}"`,
   },
   {
+    // v1.1.8 shape check: the workflow must derive APP_VERSION at runtime
+    // (see --env) instead of pinning a stale hardcoded version constant.
     label: ".github/workflows/build-desktop.yml",
     file: join(".github", "workflows", "build-desktop.yml"),
-    pattern: /((?:^|\r?\n)[ \t]*APP_VERSION:[ \t]*")([^"]*)(")/,
-    expected: (base) => base,
-    describe: (v) => `APP_VERSION: "${v}"`,
+    // Two capture groups (prefix + marker) keep the generic splice path
+    // happy: group(2) is compared against expected() and never differs,
+    // so this target only fails when the marker is absent entirely.
+    pattern: /((?:release-version\.mjs[ \t]+))(--env)/,
+    expected: () => "--env",
+    describe: () => "runtime identity derivation (release-version.mjs --env)",
   },
 ];
 
@@ -108,6 +121,24 @@ console.log(
   `[sheytan-release] source of truth: package.json = ${fullVersion} ` +
     `(base ${baseVersion}, codename ${codename})`,
 );
+
+// ---------------------------------------------------------------------------
+// 1b. --env mode: emit the release identity for CI consumption.
+// ---------------------------------------------------------------------------
+
+if (PRINT_ENV) {
+  // One VAR=value per line so both bash ($GITHUB_ENV) and PowerShell
+  // ($env:) consumers can parse it with a naive split on the first "=".
+  // APP_VERSION       base semver          e.g. "1.1.8"
+  // APP_VERSION_FULL  full package version e.g. "1.1.8" or "1.1.8-zeta"
+  // APP_CODENAME      display codename     e.g. "Zeta"
+  const displayCodename = codename.charAt(0) + codename.slice(1).toLowerCase();
+
+  console.log(`APP_VERSION=${baseVersion}`);
+  console.log(`APP_VERSION_FULL=${fullVersion}`);
+  console.log(`APP_CODENAME=${displayCodename}`);
+  process.exit(0);
+}
 
 // ---------------------------------------------------------------------------
 // 2. Verify (and, in sync mode, repair) every derived release surface.

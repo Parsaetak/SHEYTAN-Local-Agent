@@ -429,6 +429,20 @@ type modelInfo struct {
         EstimatedMemoryBytes int64 `json:"estimatedMemoryBytes,omitempty"`
         RecommendedContext   int   `json:"recommendedContext,omitempty"`
 
+        // v1.1.8 model-picker capability facts, measured by
+        // llm.ResolveModelCapabilities and served from the same bounded
+        // cache as the header card (never guessed in the UI):
+        //   - Multimodal:    a vision projector is paired with this model
+        //   - NativeBackend: the native C++ engine can execute this arch
+        //   - ChatTemplate:  the architecture ships a usable chat template
+        //                    (prerequisite for tool calling)
+        //   - EstimatedVRAMBytes: VRAM estimate at the recommended context
+        Multimodal           bool   `json:"multimodal,omitempty"`
+        NativeBackend        bool   `json:"nativeBackend,omitempty"`
+        ChatTemplate         bool   `json:"chatTemplate,omitempty"`
+        NativeReason         string `json:"nativeReason,omitempty"`
+        EstimatedVRAMBytes   int64  `json:"estimatedVRAMBytes,omitempty"`
+
         // Serving (v1.1.5Z Phase 6): true when the ACTIVE backend is
         // currently serving THIS model — the honest "currently serving"
         // marker for the picker. The backend itself is reported once at
@@ -451,18 +465,25 @@ type modelCardEntry struct {
         modTime time.Time
         size    int64
         info    *llm.ModelCard
+
+        // v1.1.8: ResolveModelCapabilities re-parses the same GGUF header the
+        // card read already covers. It used to run UNCACHED for every local
+        // model on every /api/models poll; caching it here removes that
+        // duplicated capability calculation from the hot polling path.
+        caps *llm.ModelCapabilities
 }
 
 // modelCardCacheCap bounds the card cache; a models directory with more
 // entries than this re-parses on demand (correct, just slower).
 const modelCardCacheCap = 512
 
-// modelCardFor returns cached GGUF metadata for path (nil card when
-// unreadable — a broken header must not hide the file from the picker).
-func modelCardFor(path string) *llm.ModelCard {
+// modelCardFor returns cached GGUF metadata and capability card for path
+// (nil card when unreadable — a broken header must not hide the file from
+// the picker; caps stay nil in that case).
+func modelCardFor(path string, cfg *config.Config) (*llm.ModelCard, *llm.ModelCapabilities) {
         fi, err := os.Stat(path)
         if err != nil {
-                return nil
+                return nil, nil
         }
 
         key := path + "\x00" + strconv.FormatInt(fi.Size(), 10)
@@ -472,19 +493,20 @@ func modelCardFor(path string) *llm.ModelCard {
         modelCardMu.Unlock()
 
         if ok && cached.size == fi.Size() && cached.modTime.Equal(fi.ModTime()) {
-                return cached.info
+                return cached.info, cached.caps
         }
 
         card, _ := llm.ReadModelCard(path)
+        caps := llm.ResolveModelCapabilities(cfg, path)
 
         modelCardMu.Lock()
         if len(modelCardCache) >= modelCardCacheCap {
                 modelCardCache = map[string]modelCardEntry{}
         }
-        modelCardCache[key] = modelCardEntry{modTime: fi.ModTime(), size: fi.Size(), info: card}
+        modelCardCache[key] = modelCardEntry{modTime: fi.ModTime(), size: fi.Size(), info: card, caps: caps}
         modelCardMu.Unlock()
 
-        return card
+        return card, caps
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -498,6 +520,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
         localInfos := make([]modelInfo, 0, len(local))
 
+        // v1.1.8: one host memory probe per poll, shared by every model card.
+        mem := s.systemMemory()
+
         for _, name := range local {
                 info := modelInfo{
                         ID:       name,
@@ -510,7 +535,11 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
                         info.SizeBytes = fi.Size()
                 }
 
-                if card := modelCardFor(info.Path); card != nil && card.Arch != "" {
+                // v1.1.8: card AND caps come from the same bounded cache;
+                // the per-poll ResolveModelCapabilities call is gone.
+                card, caps := modelCardFor(info.Path, cfg)
+
+                if card != nil && card.Arch != "" {
                         info.Architecture = card.Arch
                         info.Quantization = card.Quant
                         info.ContextLength = card.ContextLength
@@ -519,13 +548,22 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
                         // 1.1.6 §10: the estimated footprint uses the model
                         // class' recommended context, not the global setting,
                         // so the picker stays honest for any machine.
-                        if caps := llm.ResolveModelCapabilities(cfg, info.Path); caps != nil {
+                        // v1.1.8: the host memory probe is hoisted out of the
+                        // per-model loop — one read per poll, not N.
+                        if caps != nil {
                                 info.RecommendedContext = caps.RecommendedCtx
-                                mem := s.systemMemory()
                                 info.EstimatedMemoryBytes = llm.AssessContextResource(
                                         card, info.SizeBytes, caps.RecommendedCtx,
                                         cfg.EffectiveKVCacheQuant(), mem,
                                 ).EstimatedTotalBytes
+
+                                // v1.1.8 model-picker capability facts —
+                                // measured, cached, never guessed client-side.
+                                info.Multimodal = caps.Multimodal
+                                info.NativeBackend = caps.NativeBackend
+                                info.ChatTemplate = caps.ChatTemplate
+                                info.NativeReason = caps.NativeReason
+                                info.EstimatedVRAMBytes = caps.EstimatedVRAMBytes
                         }
                 }
 

@@ -113,6 +113,21 @@ visible and honest where it previously was silent. Verified rows:
 | Options UI sections, option metadata, tooltips | `src/SettingsPanel.tsx`, `src/SettingsPerformance.tsx`, `src/settings-shared.tsx`, `src/settings.css` | IMPLEMENTED | same card system/theme/scroll architecture; six tabs (General/Performance/Generation/Tools/Network/Logs); delayed 400 ms CSS tooltips (1–2 sentences); `Supported/Unsupported/Recommended/Restart required` chips on engine options; the restart-after-save condition now covers every engine-affecting key (speed settings previously saved but left inert until a manual restart) |
 | Concise tool labels | `internal/tools/shortdesc.go`, `internal/research/tool.go`, `internal/lab/tool.go`, `internal/memory/memory.go`, `/api/tools` | IMPLEMENTED | one-line `ShortDescription` per tool for the Options UI; the FULL `Description()` remains the model-facing operational spec (removing it would strip the JSON action syntax the agent needs); `/api/tools` carries both (`description` short, `detail` full) |
 
+## I.8c — v1.1.8 surfaces: Chat/Agent separation, model picker, release-identity gate (IMPLEMENTED + TESTED)
+
+v1.1.8 does not change any architecture either — it separates the two
+workload personas at the UI layer, upgrades model selection, and makes
+the CI release identity derivation-only. Verified rows:
+
+| Surface | Package(s)/File(s) | Status | Notes |
+|---|---|---|---|
+| Release identity single source of truth | `scripts/release-version.mjs` (`--env` mode), `.github/workflows/build-desktop.yml` | IMPLEMENTED + TESTED | `package.json` remains canonical; the workflow no longer carries `APP_VERSION`/`APP_CODENAME` constants. The audit job resolves the identity at runtime (step `id: identity`) via `release-version.mjs --env` and exports `APP_VERSION` / `APP_VERSION_FULL` / `APP_CODENAME` as job outputs consumed by `build-windows`, `build-linux` and `release` through `needs`-outputs. The script's target list now SHAPE-checks the workflow for the `--env` derivation marker instead of patching a hardcoded `APP_VERSION:` line. Root cause of run `34788709977` (stale parse-time env vs runtime-repaired tree, plus a stale `-zeta` suffix assumption) is structurally eliminated |
+| Chat/Agent mode separation | `src/store.ts` (`WorkspaceMode`, `mode`, `setMode`, localStorage `sheytan.mode`), `src/AgentHeader.tsx` (`ModeSwitch`), `src/AgentBody.tsx` | IMPLEMENTED | UI-only concern: one segmented switch, exactly one active mode, same sessions/model/engine runtime for both. Chat: model rail + stream + composer (Send), no runtime panel/context pills/telemetry. Agent: runtime panel, context controls, activity, performance strip. No second runtime, no duplicated state |
+| Model picker | `src/ModelPicker.tsx`, `src/AgentBody.tsx` | IMPLEMENTED | replaces the stream while open (automatic while no usable model exists); per-model cards show only backend-measured facts + an honest RAM-based classification (Recommended/Compatible/Limited) derived host-side from `sysinfo` vs `estimatedMemoryBytes`; actions limited to real APIs (Use/Open folder/Refresh/Details — no Remove, no deletion API) |
+| Per-model capability facts on `/api/models` | `internal/api/server.go` (`modelInfo`, `modelCardFor`) | IMPLEMENTED | `multimodal`, `nativeBackend`, `chatTemplate`, `nativeReason`, `estimatedVRAMBytes` per model from `llm.ResolveModelCapabilities`; the capability resolution now shares the header card's bounded path+size+mtime cache (previously re-parsed per model per poll), and the host memory probe is hoisted out of the per-model loop |
+| Performance strip | `src/PerfStrip.tsx` | IMPLEMENTED | compact 4 s polling of the EXISTING `/api/perf` snapshot into the Agent surface; N/A for anything unmeasured; no new telemetry pipeline |
+| Settings tabs: Models / Advanced | `src/SettingsPanel.tsx` | IMPLEMENTED | `SettingsTab`/`TABS` gained `models` (provider + model runtime card) and `advanced` (system profile/hardware card); all other tabs and the card/tooltips system unchanged |
+
 ## I.9 — The SHEYTAN Native AI Engine architecture (v1.1.5Z, IMPLEMENTED foundation + model loading)
 
 The target engine stack is now wired at the foundation level:

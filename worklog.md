@@ -1921,3 +1921,22 @@ Fix (all in the existing engine system — no engine rewrite):
 
 Package: SHEYTAN-Local-Agent-v1.1.7-UPDATE.zip (UPDATE.md §6 lists the
 same results; §1–§5 carry the exact file map incl. DO NOT TOUCH).
+
+---
+Task ID: v1.1.8
+Agent: Super Z (upgrade agent)
+Task: v1.1.7 → v1.1.8 — CI release-identity fix, Chat/Agent separation, model picker, settings tabs, backend optimisation, minimalist pass
+
+Work Log:
+- Root-caused Actions run 34788709977: workflow env APP_VERSION="1.1.6" pinned at parse time while release-version.mjs repaired the tree to 1.1.7; greps also assumed a "-zeta" suffix package.json no longer carries.
+- release-version.mjs: added --env mode (APP_VERSION / APP_VERSION_FULL / APP_CODENAME); replaced the workflow APP_VERSION target with a shape check for the runtime derivation marker.
+- build-desktop.yml: removed hardcoded APP_VERSION/APP_CODENAME; audit job step "identity" derives them from package.json into $GITHUB_OUTPUT; build-windows/build-linux/release consume needs.audit.outputs.*; all version greps use runtime-derived values (no "-zeta" assumption); audit also runs release-version.mjs --check after sync.
+- Version bumped 1.1.7 → 1.1.8 (package.json, package-lock, config.go, build/config.yml, SIGNATURE via the script).
+- internal/api/server.go: modelCardFor now caches ResolveModelCapabilities alongside the GGUF card (bounded path+size+mtime cache) — removes per-poll per-model GGUF re-parsing; handleModels exposes multimodal/nativeBackend/chatTemplate/nativeReason/estimatedVRAMBytes; host memory probe hoisted out of the per-model loop. sessioncontext.go reuses the cached read.
+- Frontend: WorkspaceMode (chat|agent) in store.ts (localStorage sheytan.mode, default chat); ModeSwitch segmented control in AgentHeader; AgentBody mode-aware (Chat = model rail + stream + composer; Agent = runtime panel + PerfStrip + activity); ModelPicker.tsx (measured facts only, honest RAM-based classification, no Remove); PerfStrip.tsx (4 s /api/perf polling, N/A contract); settings Models/Advanced tabs split; minimalist CSS pass (mode-switch, chat-rail, model-picker, perf-strip, calmer background grid/topbar).
+- switchModel returns success; first-use DOM-query hack replaced by the picker.
+- Docs updated: README v1.1.8 section, agent.md v1.1.8 notes, ARCHITECTURE I.8c, UPDATE.md rewritten.
+- Checks executed: node scripts/release-version.mjs --check; go build/vet/test -tags headless ./... (33 packages ok); npm run typecheck/lint/build.
+
+Stage Summary:
+- v1.1.8 complete per the release brief; automated checks green; no architecture changes; native engine and all subsystems untouched.

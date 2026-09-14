@@ -12,12 +12,46 @@ function formatTok(tokens: number): string {
   return String(tokens);
 }
 
+// v1.1.8: the top-level Chat / Agent segmented switch. Exactly one mode
+// is active; the mode decides which controls each surface exposes while
+// both keep using the same session and engine runtime underneath.
+const ModeSwitch = memo(function ModeSwitch() {
+  const mode = useRuntimeStore((state) => state.mode);
+  const setMode = useRuntimeStore((state) => state.setMode);
+
+  return (
+    <div className="mode-switch" role="tablist" aria-label="Workspace mode">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === "chat"}
+        className={`mode-switch-option${mode === "chat" ? " active" : ""}`}
+        onClick={() => setMode("chat")}
+      >
+        Chat
+      </button>
+
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === "agent"}
+        className={`mode-switch-option${mode === "agent" ? " active" : ""}`}
+        onClick={() => setMode("agent")}
+      >
+        Agent
+      </button>
+    </div>
+  );
+});
+
 const AgentHeader = memo(function AgentHeader() {
   const activeSessionId = useRuntimeStore((state) => state.activeSessionId);
 
   const sessions = useRuntimeStore((state) => state.sessions);
 
   const running = useRuntimeStore((state) => state.running);
+
+  const mode = useRuntimeStore((state) => state.mode);
 
   const sessionContext = useRuntimeStore((state) => state.sessionContext);
   const sessionContextError = useRuntimeStore((state) => state.sessionContextError);
@@ -27,6 +61,10 @@ const AgentHeader = memo(function AgentHeader() {
 
   const activeSession =
     sessions.find((session) => session.id === activeSessionId) ?? null;
+
+  // v1.1.8: Chat shows plain conversation wording; Agent keeps the
+  // engineering voice. Same session, different framing.
+  const defaultTitle = mode === "chat" ? "New chat" : "Forge a new task";
 
   const options = sessionContext?.options ?? [];
 
@@ -43,15 +81,18 @@ const AgentHeader = memo(function AgentHeader() {
   const chosen = sessionContext?.sessionPolicy || sessionContext?.effective || 0;
   const chosenInOptions = options.some((o) => o.tokens === chosen);
 
+  // v1.1.8: context engineering controls are Agent-surface tools. Chat
+  // stays minimal (model, conversation, input, send/stop, attachments).
+  const showContextControls = mode === "agent";
+
   return (
     <>
-      <h1>{activeSession?.title || "Forge a new task"}</h1>
+      <h1>{activeSession?.title || defaultTitle}</h1>
 
       <div className="header-actions">
-        {/* v1.1.6 §16: per-chat context state in the session controls.
-            The backend resolves the effective window; the selector only
-            offers values valid for the current model. */}
-        {sessionContext && (
+        <ModeSwitch />
+
+        {showContextControls && sessionContext && (
           <label className="ctx-pill" title="Context window for THIS chat only">
             <span className="ctx-pill-label">CONTEXT</span>
             <select
@@ -82,7 +123,7 @@ const AgentHeader = memo(function AgentHeader() {
           </label>
         )}
 
-        {usage && (
+        {showContextControls && usage && (
           <span
             className={`ctx-pill ctx-usage${
               pressurePct !== null && pressurePct >= 90 ? " ctx-critical" : ""
@@ -100,7 +141,7 @@ const AgentHeader = memo(function AgentHeader() {
           </span>
         )}
 
-        {sessionContextError && (
+        {showContextControls && sessionContextError && (
           <span className="ctx-pill ctx-usage ctx-critical" title={sessionContextError}>
             <span className="ctx-pill-label">CONTEXT</span>
             <span className="ctx-usage-value">unavailable</span>
@@ -108,7 +149,8 @@ const AgentHeader = memo(function AgentHeader() {
         )}
 
         {/* v1.1.6 §11: the status pill reflects the backend phase and the
-            verified-readiness proof, not a local guess. */}
+            verified-readiness proof, not a local guess. Kept in BOTH
+            modes — one glance answers "is the engine ready?". */}
         <span
           className={`runtime-pill${
             engine?.degraded ? " runtime-pill-degraded" : ""

@@ -89,6 +89,14 @@ export interface Model {
   // model class' recommended context, plus that recommendation itself.
   estimatedMemoryBytes?: number;
   recommendedContext?: number;
+  // v1.1.8 model-picker capability facts — measured by the backend's
+  // capability resolver and served from its bounded cache. The UI never
+  // invents these: a missing field means "not detected", not "maybe".
+  multimodal?: boolean;
+  nativeBackend?: boolean;
+  chatTemplate?: boolean;
+  nativeReason?: string;
+  estimatedVRAMBytes?: number;
 }
 
 export interface ModelsResponse {

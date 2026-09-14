@@ -12,7 +12,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-Local-Agent
-Current release:  v1.1.7
+Current release:  v1.1.8
 Codename:         Zeta
 Branch:           main
 ```
@@ -67,6 +67,22 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.1.8 — Chat/Agent Separation, Model Picker, Release-Metadata Fix, Minimalist Pass
+
+**A focused polish release. Same Go + React/TypeScript + Wails + llama.cpp/native-engine architecture; nothing was rebuilt.**
+
+| Area | What it does |
+|---|---|
+| **CI release-identity fix (single source of truth)** | GitHub Actions run `34788709977` failed because `APP_VERSION: "1.1.6"` was pinned in the workflow `env:` block while `release-version.mjs` repaired the tree to 1.1.7 — the greps compared a runtime-repaired tree against a stale parse-time constant (and assumed a `-zeta` suffix package.json no longer carries). The workflow no longer hardcodes any version: the audit job derives `APP_VERSION` / `APP_VERSION_FULL` / `APP_CODENAME` from `package.json` via `node scripts/release-version.mjs --env` and every other job consumes it through `needs`-outputs. A 1.1.8 → 1.1.9 bump now touches `package.json` + the surfaces the script repairs — nothing else |
+| **Chat / Agent mode separation** | A top-level segmented switch — `Chat` / `Agent` — lives in the workspace header. Chat is the calm conversational surface: model rail, message stream, input, send/stop, attachments — no tool/telemetry chrome. Agent is the engineering surface: runtime panel, context controls, activity, live performance strip. Both modes reuse the SAME sessions, model runtime, and engine infrastructure; the mode is a UI concern (persisted per device, defaults to Chat) |
+| **Model picker redesign** | When no model is selected — or the user asks for it — a real model panel replaces the stream: one card per local GGUF with measured facts only (architecture, quantisation, parameters, context, RAM estimate, VRAM estimate, vision pairing, chat-template availability, native-engine support, In use / Selected / Recommended / Compatible / Limited classification derived from the host RAM vs the estimated footprint). Actions: Use model / Open models folder / Refresh / Details. There is deliberately NO Remove action — no deletion API exists |
+| **Per-model capability facts (backend)** | `/api/models` now reports `multimodal`, `nativeBackend`, `chatTemplate`, `nativeReason` and `estimatedVRAMBytes` per model, all produced by the existing `llm.ResolveModelCapabilities` — never guessed in the UI |
+| **Settings: Models and Advanced tabs** | Settings keeps its card system and gains two tabs: **Models** (provider + model runtime) and **Advanced** (system profile / hardware). General, Performance, Generation, Tools, Network, Logs unchanged |
+| **Performance strip** | The Agent surface shows a compact live strip (CPU, GPU, RAM, VRAM, prompt tok/s, generation tok/s, TTFT, context, engine, backend, compatibility state) fed by the EXISTING `/api/perf` ring — no second telemetry system, N/A for anything unmeasured |
+| **Backend optimisation** | `handleModels` used to call `ResolveModelCapabilities` (a full GGUF header parse) for every model on EVERY poll, uncached. Card and capability resolution now share the same bounded path+size+mtime cache, and the host memory probe is hoisted out of the per-model loop |
+| **Minimalist UI pass** | Quieter background grid, denser topbar, navigation reduced to one label per item, the first-use "Choose model" DOM-query hack replaced by the real picker, mode-aware empty states and composer wording (`Send` vs `Forge →`). All animations remain transform/opacity-only |
+| **Documentation** | README / agent.md / ARCHITECTURE / UPDATE updated for shipped items only |
 
 ## v1.1.7 — Options Clarity, Capability Truth, Live Telemetry, In-App Diagnostics
 

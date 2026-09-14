@@ -35,19 +35,23 @@ type SaveState = "idle" | "loading" | "saved" | "error";
 // scrolling behaviour as before.
 type SettingsTab =
   | "general"
+  | "models"
   | "performance"
   | "generation"
   | "tools"
   | "network"
-  | "logs";
+  | "logs"
+  | "advanced";
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "General" },
+  { id: "models", label: "Models" },
   { id: "performance", label: "Performance" },
   { id: "generation", label: "Generation" },
   { id: "tools", label: "Tools" },
   { id: "network", label: "Network" },
   { id: "logs", label: "Logs" },
+  { id: "advanced", label: "Advanced" },
 ];
 
 // Engine-affecting top-level keys: saving any of these restarts the local
@@ -411,7 +415,9 @@ function SettingsPanel() {
         {/* ======================================================== */}
         {/* GENERAL */}
         {/* ======================================================== */}
-        {activeTab === "general" ? (
+        {/* v1.1.8: Models gets its own tab — model/provider identity is
+            its own intent, not a "General"Misc item. */}
+        {activeTab === "models" ? (
           <>
             <section className="settings-card settings-card-wide">
               <div className="settings-card-heading">
@@ -543,7 +549,11 @@ function SettingsPanel() {
                 </div>
               </div>
             </section>
+          </>
+        ) : null}
 
+        {activeTab === "general" ? (
+          <>
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>
@@ -1150,7 +1160,13 @@ function SettingsPanel() {
                 </label>
               </div>
             </section>
+          </>
+        ) : null}
 
+        {/* v1.1.8: Advanced collects host/diagnostic detail that does not
+            need to sit in the middle of everyday settings. */}
+        {activeTab === "advanced" ? (
+          <>
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>

@@ -116,19 +116,14 @@ function App() {
         </div>
 
         <div className="topbar-meta">
-          <span>{appVersion ?? "v1.1.6"}</span>
+          <span>{appVersion ?? "v1.1.8"}</span>
         </div>
       </header>
 
       <div className="app-body">
         <aside className="sidebar">
-          <div className="sidebar-heading">
-            <div>
-              <span className="eyebrow">WORKSPACE</span>
-              <strong>Navigation</strong>
-            </div>
-          </div>
-
+          {/* v1.1.8: navigation de-chromed — one label per item, no
+              repeated headings, no per-item descriptions. */}
           <nav className="app-navigation m-stagger" aria-label="Workspace">
             {WORKSPACE_LAYERS.map((layer, index) => (
               <button
@@ -145,7 +140,6 @@ function App() {
 
                 <span className="app-navigation-copy">
                   <strong>{layer.label}</strong>
-                  <span>{layer.description}</span>
                 </span>
               </button>
             ))}

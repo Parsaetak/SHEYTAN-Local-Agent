@@ -1,13 +1,13 @@
-SHEYTAN-Local-Agent v1.1.7 — Replacement Manifest
+SHEYTAN-Local-Agent v1.1.8 — Replacement Manifest
 =================================================
-Base: main @ dd49eed (1.1.6Z)
-Package: SHEYTAN-Local-Agent-v1.1.7-UPDATE.zip
+Base: main @ dbe3bd9 (v1.1.7)
+Package: SHEYTAN-Local-Agent-v1.1.8-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
-The exact per-file change map (with reasons), the DO NOT TOUCH list, the
-executed automated checks and the compatibility-mode finding summary live
-in UPDATE.md.
+The exact per-file change map (with reasons), the DO NOT TOUCH list,
+the root cause of Actions run 34788709977, the executed automated
+checks and the known limitations live in UPDATE.md.
 
 [PACKAGE METADATA]
   UPDATE.md
@@ -21,52 +21,41 @@ in UPDATE.md.
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  internal/api/logs.go — /api/logs + /api/netcheck handlers
-  internal/api/perf.go — /api/perf live performance surface (real measurements only)
-  internal/api/perf_windows.go — Windows CPU/RAM samplers (kernel32)
-  internal/api/perf_linux.go — Linux CPU/RAM samplers (/proc)
-  internal/api/perf_other.go — not-known fallback (renders N/A)
-  internal/llm/capability_compat_test.go — retry-up gate + reason vocabulary tests
-  internal/llm/perftracker.go — bounded real-measurement perf ring
-  internal/llm/perftracker_test.go — perf ring tests
-  internal/logging/recentparsed_test.go — redaction/bounding tests for the log surface
-  internal/netcheck/netcheck_diag_test.go — diagnostics classification tests
-  internal/tools/shortdesc.go — concise one-line tool labels for the Options UI
-  src/LogViewer.tsx — in-app log viewer (tail/pause/filters/search/copy/clear view)
-  src/SettingsPerformance.tsx — Performance/Network/Logs cards
-  src/settings-shared.tsx — option metadata primitives (Tip/Chip/FieldLabel)
+  src/ModelPicker.tsx — redesigned model-selection panel (measured facts, honest classification, real actions only)
+  src/PerfStrip.tsx — compact /api/perf telemetry strip for the Agent surface (N/A contract preserved)
   web/static/assets/* (new hashed Vite bundles)
 
 [MODIFIED FILES]
-  ARCHITECTURE.md — v1.1.7 truth-table rows (I.8b)
-  README.md — v1.1.7 section + version header
-  UPDATE.md — this release's change map
-  agent.md — release line + next-agent notes
-  internal/api/server.go — new routes; handleTools short/full descriptions
-  internal/config/config.go — version 1.1.7; engineCompatReason/engineCompatAt
-  internal/lab/tool.go — ShortDescription (UI label only)
-  internal/llm/capability.go — CompatInfo, CapsSnapshot, shouldRetryFullSpeed, reason vocabulary
-  internal/llm/client.go — streaming path records real generation measurements
-  internal/llm/llama.go — boot ladder: reason persistence + bounded full-speed retry + honest logs
-  internal/logging/logging.go — RecentParsed surface + inline redaction scrubbing
-  internal/memory/memory.go — ShortDescription (UI label only)
-  internal/netcheck/netcheck.go — Diagnose/classifyDiag bounded connection diagnosis
-  internal/research/tool.go — ShortDescription (UI label only)
-  package.json — version 1.1.7
-  src/SettingsPanel.tsx — six Settings sections, option metadata, engine-restart coverage, perf polling, before/after baseline
-  src/api.ts — typed perf/logs/netcheck clients + additive types
-  src/settings.css — v1.1.7 component styles (theme tokens unchanged)
-  worklog.md — v1.1.7 entry: compatibility-mode finding, shipped items, executed verification
+  .github/workflows/build-desktop.yml — CI release-identity fix: runtime derivation from package.json (audit job outputs), no hardcoded APP_VERSION/APP_CODENAME, no -zeta assumption
+  scripts/release-version.mjs — --env identity mode + workflow shape check
+  package.json — version 1.1.8 (the only manual version edit)
+  package-lock.json — root + packages[""] version aligned to 1.1.8
+  internal/config/config.go — AppVersion 1.1.8 (script-repaired)
+  build/config.yml — productVersion 1.1.8 (script-repaired)
+  SIGNATURE — SHEYTAN-Local-Agent v1.1.8 (script-repaired)
+  internal/api/server.go — cached model capability resolution; per-model multimodal/native/chatTemplate facts on /api/models
+  internal/api/sessioncontext.go — reuses the cached card+caps read
+  src/store.ts — WorkspaceMode (chat|agent) + setMode, persisted
+  src/AgentHeader.tsx — ModeSwitch segmented control; mode-aware pills
+  src/AgentBody.tsx — Chat/Agent layouts, model rail, picker integration, mode-aware composer, PerfStrip mount
+  src/MessageStream.tsx — mode-aware empty state
+  src/App.tsx — de-chromed navigation, version fallback 1.1.8
+  src/api.ts — Model capability fields
+  src/SettingsPanel.tsx — Models and Advanced tabs
+  src/styles.css — v1.1.8 design section (mode switch, chat rail, model picker, perf strip) + calmer chrome
+  README.md — v1.1.8 section + version header
+  agent.md — v1.1.8 next-agent notes
+  ARCHITECTURE.md — I.8c v1.1.8 truth table
   web/static/.vite/manifest.json — regenerated
   web/static/index.html — regenerated
 
 [DELETED FILES]
-  web/static/assets/ — 23 stale hashed Vite bundles superseded by the
+  web/static/assets/ — 8 stale hashed Vite bundles superseded by the
   regenerated embedded build (exact list in UPDATE.md §1)
 
 [UNCHANGED]
   Everything else — including agent orchestration, tool system, Coding
-  Lab, context planning/protection, memory/recall, research, attachments,
-  MCP, scheduler, specialist agents, native engine, llama.cpp integration,
-  security restrictions, path jails, config copy-on-write, Windows
-  branding (see UPDATE.md §5 DO NOT TOUCH).
+  Lab, context planning/protection, memory/recall, research,
+  attachments, MCP, scheduler, native engine, llama.cpp integration,
+  security restrictions, config copy-on-write, Windows branding (see
+  UPDATE.md §5 DO NOT TOUCH).

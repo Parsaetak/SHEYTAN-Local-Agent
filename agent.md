@@ -6,7 +6,46 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.1.7` (options/telemetry/diagnostics release on top of v1.1.6-zeta; see the v1.1.7 notes below. The v1.1.6-zeta stabilisation fixed the `internal/improve` recursive-mutex CI deadlock and regression-locked it; context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+Current release: `v1.1.8` (Chat/Agent separation + model picker + CI release-identity fix on top of v1.1.7; see the v1.1.8 notes below. The v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+
+**v1.1.8 notes for the next agent:**
+
+- Release identity has ONE source: `package.json`. The workflow NO
+  LONGER carries `APP_VERSION`/`APP_CODENAME` env constants — the audit
+  job resolves them at runtime (`node scripts/release-version.mjs
+  --env`, step id `identity`) and every other job consumes them via
+  `needs.audit.outputs.*`. To bump the version: edit `package.json`, run
+  `node scripts/release-version.mjs`, commit. Do NOT reintroduce a
+  hardcoded version constant anywhere — that was the root cause of run
+  `34788709977`. The `--env` flag prints `APP_VERSION`,
+  `APP_VERSION_FULL`, `APP_CODENAME`; the workflow shape check lives in
+  `release-version.mjs`'s target list.
+- Chat/Agent separation is a UI-only concern: `WorkspaceMode` in
+  `src/store.ts` (`mode` + `setMode`, persisted under `localStorage`
+  key `sheytan.mode`, default `chat`). Both modes share the SAME
+  session/model/engine wiring in `AgentBody.tsx`; do not fork runtime
+  state per mode. Mode decides VISIBILITY: Chat hides the runtime
+  panel, context pills (`AgentHeader`), telemetry and activity; Agent
+  shows everything.
+- The model picker (`src/ModelPicker.tsx`) renders ONLY backend facts
+  from `/api/models`. The new per-model fields (`multimodal`,
+  `nativeBackend`, `chatTemplate`, `nativeReason`, `estimatedVRAMBytes`)
+  come from `llm.ResolveModelCapabilities` via the SAME bounded
+  path+size+mtime cache as the header card (`modelCardFor` in
+  `internal/api/server.go` — now also caches caps). Do not compute
+  capabilities client-side; do not remove the Remove-less action set
+  (there is no model-deletion API by design).
+- `switchModel` in `AgentBody.tsx` returns success and owns the engine
+  restart dance; the picker closes only when it returns true. Keep ONE
+  implementation — the chat rail select, the agent panel select, and
+  the picker all route through it.
+- Settings tabs: Models and Advanced were split out of General
+  (`TABS` + `SettingsTab` in `src/SettingsPanel.tsx`). The
+  restart-after-save condition (`touchesEngine`) must still list every
+  engine-affecting config key regardless of which tab hosts it.
+- Performance strip (`src/PerfStrip.tsx`) polls the EXISTING `/api/perf`
+  every 4 s while mounted and renders N/A for anything unmeasured —
+  same honesty contract as the perf HUD.
 
 **v1.1.7 notes for the next agent:**
 
