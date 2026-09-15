@@ -82,6 +82,10 @@ type Profile struct {
 	CPU         CPU     `json:"cpu"`
 	RAM         RAM     `json:"ram"`
 	Storage     Storage `json:"storage"`
+	// GPUs MUST marshal as [] (never null): a nil Go slice marshals to
+	// JSON null, and the System Centre frontend historically read
+	// gpus.length off it - the v1.2.2 black-screen crash. Collect
+	// guarantees non-nil; JSON consumers still defend in depth.
 	GPUs        []GPU   `json:"gpus"`
 	Backend     Backend `json:"backend"`
 	CollectedAt string  `json:"collectedAt"`
@@ -107,7 +111,13 @@ func engineBinaryName() string {
 // Collect assembles the profile from measured sources only. It never
 // fails: missing facts stay zero-valued and the caller renders unknown.
 func Collect(cfg *config.Config) Profile {
-	p := Profile{CollectedAt: time.Now().UTC().Format(time.RFC3339)}
+	p := Profile{
+		CollectedAt: time.Now().UTC().Format(time.RFC3339),
+		// v1.2.2: non-nil from the start - a machine whose GPU probe
+		// returns nothing (CPU-only, or a WMI/PowerShell failure under
+		// load) marshals as "gpus": [] instead of null.
+		GPUs: []GPU{},
+	}
 
 	si := sysinfo.Probe()
 	if si != nil {

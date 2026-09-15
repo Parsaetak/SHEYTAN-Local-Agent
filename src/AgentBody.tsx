@@ -143,11 +143,18 @@ function AgentBody() {
     (state) => state.removePendingAttachment,
   );
   const refreshModels = useRuntimeStore((state) => state.refreshModels);
-  const startEnginePolling = useRuntimeStore((state) => state.startEnginePolling);
-  const stopEnginePolling = useRuntimeStore((state) => state.stopEnginePolling);
-  const connectActivity = useRuntimeStore((state) => state.connectActivity);
-  const disconnectActivity = useRuntimeStore(
-    (state) => state.disconnectActivity,
+  // v1.2.2: ownership instead of raw connect/disconnect. AgentBody
+  // ACQUIRES the activity socket + engine poll on mount and RELEASES on
+  // unmount — but a LIVE run keeps both alive across workspace tab
+  // switches (the backend hub has no event replay; dropping the socket
+  // mid-run previously lost `done` and froze the composer forever).
+  const acquireActivity = useRuntimeStore((state) => state.acquireActivity);
+  const releaseActivity = useRuntimeStore((state) => state.releaseActivity);
+  const acquireEnginePolling = useRuntimeStore(
+    (state) => state.acquireEnginePolling,
+  );
+  const releaseEnginePolling = useRuntimeStore(
+    (state) => state.releaseEnginePolling,
   );
 
   const [message, setMessage] = useState("");
@@ -183,8 +190,8 @@ function AgentBody() {
         }
 
         setConfig(runtimeConfig);
-        connectActivity();
-        startEnginePolling();
+        acquireActivity();
+        acquireEnginePolling();
       })
       .catch(() => {
         // Initialization records the main error in the runtime store.
@@ -192,12 +199,14 @@ function AgentBody() {
 
     return () => {
       cancelled = true;
-      disconnectActivity();
-      // v1.1.4Z: stop the /api/engine poll on unmount — it previously ran
-      // for the whole app lifetime once this view had been opened once.
-      stopEnginePolling();
+      // v1.2.2: release (not hard-disconnect). A live run keeps the
+      // socket + poll; the store releases them when the run settles.
+      // This is what makes tab switching mid-generation safe: no stale
+      // sockets, no lost `done`, no duplicate connections on return.
+      releaseActivity();
+      releaseEnginePolling();
     };
-  }, [connectActivity, disconnectActivity, startEnginePolling, stopEnginePolling]);
+  }, [acquireActivity, releaseActivity, acquireEnginePolling, releaseEnginePolling]);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,

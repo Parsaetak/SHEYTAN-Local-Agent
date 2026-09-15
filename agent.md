@@ -6,7 +6,61 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.2.1` (CI package-root contract fix + installer options + packaging hardening; see the v1.2.1 notes below — all prior notes remain authoritative). Prior line: `v1.2.0` (SHEYTAN-LA unified product upgrade: vision readiness state machine, hardware intelligence, evidence-based recommendation engine, chat markdown/composer polish, Environment Centre, verified health, SHEYTAN-LA Windows identity + AUMID, NSIS installer, manifest-verified app updater, release checksums; see the v1.2.0 notes below — all prior notes remain authoritative). Prior line: `v1.1.9` (CI output-name fix + mode-aware navigation + explicit model states on top of v1.1.8; see the v1.1.9 notes below. The v1.1.8 Chat/Agent separation + model picker + CI release-identity fix, the v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+Current release: `v1.2.2` (generation visibility & black-screen repair: error boundaries everywhere, `gpus: null` wire defect fixed, live-run socket lease across tab switches + `idle`-sentinel resync, live generation timeline, cumulative-snapshot streaming fix, partial-output preservation, honest engine-asset errors, log session banners; see the v1.2.2 notes below — all prior notes remain authoritative). Prior line: `v1.2.1` (CI package-root contract fix + installer options + packaging hardening; see the v1.2.1 notes below — all prior notes remain authoritative). (SHEYTAN-LA unified product upgrade: vision readiness state machine, hardware intelligence, evidence-based recommendation engine, chat markdown/composer polish, Environment Centre, verified health, SHEYTAN-LA Windows identity + AUMID, NSIS installer, manifest-verified app updater, release checksums; see the v1.2.0 notes below — all prior notes remain authoritative). Prior line: `v1.1.9` (CI output-name fix + mode-aware navigation + explicit model states on top of v1.1.8; see the v1.1.9 notes below. The v1.1.8 Chat/Agent separation + model picker + CI release-identity fix, the v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+
+**v1.2.2 notes for the next agent:**
+
+- ERROR BOUNDARIES — `src/ErrorBoundary.tsx` ships `AppErrorBoundary`
+  (root, wraps `<App/>` in `main.tsx`) and `PanelErrorBoundary` (one per
+  lazy workspace panel in `App.tsx`, `resetKey` = view id). A panel render
+  failure now shows that panel's recover/reload card. NEVER delete these
+  — the pre-v1.2.2 app had ZERO boundaries, so one `gpus.length`-on-null
+  TypeError blanked the entire window (the reported black screen).
+- GPU WIRE CONTRACT — `hardware.Collect` and `sysinfo.Probe` now
+  guarantee `"gpus": []` on the wire (nil Go slices marshal as `null`).
+  `internal/hardware/hardware_test.go` locks it. The frontend ALSO
+  defends (`Array.isArray(device.gpus)` in SystemPanel) — keep both
+  layers; the WMI/PowerShell probe genuinely fails under full inference
+  load, which is why the System tab crashed DURING generation.
+- STREAMING WIRE CONTRACT — the orchestrator's `emitProgress` publishes
+  CUMULATIVE captions: every `response`/`reasoning` activity event
+  carries the FULL text so far. `src/stream-accumulator.ts` (+ unit
+  tests via `npm run test:units`, Node's native TS runner) implements
+  replace-semantics; the OLD store appended every caption and duplicated
+  the streamed text. If you ever touch the streaming path again, do NOT
+  go back to append semantics.
+- SOCKET OWNERSHIP — `store.ts` exposes `acquireActivity`/
+  `releaseActivity` (+ engine-poll equivalents, refcounted). AgentBody
+  acquires on mount, releases on unmount; a LIVE run keeps the socket
+  across workspace tab switches (the backend `activityHub` has NO event
+  replay — unmount-disconnecting lost `done` and froze the composer
+  forever). The backend `idle` sentinel is now handled: a run the UI
+  believes live but the backend no longer registers is re-synced from
+  authoritative history (`recoverRunFromIdle`, with a 2.5 s grace guard
+  against the standby attach race right after Send).
+- RUN PHASES — `src/run-phase.ts` is the pure lifecycle machine
+  (`idle/preparing/thinking/generating/finalising/complete/error/
+  aborted`), unit-tested; the store feeds it real wire events only.
+  `MessageStream.tsx` renders the GenerationBubble whenever a run is
+  live: phase badge, elapsed clock, collapsible reasoning (auto-open
+  while thinking, auto-fold on first answer token, user intent wins
+  through `onToggle`), streamed text, progressive activity strip.
+  Finalisation (`finaliseRun`) confirms the history actually gained the
+  assistant reply and otherwise promotes the partial locally — errors
+  and aborts never discard the streamed output.
+- ENGINE ASSET ERRORS — `updater.IsNoAssetError` classifies "upstream
+  ships no prebuilt asset" vs network failure; `llamaDownloadURL`
+  reports each with its real remedy (the old text claimed "no prebuilt
+  asset (upstream no longer publishes Linux binaries)" on
+  GitHub-blocked WINDOWS machines). GitHub/Atom socket failures stay
+  non-fatal WARNs by design.
+- LOG SESSIONS — `logging.Manager.SessionBanner` writes one
+  `==== SHEYTAN-LA v<ver> session start (pid N) ====` line at every boot
+  (wired in `cmd/root.go`); everything above a banner is verifiably
+  historical in app.log and the in-app Log Viewer.
+- VERSION — 1.2.2 via the identity chain (package.json →
+  release-version.mjs). Frontend regression tests run with
+  `npm run test:units` (no new dependencies).
 
 **v1.2.1 notes for the next agent:**
 

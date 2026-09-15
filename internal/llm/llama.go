@@ -2495,20 +2495,47 @@ func llamaDownloadURL() (string, string, error) {
                 60*time.Second,
         )
 
-        if tag, err := updater.LatestTag(scanCtx); err == nil && tag != "" {
+        tag, tagErr := updater.LatestTag(scanCtx)
+        scanCancel()
+
+        if tagErr == nil && tag != "" {
                 if url := updater.AssetURL(tag); url != "" {
-                        scanCancel()
                         return url, tag, nil
                 }
+
+                return "", "",
+                        fmt.Errorf(
+                                "no prebuilt llama.cpp server asset exists for %s/%s — this platform/architecture is not served by upstream releases; build llama-server from source and set llamaBinPath, or select the native engine (engineBackend \"native\")",
+                                runtime.GOOS,
+                                runtime.GOARCH,
+                        )
         }
 
-        scanCancel()
+        // v1.2.2: classify the failure HONESTLY. The old text always claimed
+        // "no prebuilt asset … (upstream no longer publishes Linux binaries)"
+        // — on a Windows machine whose api.github.com/Atom requests are
+        // blocked, engine startup reported a wrong, misleading cause. Network
+        // failure and asset absence are different problems with different
+        // remedies, and neither may leave startup looking mysteriously broken.
+        if updater.IsNoAssetError(tagErr) {
+                return "", "",
+                        fmt.Errorf(
+                                "no recent llama.cpp release ships a prebuilt server asset for %s/%s — build llama-server from source and set llamaBinPath, or select the native engine (engineBackend \"native\")",
+                                runtime.GOOS,
+                                runtime.GOARCH,
+                        )
+        }
+
+        logging.Default().Warn(
+                "engine",
+                "engine binary missing and the llama.cpp release server could not be reached: %v",
+                tagErr,
+        )
 
         return "", "",
                 fmt.Errorf(
-                        "no prebuilt llama.cpp server asset for %s/%s (upstream no longer publishes Linux binaries) — build llama-server from source and set llamaBinPath, or select the native engine (engineBackend \"native\")",
-                        runtime.GOOS,
-                        runtime.GOARCH,
+                        "the llama.cpp release server could not be reached (%v) — the engine binary is not installed on this machine and could not be downloaded. Reconnect and start the engine again, or place a prebuilt llama-server(.exe) into the bin folder, or select the native engine (engineBackend \"native\")",
+                        tagErr,
                 )
 }
 

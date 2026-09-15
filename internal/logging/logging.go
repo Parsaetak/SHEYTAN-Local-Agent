@@ -230,6 +230,27 @@ func (m *Manager) Debug(category, format string, args ...interface{}) {
 func (m *Manager) Info(category, format string, args ...interface{}) {
         m.log("INFO", category, format, args...)
 }
+
+// SessionBanner writes ONE unambiguous separator line at process start
+// (v1.2.2). app.log persists across versions and boots — historical
+// entries (e.g. a v0.8.0 startup from months ago) previously sat above
+// current runtime lines with nothing to tell them apart. The banner:
+//
+//      2026-09-15 10:12:33.001 INFO  [session] ==== SHEYTAN-LA v1.2.2 session start (pid 4212) ====
+//
+// flows through the same ring/rotation pipeline, so the in-app Log
+// Viewer shows it too — everything ABOVE a session banner is verifiably
+// historical, everything below belongs to the current run.
+func (m *Manager) SessionBanner(appName, version string) {
+        m.log(
+                "INFO",
+                "session",
+                "==== %s v%s session start (pid %d) ====",
+                appName,
+                version,
+                os.Getpid(),
+        )
+}
 func (m *Manager) Warn(category, format string, args ...interface{}) {
         m.log("WARN", category, format, args...)
 }

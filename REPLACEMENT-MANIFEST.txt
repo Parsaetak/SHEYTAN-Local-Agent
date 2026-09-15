@@ -1,7 +1,7 @@
-SHEYTAN-Local-Agent v1.2.1 — CI Contract / Installer Hardening Replacement Manifest
+SHEYTAN-Local-Agent v1.2.2 — Generation Visibility & Black-Screen Repair Replacement Manifest
 ===================================================================
-Base: main @ e260d53 (v1.2.0, run-34871838054 failure set)
-Package: SHEYTAN-Local-Agent-v1.2.1-UPDATE.zip
+Base: main @ 3bc4008 (v1.2.1)
+Package: SHEYTAN-Local-Agent-v1.2.2-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
@@ -20,63 +20,151 @@ checks and the known limitations live in UPDATE.md.
     status:   replaced
     purpose:  SHA-256 of every file in this package
 
+[NEW FILES]
+  src/ErrorBoundary.tsx
+    status:   new
+    reason:   AppErrorBoundary + PanelErrorBoundary — the black-screen
+              class fix (recover/reload cards, view-switch reset)
+  src/run-phase.ts
+    status:   new
+    reason:   pure generation lifecycle state machine (backend events
+              only; unit-tested)
+  src/run-phase.test.ts
+    status:   new
+    reason:   regression tests for every fixed state-machine transition
+  src/stream-accumulator.ts
+    status:   new
+    reason:   cumulative-snapshot streaming accumulator — replace
+              semantics, replay-idempotent (the duplication fix)
+  src/stream-accumulator.test.ts
+    status:   new
+    reason:   regression tests for the streaming wire contract
+  internal/hardware/hardware_test.go
+    status:   new
+    reason:   locks "gpus" never marshals as JSON null (crash source)
+  internal/logging/logging_sessionbanner_test.go
+    status:   new
+    reason:   locks the session banner markers + noop safety
+  internal/updater/updater_noasset_test.go
+    status:   new
+    reason:   locks no-asset vs network error classification
+
 [MODIFIED FILES]
-  .github/workflows/build-desktop.yml
+  src/store.ts
     status:   modified
     reason:   see UPDATE.md §1 change map
-  build/config.yml
+  src/MessageStream.tsx
     status:   modified
     reason:   see UPDATE.md §1 change map
-  cmd/stress.go
+  src/SystemPanel.tsx
     status:   modified
     reason:   see UPDATE.md §1 change map
-  cmd/stress_zeta.go
+  src/AgentBody.tsx
     status:   modified
     reason:   see UPDATE.md §1 change map
-  internal/agent/reliability.go
+  src/App.tsx
     status:   modified
     reason:   see UPDATE.md §1 change map
-  internal/config/config.go
+  src/main.tsx
     status:   modified
     reason:   see UPDATE.md §1 change map
-  internal/releasecontract/releasecontract.go
+  src/api.ts
     status:   modified
     reason:   see UPDATE.md §1 change map
-  package-lock.json
+  src/styles.css
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  tsconfig.app.json
     status:   modified
     reason:   see UPDATE.md §1 change map
   package.json
     status:   modified
-    reason:   see UPDATE.md §1 change map
-  packaging/nsis/installer.nsi
+    reason:   version 1.2.2 + test:units script
+  package-lock.json
     status:   modified
-    reason:   see UPDATE.md §1 change map
-  README.md
+    reason:   version 1.2.2
+  internal/hardware/hardware.go
     status:   modified
-    reason:   see UPDATE.md §1 change map
-  agent.md
+    reason:   GPUs guaranteed non-nil — "gpus": [] on the wire
+  internal/sysinfo/sysinfo.go
     status:   modified
-    reason:   see UPDATE.md §1 change map
-  ARCHITECTURE.md
+    reason:   Probe nil-guards info.GPU (same wire contract)
+  internal/logging/logging.go
     status:   modified
-    reason:   see UPDATE.md §1 change map
-  worklog.md
+    reason:   Manager.SessionBanner (session separator per boot)
+  cmd/root.go
     status:   modified
-    reason:   see UPDATE.md §1 change map
+    reason:   SessionBanner wired before the boot line
+  internal/updater/updater.go
+    status:   modified
+    reason:   IsNoAssetError classification
+  internal/llm/llama.go
+    status:   modified
+    reason:   llamaDownloadURL honest error tails + WARN log
+  internal/config/config.go
+    status:   modified
+    reason:   AppVersion "1.2.2" (release-version.mjs repair)
+  build/config.yml
+    status:   modified
+    reason:   productVersion "1.2.2" (release-version.mjs repair)
   SIGNATURE
     status:   modified
-    reason:   see UPDATE.md §1 change map
+    reason:   first line v1.2.2 (release-version.mjs repair)
+  web/static/.vite/manifest.json
+    status:   modified
+    reason:   regenerated embedded frontend (vite build + sync:web)
+  web/static/index.html
+    status:   modified
+    reason:   regenerated embedded frontend (vite build + sync:web)
+  web/static/assets/AgentBody-EocjZLgJ.js
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  web/static/assets/AgentHeader-C5gpAJAl.js
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  web/static/assets/AgentSidebar-D_scJRE6.js
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  web/static/assets/LabPanel-Ys_1jxhi.js
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  web/static/assets/ResearchPanel-cRC5-t9l.js
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  web/static/assets/SettingsPanel-DrGWWN7P.js
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  web/static/assets/SystemPanel-BOrHcKSv.js
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  web/static/assets/index-Bto0wA8H.css
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  web/static/assets/index-DHBcE2Kp.js
+    status:   new (build output)
+    reason:   regenerated embedded frontend
+  README.md
+    status:   modified
+    reason:   v1.2.2 section + release header
+  agent.md
+    status:   modified
+    reason:   v1.2.2 notes for the next agent
+  worklog.md
+    status:   modified
+    reason:   v1.2.2 entry appended
 
-[NEW FILES]
-  cmd/stress_release.go
-    status:   new
-    purpose:  14 bounded release-hardening stress scenarios
+[DELETED FILES — remove after applying, see UPDATE.md §2]
+  web/static/assets/AgentBody-CyMQd0oP.js        (v1.2.1 build output)
+  web/static/assets/AgentHeader-Dezw4syJ.js      (v1.2.1 build output)
+  web/static/assets/AgentSidebar-D2AIsqsa.js     (v1.2.1 build output)
+  web/static/assets/LabPanel-DNdaVwnC.js         (v1.2.1 build output)
+  web/static/assets/ResearchPanel-DVSjuNFM.js    (v1.2.1 build output)
+  web/static/assets/SettingsPanel-C5otSLaN.js    (v1.2.1 build output)
+  web/static/assets/SystemPanel-CzupHX9T.js      (v1.2.1 build output)
+  web/static/assets/index-CTp-kOgC.js            (v1.2.1 build output)
+  web/static/assets/index-DJQM74Q8.css           (v1.2.1 build output)
 
-[DELETED FILES]
-  (none)
-
-[DO NOT TOUCH]
-  This package deliberately leaves internal/llm/**, internal/vision/**,
-  internal/updater/updater.go, internal/api/**, internal/native/engine/**,
-  src/**, internal/lab/**, internal/platform/** and
-  scripts/release-version.mjs untouched — see UPDATE.md §3.
+[Integrity]
+  Every file's SHA-256 is listed in REPLACEMENT-SHA256.txt (sorted by
+  path). Verify from the repository root after applying:
+  shasum -a 256 -c REPLACEMENT-SHA256.txt

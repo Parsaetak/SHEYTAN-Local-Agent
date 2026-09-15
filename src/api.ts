@@ -1170,14 +1170,16 @@ export const api = {
   },
 
   // v1.2.0: Environment Centre — the unified device/runtime/recommendation
-  // view over existing telemetry.
-  environment(): Promise<EnvironmentPayload> {
-    return request<EnvironmentPayload>("/environment", undefined, 20_000);
+  // view over existing telemetry. v1.2.2: accepts an AbortSignal so the
+  // System tab can cancel its probes on navigation.
+  environment(signal?: AbortSignal): Promise<EnvironmentPayload> {
+    return request<EnvironmentPayload>("/environment", { signal }, 20_000);
   },
 
   // v1.2.0: verified health — one check per subsystem WITH evidence.
-  health(): Promise<HealthPayload> {
-    return request<HealthPayload>("/health", undefined, 20_000);
+  // v1.2.2: accepts an AbortSignal (cancellable refresh).
+  health(signal?: AbortSignal): Promise<HealthPayload> {
+    return request<HealthPayload>("/health", { signal }, 20_000);
   },
 
   // v1.2.0: evidence-based runtime recommendation for a model + task

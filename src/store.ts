@@ -19,6 +19,20 @@ import {
   type SessionContextStatus,
 } from "./api";
 import { activityWebSocketURL } from "./config";
+import {
+  isLivePhase,
+  nextPhase,
+  type RunEventKind,
+  type RunPhase,
+} from "./run-phase";
+import {
+  applyReasoningSnapshot,
+  applyResponseSnapshot,
+  createStreamingAccumulator,
+  flush as flushAccumulator,
+  isEmpty as accumulatorIsEmpty,
+  mergeSnapshot,
+} from "./stream-accumulator";
 
 export type ConnectionState =
   "idle" | "connecting" | "connected" | "disconnected" | "error";
@@ -72,6 +86,24 @@ type RuntimeState = {
   activity: ActivityEvent[];
   running: boolean;
 
+  // v1.2.2: the live generation timeline. `runPhase` is the lifecycle
+  // state machine (run-phase.ts) driven ONLY by real backend events;
+  // `runStartedAt` powers the elapsed clock; `runNote` carries the
+  // backend's own done/error caption verbatim (never invented).
+  runPhase: RunPhase;
+  runStartedAt: number | null;
+  runNote: string | null;
+
+  // v1.2.2: socket/poll ownership. AgentBody acquires on mount and
+  // releases on unmount; a LIVE run keeps the activity socket and the
+  // engine poll alive across workspace tab switches (the backend hub has
+  // no replay — dropping the socket mid-run lost every event, including
+  // `done`, which froze the composer forever).
+  acquireActivity: () => void;
+  releaseActivity: () => void;
+  acquireEnginePolling: () => void;
+  releaseEnginePolling: () => void;
+
   // v1.1.3Z: authoritative engine state (polled + WS-pushed).
   engine: EngineSnapshot | null;
 
@@ -84,6 +116,13 @@ type RuntimeState = {
 
   // v1.1.3Z: real conversation history for the active session plus the
   // streaming assistant bubble.
+  //
+  // v1.2.2 WIRE CONTRACT FIX: the orchestrator's emitProgress publishes
+  // CUMULATIVE snapshots (each `response`/`reasoning` caption is the FULL
+  // text so far). The old store appended every caption, duplicating the
+  // streamed text and re-duplicating it after reconnects. The streaming
+  // state now holds the LATEST authoritative snapshot per stream (see
+  // stream-accumulator.ts).
   messages: ChatMessage[];
   streaming: { content: string; reasoning: string } | null;
 
@@ -157,9 +196,17 @@ const MAX_ACTIVITY_EVENTS = 500;
 
 let enginePollTimer: number | null = null;
 
+// v1.2.2: engine-poll ownership refcount (0 = nobody needs the poll).
+let enginePollConsumers = 0;
+
 let socket: WebSocket | null = null;
 let activitySequence = 0;
 let activitySessionId: string | null = null;
+
+// v1.2.2: activity-socket ownership refcount. While any AgentBody is
+// mounted the count is ≥ 1. A live run holds an implicit lease even at
+// count 0 so tab switches mid-generation never drop the event stream.
+let activityConsumers = 0;
 
 // v1.1.4Z: automatic WebSocket reconnection. The old store gave up on the
 // first close — a mid-run disconnect left `running` stuck true forever (the
@@ -196,11 +243,11 @@ let pendingRunning: boolean | undefined;
 // Coalescing only batches the CONTENT payload; lifecycle events
 // (done/error/session) are still delivered immediately because they
 // close the streaming bubble and must reset `running`.
+//
+// v1.2.2: the buffer holds the LATEST CUMULATIVE snapshot per stream
+// (backend contract — see stream-accumulator.ts), not appended deltas.
 let streamingFlushFrame: number | null = null;
-let pendingStreamingContent = "";
-let pendingStreamingReasoning = "";
-let pendingStreamingHadContent = false;
-let pendingStreamingHadReasoning = false;
+const streamAccumulator = createStreamingAccumulator();
 
 function resetPendingStreaming(): void {
   if (streamingFlushFrame !== null) {
@@ -209,40 +256,27 @@ function resetPendingStreaming(): void {
     streamingFlushFrame = null;
   }
 
-  pendingStreamingContent = "";
-  pendingStreamingReasoning = "";
-  pendingStreamingHadContent = false;
-  pendingStreamingHadReasoning = false;
+  streamAccumulator.content = null;
+  streamAccumulator.reasoning = null;
 }
 
-// flushStreaming writes the accumulated content/reasoning to the store
-// in ONE setState, then resets the buffers. Runs on a rAF boundary so
+// flushStreaming writes the latest cumulative snapshots to the store in
+// ONE setState, then resets the buffers. Runs on a rAF boundary so
 // multiple token chunks arriving within one frame coalesce into a
 // single render.
 function flushStreaming(): void {
   streamingFlushFrame = null;
 
-  if (!pendingStreamingHadContent && !pendingStreamingHadReasoning) {
+  if (accumulatorIsEmpty(streamAccumulator)) {
     return;
   }
 
-  // Read the current streaming state ONCE (cheap; no re-render), merge
-  // the pending deltas, and write back in a single setState.
+  const update = flushAccumulator(streamAccumulator);
+
   const current = useRuntimeStore.getState().streaming;
 
-  const nextContent = pendingStreamingHadContent
-    ? (current?.content ?? "") + pendingStreamingContent
-    : (current?.content ?? "");
-
-  const nextReasoning = pendingStreamingHadReasoning
-    ? (current?.reasoning ?? "") + pendingStreamingReasoning
-    : (current?.reasoning ?? "");
-
   useRuntimeStore.setState({
-    streaming: {
-      content: nextContent,
-      reasoning: nextReasoning,
-    },
+    streaming: mergeSnapshot(current, update),
   });
 
   // Phase 4 perf HUD: count this as one coalesced stream update so the
@@ -250,12 +284,25 @@ function flushStreaming(): void {
   // never one-per-token). The recordStreamUpdate import is dynamic so
   // this file stays decoupled from perf-hud.ts when the HUD is disabled.
   recordStreamUpdateSafe();
-
-  pendingStreamingContent = "";
-  pendingStreamingReasoning = "";
-  pendingStreamingHadContent = false;
-  pendingStreamingHadReasoning = false;
 }
+
+// captureRunBaseline records how many assistant messages exist when the
+// first streamed token of THIS run arrives. The finalisation path uses it
+// to decide whether the authoritative history actually gained a reply —
+// and, when it did not, to preserve the partial output locally instead of
+// silently losing the entire response (v1.2.2).
+let runAssistantBaseline: number | null = null;
+
+function captureRunBaselineIfNeeded(): void {
+  if (runAssistantBaseline === null) {
+    runAssistantBaseline = useRuntimeStore
+      .getState()
+      .messages.filter((message) => message.role === "assistant").length;
+  }
+}
+
+// flushStreaming's legacy inline body was replaced by the cumulative
+// snapshot merge above (v1.2.2); the buffers reset inside flushAccumulator.
 
 // recordStreamUpdateSafe is a thin wrapper around perf-hud's counter.
 // Kept as a separate function so the store never throws if the perf-hud
@@ -287,23 +334,22 @@ function scheduleStreamingFlush(): void {
   streamingFlushFrame = requestAnimationFrame(flushStreaming);
 }
 
-// queueStreamingContent appends one response chunk to the content buffer
-// and schedules a frame-aligned flush.
-function queueStreamingContent(chunk: string): void {
-  if (!chunk) return;
+// queueStreamingContent folds one cumulative `response` snapshot (the
+// caption IS the full text so far) and schedules a frame-aligned flush.
+function queueStreamingContent(snapshot: string): void {
+  if (!snapshot) return;
 
-  pendingStreamingContent += chunk;
-  pendingStreamingHadContent = true;
+  captureRunBaselineIfNeeded();
+  applyResponseSnapshot(streamAccumulator, snapshot);
   scheduleStreamingFlush();
 }
 
-// queueStreamingReasoning appends one reasoning chunk to the reasoning
-// buffer and schedules a frame-aligned flush.
-function queueStreamingReasoning(chunk: string): void {
-  if (!chunk) return;
+// queueStreamingReasoning folds one cumulative `reasoning` snapshot.
+function queueStreamingReasoning(snapshot: string): void {
+  if (!snapshot) return;
 
-  pendingStreamingReasoning += chunk;
-  pendingStreamingHadReasoning = true;
+  captureRunBaselineIfNeeded();
+  applyReasoningSnapshot(streamAccumulator, snapshot);
   scheduleStreamingFlush();
 }
 
@@ -460,10 +506,253 @@ function setActivityBatch(
   }
 }
 
+// transitionPhase advances the run lifecycle machine (run-phase.ts) from a
+// real wire event. Unknown/stale events are no-ops — the machine itself
+// decides which transitions are legal from which phase.
+function transitionPhase(event: RunEventKind): void {
+  const state = useRuntimeStore.getState();
+  const next = nextPhase(state.runPhase, event);
+
+  if (next !== state.runPhase) {
+    useRuntimeStore.setState({ runPhase: next });
+  }
+}
+
+// --- v1.2.2: run finalisation ----------------------------------------------
+//
+// done/error/abort/disconnect/idle must ALWAYS leave the UI in a correct
+// non-running state with the run's output preserved. The backend persists
+// the assistant reply AFTER emitting `done` (and not at all on error or
+// abort), so finalisation:
+//   1. reloads the authoritative history;
+//   2. confirms it actually gained a new assistant message;
+//   3. if it did NOT, promotes the streamed partial into the conversation
+//      locally so the user never loses the entire response.
+let runFinalizeTimer: number | null = null;
+let runOutcome: "done" | "aborted" | "lost" | null = null;
+
+// runEventsReceived: did THIS run deliver any hub event over the socket?
+// Distinguishes "socket never attached / run gone" from "still preparing"
+// when an idle sentinel arrives (see recoverRunFromIdle).
+let runEventsReceived = false;
+
+const RUN_EVENT_TYPES = new Set([
+  "response",
+  "reasoning",
+  "thinking",
+  "context",
+  "tool_start",
+  "tool_end",
+  "done",
+  "error",
+  "session",
+]);
+
+function clearRunFinalizeTimer(): void {
+  if (runFinalizeTimer !== null) {
+    window.clearTimeout(runFinalizeTimer);
+    runFinalizeTimer = null;
+  }
+}
+
+// releaseIdleOwnedResources drops the activity socket and the engine poll
+// when no mounted component owns them AND no run is live — the implicit
+// run lease is over. Prevents both duplicate sockets after tab switches
+// and post-run resource leaks.
+function releaseIdleOwnedResources(): void {
+  const state = useRuntimeStore.getState();
+
+  if (
+    activityConsumers === 0 &&
+    !state.running &&
+    !isLivePhase(state.runPhase)
+  ) {
+    state.disconnectActivity();
+  }
+
+  if (
+    enginePollConsumers === 0 &&
+    !state.running &&
+    !isLivePhase(state.runPhase)
+  ) {
+    state.stopEnginePolling();
+  }
+}
+
+// promotePartialOutput appends the streamed partial as a local assistant
+// message so errors/aborts/lost-runs never discard the entire response.
+// The message is marked via its `at` stamp + a visible note appended to
+// the content (never presented as a fully persisted reply).
+function promotePartialOutput(note: string | null): void {
+  const state = useRuntimeStore.getState();
+  const partial = state.streaming;
+
+  if (!partial || (!partial.content && !partial.reasoning)) {
+    return;
+  }
+
+  const marker = note ? `\n\n— ${note}` : "";
+
+  useRuntimeStore.setState({
+    messages: [
+      ...state.messages,
+      {
+        role: "assistant" as const,
+        content: (partial.content || "*(no answer text arrived)*") + marker,
+        ...(partial.reasoning ? { reasoning: partial.reasoning } : {}),
+      },
+    ],
+    streaming: null,
+  });
+}
+
+// finaliseRun performs the authoritative-history confirmation for one run
+// end. Called via setTimeout AFTER the backend had time to persist, and
+// again as a bounded fallback if the first attempt saw no reply land.
+async function finaliseRun(sessionId: string): Promise<void> {
+  const state = useRuntimeStore.getState();
+
+  if (state.activeSessionId !== sessionId) {
+    // Session switched/rolled over — nothing to confirm here anymore.
+    return;
+  }
+
+  const hadPartial = Boolean(
+    state.streaming && (state.streaming.content || state.streaming.reasoning),
+  );
+
+  await state.loadSession(sessionId);
+
+  const after = useRuntimeStore.getState();
+
+  if (after.activeSessionId !== sessionId) {
+    return;
+  }
+
+  // v1.1.6: the turn changed the session's context usage — refresh the
+  // authoritative status (used/pressure).
+  void after.refreshSessionContext();
+
+  const assistants = after.messages.filter(
+    (message) => message.role === "assistant",
+  ).length;
+
+  const historyGainedReply =
+    runAssistantBaseline === null ? true : assistants > runAssistantBaseline;
+
+  if (!historyGainedReply && hadPartial) {
+    // The reply never persisted (abort, lost run, persistence failure) —
+    // keep the partial output visible instead of dropping it.
+    promotePartialOutput(
+      runOutcome === "done"
+        ? "partial reply preserved locally (session history did not record it)"
+        : runOutcome === "aborted"
+          ? "stopped — partial reply preserved locally"
+          : "run ended while the view was away — partial reply preserved locally",
+    );
+  } else {
+    useRuntimeStore.setState({ streaming: null });
+  }
+
+  useRuntimeStore.setState({
+    // "lost" (run ended while detached) settles as Stopped — honest: the
+    // run is no longer active and its state was re-synced from history.
+    runPhase:
+      runOutcome === "done"
+        ? "complete"
+        : runOutcome === "lost"
+          ? "aborted"
+          : (runOutcome ?? "aborted"),
+  });
+
+  runOutcome = null;
+  runAssistantBaseline = null;
+  releaseIdleOwnedResources();
+}
+
+// scheduleRunFinalisation arms the confirm pass (and one retry — the
+// backend writes the reply right after `done`; a slow disk can beat the
+// first reload by a hair).
+function scheduleRunFinalisation(sessionId: string, delayMs: number): void {
+  clearRunFinalizeTimer();
+
+  runFinalizeTimer = window.setTimeout(() => {
+    runFinalizeTimer = null;
+
+    const state = useRuntimeStore.getState();
+
+    if (state.activeSessionId !== sessionId || state.running) {
+      return;
+    }
+
+    void finaliseRun(sessionId).then(() => {
+      // Bounded second attempt: if the first reload raced the persist
+      // write AND no partial was promoted, retry once more.
+      const current = useRuntimeStore.getState();
+
+      if (
+        current.activeSessionId === sessionId &&
+        current.runPhase === "finalising" &&
+        !current.streaming
+      ) {
+        void finaliseRun(sessionId);
+      }
+    });
+  }, delayMs);
+}
+
+// recoverRunFromIdle handles the backend's `idle` sentinel ("No active
+// run"): the UI believed a run was live but the backend has none
+// registered — the run finished while this (or a previous) socket was
+// detached. Resync from the authoritative history instead of staying
+// stuck with running=true and a frozen composer.
+//
+// RACE GUARD: the backend also sends the idle sentinel when a socket
+// PARKS IN STANDBY — including the attach race window right after Send
+// (POST /run accepted → run registered → standby sockets woken). An
+// idle frame arriving within the grace window while this run has seen
+// no events yet is that harmless standby marker, not evidence the run
+// is gone; recovering then would abort a live run.
+const RUN_IDLE_GRACE_MS = 2500;
+
+function recoverRunFromIdle(): void {
+  const state = useRuntimeStore.getState();
+
+  const runStartedAt = state.runStartedAt;
+  const sawRunEvidence = state.streaming !== null || runEventsReceived;
+
+  if (
+    runStartedAt !== null &&
+    !sawRunEvidence &&
+    Date.now() - runStartedAt < RUN_IDLE_GRACE_MS
+  ) {
+    // Standby-entry marker during the attach race — ignore; the hub
+    // wakes this socket the moment the run registers.
+    return;
+  }
+
+  if (runOutcome === null) {
+    runOutcome = "lost";
+  }
+
+  flushStreaming();
+
+  useRuntimeStore.setState({ running: false });
+
+  if (state.activeSessionId) {
+    scheduleRunFinalisation(state.activeSessionId, 50);
+  } else {
+    useRuntimeStore.setState({ streaming: null, runPhase: "aborted" });
+    runOutcome = null;
+    runAssistantBaseline = null;
+    releaseIdleOwnedResources();
+  }
+}
+
 // handleConversationEvent mirrors activity stream events into the real
 // conversation view and repairs the run state machine.
 //
-// Phase 4: streaming response/reasoning chunks are COALESCED through
+// Phase 4: streaming response/reasoning snapshots are COALESCED through
 // queueStreamingContent / queueStreamingReasoning and flushed on a rAF
 // boundary. This means a model emitting 200 tokens/sec no longer
 // triggers 200 React renders/sec — the UI updates at most once per
@@ -471,6 +760,10 @@ function setActivityBatch(
 // events (done/error/session) bypass the coalescer and reset state
 // immediately so `running` clears without delay.
 function handleConversationEvent(event: ActivityEvent): void {
+  if (RUN_EVENT_TYPES.has(event.type)) {
+    runEventsReceived = true;
+  }
+
   switch (event.type) {
     case "response": {
       const content =
@@ -478,6 +771,7 @@ function handleConversationEvent(event: ActivityEvent): void {
 
       if (content) {
         queueStreamingContent(content);
+        transitionPhase("response_delta");
       }
 
       break;
@@ -489,6 +783,31 @@ function handleConversationEvent(event: ActivityEvent): void {
 
       if (reasoning) {
         queueStreamingReasoning(reasoning);
+        transitionPhase("reasoning_delta");
+      }
+
+      break;
+    }
+
+    case "thinking":
+    case "context":
+    case "tool_start":
+    case "tool_end": {
+      // Progressive activity alongside the generation — these advance
+      // Preparing → Thinking but never demote Generating.
+      transitionPhase("thinking_activity");
+
+      break;
+    }
+
+    case "idle": {
+      // Sent by the backend whenever this socket has no run attached.
+      // Only meaningful when the UI believes a run is live — see
+      // recoverRunFromIdle.
+      const state = useRuntimeStore.getState();
+
+      if (state.running || isLivePhase(state.runPhase)) {
+        recoverRunFromIdle();
       }
 
       break;
@@ -505,8 +824,16 @@ function handleConversationEvent(event: ActivityEvent): void {
       if (nextSessionId && nextSessionId !== currentId) {
         // Drop any pending streaming chunks — the chapter is closing.
         resetPendingStreaming();
+        clearRunFinalizeTimer();
+        runOutcome = null;
+        runAssistantBaseline = null;
 
-        useRuntimeStore.setState({ running: false, streaming: null });
+        useRuntimeStore.setState({
+          running: false,
+          streaming: null,
+          runPhase: "complete",
+          runNote: null,
+        });
         void useRuntimeStore.getState().selectSession(nextSessionId);
         void useRuntimeStore.getState().refreshSessions();
       }
@@ -520,32 +847,68 @@ function handleConversationEvent(event: ActivityEvent): void {
       // always release the composer. The old code only reset `running`
       // on error paths, so a successful reply left it disabled forever.
       //
-      // Phase 4: flush any pending streaming chunks FIRST so the final
-      // content is visible before the streaming bubble closes. Then
-      // reset running + streaming.
+      // v1.2.2: flush pending snapshots FIRST so the final content is
+      // visible, then run the full finalisation state machine. The
+      // streaming bubble stays visible through "Finalising" until the
+      // authoritative history (or the preserved partial) replaces it —
+      // no blink, no lost output.
       flushStreaming();
 
-      useRuntimeStore.setState({ running: false });
+      const caption =
+        typeof event.data.caption === "string" ? event.data.caption : "";
 
-      // Reload the persisted conversation so the final assistant message
-      // (written by the run goroutine after the done event) replaces the
-      // optimistic streaming bubble with the authoritative history.
-      const sessionId = useRuntimeStore.getState().activeSessionId;
+      const state = useRuntimeStore.getState();
+      const sessionId = state.activeSessionId;
 
-      if (event.type === "done" && sessionId) {
-        window.setTimeout(() => {
-          const current = useRuntimeStore.getState();
+      if (event.type === "error") {
+        // Terminal failure: the backend did NOT persist a reply. Unlock
+        // the composer, surface the backend's own caption, and keep the
+        // partial output as a local assistant message.
+        transitionPhase("error");
 
-          if (current.activeSessionId === sessionId) {
-            void current.loadSession(sessionId);
-            // v1.1.6: the turn changed the session's context usage —
-            // refresh the authoritative status (used/pressure).
-            void current.refreshSessionContext();
-          }
-        }, 400);
+        useRuntimeStore.setState({
+          running: false,
+          error: caption || "Agent run failed.",
+          runNote: caption || null,
+        });
+
+        promotePartialOutput(
+          caption
+            ? `run failed — partial reply preserved locally (${caption})`
+            : "run failed — partial reply preserved locally",
+        );
+
+        runOutcome = null;
+        runAssistantBaseline = null;
+        releaseIdleOwnedResources();
+
+        break;
       }
 
-      useRuntimeStore.setState({ streaming: null });
+      transitionPhase("done");
+
+      // v1.2.2: the backend's own abort captions mark stopped runs so the
+      // timeline settles on "Stopped", not "Complete".
+      const captionLower = caption.toLowerCase();
+      const abortedByBackend =
+        captionLower === "aborted by user" ||
+        captionLower.startsWith("run stopped");
+
+      runOutcome = abortedByBackend ? "aborted" : "done";
+
+      useRuntimeStore.setState({
+        running: false,
+        runNote: caption || null,
+      });
+
+      if (sessionId) {
+        scheduleRunFinalisation(sessionId, 400);
+      } else {
+        useRuntimeStore.setState({ streaming: null, runPhase: "complete" });
+        runOutcome = null;
+        runAssistantBaseline = null;
+        releaseIdleOwnedResources();
+      }
 
       break;
     }
@@ -571,6 +934,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
   activity: [],
   running: false,
+
+  // v1.2.2: generation timeline state.
+  runPhase: "idle",
+  runStartedAt: null,
+  runNote: null,
 
   engine: null,
 
@@ -728,6 +1096,52 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     }
   },
 
+  // v1.2.2: ownership API. acquire/release bracket the mounted lifetime
+  // of the Agent surface. A LIVE run keeps the socket + poll alive across
+  // workspace tab switches (the backend activity hub has no replay);
+  // they are released the moment the run settles if nothing is mounted.
+  acquireActivity: () => {
+    activityConsumers += 1;
+
+    if (get().activeSessionId) {
+      get().connectActivity();
+    }
+  },
+
+  releaseActivity: () => {
+    activityConsumers = Math.max(0, activityConsumers - 1);
+
+    const state = get();
+
+    if (
+      activityConsumers === 0 &&
+      !state.running &&
+      !isLivePhase(state.runPhase)
+    ) {
+      state.disconnectActivity();
+    }
+  },
+
+  acquireEnginePolling: () => {
+    enginePollConsumers += 1;
+
+    get().startEnginePolling();
+  },
+
+  releaseEnginePolling: () => {
+    enginePollConsumers = Math.max(0, enginePollConsumers - 1);
+
+    const state = get();
+
+    if (
+      enginePollConsumers === 0 &&
+      !state.running &&
+      !isLivePhase(state.runPhase)
+    ) {
+      state.stopEnginePolling();
+    }
+  },
+
   // v1.1.6: fetch the backend-resolved context status for the active
   // session. Switching sessions restores each chat's own policy — the
   // status is per-session and never mutates other chats.
@@ -877,6 +1291,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // Phase 4: drop any pending streaming chunks for the OLD session.
     resetPendingStreaming();
 
+    // v1.2.2: a fresh session ends any in-flight timeline for the old one.
+    clearRunFinalizeTimer();
+    runOutcome = null;
+    runAssistantBaseline = null;
+    runEventsReceived = false;
+
     set((state) => ({
       sessions: [session, ...state.sessions],
       activeSessionId: session.id,
@@ -885,10 +1305,16 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       messages: [],
       streaming: null,
       running: false,
+      runPhase: "idle",
+      runStartedAt: null,
+      runNote: null,
       pendingAttachments: [],
     }));
 
-    get().connectActivity();
+    // v1.2.2: only a mounted consumer keeps the new session's socket.
+    if (activityConsumers > 0) {
+      get().connectActivity();
+    }
 
     return session;
   },
@@ -900,6 +1326,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     get().disconnectActivity();
 
+    // v1.2.2: switching sessions ends the previous run's timeline.
+    clearRunFinalizeTimer();
+    runOutcome = null;
+    runAssistantBaseline = null;
+    runEventsReceived = false;
+
     set({
       activeSessionId: id,
       error: null,
@@ -907,6 +1339,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       messages: [],
       streaming: null,
       running: false,
+      runPhase: "idle",
+      runStartedAt: null,
+      runNote: null,
       pendingAttachments: [],
     });
 
@@ -914,7 +1349,13 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     resetPendingStreaming();
 
     if (id) {
-      get().connectActivity();
+      // v1.2.2: only a mounted consumer (Agent surface) keeps a live
+      // socket — switching chapters from a background view must not
+      // leak an ownerless connection.
+      if (activityConsumers > 0) {
+        get().connectActivity();
+      }
+
       void get().loadSession(id);
       void get().refreshSessionContext();
     } else {
@@ -946,13 +1387,20 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         activity: state.activeSessionId === id ? [] : state.activity,
         streaming: null,
         running: false,
+        runPhase: state.activeSessionId === id ? "idle" : state.runPhase,
+        runStartedAt: state.activeSessionId === id ? null : state.runStartedAt,
+        runNote: state.activeSessionId === id ? null : state.runNote,
       };
     });
 
     const nextId = get().activeSessionId;
 
     if (nextId) {
-      get().connectActivity();
+      // v1.2.2: same ownership guard as selectSession.
+      if (activityConsumers > 0) {
+        get().connectActivity();
+      }
+
       void get().loadSession(nextId);
     }
   },
@@ -968,9 +1416,21 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       return;
     }
 
+    // v1.2.2: reset this run's bookkeeping BEFORE the optimistic bubble —
+    // the generation timeline becomes visible the instant Send is
+    // accepted (no dead visual gap while the engine gate warms up).
+    clearRunFinalizeTimer();
+    runOutcome = null;
+    runAssistantBaseline = null;
+    runEventsReceived = false;
+    resetPendingStreaming();
+
     set({
       running: true,
       error: null,
+      runPhase: "preparing",
+      runStartedAt: Date.now(),
+      runNote: null,
     });
 
     // v1.1.3Z: optimistic user bubble — the conversation shows the sent
@@ -983,7 +1443,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         {
           role: "user" as const,
           content: message.trim(),
-          ...(attachmentNames.length > 0 ? { attachments: attachmentNames } : {}),
+          ...(attachmentNames.length > 0
+            ? { attachments: attachmentNames }
+            : {}),
         },
       ],
       streaming: null,
@@ -1005,7 +1467,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       set({
         error: error instanceof Error ? error.message : "Agent run failed.",
         running: false,
+        runPhase: "error",
+        runNote:
+          error instanceof Error ? error.message : "The run request failed.",
       });
+
+      releaseIdleOwnedResources();
 
       throw error;
     }
@@ -1022,10 +1489,20 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       return;
     }
 
+    // v1.2.2: same timeline reset as a fresh run.
+    clearRunFinalizeTimer();
+    runOutcome = null;
+    runAssistantBaseline = null;
+    runEventsReceived = false;
+    resetPendingStreaming();
+
     set({
       running: true,
       error: null,
       streaming: null,
+      runPhase: "preparing",
+      runStartedAt: Date.now(),
+      runNote: null,
     });
 
     try {
@@ -1060,7 +1537,14 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       set({
         error: error instanceof Error ? error.message : "Regenerate failed.",
         running: false,
+        runPhase: "error",
+        runNote:
+          error instanceof Error
+            ? error.message
+            : "The regenerate request failed.",
       });
+
+      releaseIdleOwnedResources();
 
       throw error;
     }
@@ -1079,7 +1563,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       const response = await api.uploadAttachments(sessionId, files);
 
       set((state) => ({
-        pendingAttachments: [...state.pendingAttachments, ...response.attachments],
+        pendingAttachments: [
+          ...state.pendingAttachments,
+          ...response.attachments,
+        ],
         attachmentsUploading: false,
       }));
 
@@ -1135,17 +1622,37 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     if (!sessionId) {
       set({
         running: false,
+        runPhase: "aborted",
       });
+
+      releaseIdleOwnedResources();
 
       return;
     }
 
+    // v1.2.2: unlock the composer immediately; the phase stays live so
+    // the generation timeline keeps showing the partial output until the
+    // backend's `done`(abort) event — or a bounded fallback — finalises
+    // the run with the partial preserved.
+    flushStreaming();
+
+    useRuntimeStore.setState({ running: false });
+
     try {
       await api.abort(sessionId);
     } finally {
-      set({
-        running: false,
-      });
+      // Fallback finalisation: if the backend's done(abort) event never
+      // arrives (detached socket, engine hiccup), settle the run locally
+      // after a short grace period — never a stuck live phase.
+      if (runOutcome === null) {
+        runOutcome = "aborted";
+      }
+
+      const phase = useRuntimeStore.getState().runPhase;
+
+      if (isLivePhase(phase)) {
+        scheduleRunFinalisation(sessionId, 1200);
+      }
     }
   },
 

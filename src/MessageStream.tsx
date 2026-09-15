@@ -5,12 +5,30 @@ import rehypeHighlight from "rehype-highlight";
 
 import type { ChatMessage } from "./api";
 import { useRuntimeStore } from "./store";
+import { isLivePhase, PHASE_LABELS, type RunPhase } from "./run-phase";
 
 const MAX_RENDERED_MESSAGES = 200;
 
 // v1.2.0: stick-to-bottom threshold (px from the bottom still counts as
 // "the user is reading the latest message").
 const AUTO_SCROLL_THRESHOLD = 96;
+
+// v1.2.2: the generation timeline's elapsed clock refresh cadence. One
+// tick per second — enough for a live feel, cheap for React.
+const GENERATION_CLOCK_MS = 1000;
+
+function formatElapsed(startedAt: number | null): string {
+  if (!startedAt) {
+    return "0:00";
+  }
+
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+
+  return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1_048_576) {
@@ -25,7 +43,13 @@ function formatBytes(bytes: number): string {
 }
 
 // v1.2.0: per-message clipboard copy with a quiet "Copied" confirmation.
-function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+function CopyButton({
+  text,
+  label = "Copy",
+}: {
+  text: string;
+  label?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const onCopy = useCallback(() => {
@@ -105,7 +129,9 @@ function AttachmentChip({
   onRemove?: (id: string) => void;
   previewUrl?: string;
 }) {
-  const isImage = attachment.kind === "image" || /\.(png|jpe?g|webp|gif|bmp)$/i.test(attachment.name);
+  const isImage =
+    attachment.kind === "image" ||
+    /\.(png|jpe?g|webp|gif|bmp)$/i.test(attachment.name);
 
   return (
     <span className={`attachment-chip kind-${attachment.kind}`}>
@@ -179,9 +205,7 @@ const MessageBubble = memo(function MessageBubble({
   // recall engine's future relevance scoring (the backend steering has
   // existed since v1.0.6 — this is its first user-facing write path).
   const sendFeedback = useRuntimeStore((state) => state.sendFeedback);
-  const [feedback, setFeedback] = useState<"liked" | "disliked" | null>(
-    null,
-  );
+  const [feedback, setFeedback] = useState<"liked" | "disliked" | null>(null);
   const [feedbackError, setFeedbackError] = useState(false);
 
   const handleFeedback = (liked: boolean) => {
@@ -208,11 +232,7 @@ const MessageBubble = memo(function MessageBubble({
 
       <div className="message-bubble">
         {message.reasoning ? (
-          <details className="message-reasoning">
-            <summary>reasoning</summary>
-
-            <p className="message-reasoning-body">{message.reasoning}</p>
-          </details>
+          <ReasoningPanel reasoning={message.reasoning} live={false} />
         ) : null}
 
         {isUser ? (
@@ -251,7 +271,11 @@ const MessageBubble = memo(function MessageBubble({
 
         <div className="message-meta">
           {!isUser && message.content && query ? (
-            <div className="message-feedback" role="group" aria-label="Rate this reply for recall relevance">
+            <div
+              className="message-feedback"
+              role="group"
+              aria-label="Rate this reply for recall relevance"
+            >
               <button
                 type="button"
                 className={`feedback-button like ${feedback === "liked" ? "active" : ""}`}
@@ -280,19 +304,214 @@ const MessageBubble = memo(function MessageBubble({
             </div>
           ) : null}
 
-          {message.content ? (
-            <CopyButton text={message.content} />
-          ) : null}
+          {message.content ? <CopyButton text={message.content} /> : null}
         </div>
       </div>
     </article>
   );
 });
 
+// ReasoningPanel is the collapsible reasoning surface used BOTH while
+// streaming (auto-open while the model thinks, auto-fold when the answer
+// starts, always user-togglable) and after completion inside the settled
+// message bubble. Only text the backend actually emitted is shown.
+const ReasoningPanel = memo(function ReasoningPanel({
+  reasoning,
+  live,
+}: {
+  reasoning: string;
+  live: boolean;
+}) {
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+
+  // Auto-open while the run is still in the Thinking phase; auto-fold
+  // once Generating begins — unless the user made an explicit choice.
+  const open = manualOpen ?? live;
+
+  return (
+    <details
+      className="message-reasoning"
+      open={open}
+      onToggle={(event) => {
+        // User intent wins over any automatic behaviour.
+        setManualOpen((event.target as HTMLDetailsElement).open);
+      }}
+    >
+      <summary>
+        {live ? "Thinking… " : ""}Reasoning
+        <span className="message-reasoning-meta">
+          {reasoning.length.toLocaleString()} chars
+        </span>
+      </summary>
+
+      <p className="message-reasoning-body">{reasoning}</p>
+    </details>
+  );
+});
+
+// GenerationBubble is the v1.2.2 live generation timeline. It mounts the
+// INSTANT the run starts (no dead gap while the engine gate warms up) and
+// walks the real backend-driven lifecycle:
+//   Preparing → Thinking → Generating → Finalising → (history replaces it)
+// Activity (tool/context/engine) events render progressively alongside.
+function GenerationBubble() {
+  const runPhase = useRuntimeStore((state) => state.runPhase);
+  const runStartedAt = useRuntimeStore((state) => state.runStartedAt);
+  const runNote = useRuntimeStore((state) => state.runNote);
+  const streaming = useRuntimeStore((state) => state.streaming);
+  const activity = useRuntimeStore((state) => state.activity);
+
+  const [, setClockTick] = useState(0);
+
+  // One lightweight tick per second while a run is live — drives the
+  // elapsed clock only (content updates ride the store's rAF coalescing).
+  useEffect(() => {
+    if (!isLivePhase(runPhase)) {
+      return;
+    }
+
+    const timer = window.setInterval(
+      () => setClockTick((tick) => tick + 1),
+      GENERATION_CLOCK_MS,
+    );
+
+    return () => window.clearInterval(timer);
+  }, [runPhase]);
+
+  // Progressive activity alongside the generation (tool/context/engine).
+  const runActivity = useMemo(() => {
+    const interesting = activity.filter(
+      (item) =>
+        item.type === "tool_start" ||
+        item.type === "tool_end" ||
+        item.type === "engine" ||
+        item.type === "context" ||
+        item.type === "thinking",
+    );
+
+    return interesting.slice(-6);
+  }, [activity]);
+
+  const reasoning = streaming?.reasoning ?? "";
+  const content = streaming?.content ?? "";
+
+  // Auto-open reasoning while the model thinks, fold when the answer
+  // streams (explicit user choice overrides both directions).
+  const reasoningLive = runPhase === "thinking" || runPhase === "preparing";
+
+  return (
+    <article
+      className="message-row from-agent generation-row"
+      aria-live="polite"
+    >
+      <div className="message-avatar" aria-hidden="true">
+        S
+      </div>
+
+      <div className="message-bubble streaming generation-bubble">
+        <div className="generation-timeline">
+          <span
+            className={`generation-phase phase-${runPhase}${
+              runPhase === "finalising" ? " settling" : ""
+            }`}
+          >
+            <span className="generation-phase-dot" aria-hidden="true" />
+            {PHASE_LABELS[runPhase] ?? runPhase}
+          </span>
+
+          <span className="generation-elapsed" title="Elapsed generation time">
+            {formatElapsed(runStartedAt)}
+          </span>
+        </div>
+
+        {reasoning ? (
+          <ReasoningPanel reasoning={reasoning} live={reasoningLive} />
+        ) : null}
+
+        <p className="message-content">
+          {content ||
+            (runPhase === "preparing"
+              ? "Connecting to the engine and preparing the turn…"
+              : "…")}
+
+          {runPhase !== "finalising" ? (
+            <span className="stream-cursor" aria-hidden="true" />
+          ) : null}
+        </p>
+
+        {runActivity.length > 0 ? (
+          <div
+            className="conversation-activity in-generation"
+            aria-label="Runtime activity"
+          >
+            {runActivity.map((item) => (
+              <span
+                key={item.id}
+                className={`conversation-activity-item type-${item.type}`}
+              >
+                <span className="conversation-activity-type">{item.type}</span>
+
+                <span className="conversation-activity-caption">
+                  {typeof item.data.caption === "string"
+                    ? item.data.caption
+                    : item.type}
+                </span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {runPhase === "finalising" && runNote ? (
+          <p className="generation-note">{runNote}</p>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+// phaseTone maps a settled/terminal phase for the note surface.
+function phaseTone(runPhase: RunPhase): string {
+  if (runPhase === "complete") return "complete";
+  if (runPhase === "error") return "error";
+  if (runPhase === "aborted") return "aborted";
+  return "idle";
+}
+
+// RunOutcomeNote surfaces the settled outcome of the LAST run (Complete /
+// Stopped / Failed with the backend's own caption) directly under the
+// conversation — never invented, only what the wire carried.
+function RunOutcomeNote() {
+  const runPhase = useRuntimeStore((state) => state.runPhase);
+  const runNote = useRuntimeStore((state) => state.runNote);
+
+  if (runPhase === "idle" || isLivePhase(runPhase)) {
+    return null;
+  }
+
+  const tone = phaseTone(runPhase);
+
+  return (
+    <div className={`run-outcome tone-${tone}`} role="status">
+      <span className="run-outcome-label">
+        {PHASE_LABELS[runPhase] ?? runPhase}
+      </span>
+      {runNote ? <span className="run-outcome-note">{runNote}</span> : null}
+    </div>
+  );
+}
+
 function StreamingBubble() {
   const streaming = useRuntimeStore((state) => state.streaming);
+  const runPhase = useRuntimeStore((state) => state.runPhase);
 
   if (!streaming) {
+    return null;
+  }
+
+  // While a run is live the GenerationBubble owns the surface; the plain
+  // StreamingBubble only exists as a safety net for stray streaming data
+  // after the timeline settled (e.g. a late flush racing finalisation).
+  if (isLivePhase(runPhase)) {
     return null;
   }
 
@@ -325,7 +544,9 @@ function EmptyConversation() {
   const chat = mode === "chat";
 
   const engineLive =
-    engineState === "ready" || engineState === "running" || engineState === "busy";
+    engineState === "ready" ||
+    engineState === "running" ||
+    engineState === "busy";
 
   return (
     <div className="conversation-empty">
@@ -350,6 +571,7 @@ function MessageStream() {
   const messages = useRuntimeStore((state) => state.messages);
   const streaming = useRuntimeStore((state) => state.streaming);
   const running = useRuntimeStore((state) => state.running);
+  const runPhase = useRuntimeStore((state) => state.runPhase);
   const activity = useRuntimeStore((state) => state.activity);
 
   const streamRef = useRef<HTMLDivElement | null>(null);
@@ -389,7 +611,9 @@ function MessageStream() {
       : messageQueries;
 
   // Only the last ~40 activity entries are mirrored inline; the full
-  // activity feed stays bounded in the store.
+  // activity feed stays bounded in the store. While a run is LIVE the
+  // GenerationBubble carries its own activity strip, so the standalone
+  // block renders only for idle/idle-phase tails.
   const inlineActivity = useMemo(() => {
     const interesting = activity.filter(
       (item) =>
@@ -399,8 +623,8 @@ function MessageStream() {
         item.type === "context",
     );
 
-    return interesting.slice(-8);
-  }, [activity]);
+    return isLivePhase(runPhase) ? [] : interesting.slice(-8);
+  }, [activity, runPhase]);
 
   // v1.2.0: intelligent autoscroll — follow the stream ONLY while the
   // user stays near the bottom; any deliberate scroll-up suspends the
@@ -436,12 +660,24 @@ function MessageStream() {
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [visibleMessages.length, streaming?.content, inlineActivity.length]);
+  }, [
+    visibleMessages.length,
+    streaming?.content,
+    streaming?.reasoning,
+    inlineActivity.length,
+    runPhase,
+  ]);
 
   return (
     <div className="conversation-panel">
-      <div className="conversation-stream" ref={streamRef} onScroll={handleStreamScroll}>
-        {visibleMessages.length === 0 && !streaming ? (
+      <div
+        className="conversation-stream"
+        ref={streamRef}
+        onScroll={handleStreamScroll}
+      >
+        {visibleMessages.length === 0 &&
+        !streaming &&
+        !isLivePhase(runPhase) ? (
           <EmptyConversation />
         ) : (
           <>
@@ -454,10 +690,18 @@ function MessageStream() {
             ))}
 
             {inlineActivity.length > 0 ? (
-              <div className="conversation-activity" aria-label="Runtime activity">
+              <div
+                className="conversation-activity"
+                aria-label="Runtime activity"
+              >
                 {inlineActivity.map((item) => (
-                  <span key={item.id} className={`conversation-activity-item type-${item.type}`}>
-                    <span className="conversation-activity-type">{item.type}</span>
+                  <span
+                    key={item.id}
+                    className={`conversation-activity-item type-${item.type}`}
+                  >
+                    <span className="conversation-activity-type">
+                      {item.type}
+                    </span>
 
                     <span className="conversation-activity-caption">
                       {typeof item.data.caption === "string"
@@ -469,7 +713,14 @@ function MessageStream() {
               </div>
             ) : null}
 
-            {running ? <StreamingBubble /> : null}
+            {/* v1.2.2: the live generation timeline — mounts the instant a
+                run starts (running || live phase), not just when the first
+                token lands. */}
+            {running || isLivePhase(runPhase) ? <GenerationBubble /> : null}
+
+            <StreamingBubble />
+
+            <RunOutcomeNote />
           </>
         )}
 

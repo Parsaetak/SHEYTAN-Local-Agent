@@ -30,6 +30,12 @@ func RunWithDefaultFn(defaultFn func() int) int {
 		logging.SetVersion(config.AppVersion)
 		defer mgr.Close()
 	}
+	// v1.2.2: one unambiguous session separator BEFORE anything else -
+	// app.log persists across versions/boots, so historical startup
+	// entries (e.g. v0.8.0) previously mixed indistinguishably with the
+	// current run. Everything above a banner is verifiably historical.
+	logging.Default().SessionBanner(brand.FullName, config.AppVersion)
+
 	logging.Default().Info(
 		"boot",
 		"%s v%s starting (%s/%s, provider=%s)",

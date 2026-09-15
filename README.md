@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.2.1
+Current release:  v1.2.2
 Codename:         Zeta
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
@@ -70,6 +70,22 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.2.2 — Generation Visibility & Black-Screen Repair
+
+**A focused stability repair: the System-tab black screen is fixed at its root (error boundaries everywhere + the `gpus: null` wire defect), the mid-generation tab-switch composer freeze is eliminated (socket ownership with a live-run lease + `idle`-sentinel resync), the live generation timeline makes every run visible from Send to completion, and engine/log reporting becomes honest. No architecture changes, no feature work beyond the visibility brief.**
+
+| Area | What changed |
+|---|---|
+| **Black screen (root fix)** | React error boundaries at three levels — app root (`AppErrorBoundary`), every lazy workspace panel (`PanelErrorBoundary` with a recover/reload card and view-switch reset) — so one panel's render failure can never blank the application again. The actual crash source is fixed on the wire: `hardware.Collect` and `sysinfo.Probe` now guarantee `"gpus": []` (a nil Go slice marshalled as JSON `null`, and `DeviceCard` read `gpus.length` off it — WMI/PowerShell GPU probes fail under heavy inference load, which is why the System tab crashed DURING generation) |
+| **System-tab hardening** | Every optional payload field in DeviceCard / RuntimeCard / RecommendationCard / HealthCard is read defensively (`Array.isArray` guards, `??` fallbacks); the environment + health probes are `AbortController`-cancellable and ignore results after unmount; recommendation application guards its state setters against unmounted continuation |
+| **Tab-switch mid-generation** | AgentBody now ACQUIRES/RELEASES the activity socket and engine poll instead of hard-connect/disconnect. A live run holds the lease across workspace switches — the backend hub has no event replay, and the old unmount-disconnect lost every mid-run event including `done`, leaving `running` stuck true and the composer frozen forever. The backend's `idle` sentinel is now handled: a run the UI believes live but the backend no longer registers is re-synced from the authoritative history (with a grace guard against the standby attach race). No duplicate sockets/pollers on return — release happens exactly when the run settles and the last consumer is gone |
+| **Live generation timeline** | A generation bubble mounts the INSTANT Send is accepted and walks the real backend-driven lifecycle `Preparing → Thinking → Generating → Finalising → Complete` (pure state machine in `run-phase.ts`, unit-tested). Elapsed clock, collapsible reasoning panel (auto-open while thinking, auto-fold when the answer streams, user intent wins), streamed answer text, progressive tool/context/engine activity alongside, and a settled outcome note (Complete/Stopped/Failed with the backend's own caption) |
+| **Streaming duplication fix** | The orchestrator's `emitProgress` publishes CUMULATIVE captions; the store previously APPENDED every caption, duplicating the streamed text massively. The new accumulator (`stream-accumulator.ts`, unit-tested) treats each event as an authoritative snapshot — replace semantics make replayed/duplicate frames after reconnects idempotent by construction |
+| **Partial output preservation** | `done` keeps the streamed bubble visible through Finalising until the authoritative history replaces it (no blink); errors and aborts promote the partial reply into the conversation locally (marked, never presented as persisted) when — and only when — the history did not actually gain a reply. Abort unlocks the composer immediately with a bounded fallback finalisation |
+| **Engine asset honesty** | `llamaDownloadURL` no longer reports "no prebuilt asset … (upstream no longer publishes Linux binaries)" on Windows machines whose `api.github.com`/Atom requests are blocked. Network failure and genuine asset absence are classified (`updater.IsNoAssetError`, unit-tested) and reported with their real remedy; the classification is logged as a WARN, never fatal to the UI |
+| **Log session clarity** | Every process start writes one unambiguous session banner (`==== SHEYTAN-LA v1.2.2 session start (pid N) ====`) through the normal ring/rotation pipeline — stale v0.8.0 startup entries above a banner are verifiably historical in the file AND the in-app Log Viewer |
+| **Version** | `1.2.1` → `1.2.2` through the established identity chain (package.json → release-version.mjs → config.go / build/config.yml / SIGNATURE) |
 
 ## v1.2.1 — CI Package-Root Contract, Installer Options, Packaging Hardening
 

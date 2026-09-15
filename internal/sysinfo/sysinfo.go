@@ -94,7 +94,13 @@ func probeUncached() *SysInfo {
 		CPU:      probeCPU(),
 		RAM:      probeRAM(),
 	}
+	// v1.2.2: a GPU-less or failed probe (WMI/PowerShell failures are
+	// common under heavy inference load) must marshal as "gpus": [] -
+	// never null, which crashed JSON consumers reading .length.
 	info.GPU = probeGPUs()
+	if info.GPU == nil {
+		info.GPU = []GPUInfo{}
+	}
 	info.Disk = probeDisk(".")
 	info.WSL2 = detectWSL2()
 	info.Docker = detectDocker()

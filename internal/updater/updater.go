@@ -209,6 +209,24 @@ func LatestTag(ctx context.Context) (string, error) {
 // errNoAsset marks "API reachable but no release had a matching asset".
 var errNoAsset = errors.New("no recent release ships a prebuilt asset for this platform")
 
+// IsNoAssetError reports whether err means upstream GENUINELY ships no
+// prebuilt engine asset for this platform (v1.2.2). Distinguishing this
+// from a NETWORK failure matters: a blocked/unreachable api.github.com
+// must never be reported as "no prebuilt asset exists" — that misled
+// engine startup on firewalled machines (the Windows log symptom).
+func IsNoAssetError(err error) bool {
+        if err == nil {
+                return false
+        }
+        if errors.Is(err, errNoAsset) {
+                return true
+        }
+        // The Atom fallback's no-asset wording (it can only be produced after
+        // the feed itself was fetched successfully — a network failure
+        // surfaces as the HTTP error instead).
+        return strings.Contains(err.Error(), "no recent release ships a prebuilt asset")
+}
+
 // latestTagFromAPI pages the GitHub release list (newest first) and returns
 // the first tag whose assets include our platform build.
 func latestTagFromAPI(ctx context.Context) (string, error) {

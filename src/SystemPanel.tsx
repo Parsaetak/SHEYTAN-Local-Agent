@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  api,
-  type EnvironmentPayload,
-  type HealthPayload,
-} from "./api";
+import { api, type EnvironmentPayload, type HealthPayload } from "./api";
 
 // v1.2.0 — the Environment Centre (System Centre): one honest view over
 // device, runtime, verified health and the recommendation engine. Every
 // value comes from /api/environment + /api/health (existing telemetry);
 // unknown values render as "—".
+//
+// v1.2.2 hardening: this panel previously crashed the whole app when the
+// backend payload was malformed or partial (a nil Go GPU slice marshals
+// as JSON `null`, and `device.gpus.length` then threw inside render —
+// with no error boundary that blanked the window). Every optional field
+// is now read defensively AND the fetches are AbortController-cancellable
+// so navigating away mid-request can never mutate unmounted state.
 
 function fmtBytes(bytes: number | undefined): string {
   if (!bytes || bytes <= 0) return "—";
@@ -34,7 +37,7 @@ const HEALTH_SYMBOL: Record<string, string> = {
 };
 
 function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
-  if (!env) {
+  if (!env || !env.device) {
     return (
       <div className="settings-card">
         <span className="eyebrow">DEVICE</span>
@@ -43,14 +46,25 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
     );
   }
 
-  const { device } = env;
+  // v1.2.2: defensive reads — a nil Go slice arrives as JSON null and
+  // must never throw during render (the historical System-tab crash).
+  const device = env.device;
+  const gpus = Array.isArray(device.gpus) ? device.gpus : [];
+  const cpu = device.cpu ?? { name: "" };
+  const ram = device.ram ?? { totalBytes: 0, availableBytes: 0 };
+  const storage = device.storage ?? {};
+  const identity = device.identity ?? {
+    product: "",
+    shortName: "",
+    platform: "",
+  };
 
   return (
     <div className="settings-card">
       <div className="panel-heading">
         <div>
           <span className="eyebrow">DEVICE</span>
-          <strong>{device.identity.shortName}</strong>
+          <strong>{identity.shortName || "This machine"}</strong>
         </div>
         <span className="settings-chip chip-neutral">
           {device.os || "—"} · {device.arch || "—"}
@@ -60,10 +74,10 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
       <div className="env-grid">
         <div className="session-detail">
           <span>CPU</span>
-          <strong title={device.cpu.name}>
-            {device.cpu.name || "—"}
-            {device.cpu.physicalCores
-              ? ` · ${device.cpu.physicalCores}C/${device.cpu.logicalCores ?? "?"}T`
+          <strong title={cpu.name}>
+            {cpu.name || "—"}
+            {cpu.physicalCores
+              ? ` · ${cpu.physicalCores}C/${cpu.logicalCores ?? "?"}T`
               : ""}
           </strong>
         </div>
@@ -71,9 +85,9 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
         <div className="session-detail">
           <span>RAM</span>
           <strong>
-            {fmtBytes(device.ram.totalBytes)}
-            {device.ram.availableBytes
-              ? ` · ${fmtBytes(device.ram.availableBytes)} available`
+            {fmtBytes(ram.totalBytes)}
+            {ram.availableBytes
+              ? ` · ${fmtBytes(ram.availableBytes)} available`
               : ""}
           </strong>
         </div>
@@ -81,9 +95,12 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
         <div className="session-detail">
           <span>GPU</span>
           <strong>
-            {device.gpus.length > 0
-              ? device.gpus
-                  .map((g) => `${g.name || g.vendor || "GPU"}${g.vramBytes ? ` (${fmtBytes(g.vramBytes)})` : ""}`)
+            {gpus.length > 0
+              ? gpus
+                  .map(
+                    (g) =>
+                      `${g.name || g.vendor || "GPU"}${g.vramBytes ? ` (${fmtBytes(g.vramBytes)})` : ""}`,
+                  )
                   .join(", ")
               : "— none detected"}
           </strong>
@@ -92,8 +109,8 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
         <div className="session-detail">
           <span>Storage</span>
           <strong>
-            {device.storage.freeBytes
-              ? `${fmtBytes(device.storage.freeBytes)} free of ${fmtBytes(device.storage.totalBytes)}`
+            {storage.freeBytes
+              ? `${fmtBytes(storage.freeBytes)} free of ${fmtBytes(storage.totalBytes)}`
               : "—"}
           </strong>
         </div>
@@ -101,7 +118,7 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
         <div className="session-detail">
           <span>Engine backend</span>
           <strong>
-            {device.backend.engineBinary
+            {device.backend?.engineBinary
               ? `provisioned${device.backend.vulkan ? " · Vulkan" : ""}`
               : "not yet provisioned (auto-download on first run)"}
           </strong>
@@ -109,8 +126,9 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
 
         <div className="session-detail">
           <span>Identity</span>
-          <strong title={device.identity.appUserModelId}>
-            {device.identity.product} · {device.identity.appUserModelId || device.identity.platform}
+          <strong title={identity.appUserModelId}>
+            {identity.product || "SHEYTAN"} ·{" "}
+            {identity.appUserModelId || identity.platform || "—"}
           </strong>
         </div>
       </div>
@@ -119,9 +137,11 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
 }
 
 function RuntimeCard({ env }: { env: EnvironmentPayload | null }) {
-  if (!env) return null;
+  if (!env || !env.runtime) return null;
 
   const { runtime } = env;
+  const vision = runtime.vision ?? { state: "" };
+  const recommendation = env.recommendation;
 
   return (
     <div className="settings-card">
@@ -130,7 +150,9 @@ function RuntimeCard({ env }: { env: EnvironmentPayload | null }) {
           <span className="eyebrow">RUNTIME</span>
           <strong>{runtime.backend || "engine"}</strong>
         </div>
-        <span className={`settings-chip chip-${runtime.verified ? "good" : "warn"}`}>
+        <span
+          className={`settings-chip chip-${runtime.verified ? "good" : "warn"}`}
+        >
           {runtime.verified ? "✓ verified" : "not verified"}
         </span>
       </div>
@@ -139,7 +161,7 @@ function RuntimeCard({ env }: { env: EnvironmentPayload | null }) {
         <div className="session-detail">
           <span>Engine</span>
           <strong>
-            {runtime.engineState}
+            {runtime.engineState || "—"}
             {runtime.enginePhase && runtime.enginePhase !== "ready"
               ? ` · ${runtime.enginePhase}`
               : ""}
@@ -153,24 +175,24 @@ function RuntimeCard({ env }: { env: EnvironmentPayload | null }) {
 
         <div className="session-detail">
           <span>Context</span>
-          <strong>{runtime.context ? `${runtime.context.toLocaleString()} tok` : "—"}</strong>
+          <strong>
+            {runtime.context ? `${runtime.context.toLocaleString()} tok` : "—"}
+          </strong>
         </div>
 
         <div className="session-detail">
           <span>Vision</span>
           <strong
-            title={runtime.vision.reason}
+            title={vision.reason}
             className={`vision-value tone-${
-              runtime.vision.state === "ready"
+              vision.state === "ready"
                 ? "good"
-                : runtime.vision.state === "failed"
+                : vision.state === "failed"
                   ? "bad"
                   : "warn"
             }`}
           >
-            {runtime.vision.state
-              ? `${runtime.vision.active ? "✓ " : ""}${runtime.vision.state}`
-              : "—"}
+            {vision.state ? `${vision.active ? "✓ " : ""}${vision.state}` : "—"}
           </strong>
         </div>
 
@@ -181,7 +203,7 @@ function RuntimeCard({ env }: { env: EnvironmentPayload | null }) {
 
         <div className="session-detail">
           <span>Profile</span>
-          <strong>{env.recommendation.task || "chat"}</strong>
+          <strong>{recommendation?.task || "chat"}</strong>
         </div>
       </div>
     </div>
@@ -192,15 +214,28 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
   const [applying, setApplying] = useState(false);
   const [appliedAt, setAppliedAt] = useState<string | null>(null);
 
-  if (!env) return null;
+  // v1.2.2: applying a recommendation races navigation — a component
+  // unmounted mid-apply must never re-enter its dead state setters.
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  if (!env || !env.recommendation) return null;
 
   const rec = env.recommendation;
+  const task = rec.task || "chat";
 
   const apply = useCallback(async () => {
     setApplying(true);
 
     try {
-      const payload = await api.recommendation("", rec.task);
+      const payload = await api.recommendation("", task);
       const r = payload.recommended;
       if (!r) return;
 
@@ -218,13 +253,17 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
         runtimeProfile: r.task,
       });
 
+      if (!aliveRef.current) return;
+
       setAppliedAt(new Date().toLocaleTimeString());
     } catch {
       // Config errors surface through the config surfaces elsewhere.
     } finally {
-      setApplying(false);
+      if (aliveRef.current) {
+        setApplying(false);
+      }
     }
-  }, [rec.task]);
+  }, [task]);
 
   return (
     <div className="settings-card">
@@ -233,8 +272,14 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
           <span className="eyebrow">RECOMMENDATION</span>
           <strong>{rec.summary}</strong>
         </div>
-        <span className={`settings-chip chip-${rec.applied || appliedAt ? "good" : "neutral"}`}>
-          {appliedAt ? `Applied ✓ ${appliedAt}` : rec.applied ? "✓ optimal" : "available"}
+        <span
+          className={`settings-chip chip-${rec.applied || appliedAt ? "good" : "neutral"}`}
+        >
+          {appliedAt
+            ? `Applied ✓ ${appliedAt}`
+            : rec.applied
+              ? "✓ optimal"
+              : "available"}
         </span>
       </div>
 
@@ -262,8 +307,8 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
           </button>
 
           <span className="runtime-hint">
-            Predicted values — measure the effect afterwards in
-            Settings → Performance → Live metrics.
+            Predicted values — measure the effect afterwards in Settings →
+            Performance → Live metrics.
           </span>
         </div>
       ) : null}
@@ -274,16 +319,40 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
 function HealthCard() {
   const [health, setHealth] = useState<HealthPayload | null>(null);
 
+  // v1.2.2: the health probe is fully cancellable — leaving the System
+  // tab mid-request aborts the fetch instead of letting a late response
+  // (or a 20s timeout error) mutate unmounted state.
+  const abortRef = useRef<AbortController | null>(null);
+
   const load = useCallback(() => {
+    abortRef.current?.abort();
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     api
-      .health()
-      .then(setHealth)
-      .catch(() => setHealth(null));
+      .health(controller.signal)
+      .then((payload) => {
+        if (!controller.signal.aborted) setHealth(payload);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setHealth(null);
+      });
   }, []);
 
   useEffect(() => {
     load();
+
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
   }, [load]);
+
+  // v1.2.2: defensive checks — a malformed/absent checks array renders
+  // honestly instead of throwing.
+  const checks = Array.isArray(health?.checks) ? health.checks : [];
+  const overall = health?.overall ?? "unknown";
 
   if (!health) {
     return (
@@ -304,9 +373,9 @@ function HealthCard() {
         <div>
           <span className="eyebrow">SYSTEM HEALTH</span>
           <strong>
-            {health.overall === "ok"
+            {overall === "ok"
               ? "All verified checks pass"
-              : health.overall === "warn"
+              : overall === "warn"
                 ? "Verified, with warnings"
                 : "Attention required"}
           </strong>
@@ -317,15 +386,20 @@ function HealthCard() {
             Refresh
           </button>
 
-          <span className={`settings-chip chip-${HEALTH_TONE[health.overall] ?? "neutral"}`}>
-            {health.checks.filter((c) => c.state === "ok").length}/{health.checks.length} ok
+          <span
+            className={`settings-chip chip-${HEALTH_TONE[overall] ?? "neutral"}`}
+          >
+            {checks.filter((c) => c.state === "ok").length}/{checks.length} ok
           </span>
         </div>
       </div>
 
       <div className="health-checks">
-        {health.checks.map((check) => (
-          <details key={check.id} className={`health-check state-${check.state}`}>
+        {checks.map((check) => (
+          <details
+            key={check.id}
+            className={`health-check state-${check.state}`}
+          >
             <summary>
               <span className="health-check-label">
                 <span
@@ -337,7 +411,9 @@ function HealthCard() {
                 {check.label}
               </span>
 
-              <span className={`health-check-state tone-${HEALTH_TONE[check.state] ?? "neutral"}`}>
+              <span
+                className={`health-check-state tone-${HEALTH_TONE[check.state] ?? "neutral"}`}
+              >
                 {check.state}
               </span>
             </summary>
@@ -358,20 +434,23 @@ function HealthCard() {
 const SystemPanel = function SystemPanel() {
   const [env, setEnv] = useState<EnvironmentPayload | null>(null);
 
+  // v1.2.2: cancellable environment fetch — leaving the tab mid-probe
+  // aborts the request; a late response can never touch unmounted state
+  // (and never races a subsequent mount's fetch).
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
 
     api
-      .environment()
+      .environment(controller.signal)
       .then((payload) => {
-        if (!cancelled) setEnv(payload);
+        if (!controller.signal.aborted) setEnv(payload);
       })
       .catch(() => {
-        if (!cancelled) setEnv(null);
+        if (!controller.signal.aborted) setEnv(null);
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, []);
 

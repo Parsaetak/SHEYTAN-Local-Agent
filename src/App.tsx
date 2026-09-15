@@ -8,6 +8,7 @@ import {
   visibleWorkspaceLayers,
   type WorkspaceView,
 } from "./workspace";
+import { PanelErrorBoundary } from "./ErrorBoundary";
 import { useRuntimeStore } from "./store";
 
 const AgentBody = lazy(() => import("./AgentBody"));
@@ -94,9 +95,7 @@ function App() {
   // generic shell or localhost strings.
   useEffect(() => {
     document.title =
-      effectiveView === "agent"
-        ? "SHEYTAN"
-        : `SHEYTAN — ${activeLayer.label}`;
+      effectiveView === "agent" ? "SHEYTAN" : `SHEYTAN — ${activeLayer.label}`;
   }, [effectiveView, activeLayer.label]);
 
   const statusLabel =
@@ -129,7 +128,7 @@ function App() {
         </div>
 
         <div className="topbar-meta">
-          <span>{appVersion ?? "v1.2.0"}</span>
+          <span>{appVersion ?? "v1.2.2"}</span>
         </div>
       </header>
 
@@ -186,26 +185,41 @@ function App() {
           </section>
 
           <div className="view-transition">
+            {/* v1.2.2: every lazy workspace panel sits inside its OWN error
+                boundary — one panel's render failure (e.g. a malformed
+                backend payload) shows that panel's recovery card instead of
+                blanking the entire application. resetKey clears a stale
+                failure whenever the user switches views. */}
             {effectiveView === "agent" ? (
-              <Suspense fallback={<PanelLoading label="Agent" />}>
-                <AgentBody />
-              </Suspense>
+              <PanelErrorBoundary label="Agent" resetKey="agent">
+                <Suspense fallback={<PanelLoading label="Agent" />}>
+                  <AgentBody />
+                </Suspense>
+              </PanelErrorBoundary>
             ) : effectiveView === "lab" ? (
-              <Suspense fallback={<PanelLoading label="Coding Lab" />}>
-                <LabPanel />
-              </Suspense>
+              <PanelErrorBoundary label="Coding Lab" resetKey="lab">
+                <Suspense fallback={<PanelLoading label="Coding Lab" />}>
+                  <LabPanel />
+                </Suspense>
+              </PanelErrorBoundary>
             ) : effectiveView === "research" ? (
-              <Suspense fallback={<PanelLoading label="Research" />}>
-                <ResearchPanel />
-              </Suspense>
+              <PanelErrorBoundary label="Research" resetKey="research">
+                <Suspense fallback={<PanelLoading label="Research" />}>
+                  <ResearchPanel />
+                </Suspense>
+              </PanelErrorBoundary>
             ) : effectiveView === "system" ? (
-              <Suspense fallback={<PanelLoading label="System Centre" />}>
-                <SystemPanel />
-              </Suspense>
+              <PanelErrorBoundary label="System Centre" resetKey="system">
+                <Suspense fallback={<PanelLoading label="System Centre" />}>
+                  <SystemPanel />
+                </Suspense>
+              </PanelErrorBoundary>
             ) : (
-              <Suspense fallback={<PanelLoading label="Settings" />}>
-                <SettingsPanel />
-              </Suspense>
+              <PanelErrorBoundary label="Settings" resetKey="settings">
+                <Suspense fallback={<PanelLoading label="Settings" />}>
+                  <SettingsPanel />
+                </Suspense>
+              </PanelErrorBoundary>
             )}
           </div>
         </main>

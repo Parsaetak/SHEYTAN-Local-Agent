@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import App from "./App";
+import { AppErrorBoundary } from "./ErrorBoundary";
 import { initPerfHUD, recordStreamUpdate } from "./perf-hud";
 import { setStreamUpdateRecorder } from "./store";
 import "./styles.css";
@@ -23,8 +24,13 @@ initPerfHUD();
 // counted by the HUD (one count per coalesced flush, never per token).
 setStreamUpdateRecorder(recordStreamUpdate);
 
+// v1.2.2: the top-level error boundary — a render failure ANYWHERE below
+// the root now shows a scoped recovery card instead of unmounting the
+// whole React tree (the historical black-screen failure mode).
 createRoot(rootElement).render(
   <StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </StrictMode>,
 );
