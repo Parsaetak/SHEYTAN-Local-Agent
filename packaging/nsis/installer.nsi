@@ -1,5 +1,5 @@
 ; ============================================================================
-; SHEYTAN-LA — SHEYTAN Local Agent — Windows installer (NSIS, v1.2.0)
+; SHEYTAN-LA — SHEYTAN Local Agent — Windows installer (NSIS, v1.2.1)
 ; ============================================================================
 ; Built by CI (.github/workflows/build-desktop.yml) on the windows runner:
 ;
@@ -23,6 +23,27 @@
 ; executable or directory is missing, so a path-contract break fails the
 ; installer build immediately with a precise message instead of a generic
 ; "no files found".
+;
+; v1.2.1 CONTRACT UPGRADES:
+;   - Desktop shortcut is now a GENUINE INSTALLER OPTION: a checkbox on
+;     the directory page ("Create a &desktop shortcut"), DEFAULT CHECKED.
+;     Unchecked → no desktop shortcut is created; Checked → created.
+;   - Clean upgrades: a running instance is closed before replacing the
+;     executable, with a bounded retry and an explicit Retry/Cancel
+;     message if the binary is still locked. No silent partial upgrade.
+;   - Uninstaller hardening: removes the application, shortcuts (Start
+;     Menu + desktop), installer registration and the AppUserModelID —
+;     and preserve user data by CONSTRUCTION (no recursive deletes):
+;     models/, workspace/, sessions/ and configuration survive uninstall
+;     untouched, including %LOCALAPPDATA%\SHEYTAN-LA and the
+;     SHEYTAN_DATA_DIR override.
+;   - Per-machine shell context for shortcuts (SetShellVarContext all),
+;     so the desktop/Start Menu entries and their removal are symmetric
+;     for every user of the machine.
+;
+; Directory selection is unchanged (MUI_PAGE_DIRECTORY) and the selected
+; directory is genuinely used: every payload file, shortcut and registry
+; entry below resolves through $INSTDIR.
 ;
 ; Contract:
 ;   - installs the APPLICATION ONLY (exe + license + readme); models are
@@ -48,9 +69,14 @@ ManifestDPIAware true
   !define EXE "SHEYTAN-LA.exe"
 !endif
 ; Staging directory holding the packaged application. Script-relative by
-; default; CI passes an ABSOLUTE path (see path contract above).
+; default (packaging\nsis\..\..\dist = the repository dist directory); CI
+; passes an ABSOLUTE path (see path contract above). v1.2.1 fixes the
+; default: it previously pointed one level short of the repository root
+; (packaging\nsis\..\dist), where no staging tree ever existed — the
+; compile-time assertion below now catches that class of mistake instead
+; of failing with a generic "no files found".
 !ifndef BUILDDIR
-  !define BUILDDIR "..\dist\windows\app\SHEYTAN-LA"
+  !define BUILDDIR "..\..\dist\windows\app\SHEYTAN-LA"
 !endif
 ; Installer output path. Script-relative by default; CI passes an ABSOLUTE
 ; path. Derived from the same release identity the workflow and the
@@ -69,6 +95,8 @@ ManifestDPIAware true
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "nsDialogs.nsh"
+!include "WinMessages.nsh"
 
 !define PRODUCT       "SHEYTAN-LA"
 !define DESCRIPTION   "SHEYTAN Local Agent"
@@ -76,6 +104,15 @@ ManifestDPIAware true
 !define AUMID         "Parsaetak.SHEYTAN-LA"
 !define REGKEY        "Software\Parsaetak\SHEYTAN-LA"
 !define UNINSTKEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA"
+
+; --- installer options state ------------------------------------------------
+; CreateDesktopShortcut carries ${BST_CHECKED} / ${BST_UNCHECKED} across
+; page transitions. It is initialised CHECKED in .onInit, bound to the
+; checkbox on the directory page (DirectoryPageShow) and consumed by the
+; install section. A silent install (/S) never shows the page and keeps
+; the default CHECKED behaviour.
+Var DesktopCheckbox
+Var CreateDesktopShortcut
 
 Name "${DESCRIPTION} v${VERSION}"
 OutFile "${OUTFILE}"
@@ -98,6 +135,10 @@ VIAddVersionKey "LegalCopyright" "(c) 2024-2026 Parsaetak. All rights reserved."
 !define MUI_UNICON "..\..\build\sheytan.ico"
 !define MUI_ABORTWARNING
 
+; The directory page stays the graphical folder-selection UI; the custom
+; SHOW callback adds the desktop-shortcut checkbox to that same page, so
+; the installer stays a two-click experience (directory → install).
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW DirectoryPageShow
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -108,10 +149,62 @@ VIAddVersionKey "LegalCopyright" "(c) 2024-2026 Parsaetak. All rights reserved."
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
+Function .onInit
+  ; Default CHECKED: the checkbox state variable, not the UI element, is
+  ; the single source of truth for the section below. With no page shown
+  ; (silent install) or before first render, the default applies.
+  StrCpy $CreateDesktopShortcut ${BST_CHECKED}
+FunctionEnd
+
+; DirectoryPageShow runs with the live dialog every time the page is
+; shown (first visit and Back/Next revisits), so the checkbox reflects
+; the persisted choice instead of resetting.
+Function DirectoryPageShow
+  ${NSD_CreateCheckbox} 0u -34u 100% 8u "Create a &desktop shortcut"
+  Pop $DesktopCheckbox
+  ${NSD_SetState} $DesktopCheckbox $CreateDesktopShortcut
+  ${NSD_OnClick} $DesktopCheckbox DesktopShortcutClick
+FunctionEnd
+
+; DesktopShortcutClick persists the user's choice the moment the box is
+; toggled; the install section only reads the variable.
+Function DesktopShortcutClick
+  Pop $0 ; control HWND pushed by nsDialogs::OnClick
+  ${NSD_GetState} $DesktopCheckbox $CreateDesktopShortcut
+FunctionEnd
+
 Section "Install"
   SetOutPath "$INSTDIR"
 
-  ; Application payload (never models).
+  ; --- clean upgrade: replace a running instance safely -------------------
+  ; The GUI binary is write-locked while the app runs. Ask Windows to
+  ; close it (WM_CLOSE first, then force), then verify the lock is gone
+  ; with a BOUNDED retry (3 × 500 ms) before touching anything. If it is
+  ; still locked the user gets Retry/Cancel — never a silent partial
+  ; upgrade, never an uncontrolled loop.
+  DetailPrint "Closing any running ${DESCRIPTION} instance..."
+  nsExec::Exec 'taskkill /IM "${EXE}"'
+  Sleep 300
+  nsExec::Exec 'taskkill /IM "${EXE}" /F'
+  Sleep 200
+
+  StrCpy $R0 0
+upgrade_retry:
+  ClearErrors
+  Delete "$INSTDIR\${EXE}"
+  IfErrors 0 upgrade_replaced
+  IntOp $R0 $R0 + 1
+  IntCmp $R0 3 0 upgrade_retry_sleep upgrade_retry_sleep
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+    "${DESCRIPTION} is still running and its executable is locked.$\n$\nClose ${DESCRIPTION} and click Retry to continue the upgrade." \
+    IDRETRY upgrade_retry
+  Abort "Upgrade aborted: $INSTDIR\${EXE} is locked by a running instance."
+upgrade_retry_sleep:
+  Sleep 500
+  Goto upgrade_retry
+upgrade_replaced:
+
+  ; --- application payload (never models) ---------------------------------
   File "${BUILDDIR}\${EXE}"
   File /nonfatal "${BUILDDIR}\LICENSE"
   File /nonfatal "${BUILDDIR}\README.md"
@@ -132,13 +225,23 @@ Section "Install"
   WriteRegStr HKCU "Software\Classes\AppUserModelId\${AUMID}" "DisplayName" "${DESCRIPTION}"
   WriteRegStr HKCU "Software\Classes\AppUserModelId\${AUMID}" "IconUri" "$INSTDIR\sheytan.ico"
 
-  ; Start Menu shortcut.
+  ; Per-machine shell context: shortcuts land on the common desktop and
+  ; the all-users Start Menu, so every user of the machine sees them and
+  ; the uninstaller removes exactly what the installer created.
+  SetShellVarContext all
+
+  ; Start Menu shortcuts.
   CreateDirectory "$SMPROGRAMS\${PRODUCT}"
   CreateShortcut "$SMPROGRAMS\${PRODUCT}\${DESCRIPTION}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\sheytan.ico"
   CreateShortcut "$SMPROGRAMS\${PRODUCT}\Uninstall ${DESCRIPTION}.lnk" "$INSTDIR\Uninstall.exe"
 
-  ; Optional desktop shortcut.
+  ; Optional desktop shortcut — GENUINE OPTION (v1.2.1). The checkbox on
+  ; the directory page (default CHECKED) drives this decision:
+  ;   checked   → desktop shortcut created
+  ;   unchecked → no desktop shortcut created
+  IntCmp $CreateDesktopShortcut ${BST_CHECKED} 0 skip_desktop skip_desktop
   CreateShortcut "$DESKTOP\${DESCRIPTION}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\sheytan.ico"
+skip_desktop:
 
   ; Add/Remove Programs entry.
   WriteRegStr HKLM "${UNINSTKEY}" "DisplayName" "${DESCRIPTION} v${VERSION}"
@@ -159,9 +262,19 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
-  ; Remove the application — and NOTHING else. models/, workspace/,
-  ; sessions/ and config live under %LOCALAPPDATA%\SHEYTAN-LA (or a
-  ; portable folder) and are deliberately PRESERVED.
+  ; Per-machine shell context — the exact mirror of the install section,
+  ; so the shortcuts removed here are the ones the installer created.
+  SetShellVarContext all
+
+  ; Remove the application — and NOTHING else.
+  ;
+  ; preserve user data — models/, workspace/, sessions/ and configuration
+  ; live under %LOCALAPPDATA%\SHEYTAN-LA (SHEYTAN_DATA_DIR) and are
+  ; deliberately PRESERVED. Users who keep models inside $INSTDIR are
+  ; equally safe: plain RMDir (never its recursive variant) removes the
+  ; directory only when it is EMPTY, so anything left behind stays on
+  ; disk untouched. Recursion is forbidden here by the CI contract on
+  ; this very file.
   Delete "$INSTDIR\${EXE}"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\README.md"
@@ -173,8 +286,13 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${PRODUCT}\${DESCRIPTION}.lnk"
   Delete "$SMPROGRAMS\${PRODUCT}\Uninstall ${DESCRIPTION}.lnk"
   RMDir "$SMPROGRAMS\${PRODUCT}"
+
+  ; Desktop shortcut is removed only if it exists — Delete on a missing
+  ; file is a no-op, so an install made with the option unchecked is
+  ; handled by the same instruction.
   Delete "$DESKTOP\${DESCRIPTION}.lnk"
 
+  ; Installer registration + application identity.
   DeleteRegKey HKCU "Software\Classes\AppUserModelId\${AUMID}"
   DeleteRegKey HKLM "${UNINSTKEY}"
 

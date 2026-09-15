@@ -707,6 +707,47 @@ and never executes or deletes anything. Code signing is not configured in
 this release; the pipeline reports Authenticode status honestly instead of
 claiming it.
 
+# Part II.10 — v1.2.1 release-contract machinery (IMPLEMENTED)
+
+**Canonical package roots.** The release identity chain already resolved the
+VERSION single-source problem (package.json → release-version.mjs → CI);
+v1.2.1 resolves the same problem for the package ROOT — the directory name
+the portable ZIP and the installer stage under. The workflow now carries two
+canonical variables (`WIN_PKG_ROOT: "SHEYTAN-LA"`,
+`LINUX_PKG_ROOT: "SHEYTAN-Local-Agent"`) and every staging directory, ZIP
+creation path, ZIP entry check, artifact name and release-metadata reference
+is derived from them; no root literal is repeated. The Go mirror
+(`internal/releasecontract`) exposes the concrete identities (roots, exe
+names, artifact names per version), the parameterized workflow-slot
+spellings, and the required ZIP entry sets. Because the workflow cannot
+import Go, `cmd/stress_zeta.go` is the enforcement arm: it requires the
+canonical env lines and the parameterized verification spellings to be
+present in the workflow text and checks every `dist/` artifact the workflow
+produces against the contract slots — naming drift now fails in either
+direction instead of two copies of the truth agreeing with each other (the
+exact mechanism that kept run 34871838054's failure invisible to the gate:
+the contract's own Linux entry list mixed roots, so the workflow verifier
+and the contract were wrong together).
+
+**Installer option and uninstall boundaries.** The NSIS installer keeps the
+graphical directory page; the desktop shortcut became a checkbox on that
+same page (default checked, state persisted across Back/Next, silent
+installs keep the default). Upgrades close a running instance through a
+bounded retry with an explicit user decision on a locked executable — no
+silent partial upgrade. The uninstaller's boundaries are contractual, not
+conventional: it removes the application, shortcuts, ARP registration and
+the AppUserModelID, while user data (models, workspace, sessions,
+configuration, `SHEYTAN_DATA_DIR`) is preserved BY CONSTRUCTION — the
+script may not contain a recursive delete, and CI verifies the source
+contract (directory page, shortcut option, uninstaller registration, no
+`RMDir /r`) before an installer is built from it.
+
+**Bounded packaging.** Every workflow job carries `timeout-minutes`; both
+portable ZIPs verify the in-package `BUILD-INFO.txt` version; the native
+engine build is cached keyed on the exact `native/engine/**` source hash —
+a cache hit reuses the build tree for identical sources, ctest still runs,
+and reproducibility is unaffected.
+
 # Part III — Documentation truth standard
 
 Every significant capability statement in this repository must fit one

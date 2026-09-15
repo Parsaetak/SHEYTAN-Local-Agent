@@ -1,7 +1,7 @@
-SHEYTAN-Local-Agent v1.2.0 — Stability Repair Replacement Manifest
+SHEYTAN-Local-Agent v1.2.1 — CI Contract / Installer Hardening Replacement Manifest
 ===================================================================
-Base: main @ 40fdd3b (v1.2.0, run-34857158565 failure set)
-Package: SHEYTAN-Local-Agent-v1.2.0-UPDATE.zip
+Base: main @ e260d53 (v1.2.0, run-34871838054 failure set)
+Package: SHEYTAN-Local-Agent-v1.2.1-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
@@ -22,83 +22,61 @@ checks and the known limitations live in UPDATE.md.
 
 [MODIFIED FILES]
   .github/workflows/build-desktop.yml
-    NSIS build: ABSOLUTE BUILDDIR/OUTFILE path contract, pre-flight staging
-    assertions, LASTEXITCODE check, installer identity + MZ-header
-    verification.
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  build/config.yml
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  cmd/stress.go
+    status:   modified
+    reason:   see UPDATE.md §1 change map
   cmd/stress_zeta.go
-    zeta_release_surface derives the artifact contract from
-    internal/releasecontract and regex-verifies workflow agreement
-    (naming-drift detection in both directions; legacy naming rejected).
+    status:   modified
+    reason:   see UPDATE.md §1 change map
   internal/agent/reliability.go
-    LoopGuard wall-clock budget: injectable clock, >= semantics, zero or
-    negative disables. No behaviour change for real budgets.
-  internal/agent/reliability_test.go
-    Deterministic wall-clock coverage (expired / at-expiry / just-before /
-    disabled / negative / multi-call). Replaces the flaky real-clock 1ns
-    test with MORE cases, none weaker.
-  internal/api/lifecycle.go
-    Server.Close cancels the scheduled engine-update loop and waits
-    (bounded 3s) for its completion channel.
-  internal/api/server.go
-    Tracks updateDone; wires RunScheduled's completion channel.
-  internal/api/server_native_test.go
-    UpdateSchedule = "off" in test config (no network in unit tests).
-  internal/api/server_test.go
-    UpdateSchedule = "off" in test config.
-  internal/api/server_v114_test.go
-    UpdateSchedule = "off" in test config.
-  internal/lab/lab_test.go
-    TestWorkspacePathForCanonicalSpelling: reproduces the Windows 8.3
-    short-name/long-name mismatch class via symlink; jail still rejects
-    escapes across spellings.
-  internal/lab/workspace.go
-    canonicalPath helper (Abs + Clean + EvalSymlinks on the nearest
-    existing ancestor, tail re-attached); both comparison sides
-    canonicalised in PathFor/validateWorkspace/Remove/Create;
-    OS-aware sameWord equality; rooted \foo refused; manager root
-    canonicalised at construction. Isolation unchanged or stricter.
-  internal/llm/capability_test.go
-    Three engine tests own and stop the fake engine they start
-    (t.Cleanup(s.Stop)) — no orphan test-binary children.
-  internal/llm/llama.go
-    Stop() waits (bounded 5s) on the exit watcher's done channel after
-    Kill — deterministic child reaping; exitDone tracked with s.cmd;
-    safeArchivePath delegates to the single authoritative validator.
-  internal/llm/llama_test.go
-    OS-canonical path construction (filepath.Join) and assertions.
-  internal/logging/recentparsed_test.go
-    Tests close the log Manager (idempotent Close) so no file handle
-    outlives the test on Windows.
-  internal/proc/proc_windows.go
-    taskkill spawned with CREATE_NO_WINDOW — no orphan conhost consoles.
-  internal/updater/updater.go
-    safeZipPath: separator-canonical validation (POSIX-absolute, rooted,
-    drive-letter, UNC, mixed-separator traversal, NUL all rejected);
-    exported SafeArchivePath as the single authoritative validator;
-    RunScheduled returns a done channel closed after cancellation AND
-    in-flight pass completion.
-  internal/updater/zipsafe_test.go
-    Regression members for every rejected shape + allowed relative
-    shapes; llm/updater validator-agreement test.
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  internal/config/config.go
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  internal/releasecontract/releasecontract.go
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  package-lock.json
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  package.json
+    status:   modified
+    reason:   see UPDATE.md §1 change map
   packaging/nsis/installer.nsi
-    Centralised OUTFILE define; compile-time staging-exe assertion
-    (!if ! /FileExists); one documented path contract (script-relative
-    defaults, ABSOLUTE paths from CI).
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  README.md
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  agent.md
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  ARCHITECTURE.md
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  worklog.md
+    status:   modified
+    reason:   see UPDATE.md §1 change map
+  SIGNATURE
+    status:   modified
+    reason:   see UPDATE.md §1 change map
 
 [NEW FILES]
-  internal/releasecontract/releasecontract.go
-    Single authoritative release artifact-name contract (portable ZIPs,
-    NSIS installer, app roots, launcher, required ZIP entries).
-  internal/llm/paths_test.go
-    One OS-aware filesystem-path comparison helper for tests.
+  cmd/stress_release.go
+    status:   new
+    purpose:  14 bounded release-hardening stress scenarios
 
 [DELETED FILES]
-  None. Nothing was removed by this repair.
+  (none)
 
-[UNCHANGED — DO NOT TOUCH]
-  Everything not listed above, in particular: the rAF streaming coalescing
-  path; the compatibility adapter; objective verification; performance
-  telemetry; logs; network diagnostics; model capability detection; the
-  vision package; context handling; the engine state machine; updater
-  safety; the Windows identity (SHEYTAN-LA / SHEYTAN-LA.exe /
-  Parsaetak.SHEYTAN-LA); package.json as the version source of truth.
+[DO NOT TOUCH]
+  This package deliberately leaves internal/llm/**, internal/vision/**,
+  internal/updater/updater.go, internal/api/**, internal/native/engine/**,
+  src/**, internal/lab/**, internal/platform/** and
+  scripts/release-version.mjs untouched — see UPDATE.md §3.

@@ -312,6 +312,14 @@ func (g *LoopGuard) wallClockExhausted() bool {
         return g.elapsedWallClock() >= g.WallClock
 }
 
+// WallClockExhausted reports whether the wall-clock budget is enabled and
+// fully consumed. Exported for the release stress gate (cmd), which pins
+// the budget semantics — an exhausted budget blocks, a zero/negative
+// budget never does — against Windows monotonic-clock granularity.
+func (g *LoopGuard) WallClockExhausted() bool {
+        return g.wallClockExhausted()
+}
+
 // normalizeArgs produces a stable representation of raw JSON tool
 // arguments: parse-insensitive — whitespace and key order collapse so
 // only a SEMANTIC difference produces a new signature when the model

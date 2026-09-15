@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.2.0
+Current release:  v1.2.1
 Codename:         Zeta
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
@@ -70,6 +70,20 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.2.1 — CI Package-Root Contract, Installer Options, Packaging Hardening
+
+**A targeted release-quality repair: the Linux ZIP verification failure (run 34871838054) is fixed at the ROOT — one canonical package-root variable per platform — the Windows installer gains a genuine desktop-shortcut option and a hardened upgrade/uninstall path, and the packaging gates are strictly stronger than before. No feature work, no architecture changes.**
+
+| Area | What changed |
+|---|---|
+| **Canonical package-root contract** | The workflow now defines `WIN_PKG_ROOT` / `LINUX_PKG_ROOT` once and derives every staging directory, ZIP name, ZIP entry check, artifact name and release-metadata reference from them. The root cause of the failing Linux job: the ZIP was created under `SHEYTAN-Local-Agent/` while its verifier expected `SHEYTAN-LA/` entries — and `internal/releasecontract.RequiredLinuxZipEntries()` itself mixed roots, so the stress gate agreed with the workflow instead of with reality. The contract now exposes the workflow-slot spellings and the gate fails on any drift in EITHER direction |
+| **Stress gate strengthened** | `zeta_release_surface` requires the canonical root variables and the parameterized verification spellings (`${env:WIN_PKG_ROOT}/…`, `${LINUX_PKG_ROOT}/…`) to be present in the workflow text; duplicated root literals can no longer pass. 14 new bounded scenarios cover the updater (offline / tampered SHA-256 / size mismatch / staged drift / zip-slip members), vision honesty, memory/session robustness, bounded context machinery and the LoopGuard retry ceiling — suite now prints a machine-readable `STRESS-RESULT` line |
+| **Installer: desktop shortcut option** | `packaging/nsis/installer.nsi`: the previously unconditional desktop shortcut is now a checkbox on the directory page (`Create a &desktop shortcut`), DEFAULT CHECKED; unchecked means no desktop shortcut. State persists across Back/Next; silent installs keep the default |
+| **Installer: clean upgrades** | A running instance is closed before the payload is replaced (graceful `taskkill`, then bounded retry of the locked executable, then an explicit Retry/Cancel message) — no silent partial upgrades, no uncontrolled loops. The developer-path default `BUILDDIR` was one level short of the repository root; the compile-time assertion now catches that class instead of a generic "no files found" |
+| **Installer: uninstaller hardening** | Per-machine shell context (`SetShellVarContext all`) for shortcuts and their removal; uninstall removes the application, Start Menu + desktop shortcuts, ARP registration and the AppUserModelID — and preserve user data BY CONSTRUCTION: plain `RMDir` (the recursive variant is now FORBIDDEN by a CI contract check on the script) can only remove an empty install directory, so models/workspace/sessions/config survive untouched |
+| **Packaging verification hardening** | In-package `BUILD-INFO.txt` must carry the resolved version (Windows + Linux); the NSIS SOURCE is contract-checked in CI (directory page, shortcut option, uninstaller registration, `SHEYTAN_DATA_DIR`, user-data preservation, no recursive deletes) BEFORE any installer is built from a weakened script; job-level `timeout-minutes` bound every job; the native engine build is cached on the full `native/engine/**` source hash (reproducibility: exact source hash key, ctest still runs) |
+| **Version** | `1.2.0` → `1.2.1` through the established identity chain (package.json → release-version.mjs → config.go / build/config.yml / SIGNATURE) — the app updater needs a strictly higher version to offer the improved installer |
 
 ## v1.2.0 — SHEYTAN-LA Unified Product Upgrade
 

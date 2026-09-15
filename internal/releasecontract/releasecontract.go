@@ -7,19 +7,30 @@
 // apart (the workflow vs the stress gate): the stress test kept failing
 // on a name nothing produces any more.
 //
-// The rule now: the workflow's packaging steps, the NSIS installer build
-// and the stress/release-surface verification all derive their names from
-// this one helper. When a future release renames artifacts again, the
-// contract changes HERE — and the stress gate detects any workflow that
-// still emits (or stopped emitting) the contracted names, instead of
-// silently pinning a second copy of the truth.
+// v1.2.1 closed the next drift in the same class: the Linux ZIP was
+// staged and created under the SHEYTAN-Local-Agent root while its
+// verification steps expected entries under SHEYTAN-LA (run
+// 34871838054). The root cause was duplicated package-root literals
+// across the workflow AND inside this contract itself
+// (RequiredLinuxZipEntries mixed WindowsAppRoot entries into the Linux
+// list — which is exactly why the stress gate stayed green while CI
+// failed: two copies of the truth agreeing with each other instead of
+// with reality).
 //
-// The GitHub Actions workflow cannot import Go, so the stress gate acts as
-// the enforcement arm: it extracts the artifact names the workflow ACTUALLY
-// produces (generic `dist/…` regexes) and compares them against this
-// contract with the version substituted. Any future rename in the workflow
-// without a matching contract update fails the stress suite, and vice
-// versa — naming drift is detected in both directions.
+// The rule now:
+//
+//   - The workflow defines ONE canonical package-root variable per
+//     platform (WIN_PKG_ROOT / LINUX_PKG_ROOT) and derives every staging
+//     directory, ZIP creation path, ZIP entry check, artifact name and
+//     release-metadata reference from them. No root literal is repeated.
+//   - This contract mirrors those variables and exposes the workflow-slot
+//     spellings the gate requires to see in the workflow text.
+//   - The stress gate (cmd/stress_zeta.go) enforces agreement in both
+//     directions: the workflow must consume the canonical variables, and
+//     every dist/ artifact it produces must match the contract slots.
+//     When a future release renames artifacts again, the contract changes
+//     HERE and the gate detects any drift instead of silently pinning a
+//     second copy of the truth.
 package releasecontract
 
 import (
@@ -39,22 +50,46 @@ const (
 	LauncherScript = "SHEYTAN-LA.bat"
 )
 
+// Canonical workflow package-root variables (v1.2.1). These are the exact
+// env declarations the workflow must carry: one canonical root per
+// platform, from which every packaging path is derived. The stress gate
+// requires these exact lines so a future edit that reintroduces a
+// duplicated root literal fails the suite instead of the release.
+const (
+	WorkflowWinRootEnvLine   = `WIN_PKG_ROOT: "` + WindowsAppRoot + `"`
+	WorkflowLinuxRootEnvLine = `LINUX_PKG_ROOT: "` + LinuxAppRoot + `"`
+)
+
+// Workflow reference spellings for the canonical roots. The workflow
+// cannot import Go, so the gate checks these textual slots instead; the
+// shell spellings carry the artifact-agreement regexes (the GitHub
+// Actions `${{ … }}` spelling contains spaces and is deliberately not
+// part of the agreement regex set).
+const (
+	WinRootPwsh   = "${env:WIN_PKG_ROOT}"    // PowerShell steps
+	WinRootBash   = "${WIN_PKG_ROOT}"        // bash steps (release job)
+	WinRootGHA    = "${{ env.WIN_PKG_ROOT }}" // with: blocks
+	LinuxRootBash = "${LINUX_PKG_ROOT}"       // bash steps
+	LinuxRootGHA  = "${{ env.LINUX_PKG_ROOT }}" // with: blocks
+)
+
 // Contract is the resolved artifact-name set for one version.
 type Contract struct {
 	Version string
 
 	// Portable ZIPs.
-	WindowsZip string // SHEYTAN-LA-v1.2.0-windows-x64.zip
-	LinuxZip   string // SHEYTAN-Local-Agent-Linux-x64-v1.2.0Z.zip
+	WindowsZip string // SHEYTAN-LA-v1.2.1-windows-x64.zip
+	LinuxZip   string // SHEYTAN-Local-Agent-Linux-x64-v1.2.1Z.zip
 
 	// Windows NSIS installer.
-	WindowsInstaller string // SHEYTAN-LA-v1.2.0-windows-x64-installer.exe
+	WindowsInstaller string // SHEYTAN-LA-v1.2.1-windows-x64-installer.exe
 
 	// Workflow placeholders: the exact spellings used inside
-	// build-desktop.yml, with the version slot left to the workflow env.
-	WindowsZipWorkflowSlot string // SHEYTAN-LA-v${env:APP_VERSION}-windows-x64.zip
-	WindowsInstallerSlot   string // SHEYTAN-LA-v${env:APP_VERSION}-windows-x64-installer.exe
-	LinuxZipWorkflowSlot   string // SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip
+	// build-desktop.yml, with the version slot left to the workflow env
+	// and the package root slot left to the canonical root variables.
+	WindowsZipWorkflowSlot string // ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip
+	WindowsInstallerSlot   string // ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe
+	LinuxZipWorkflowSlot   string // ${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip
 }
 
 // For resolves the artifact-name contract for a semantic version (with or
@@ -65,24 +100,38 @@ func For(version string) Contract {
 	return Contract{
 		Version: v,
 
-		WindowsZip:       fmt.Sprintf("SHEYTAN-LA-v%s-windows-x64.zip", v),
-		LinuxZip:         fmt.Sprintf("SHEYTAN-Local-Agent-Linux-x64-v%sZ.zip", v),
-		WindowsInstaller: fmt.Sprintf("SHEYTAN-LA-v%s-windows-x64-installer.exe", v),
+		WindowsZip:       fmt.Sprintf("%s-v%s-windows-x64.zip", WindowsAppRoot, v),
+		LinuxZip:         fmt.Sprintf("%s-Linux-x64-v%sZ.zip", LinuxAppRoot, v),
+		WindowsInstaller: fmt.Sprintf("%s-v%s-windows-x64-installer.exe", WindowsAppRoot, v),
 
-		WindowsZipWorkflowSlot: "SHEYTAN-LA-v${env:APP_VERSION}-windows-x64.zip",
-		WindowsInstallerSlot:   "SHEYTAN-LA-v${env:APP_VERSION}-windows-x64-installer.exe",
-		LinuxZipWorkflowSlot:   "SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip",
+		WindowsZipWorkflowSlot: WinRootPwsh + "-v${env:APP_VERSION}-windows-x64.zip",
+		WindowsInstallerSlot:   WinRootPwsh + "-v${env:APP_VERSION}-windows-x64-installer.exe",
+		LinuxZipWorkflowSlot:   LinuxRootBash + "-Linux-x64-v${APP_VERSION}Z.zip",
 	}
 }
 
 // WindowsAppDir is the staging directory (relative to the repository root)
-// the workflow assembles the portable Windows application into.
+// the workflow assembles the portable Windows application into. Kept as a
+// concrete constant for tooling and tests; the workflow itself derives the
+// same path from the canonical WIN_PKG_ROOT (see the workflow slot below).
 const WindowsAppDir = "dist/windows/app/" + WindowsAppRoot
 
+// LinuxAppDir is the concrete Linux staging directory for tooling/tests.
+const LinuxAppDir = "dist/linux/app/" + LinuxAppRoot
+
+// Workflow staging-directory slots: the exact spellings the workflow must
+// contain. Requiring the SLOT (not the concrete name) is what makes the
+// canonical variable contract enforceable — a workflow that reintroduces a
+// duplicated root literal in the staging path no longer matches.
+const (
+	WindowsAppDirWorkflowSlot = "dist/windows/app/" + WinRootPwsh
+	LinuxAppDirWorkflowSlot   = "dist/linux/app/" + LinuxRootBash
+)
+
 // RequiredWindowsZipEntries lists the entries the Windows portable ZIP
-// must contain, expressed against the contracted app root. The workflow's
-// "Verify Windows ZIP" step checks the same list — one contract, two
-// enforcement points.
+// must contain, expressed against the contracted app root. This is the
+// CONCRETE truth (what the sealed ZIP must hold after the workflow's
+// variables expand).
 func (c Contract) RequiredWindowsZipEntries() []string {
 	return []string{
 		WindowsAppRoot + "/" + WindowsExeName,
@@ -93,12 +142,48 @@ func (c Contract) RequiredWindowsZipEntries() []string {
 	}
 }
 
-// RequiredLinuxZipEntries lists the entries the Linux portable ZIP
-// verification step must check for.
+// RequiredLinuxZipEntries lists the entries the Linux portable ZIP must
+// contain, expressed against the contracted Linux root.
+//
+// v1.2.1 FIX: this list previously mixed roots (README.txt and
+// BUILD-INFO.txt were pinned under WindowsAppRoot), which made the
+// verifier agree with itself while disagreeing with the ZIP it verified —
+// the exact run-34871838054 failure. Every Linux entry is now rooted at
+// LinuxAppRoot, the single Linux identity.
 func (c Contract) RequiredLinuxZipEntries() []string {
 	return []string{
 		LinuxAppRoot + "/" + LinuxExeName,
-		WindowsAppRoot + "/README.txt",
-		WindowsAppRoot + "/BUILD-INFO.txt",
+		LinuxAppRoot + "/README.txt",
+		LinuxAppRoot + "/BUILD-INFO.txt",
+		LinuxAppRoot + "/models/README.txt",
+		LinuxAppRoot + "/workspace/README.txt",
+	}
+}
+
+// RequiredWindowsZipWorkflowEntries lists the parameterized entry
+// spellings the workflow's Windows verification step must contain: the
+// canonical WIN_PKG_ROOT slot followed by the concrete leaf names. The
+// stress gate requires these so the verifier demonstrably derives its
+// expectations from the canonical variable instead of a duplicated root.
+func (c Contract) RequiredWindowsZipWorkflowEntries() []string {
+	return []string{
+		WinRootPwsh + "/" + WindowsExeName,
+		WinRootPwsh + "/README.txt",
+		WinRootPwsh + "/BUILD-INFO.txt",
+		WinRootPwsh + "/models/README.txt",
+		WinRootPwsh + "/workspace/README.txt",
+	}
+}
+
+// RequiredLinuxZipWorkflowEntries lists the parameterized entry spellings
+// the workflow's Linux verification steps must contain: the canonical
+// LINUX_PKG_ROOT slot followed by the concrete leaf names.
+func (c Contract) RequiredLinuxZipWorkflowEntries() []string {
+	return []string{
+		LinuxRootBash + "/" + LinuxExeName,
+		LinuxRootBash + "/README.txt",
+		LinuxRootBash + "/BUILD-INFO.txt",
+		LinuxRootBash + "/models/README.txt",
+		LinuxRootBash + "/workspace/README.txt",
 	}
 }

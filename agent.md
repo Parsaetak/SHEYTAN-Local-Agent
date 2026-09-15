@@ -6,7 +6,43 @@ Repository: https://github.com/Parsaetak/SHEYTAN-local-agent
 
 Branch: `main`
 
-Current release: `v1.2.0` (SHEYTAN-LA unified product upgrade: vision readiness state machine, hardware intelligence, evidence-based recommendation engine, chat markdown/composer polish, Environment Centre, verified health, SHEYTAN-LA Windows identity + AUMID, NSIS installer, manifest-verified app updater, release checksums; see the v1.2.0 notes below — all prior notes remain authoritative). Prior line: `v1.1.9` (CI output-name fix + mode-aware navigation + explicit model states on top of v1.1.8; see the v1.1.9 notes below. The v1.1.8 Chat/Agent separation + model picker + CI release-identity fix, the v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+Current release: `v1.2.1` (CI package-root contract fix + installer options + packaging hardening; see the v1.2.1 notes below — all prior notes remain authoritative). Prior line: `v1.2.0` (SHEYTAN-LA unified product upgrade: vision readiness state machine, hardware intelligence, evidence-based recommendation engine, chat markdown/composer polish, Environment Centre, verified health, SHEYTAN-LA Windows identity + AUMID, NSIS installer, manifest-verified app updater, release checksums; see the v1.2.0 notes below — all prior notes remain authoritative). Prior line: `v1.1.9` (CI output-name fix + mode-aware navigation + explicit model states on top of v1.1.8; see the v1.1.9 notes below. The v1.1.8 Chat/Agent separation + model picker + CI release-identity fix, the v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+
+**v1.2.1 notes for the next agent:**
+
+- PACKAGE-ROOT CONTRACT — the workflow defines `WIN_PKG_ROOT: "SHEYTAN-LA"`
+  and `LINUX_PKG_ROOT: "SHEYTAN-Local-Agent"` ONCE (workflow env block) and
+  derives every packaging path from them. `internal/releasecontract.go`
+  mirrors them: `WorkflowWinRootEnvLine` / `WorkflowLinuxRootEnvLine`, the
+  `${env:WIN_PKG_ROOT}` / `${LINUX_PKG_ROOT}` slot spellings, staging-dir
+  slots and `Required*ZipWorkflowEntries()`. The stress gate (3e2/3h/3i in
+  `cmd/stress_zeta.go`) fails the build when the workflow loses any of
+  these — do NOT reintroduce a root literal anywhere in the packaging
+  path; that is the exact run-34871838054 failure class (the Linux ZIP was
+  verified against `SHEYTAN-LA/` while created under
+  `SHEYTAN-Local-Agent/`, and the Go contract's own
+  `RequiredLinuxZipEntries` mixed roots so the gate stayed green).
+- NSIS INSTALLER — desktop shortcut is a checkbox on the directory page
+  (`DirectoryPageShow`, default CHECKED via `.onInit` →
+  `CreateDesktopShortcut = BST_CHECKED`); silent installs keep the
+  default. Upgrades close a running instance (graceful taskkill, bounded
+  retry, Retry/Cancel on a locked exe). The uninstaller must keep plain
+  `RMDir` only — a CI contract check FORBIDS `RMDir /r` in the script and
+  requires the `preserve user data` marker; user data
+  (%LOCALAPPDATA%\SHEYTAN-LA + SHEYTAN_DATA_DIR) is never touched. CI
+  greps the SOURCE for these fragments before building — keep them intact.
+- PACKAGING GATES — in-package `BUILD-INFO.txt` must carry the resolved
+  `Version:` (verified inside both ZIPs); job-level `timeout-minutes`
+  bound all four jobs; `native/engine/build` is cached on
+  `hashFiles('native/engine/**')` (exact source hash — reproducible).
+- STRESS — new scenarios live in `cmd/stress_release.go`
+  (`stressReleaseScenarios`): updater integrity, vision honesty,
+  memory/session robustness, bounded context machinery, LoopGuard
+  ceiling. The suite ends with a machine-readable
+  `STRESS-RESULT pass=N fail=M hangs=0 crashes=0` line.
+- VERSION — 1.2.1 via the identity chain (package.json →
+  release-version.mjs). The updater needs a strictly higher version to
+  offer the improved installer.
 
 **v1.2.0 notes for the next agent:**
 

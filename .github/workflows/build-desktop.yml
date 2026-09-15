@@ -27,11 +27,22 @@ permissions:
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
+  # v1.2.1: canonical package-root variables — ONE root per platform, from
+  # which every staging directory, ZIP name, ZIP entry check, artifact name
+  # and release-metadata reference is derived. The root cause of run
+  # 34871838054 was duplicated root literals: the Linux ZIP was created
+  # under SHEYTAN-Local-Agent/ while its verifier expected SHEYTAN-LA/
+  # entries. No root literal is repeated below anymore; the Go contract
+  # (internal/releasecontract) mirrors these values and the stress gate
+  # fails the build if the two copies of the truth ever drift apart again.
+  WIN_PKG_ROOT: "SHEYTAN-LA"
+  LINUX_PKG_ROOT: "SHEYTAN-Local-Agent"
 
 jobs:
   audit:
     name: Source & frontend audit
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
 
     # v1.1.9: the identity step emits APP_VERSION / APP_VERSION_FULL /
     # APP_CODENAME (exactly as release-version.mjs --env names them). Run
@@ -140,6 +151,17 @@ jobs:
       # v1.1.5Z Phase 1: the C++ native engine skeleton builds and its
       # dependency-free test suites pass on the same runner the Go build
       # uses. Ubuntu-24.04 images ship cmake (>= 3.28) and g++.
+      # v1.2.1: the engine build is cached on the full source hash of
+      # native/engine/** — a cache hit reuses the previous build tree
+      # (cmake reconfigures if anything is stale), so repeated CI runs pay
+      # the compile cost once per source revision. Reproducibility is
+      # unaffected: the key is the exact source hash, and ctest still runs.
+      - name: Cache native engine build
+        uses: actions/cache@v5
+        with:
+          path: native/engine/build
+          key: native-engine-${{ runner.os }}-${{ hashFiles('native/engine/**') }}
+
       - name: Native engine (C++) build and tests
         shell: bash
         run: |
@@ -156,6 +178,7 @@ jobs:
   build-windows:
     name: Windows x64
     needs: audit
+    timeout-minutes: 60
 
     # v1.1.8: identity flows from the audit job's runtime resolution of
     # package.json — no local hardcoded version can drift here either.
@@ -332,7 +355,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $appRoot = "dist/windows/app/SHEYTAN-LA"
+          # v1.2.1: staging root derives from the canonical WIN_PKG_ROOT.
+          $appRoot = "dist/windows/app/${env:WIN_PKG_ROOT}"
 
           New-Item `
             -ItemType Directory `
@@ -356,7 +380,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $exe = "dist/windows/app/SHEYTAN-LA/SHEYTAN-LA.exe"
+          # v1.2.1: the probed executable derives from the canonical root.
+          $exe = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
           $probe = "dist/windows/sheytan-version-smoke.exe"
 
           if (-not (Test-Path $exe)) {
@@ -406,7 +431,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $root = "dist/windows/app/SHEYTAN-LA"
+          # v1.2.1: canonical package root — same value controls staging,
+          # ZIP creation, ZIP verification and artifact naming.
+          $root = "dist/windows/app/${env:WIN_PKG_ROOT}"
 
           New-Item `
             -ItemType Directory `
@@ -479,14 +506,14 @@ jobs:
             -Force `
             -Path "dist" | Out-Null
 
-          $zip = "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64.zip"
+          $zip = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
 
           if (Test-Path $zip) {
             Remove-Item $zip -Force
           }
 
           Compress-Archive `
-            -Path "dist/windows/app/SHEYTAN-LA" `
+            -Path "dist/windows/app/${env:WIN_PKG_ROOT}" `
             -DestinationPath $zip `
             -CompressionLevel Optimal
 
@@ -505,8 +532,11 @@ jobs:
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+          # v1.2.1: every expected entry is rooted at the canonical
+          # WIN_PKG_ROOT — the same variable that staged and zipped the
+          # application. No duplicated root literal exists to drift.
           $zipPath = Resolve-Path `
-            "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64.zip"
+            "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
 
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 
@@ -517,11 +547,11 @@ jobs:
             )
 
             $required = @(
-              "SHEYTAN-LA/SHEYTAN-LA.exe",
-              "SHEYTAN-LA/README.txt",
-              "SHEYTAN-LA/BUILD-INFO.txt",
-              "SHEYTAN-LA/models/README.txt",
-              "SHEYTAN-LA/workspace/README.txt"
+              "${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe",
+              "${env:WIN_PKG_ROOT}/README.txt",
+              "${env:WIN_PKG_ROOT}/BUILD-INFO.txt",
+              "${env:WIN_PKG_ROOT}/models/README.txt",
+              "${env:WIN_PKG_ROOT}/workspace/README.txt"
             )
 
             foreach ($item in $required) {
@@ -532,9 +562,21 @@ jobs:
 
             if (
               (Test-Path "SHEYTAN-LA.bat") -and
-              ($entries -notcontains "SHEYTAN-LA/SHEYTAN-LA.bat")
+              ($entries -notcontains "${env:WIN_PKG_ROOT}/SHEYTAN-LA.bat")
             ) {
               throw "Expected launcher script is missing from Windows ZIP."
+            }
+
+            # Release metadata inside the package must carry the identity:
+            # BUILD-INFO.txt is the in-archive version authority.
+            $buildInfo = $archive.Entries |
+              Where-Object { $_.FullName -eq "${env:WIN_PKG_ROOT}/BUILD-INFO.txt" }
+            $reader = New-Object System.IO.StreamReader($buildInfo.Open())
+            $buildText = $reader.ReadToEnd()
+            $reader.Dispose()
+
+            if ($buildText -notmatch [regex]::Escape("Version: $env:APP_VERSION")) {
+              throw "BUILD-INFO.txt inside the ZIP does not carry version $env:APP_VERSION."
             }
 
             Write-Host "Windows ZIP structure verification passed."
@@ -551,7 +593,7 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
           $zipPath = Resolve-Path `
-            "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64.zip"
+            "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
 
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 
@@ -610,8 +652,9 @@ jobs:
 
           # Pre-flight assertions: refuse to invoke NSIS against a broken
           # staging tree — the exact executable, at the exact stage path.
+          # v1.2.1: the staging path derives from the canonical root.
           $repoRoot = (Get-Location).Path
-          $stagingDir = Join-Path $repoRoot "dist\windows\app\SHEYTAN-LA"
+          $stagingDir = Join-Path $repoRoot "dist\windows\app\${env:WIN_PKG_ROOT}"
           $stagingExe = Join-Path $stagingDir "SHEYTAN-LA.exe"
 
           if (-not (Test-Path $stagingDir)) {
@@ -621,7 +664,37 @@ jobs:
             throw "NSIS staging executable missing: $stagingExe"
           }
 
-          $installerPath = Join-Path $repoRoot "dist\SHEYTAN-LA-v${env:APP_VERSION}-windows-x64-installer.exe"
+          # v1.2.1: NSIS installer source-contract — the installer MUST
+          # keep the directory-selection page, the optional desktop
+          # shortcut (default checked), a registered uninstaller, and the
+          # user-data-preserving uninstall section. Checking the SOURCE
+          # here means a silent regression fails CI before any installer
+          # is built from a weakened script.
+          $nsi = Get-Content "packaging/nsis/installer.nsi" -Raw
+          $nsiContract = @(
+            "MUI_PAGE_DIRECTORY",
+            "Create a &desktop shortcut",
+            "BST_CHECKED",
+            "WriteUninstaller",
+            "UninstallString",
+            "SHEYTAN_DATA_DIR",
+            "preserve user data"
+          )
+          foreach ($fragment in $nsiContract) {
+            if ($nsi -notmatch [regex]::Escape($fragment)) {
+              throw "installer.nsi lost required contract fragment: $fragment"
+            }
+          }
+
+          # Negative contract: the uninstaller must NEVER contain the
+          # recursive-delete instruction — user data is preserved by
+          # construction, not by discipline.
+          if ($nsi -match [regex]::Escape("RMDir /r")) {
+            throw "installer.nsi contains 'RMDir /r' — recursive deletes are forbidden in the uninstaller (user data must be preserved)."
+          }
+          Write-Host "NSIS source contract verified (directory page, shortcut option, uninstaller, no recursive deletes)."
+
+          $installerPath = Join-Path $repoRoot "dist\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
 
           & $makensis `
             -DVERSION="$env:APP_VERSION" `
@@ -658,7 +731,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $installer = Get-Item "dist/SHEYTAN-LA-v${env:APP_VERSION}-windows-x64-installer.exe"
+          $installer = Get-Item "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
 
           if ($installer.Length -lt 1MB) {
             throw "Installer is implausibly small ($($installer.Length) bytes) — refusing to publish."
@@ -690,22 +763,23 @@ jobs:
       - name: Upload Windows installer
         uses: actions/upload-artifact@v6
         with:
-          name: SHEYTAN-LA-Windows-x64-installer-v${{ env.APP_VERSION }}
-          path: dist/SHEYTAN-LA-v${{ env.APP_VERSION }}-windows-x64-installer.exe
+          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-installer-v${{ env.APP_VERSION }}
+          path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v6
         with:
-          name: SHEYTAN-LA-Windows-x64-v${{ env.APP_VERSION }}
-          path: dist/SHEYTAN-LA-v${{ env.APP_VERSION }}-windows-x64.zip
+          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-v${{ env.APP_VERSION }}
+          path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
 
   build-linux:
     name: Linux x64
     needs: audit
+    timeout-minutes: 50
 
     # v1.1.8: identity flows from the audit job's runtime resolution of
     # package.json — no local hardcoded version can drift here either.
@@ -826,6 +900,13 @@ jobs:
       # instead of skipping. The audit job builds and ctests the engine,
       # but on its own runner/workspace — without this step the boundary
       # tests never actually executed in any Go job.
+      # v1.2.1: same source-hash cache as the audit job.
+      - name: Cache native engine build
+        uses: actions/cache@v5
+        with:
+          path: native/engine/build
+          key: native-engine-${{ runner.os }}-${{ hashFiles('native/engine/**') }}
+
       - name: Native engine (C++) build for Go integration tests
         shell: bash
         run: |
@@ -878,12 +959,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p dist/linux/app/SHEYTAN-Local-Agent
+          # v1.2.1: staging root derives from the canonical LINUX_PKG_ROOT.
+          mkdir -p "dist/linux/app/${LINUX_PKG_ROOT}"
 
           go build \
             -trimpath \
             -ldflags="-s -w" \
-            -o dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent \
+            -o "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent" \
             .
 
       - name: Verify Linux executable
@@ -891,7 +973,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          exe="dist/linux/app/SHEYTAN-Local-Agent/SHEYTAN-Local-Agent"
+          exe="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
 
           test -f "$exe"
           test -x "$exe"
@@ -935,7 +1017,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          root="dist/linux/app/SHEYTAN-Local-Agent"
+          # v1.2.1: canonical package root — the same single value controls
+          # staging, ZIP creation, ZIP verification and artifact naming.
+          root="dist/linux/app/${LINUX_PKG_ROOT}"
 
           mkdir -p \
             "$root/models" \
@@ -990,7 +1074,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          root="dist/linux/app/SHEYTAN-Local-Agent"
+          root="dist/linux/app/${LINUX_PKG_ROOT}"
 
           test -f "$root/SHEYTAN-Local-Agent"
           test -x "$root/SHEYTAN-Local-Agent"
@@ -1024,24 +1108,31 @@ jobs:
 
           mkdir -p dist
 
-          zip="dist/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip"
 
           rm -f "$zip"
 
           (
             cd dist/linux/app
-            zip -r -9 "../../../$zip" SHEYTAN-Local-Agent
+            zip -r -9 "../../../$zip" "${LINUX_PKG_ROOT}"
           )
 
           test -f "$zip"
           test -s "$zip"
 
+      # v1.2.1 THE FIX (run 34871838054): this verifier used to expect
+      # SHEYTAN-LA/… entries while the ZIP was created under the
+      # SHEYTAN-Local-Agent/ root. Every expected entry now derives from
+      # the ONE canonical LINUX_PKG_ROOT variable that also staged and
+      # zipped the application — the mismatch class is structurally gone,
+      # and the verifier is STRICTER than before (version-checked
+      # BUILD-INFO content on top of the entry list).
       - name: Verify Linux ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          zip="dist/SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
+          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip"
 
           test -f "$zip"
           test -s "$zip"
@@ -1050,57 +1141,65 @@ jobs:
 
           entries="$(unzip -Z1 "$zip")"
 
+          # Every expected entry references the canonical root DIRECTLY
+          # (no intermediate aliases): the stress gate pins these exact
+          # spellings so the verifier provably derives from
+          # LINUX_PKG_ROOT — the same variable that staged and zipped.
           grep -Fxq \
-            "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent" \
+            "${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent" \
             <<< "$entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/README.txt" \
+            "${LINUX_PKG_ROOT}/README.txt" \
             <<< "$entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/BUILD-INFO.txt" \
+            "${LINUX_PKG_ROOT}/BUILD-INFO.txt" \
             <<< "$entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/models/README.txt" \
+            "${LINUX_PKG_ROOT}/models/README.txt" \
             <<< "$entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/workspace/README.txt" \
+            "${LINUX_PKG_ROOT}/workspace/README.txt" \
             <<< "$entries"
 
           if [ -f LICENSE ]; then
             grep -Fxq \
-              "SHEYTAN-LA/LICENSE" \
+              "${LINUX_PKG_ROOT}/LICENSE" \
               <<< "$entries"
           fi
 
           if [ -f README.md ]; then
             grep -Fxq \
-              "SHEYTAN-LA/README.md" \
+              "${LINUX_PKG_ROOT}/README.md" \
               <<< "$entries"
           fi
 
           if [ -f agent.md ]; then
             grep -Fxq \
-              "SHEYTAN-LA/AI-CONTEXT.md" \
+              "${LINUX_PKG_ROOT}/AI-CONTEXT.md" \
               <<< "$entries"
           fi
 
           if [ -f SIGNATURE ]; then
             grep -Fxq \
-              "SHEYTAN-LA/SIGNATURE" \
+              "${LINUX_PKG_ROOT}/SIGNATURE" \
               <<< "$entries"
           fi
+
+          # In-package release metadata must carry the resolved identity.
+          grep -Fq "Version: ${APP_VERSION}" \
+            <(unzip -p "$zip" "${LINUX_PKG_ROOT}/BUILD-INFO.txt")
 
           echo "Linux ZIP integrity and content verification passed."
 
       - name: Upload Linux package
         uses: actions/upload-artifact@v6
         with:
-          name: SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z
-          path: dist/SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z.zip
+          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}Z
+          path: dist/${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}Z.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -1110,6 +1209,7 @@ jobs:
       - build-windows
       - build-linux
       - audit
+    timeout-minutes: 20
 
     # v1.1.8: the release job consumes the audit job's runtime-resolved
     # identity (package.json) — it needs no checkout to verify the tag.
@@ -1143,19 +1243,19 @@ jobs:
       - name: Download Windows package
         uses: actions/download-artifact@v7
         with:
-          name: SHEYTAN-LA-Windows-x64-v${{ env.APP_VERSION }}
+          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-v${{ env.APP_VERSION }}
           path: dist/windows
 
       - name: Download Windows installer
         uses: actions/download-artifact@v7
         with:
-          name: SHEYTAN-LA-Windows-x64-installer-v${{ env.APP_VERSION }}
+          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-installer-v${{ env.APP_VERSION }}
           path: dist/installer
 
       - name: Download Linux package
         uses: actions/download-artifact@v7
         with:
-          name: SHEYTAN-Local-Agent-Linux-x64-v${{ env.APP_VERSION }}Z
+          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}Z
           path: dist/linux
 
       - name: Verify release ZIP payloads
@@ -1163,9 +1263,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          windows_zip_name="SHEYTAN-LA-v${APP_VERSION}-windows-x64.zip"
-          linux_zip_name="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
-          installer_name="SHEYTAN-LA-v${APP_VERSION}-windows-x64-installer.exe"
+          # v1.2.1: artifact names derive from the canonical roots.
+          windows_zip_name="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip"
+          linux_zip_name="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip"
+          installer_name="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe"
 
           windows="$(find dist/windows -type f -name "$windows_zip_name" -print -quit)"
           linux="$(find dist/linux -type f -name "$linux_zip_name" -print -quit)"
@@ -1193,90 +1294,93 @@ jobs:
           windows_entries="$(unzip -Z1 "$windows")"
           linux_entries="$(unzip -Z1 "$linux")"
 
+          win_root="${WIN_PKG_ROOT}"
+          linux_root="${LINUX_PKG_ROOT}"
+
           grep -Fxq \
-            "SHEYTAN-LA/SHEYTAN-LA.exe" \
+            "${win_root}/SHEYTAN-LA.exe" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/README.txt" \
+            "${win_root}/README.txt" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/BUILD-INFO.txt" \
+            "${win_root}/BUILD-INFO.txt" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/models/README.txt" \
+            "${win_root}/models/README.txt" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/workspace/README.txt" \
+            "${win_root}/workspace/README.txt" \
             <<< "$windows_entries"
 
           grep -Fxq \
-            "SHEYTAN-Local-Agent/SHEYTAN-Local-Agent" \
+            "${linux_root}/SHEYTAN-Local-Agent" \
             <<< "$linux_entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/README.txt" \
+            "${linux_root}/README.txt" \
             <<< "$linux_entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/BUILD-INFO.txt" \
+            "${linux_root}/BUILD-INFO.txt" \
             <<< "$linux_entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/models/README.txt" \
+            "${linux_root}/models/README.txt" \
             <<< "$linux_entries"
 
           grep -Fxq \
-            "SHEYTAN-LA/workspace/README.txt" \
+            "${linux_root}/workspace/README.txt" \
             <<< "$linux_entries"
 
           if grep -Fxq \
-            "SHEYTAN-LA/LICENSE" \
+            "${win_root}/LICENSE" \
             <<< "$windows_entries"; then
             echo "Windows LICENSE present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-LA/README.md" \
+            "${win_root}/README.md" \
             <<< "$windows_entries"; then
             echo "Windows README.md present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-LA/AI-CONTEXT.md" \
+            "${win_root}/AI-CONTEXT.md" \
             <<< "$windows_entries"; then
             echo "Windows AI-CONTEXT.md present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-LA/SIGNATURE" \
+            "${win_root}/SIGNATURE" \
             <<< "$windows_entries"; then
             echo "Windows SIGNATURE present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-LA/LICENSE" \
+            "${linux_root}/LICENSE" \
             <<< "$linux_entries"; then
             echo "Linux LICENSE present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-LA/README.md" \
+            "${linux_root}/README.md" \
             <<< "$linux_entries"; then
             echo "Linux README.md present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-LA/AI-CONTEXT.md" \
+            "${linux_root}/AI-CONTEXT.md" \
             <<< "$linux_entries"; then
             echo "Linux AI-CONTEXT.md present."
           fi
 
           if grep -Fxq \
-            "SHEYTAN-LA/SIGNATURE" \
+            "${linux_root}/SIGNATURE" \
             <<< "$linux_entries"; then
             echo "Linux SIGNATURE present."
           fi
@@ -1375,9 +1479,9 @@ jobs:
 
           echo "$payload"
 
-          windows_asset="SHEYTAN-LA-v${APP_VERSION}-windows-x64.zip"
-          linux_asset="SHEYTAN-Local-Agent-Linux-x64-v${APP_VERSION}Z.zip"
-          installer_asset="SHEYTAN-LA-v${APP_VERSION}-windows-x64-installer.exe"
+          windows_asset="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip"
+          linux_asset="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip"
+          installer_asset="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe"
 
           echo "$payload" |
             jq -e \
