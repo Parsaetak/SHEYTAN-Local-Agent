@@ -21,6 +21,7 @@
 package sessions
 
 import (
+        "bufio"
         "crypto/rand"
         "encoding/hex"
         "encoding/json"
@@ -143,6 +144,90 @@ type Store struct {
         loaded  bool
         index   []*Session          // stubs, newest first
         pending map[string]*Session // created in-memory, not yet persisted
+
+        // hot (v1.2.4): bounded LRU of fully-loaded sessions, validated by
+        // (size, mtime) on every hit so external writers are still detected.
+        // This removes the re-read + re-unmarshal of the whole session file
+        // from the per-message append path and from repeated Get calls.
+        hot map[string]*hotEntry
+}
+
+// hotCap bounds the loaded-session cache. Eight full sessions cover the
+// active conversation plus the sessions a recall backfill / continuum pass
+// touches most recently, with a bounded memory footprint (entries hold
+// references to parsed message structs, not file bytes).
+const hotCap = 8
+
+// hotEntry is one cached full session plus the disk identity it was loaded
+// from. Identity is re-validated on every hit; a mismatch (external edit,
+// changed size) silently falls back to a disk reload.
+type hotEntry struct {
+        sess    *Session
+        size    int64
+        mod     time.Time
+        touched time.Time // LRU stamp
+        acts    []ActivityEntry
+        actSize int64
+        actMod  time.Time
+}
+
+// touchHotLocked refreshes the LRU stamp and evicts past the cap.
+// Caller holds mu.
+func (s *Store) touchHotLocked(id string, e *hotEntry) {
+        if s.hot == nil {
+                s.hot = map[string]*hotEntry{}
+        }
+        e.touched = time.Now()
+        s.hot[id] = e
+        for len(s.hot) > hotCap {
+                oldestID := ""
+                var oldest time.Time
+                for id, e := range s.hot {
+                        if oldestID == "" || e.touched.Before(oldest) {
+                                oldestID, oldest = id, e.touched
+                        }
+                }
+                if oldestID == "" {
+                        break
+                }
+                delete(s.hot, oldestID)
+        }
+}
+
+// hotGetLocked returns the cached session when the disk identity still
+// matches. Caller holds mu.
+func (s *Store) hotGetLocked(id string) (*Session, bool) {
+        e, ok := s.hot[id]
+        if !ok {
+                return nil, false
+        }
+        fi, err := os.Stat(s.path(id))
+        if err != nil || fi.Size() != e.size || !fi.ModTime().Equal(e.mod) {
+                delete(s.hot, id) // stale (external write) — reload from disk
+                return nil, false
+        }
+        e.touched = time.Now()
+        return e.sess, true
+}
+
+// copySession returns a read-isolated copy: struct copy plus fresh Messages
+// and Activities slice headers, so callers that mutate the result outside
+// the store lock (the API run path does exactly that) can never tear the
+// cached copy other readers see. Strings are immutable and nested tool-call
+// slices are treated as read-only, matching the previous fresh-unmarshal
+// semantics.
+func copySession(sess *Session) *Session {
+        if sess == nil {
+                return nil
+        }
+        out := *sess
+        if sess.Messages != nil {
+                out.Messages = append([]llm.Message(nil), sess.Messages...)
+        }
+        if sess.Activities != nil {
+                out.Activities = append([]ActivityEntry(nil), sess.Activities...)
+        }
+        return &out
 }
 
 // New returns a session store rooted at dir (created lazily on first
@@ -290,6 +375,11 @@ func (s *Store) readLocked(id string) (*Session, error) {
                 }
                 sess.Activities = nil
         }
+        // v1.2.4: remember the parsed session in the bounded hot cache keyed
+        // by the exact disk identity we just read.
+        if fi, statErr := os.Stat(s.path(id)); statErr == nil {
+                s.touchHotLocked(id, &hotEntry{sess: &sess, size: fi.Size(), mod: fi.ModTime()})
+        }
         return &sess, nil
 }
 
@@ -336,6 +426,12 @@ func (s *Store) upsertIndexLocked(sess *Session) bool {
 // the meta-index. The index rewrite is skipped when the stub did not
 // change — appending the 500th message to an unchanged header costs one
 // session-file write, not two.
+//
+// v1.2.4: the file is streamed into the tmp file through a buffered
+// json.Encoder instead of marshalling the whole session into one heap
+// buffer first (halves the transient allocation on every append), and the
+// hot cache entry is refreshed with the exact (size, mtime) identity of
+// the freshly written file so the next fetch is a cache hit.
 func (s *Store) saveLocked(sess *Session) error {
         if sess.ID == "" {
                 return fmt.Errorf("session has no id")
@@ -350,28 +446,80 @@ func (s *Store) saveLocked(sess *Session) error {
                 sess.UpdatedAt = sess.CreatedAt
         }
         sess.MsgCount = len(sess.Messages)
-        data, err := json.Marshal(sess)
+        path := s.path(sess.ID)
+        tmp := path + ".tmp"
+        size, err := writeSessionFile(tmp, sess)
         if err != nil {
                 return err
         }
-        if err := writeAtomic(s.path(sess.ID), data); err != nil {
+        if err := os.Rename(tmp, path); err != nil {
                 return err
         }
+        if fi, statErr := os.Stat(path); statErr == nil {
+                size = fi.Size()
+        }
         delete(s.pending, sess.ID)
+        if e := s.hot[sess.ID]; e != nil && e.sess == sess {
+                // Same object we already cache — refresh identity in place.
+                e.size, e.mod = size, modTimeOf(path)
+                e.touched = time.Now()
+                e.acts = nil // sidecar may have rotated; cheap to re-derive
+        } else {
+                s.touchHotLocked(sess.ID, &hotEntry{sess: sess, size: size, mod: modTimeOf(path)})
+        }
         if s.upsertIndexLocked(sess) {
                 return s.saveIndexLocked()
         }
         return nil
 }
 
+// writeSessionFile streams sess into path as compact JSON via a buffered
+// encoder and returns the written size. Streaming avoids materializing the
+// full JSON document (≈2× the file size) in memory per save.
+func writeSessionFile(path string, sess *Session) (int64, error) {
+        f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+        if err != nil {
+                return 0, err
+        }
+        bw := bufio.NewWriterSize(f, 256<<10)
+        enc := json.NewEncoder(bw)
+        enc.SetEscapeHTML(false)
+        err = enc.Encode(sess)
+        if flushErr := bw.Flush(); err == nil {
+                err = flushErr
+        }
+        if closeErr := f.Close(); err == nil {
+                err = closeErr
+        }
+        if err != nil {
+                _ = os.Remove(path)
+                return 0, err
+        }
+        fi, err := os.Stat(path)
+        if err != nil {
+                return 0, err
+        }
+        return fi.Size(), nil
+}
+
+func modTimeOf(path string) time.Time {
+        if fi, err := os.Stat(path); err == nil {
+                return fi.ModTime()
+        }
+        return time.Time{}
+}
+
 // fetchLocked returns the live session for id: the in-memory copy first
-// (pending), then the file on disk, then a bare stub if only the index
-// knows the id (resilient against a lost file).
+// (pending), then the hot cache, then the file on disk, then a bare stub
+// if only the index knows the id (resilient against a lost file).
 func (s *Store) fetchLocked(id string) (*Session, error) {
         if id == "" {
                 return nil, fmt.Errorf("empty session id")
         }
         if sess, ok := s.pending[id]; ok {
+                return sess, nil
+        }
+        if sess, ok := s.hotGetLocked(id); ok {
                 return sess, nil
         }
         if sess, err := s.readLocked(id); err == nil {
@@ -399,7 +547,9 @@ func (s *Store) Save(sess *Session) error {
 }
 
 // Get loads the full session with the given id (messages + activity
-// feed).
+// feed). The returned session is a read-isolated copy — callers may mutate
+// it freely without affecting the internal cache; persistence flows
+// through Save/Append*.
 func (s *Store) Get(id string) (*Session, error) {
         s.mu.Lock()
         defer s.mu.Unlock()
@@ -408,13 +558,13 @@ func (s *Store) Get(id string) (*Session, error) {
         if err != nil {
                 return nil, err
         }
-        // Merge the activity sidecar for API completeness (bounded).
-        if sess != nil && sess.Activities == nil {
-                if acts := s.loadActivitiesLocked(id); len(acts) > 0 {
-                        sess.Activities = acts
-                }
+        out := copySession(sess)
+        // Merge the activity sidecar for API completeness (bounded). Served
+        // from the per-entry sidecar cache when the file identity is unchanged.
+        if out.Activities == nil {
+                out.Activities = s.loadActivitiesLocked(id)
         }
-        return sess, nil
+        return out, nil
 }
 
 // List returns meta-index stubs, newest first. Stub Messages is always
@@ -500,6 +650,7 @@ func (s *Store) Delete(id string) error {
                 return err
         }
         _ = os.Remove(s.activityPath(id))
+        delete(s.hot, id)
         if !found {
                 return fmt.Errorf("session %s not found", id)
         }
@@ -549,12 +700,22 @@ func (s *Store) AppendActivity(id string, entry ActivityEntry) error {
         if err != nil {
                 return err
         }
-        if _, err := f.Write(append(line, '\n')); err != nil {
+        _, err = f.Write(append(line, '\n'))
+        if err != nil {
                 f.Close()
                 return err
         }
         if err := f.Close(); err != nil {
                 return err
+        }
+        // Refresh the sidecar cache identity (append-only write).
+        if e := s.hot[id]; e != nil {
+                if e.acts != nil {
+                        e.acts = append(e.acts, entry)
+                }
+                if fi, statErr := os.Stat(path); statErr == nil {
+                        e.actSize, e.actMod = fi.Size(), fi.ModTime()
+                }
         }
         s.rotateActivitiesLocked(id)
         // Keep the index timestamp fresh so the session stays sorted by use.
@@ -607,9 +768,22 @@ func (s *Store) rotateActivitiesLocked(id string) {
 }
 
 // loadActivitiesLocked reads the sidecar (missing file = empty feed).
+// Served from the hot entry's validated sidecar cache when unchanged.
 func (s *Store) loadActivitiesLocked(id string) []ActivityEntry {
+        if e := s.hot[id]; e != nil {
+                if fi, err := os.Stat(s.activityPath(id)); err == nil {
+                        if e.acts != nil && fi.Size() == e.actSize && fi.ModTime().Equal(e.actMod) {
+                                return e.acts
+                        }
+                } else if e.acts != nil && e.actSize == 0 {
+                        return nil // no sidecar, cache agrees
+                }
+        }
         data, err := os.ReadFile(s.activityPath(id))
         if err != nil {
+                if e := s.hot[id]; e != nil {
+                        e.acts, e.actSize, e.actMod = nil, 0, time.Time{}
+                }
                 return nil
         }
         var out []ActivityEntry
@@ -623,10 +797,53 @@ func (s *Store) loadActivitiesLocked(id string) []ActivityEntry {
                         out = append(out, e)
                 }
         }
+        if e := s.hot[id]; e != nil {
+                if fi, statErr := os.Stat(s.activityPath(id)); statErr == nil {
+                        e.acts, e.actSize, e.actMod = out, fi.Size(), fi.ModTime()
+                }
+        }
         return out
 }
 
 func (s *Store) activityPath(id string) string { return filepath.Join(s.dir, id+".activities.jsonl") }
+
+// TrimHot sheds the loaded-session cache (v1.2.4 coordinated cleanup):
+// evicts entries until at most keep remain, keeping the MOST RECENTLY used
+// ones. Returns an ESTIMATE of bytes reclaimed (the on-disk size identities
+// of the dropped sessions). The hot cache is a pure read-through cache —
+// dropping entries never loses data; the next Get reloads from disk.
+// Registered with the runtime memory manager so idle/pressure cleanups can
+// bound resident history while the active session stays warm.
+func (s *Store) TrimHot(keep int) int64 {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        if keep < 0 {
+                keep = 0
+        }
+        if len(s.hot) <= keep {
+                return 0
+        }
+
+        type stamp struct {
+                id string
+                at time.Time
+                //nolint:unused // mirrors hotEntry.size for the reclaim estimate
+                size int64
+        }
+        entries := make([]stamp, 0, len(s.hot))
+        for id, e := range s.hot {
+                entries = append(entries, stamp{id: id, at: e.touched, size: e.size})
+        }
+        sort.Slice(entries, func(i, j int) bool { return entries[i].at.After(entries[j].at) })
+
+        var freed int64
+        for _, e := range entries[keep:] {
+                freed += e.size
+                delete(s.hot, e.id)
+        }
+        return freed
+}
 
 // UpdateTitle sets the session title (and persists it).
 func (s *Store) UpdateTitle(id, title string) error {

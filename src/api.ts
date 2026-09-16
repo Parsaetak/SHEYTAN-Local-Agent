@@ -848,6 +848,61 @@ export interface RecommendedSettings {
   notes?: string[];
 }
 
+// v1.2.4: Workspace work-environment surface.
+export interface WorkspaceFileEntry {
+  name: string;
+  size: number;
+  modTime: string;
+}
+
+export interface WorkspaceProjectFacts {
+  root: string;
+  languages?: string[];
+  buildCmd?: string;
+  testCmd?: string;
+  lintCmd?: string;
+  layout?: string;
+  entryHint?: string;
+  conventions?: string[];
+  lessons?: string[];
+  buildVerifiedAt?: string;
+  testVerifiedAt?: string;
+  lastObservedAt?: string;
+}
+
+export interface WorkspaceSummary {
+  root: string;
+  isDefault: boolean;
+  exists: boolean;
+  recentFiles?: WorkspaceFileEntry[];
+  project?: WorkspaceProjectFacts | null;
+  projectCard?: string;
+  recentWorkspaces?: string[];
+  activeSession?: {
+    id: string;
+    title?: string;
+    model?: string;
+    messages: number;
+    updatedAt?: string;
+  } | null;
+  runtime?: {
+    backend?: string;
+    engineState?: string;
+    model?: string;
+  } | null;
+  agent?: {
+    running: boolean;
+    state?: string;
+  } | null;
+}
+
+export interface WorkspaceSwitchResult {
+  ok: boolean;
+  previous?: string;
+  summary: WorkspaceSummary;
+  changed?: string[];
+}
+
 export interface LogEntry {
   index: number;
   time: string;
@@ -1190,6 +1245,28 @@ export const api = {
   // unavailable values arrive null and render as N/A).
   perf(): Promise<PerfSnapshot> {
     return request<PerfSnapshot>("/perf");
+  },
+
+  // v1.2.4: Workspace — one compact work-environment summary.
+  workspace(): Promise<WorkspaceSummary> {
+    return request<WorkspaceSummary>("/workspace");
+  },
+
+  // v1.2.4: reveal the workspace root in the OS file manager / terminal.
+  workspaceReveal(target: "files" | "terminal" = "files"): Promise<{ ok: boolean; path: string }> {
+    return request("/workspace/reveal", {
+      method: "POST",
+      body: JSON.stringify({ target }),
+    });
+  },
+
+  // v1.2.4: switch the current project folder (refused while a run is
+  // active; the response states exactly what changed).
+  workspaceSwitch(path: string): Promise<WorkspaceSwitchResult> {
+    return request("/workspace/switch", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
   },
 
   // v1.1.7: recent, parsed, REDACTED app-log entries (bounded server-side).

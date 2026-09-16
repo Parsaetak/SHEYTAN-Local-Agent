@@ -1,7 +1,7 @@
-SHEYTAN-Local-Agent v1.2.3 — Engine-Race Fix, Download Manager & Honest Download Progress Replacement Manifest
-====================================================================================================
-Base: main @ f0ef0d2 (v1.2.2)
-Package: SHEYTAN-Local-Agent-v1.2.3-UPDATE.zip
+SHEYTAN-Local-Agent v1.2.4 — Data-Path Speed, Coordinated Memory Policy, Real Workspace & Usability Replacement Manifest
+========================================================================================================================
+Base: main @ 8d8858d (v1.2.3)
+Package: SHEYTAN-Local-Agent-v1.2.4-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
@@ -21,124 +21,132 @@ checks and the known limitations live in UPDATE.md.
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  internal/downloader/downloader.go
-    reason:   D
-    ies, mirror order, source cache
-  internal/downloader/transfer.go
-    reason:   H
-    eaming, verify + atomic activate + rollback
-  internal/downloader/meta.go
-    reason:   T
-  internal/downloader/downloader_test.go
-    reason:   1
-    undary, retry classes
-  src/DownloadProgress.tsx
-    reason:   s
-    ETA/source/verification, actions
+  internal/memmanager/memmanager.go
+    reason:   coordinated runtime memory policy (trims, run tracking, pressure, idle loop, telemetry)
+  internal/memmanager/memmanager_test.go
+    reason:   policy tests incl. repeated-run bounded-memory proof (race-clean)
+  internal/api/workspace.go
+    reason:   Workspace surface: compact summary + reveal + safe switch endpoints
+  internal/api/workspace_test.go
+    reason:   workspace endpoint contract tests
+  internal/tools/capture.go
+    reason:   bounded streaming command-output capture replacing unbounded CombinedOutput + counters
+  internal/aicontext/bench_test.go
+    reason:   per-turn system-message benchmark (baseline pinning)
+  internal/chunking/format_bench_test.go
+    reason:   1 MB attachment compose benchmark (baseline pinning)
+  internal/chunking/window_bytes_test.go
+    reason:   byte-window differential + non-aliasing + large-file tests
+  internal/ctxtelemetry/bench_test.go
+    reason:   steady-state record/read benchmarks (baseline pinning)
+  internal/projectintel/bench_test.go
+    reason:   per-turn project-card benchmark (baseline pinning)
+  internal/sessions/bench_test.go
+    reason:   append/get hot-path benchmarks (baseline pinning)
+  src/WorkspacePanel.tsx
+    reason:   work-environment panel (project → files → task → model → runtime → state + quick actions)
+  src/shortcuts.ts
+    reason:   global keyboard shortcut registry + help data
+  web/static/assets/AgentBody-cMt13HM9.js
+    reason:   rebuilt frontend bundle (hashed)
+  web/static/assets/AgentHeader-dCYmm522.js
+    reason:   rebuilt frontend bundle (hashed)
+  web/static/assets/AgentSidebar-CWp3SdAx.js
+    reason:   rebuilt frontend bundle (hashed)
+  web/static/assets/DownloadProgress-28j0D3i-.js
+    reason:   rebuilt frontend bundle (hashed)
+  web/static/assets/LabPanel-DFJX1ZVA.js
+    reason:   rebuilt frontend bundle (hashed)
+  web/static/assets/ResearchPanel-BXiEx0Sd.js
+    reason:   rebuilt frontend bundle (hashed)
+  web/static/assets/SettingsPanel-BdbLpW4s.js
+    reason:   rebuilt frontend bundle (hashed)
+  web/static/assets/SystemPanel-BEI2b4hF.js
+    reason:   rebuilt frontend bundle (hashed)
+  web/static/assets/WorkspacePanel-BV8_VjyW.js
+    reason:   new lazy workspace panel bundle
+  web/static/assets/index-B_uB5cBU.js
+    reason:   rebuilt entry bundle
+  web/static/assets/index-gFgARQCb.css
+    reason:   rebuilt stylesheet
 
 [MODIFIED FILES]
-  README.md
-    reason:   v1.2.3 section + release header
-  agent.md
-    reason:   v1.2.3 notes for the next agent
-  worklog.md
-    reason:   v1.2.3 entry appended
   package.json
-    reason:   version "1.2.3" (release identity source of truth)
-  package-lock.json
-    reason:   version "1.2.3" (lockfile sync)
+    reason:   version 1.2.4 (identity chain source of truth)
   SIGNATURE
-    reason:   first line v1.2.3 (release-version.mjs repair)
+    reason:   version sync via release-version.mjs
   build/config.yml
-    reason:   productVersion "1.2.3"
+    reason:   version sync via release-version.mjs
   internal/config/config.go
-    reason:   AppVersion = "1.2.3"
-  cmd/stress_release.go
-    reason:   +downloader_integrity_resume, +downloader_untrusted_fallba
-              ck
-  internal/api/engine.go
-    reason:   engineSnapshot.Download + WS engine frames carry live down
-              load progress
-  internal/api/lifecycle.go
-    reason:   Close() cancels in-flight app-update staging
+    reason:   WorkspaceRoot + RecentWorkspaces config, EffectiveWorkspaceRoot resolution
+  internal/ctxtelemetry/ctxtelemetry.go
+    reason:   in-memory record cache + coalesced persistence (removes per-turn full-file rewrite)
+  internal/sessions/sessions.go
+    reason:   bounded hot cache, read-isolated Get, streamed writes, TrimHot, sidecar cache
+  internal/aicontext/aicontext.go
+    reason:   (size,mtime) text cache for the per-turn briefing
+  internal/projectintel/projectintel.go
+    reason:   validated facts parse cache for the per-turn card
+  internal/chunking/chunking.go
+    reason:   WindowHeadTailBytes + byte-windowed attachment compose (no full string copy)
+  internal/tools/tools.go
+    reason:   Shell/CodeExec/Git switched to bounded output capture
+  internal/memory/memory.go
+    reason:   remember-path exact-duplicate suppression + counter
+  internal/llm/client.go
+    reason:   byte-bounded LRU image cache (worst case 48 MB → 24 MiB cap)
+  internal/contextcache/contextcache.go
+    reason:   TrimIdle cold-tail shedding for coordinated cleanup
+  internal/runtime/runtime.go
+    reason:   Stack.Sessions/MemMgr/Intel, trim registration, StartMemoryManager, Close flush
   internal/api/server.go
-    reason:   appUpdateJob/Staging/Cancel fields; cancel-download action
-              ; route
-  internal/api/update.go
-    reason:   ASYNC staging (immediate return), /api/update/cancel, live
-               progress in status
-    status:   replaced (complete file replacement)
-  internal/llm/llama.go
-    reason:   engine bootstrap via Download Manager; EngineEvent.Downloa
-              d; dlJob/dlProgress; cancel
-  internal/updater/updater.go
-    reason:   downloadEngine on the manager (+progress); UpdateEngineWit
-              hProgress
-  internal/updater/appupdate.go
-    reason:   StageAppUpdate(WithProgress)/AppUpdateStagingJob on the ma
-              nager; Status.Download
-  internal/updater/appupdate_test.go
-    reason:   tamper case clears staging first (skip-existing semantics)
-  native/engine/src/engine.cpp
-    reason:   generation_in_flight(): whole-window load/unload guard (CI
-               root cause fix)
-  native/engine/tests/test_generate.cpp
-    reason:   deterministic unload-guard test (first-token condvar signa
-              l + coherence/reload/cancel asserts)
-  native/engine/src/tokenizer.cpp
-    reason:   dead utf8_encode removed (warning cleanup)
-  native/engine/src/tensor.cpp
-    reason:   unused nbytes local removed (warning cleanup)
+    reason:   shared session store, run lifecycle tracking, workspace routes, idle-loop start
+  internal/api/perf.go
+    reason:   memory + data-path telemetry on /api/perf
+  src/workspace.ts
+    reason:   workspace layer registration, Agent relabel, view persistence
   src/api.ts
-    reason:   DownloadProgress type; engine/update download fields; upda
-              teCancel(); cancel-download action
+    reason:   workspace types + endpoints
+  src/App.tsx
+    reason:   workspace route, view restore, global shortcuts, help overlay
   src/store.ts
-    reason:   modelsLoading flag (skeleton instead of fake empty state)
-  src/AgentBody.tsx
-    reason:   compact engine-download panel + cancel in the runtime pane
-              l
-  src/AgentHeader.tsx
-    reason:   live download percentage in the phase pill
+    reason:   engine snapshot change-detection (kills 2.5 s re-render churn)
+  src/LabPanel.tsx
+    reason:   explicit store selectors (was whole-store subscription)
+  src/MessageStream.tsx
+    reason:   memo export + stable message keys
   src/ModelPicker.tsx
-    reason:   loading skeleton branch (aria-busy)
-  src/SettingsVisionUpdates.tsx
-    reason:   async UpdatesCard: poll-while-downloading, progress panel,
-               cancel, retry
-  src/SystemPanel.tsx
-    reason:   compact download slot in RuntimeCard
+    reason:   memo export
+  src/PerfStrip.tsx
+    reason:   memo export
+  src/ActivityStream.tsx
+    reason:   memo export
   src/styles.css
-    reason:   .dl-* downloader styles on canonical tokens (+ skeleton ca
-              rd)
+    reason:   additive v1.2.4 styles (workspace panel, shortcut overlay, skeletons)
   web/static/index.html
-    reason:   regenerated embedded frontend (new asset hashes)
+    reason:   rebuilt frontend bundle references
   web/static/.vite/manifest.json
-    reason:   regenerated embedded frontend (new asset hashes)
+    reason:   rebuilt frontend manifest
+  worklog.md
+    reason:   this release's work-log entry (append-only)
 
 [REPLACED PACKAGE METADATA]
-  UPDATE.md / REPLACEMENT-MANIFEST.txt / REPLACEMENT-SHA256.txt
-    status:   replaced — this package's own metadata (see above)
+  UPDATE.md
+  REPLACEMENT-MANIFEST.txt
+  REPLACEMENT-SHA256.txt
 
 [DELETED FILES — remove after applying, see UPDATE.md §4]
-  web/static/assets/AgentBody-CyMQd0oP.js        (v1.2.2 build output)
-  web/static/assets/AgentBody-EocjZLgJ.js        (v1.2.2 build output)
-  web/static/assets/AgentHeader-C5gpAJAl.js        (v1.2.2 build output)
-  web/static/assets/AgentHeader-Dezw4syJ.js        (v1.2.2 build output)
-  web/static/assets/AgentSidebar-D2AIsqsa.js        (v1.2.2 build output)
-  web/static/assets/AgentSidebar-D_scJRE6.js        (v1.2.2 build output)
-  web/static/assets/LabPanel-DNdaVwnC.js        (v1.2.2 build output)
-  web/static/assets/LabPanel-Ys_1jxhi.js        (v1.2.2 build output)
-  web/static/assets/ResearchPanel-DVSjuNFM.js        (v1.2.2 build output)
-  web/static/assets/ResearchPanel-cRC5-t9l.js        (v1.2.2 build output)
-  web/static/assets/SettingsPanel-C5otSLaN.js        (v1.2.2 build output)
-  web/static/assets/SettingsPanel-DrGWWN7P.js        (v1.2.2 build output)
-  web/static/assets/SystemPanel-BOrHcKSv.js        (v1.2.2 build output)
-  web/static/assets/SystemPanel-CzupHX9T.js        (v1.2.2 build output)
-  web/static/assets/index-Bto0wA8H.css        (v1.2.2 build output)
-  web/static/assets/index-CTp-kOgC.js        (v1.2.2 build output)
-  web/static/assets/index-DHBcE2Kp.js        (v1.2.2 build output)
-  web/static/assets/index-DJQM74Q8.css        (v1.2.2 build output)
+  web/static/assets/AgentBody-BjrGu1AP.js
+  web/static/assets/AgentHeader-Du6Ox9Mq.js
+  web/static/assets/AgentSidebar-DvyhjsPE.js
+  web/static/assets/DownloadProgress-CO-h6FaB.js
+  web/static/assets/LabPanel-BaaTabl2.js
+  web/static/assets/ResearchPanel-MRM_MVdu.js
+  web/static/assets/SettingsPanel-DALRLl1e.js
+  web/static/assets/SystemPanel-CAyGQpds.js
+  web/static/assets/index-CjGSRCFB.js
+  web/static/assets/index-DwewjhlI.css
 
 [Integrity]
-  Every file's SHA-256 is listed in REPLACEMENT-SHA256.txt (sorted by
-  path). Verify from the repository root after applying:
-  shasum -a 256 -c REPLACEMENT-SHA256.txt
+  Every file in this package is covered by REPLACEMENT-SHA256.txt.
+  Verify with:  shasum -a 256 -c REPLACEMENT-SHA256.txt

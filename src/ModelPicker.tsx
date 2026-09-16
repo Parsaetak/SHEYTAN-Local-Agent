@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { api, type Model } from "./api";
 import { useRuntimeStore } from "./store";
@@ -558,4 +558,4 @@ const ModelPicker = function ModelPicker({
   );
 };
 
-export default ModelPicker;
+export default memo(ModelPicker);

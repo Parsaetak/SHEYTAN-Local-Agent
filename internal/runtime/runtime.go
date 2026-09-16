@@ -22,6 +22,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/memmanager"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
         nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
@@ -60,6 +61,12 @@ type Stack struct {
         Sandbox *sandbox.CodeExecSandbox
         Recall  *recall.Engine
 
+        // Sessions (v1.2.4) is the process-wide session store. Previously
+        // each consumer built its own store over the same directory; one
+        // shared instance means one hot cache for the memory manager to
+        // bound and one place for the API layer to read from.
+        Sessions *sessions.Store
+
         // Native (v1.1.5Z Phase 1) is the supervised SHEYTAN native engine.
         // nil unless cfg.EngineBackend == "native" at construction: the
         // native path is an explicit opt-in. Since Phase 5 the native
@@ -94,6 +101,11 @@ type Stack struct {
         // learning only — see internal/skills).
         Skills *skills.Store
 
+        // Intel (v1.2.4) is the per-project measured-facts store. Exposed on
+        // the stack so the Workspace surface can report project health and
+        // so a workspace switch can re-observe the new root.
+        Intel *projectintel.Store
+
         // Telemetry records per-turn context-effectiveness measurements.
         Telemetry *ctxtelemetry.Store
 
@@ -105,6 +117,14 @@ type Stack struct {
         // (the `linux` tool) and the Terminal view — one shared instance so the
         // user sees (and can replay) exactly what the agent did.
         Linux *tools.LinuxSim
+
+        // MemMgr (v1.2.4) coordinates the runtime memory policy: registered
+        // cache trims, run-boundary cleanup, pressure-triggered eviction and
+        // measured reclamation telemetry (see internal/memmanager).
+        MemMgr *memmanager.Manager
+
+        // memStop ends the manager's idle maintenance loop.
+        memStop chan struct{}
 
         // browserMu guards the lazy BrowserTool cache.
         browserMu sync.Mutex
@@ -226,6 +246,20 @@ func NewStack(cfg *config.Config) *Stack {
         stack.clientStream = client.StreamChatDetailed
         orch.SetGenerationStream(stack.streamGeneration)
 
+        // v1.2.4: one shared session store + the runtime memory manager.
+        // The manager owns coordinated cleanup: bounded caches stay bounded
+        // by themselves; the manager sheds their cold tail on run boundaries
+        // and under memory pressure, with before/after + duration telemetry.
+        stack.Sessions = sessions.New(cfg.SessionsDir)
+        memMgr := memmanager.New()
+        stack.MemMgr = memMgr
+        memMgr.RegisterTrim("sessions-hot", func() int64 {
+                return stack.Sessions.TrimHot(1) // keep the most recent session
+        })
+        memMgr.RegisterTrim("image-cache", func() int64 {
+                return client.TrimImageCache()
+        })
+
         // ---------------------------------------------------------------------
         // Phase 7 wiring: model capabilities → planner, dynamic toolsets →
         // orchestrator, skills, context telemetry, programmatic pipelines.
@@ -304,6 +338,11 @@ func NewStack(cfg *config.Config) *Stack {
         telemetryStore := ctxtelemetry.NewStore(cfg.DataDir)
         stack.Telemetry = telemetryStore
         orch.SetTelemetry(telemetryStore)
+        // v1.2.4: run-boundary cleanup persists coalesced telemetry records.
+        memMgr.RegisterTrim("ctxtelemetry", func() int64 {
+                telemetryStore.Flush()
+                return 0
+        })
 
         // Programmatic tool pipelines: the model declares a bounded stage
         // plan once; the runtime executes it deterministically.
@@ -346,6 +385,7 @@ func NewStack(cfg *config.Config) *Stack {
         intel := projectintel.NewStore(
                 cfg.DataDir + "/projectintel",
         )
+        stack.Intel = intel
 
         if _, err := intel.Observe(cfg.WorkspaceDir()); err != nil {
                 logging.Default().Warn(
@@ -379,9 +419,11 @@ func NewStack(cfg *config.Config) *Stack {
                 }
         }
 
-        // Project card injection: measured facts before every run.
+        // Project card injection: measured facts before every run. The root
+        // is read LIVE (v1.2.4): switching the workspace in the UI moves the
+        // card to the new project on the very next run, no restart.
         orch.SetProjectCard(func() string {
-                return intel.Card(cfg.WorkspaceDir())
+                return intel.Card(src.Load().EffectiveWorkspaceRoot())
         })
 
         // Version Zeta: unified external research.
@@ -621,12 +663,8 @@ func NewStack(cfg *config.Config) *Stack {
                 orch.SetRecaller(engine)
 
                 go func() {
-                        store := sessions.New(
-                                cfg.SessionsDir,
-                        )
-
                         if err := engine.Backfill(
-                                store,
+                                stack.Sessions,
                         ); err != nil {
                                 logging.Default().Warn(
                                         "recall",
@@ -704,6 +742,18 @@ func NewStack(cfg *config.Config) *Stack {
         stack.Linux = linuxSim
 
         return stack
+}
+
+// StartMemoryManager launches the idle maintenance loop of the runtime
+// memory policy (v1.2.4): housekeeping runs ONLY while no agent run is
+// active. Cancellation of ctx ends the loop.
+func (s *Stack) StartMemoryManager(ctx context.Context) {
+        if s == nil || s.MemMgr == nil {
+                return
+        }
+        s.memStop = make(chan struct{})
+        go s.MemMgr.IdleLoop(s.memStop, 2*time.Minute)
+        _ = ctx // reserved for future ctx-bound policies
 }
 
 // streamGeneration is the single backend-aware generation seam wired
@@ -1118,6 +1168,16 @@ func remoteBaseURL(cfg *config.Config) string {
 
 // Close tears down every owned subprocess/handle.
 func (s *Stack) Close() {
+        // v1.2.4: stop idle cleanup first, then persist coalesced telemetry
+        // so a clean shutdown never loses the coalescing window.
+        if s.memStop != nil {
+                close(s.memStop)
+                s.memStop = nil
+        }
+        if s.Telemetry != nil {
+                s.Telemetry.Flush()
+        }
+
         if s.BrowserTool() != nil {
                 s.BrowserTool().Close()
         }

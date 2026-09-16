@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import { api, type PerfSnapshot } from "./api";
 import { useRuntimeStore } from "./store";
@@ -220,4 +220,4 @@ const PerfStrip = function PerfStrip() {
   );
 };
 
-export default PerfStrip;
+export default memo(PerfStrip);

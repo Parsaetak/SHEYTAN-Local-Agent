@@ -283,4 +283,4 @@ function ActivityStream() {
   );
 }
 
-export default ActivityStream;
+export default memo(ActivityStream);

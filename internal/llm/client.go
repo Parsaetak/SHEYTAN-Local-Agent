@@ -110,9 +110,11 @@ type Client struct {
         // v1.0.6: encoded-image cache. The agent loop rebuilds the request
         // every iteration; without the cache a 1 MB screenshot would be
         // base64-encoded dozens of times per turn. Keyed by path, invalidated
-        // by mtime, hard-capped at 8 entries (one turn's worth).
-        imgCacheMu sync.Mutex
-        imgCache   map[string]imageCacheEntry
+        // by mtime, bounded by entry count AND total bytes (v1.2.4).
+        imgCacheMu    sync.Mutex
+        imgCache      map[string]imageCacheEntry
+        imgCacheOrder []string
+        imgCacheBytes int64
 }
 
 // SetBusyHook wires the engine busy reporter. Safe under concurrency
@@ -139,6 +141,16 @@ type imageCacheEntry struct {
         modTime time.Time
         url     string
 }
+
+// v1.2.4: the image cache is bounded by TOTAL BYTES, not only entry count.
+// Encoded data-URLs are up to ~6 MB each (vision.EncodedBudget), so eight
+// entries could retain ~48 MB of base64 text. The cache now evicts
+// oldest-first once the byte cap is hit; a wholesale reset stays as the
+// fallback so the worst case remains one oversized entry.
+const (
+        imgCacheMaxEntries = 8
+        imgCacheMaxBytes   = 24 << 20 // 24 MiB of retained base64
+)
 
 // newTunedTransport builds the shared HTTP transport (v1.0.4 Speed Pack):
 // keep-alive connections are pooled per host so the health checks, the
@@ -958,7 +970,8 @@ func truncateStr(s string, n int) string {
 
 // imageDataURL returns the data-URL form of an image file, cached by path
 // and mtime (the agent loop rebuilds the request every iteration — the cache
-// turns dozens of base64 encodings into one). Hard-capped at 8 entries.
+// turns dozens of base64 encodings into one). Bounded by entry count AND by
+// total retained bytes (v1.2.4).
 func (c *Client) imageDataURL(path string) (string, error) {
         fi, err := os.Stat(path)
         if err != nil {
@@ -978,13 +991,49 @@ func (c *Client) imageDataURL(path string) (string, error) {
         c.imgCacheMu.Lock()
         if c.imgCache == nil {
                 c.imgCache = map[string]imageCacheEntry{}
+                c.imgCacheOrder = c.imgCacheOrder[:0]
+                c.imgCacheBytes = 0
         }
-        if len(c.imgCache) >= 8 {
-                c.imgCache = map[string]imageCacheEntry{} // bounded: one turn's worth
+        if _, exists := c.imgCache[path]; !exists {
+                c.imgCacheOrder = append(c.imgCacheOrder, path)
+                c.imgCacheBytes += int64(len(url))
         }
         c.imgCache[path] = imageCacheEntry{modTime: fi.ModTime(), url: url}
+        // LRU-style byte/count eviction: drop OLDEST entries until within bounds.
+        for c.imgCacheBytes > imgCacheMaxBytes || len(c.imgCache) > imgCacheMaxEntries {
+                if len(c.imgCacheOrder) == 0 {
+                        break
+                }
+                oldest := c.imgCacheOrder[0]
+                c.imgCacheOrder = c.imgCacheOrder[1:]
+                if e, ok := c.imgCache[oldest]; ok {
+                        c.imgCacheBytes -= int64(len(e.url))
+                        delete(c.imgCache, oldest)
+                }
+        }
+        if c.imgCacheBytes > imgCacheMaxBytes {
+                // Single oversized entry — reset wholesale (previous behaviour).
+                c.imgCache = map[string]imageCacheEntry{}
+                c.imgCacheOrder = c.imgCacheOrder[:0]
+                c.imgCacheBytes = 0
+        }
         c.imgCacheMu.Unlock()
         return url, nil
+}
+
+// TrimImageCache releases the entire encoded-image cache (v1.2.4
+// coordinated cleanup hook). Returns the bytes retained before the drop.
+// Pure cache — the next imageDataURL call simply re-encodes on demand.
+func (c *Client) TrimImageCache() int64 {
+        c.imgCacheMu.Lock()
+        defer c.imgCacheMu.Unlock()
+        freed := c.imgCacheBytes
+        if c.imgCache != nil {
+                c.imgCache = map[string]imageCacheEntry{}
+        }
+        c.imgCacheOrder = c.imgCacheOrder[:0]
+        c.imgCacheBytes = 0
+        return freed
 }
 
 // wireMessages projects messages into the multimodal wire form (v1.0.6).

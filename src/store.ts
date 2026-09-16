@@ -1077,6 +1077,15 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     try {
       const engine = await api.engine();
 
+      // v1.2.4: skip the state write when the snapshot is unchanged. The
+      // poll fires every 2.5 s; a fresh object identity used to re-render
+      // every component that selects `engine` (AgentBody, AgentHeader,
+      // ModelPicker) even when nothing changed.
+      const prev = useRuntimeStore.getState().engine;
+      if (prev && JSON.stringify(prev) === JSON.stringify(engine)) {
+        return;
+      }
+
       set({ engine });
     } catch {
       // Engine endpoint unreachable — connection state already reflects

@@ -546,16 +546,17 @@ function StartTaskForm({
 }
 
 export default function LabPanel() {
-  const {
-    lab,
-    labLoading,
-    labError,
-    activeLabTaskId,
-    activeLabTask,
-    refreshLab,
-    loadLabTask,
-    runLabAction,
-  } = useRuntimeStore();
+  // v1.2.4: explicit selectors — subscribing to the whole store made the
+  // Lab panel re-render on every streaming flush and every 2.5 s engine
+  // poll even though it reads none of that state.
+  const lab = useRuntimeStore((s) => s.lab);
+  const labLoading = useRuntimeStore((s) => s.labLoading);
+  const labError = useRuntimeStore((s) => s.labError);
+  const activeLabTaskId = useRuntimeStore((s) => s.activeLabTaskId);
+  const activeLabTask = useRuntimeStore((s) => s.activeLabTask);
+  const refreshLab = useRuntimeStore((s) => s.refreshLab);
+  const loadLabTask = useRuntimeStore((s) => s.loadLabTask);
+  const runLabAction = useRuntimeStore((s) => s.runLabAction);
 
   useEffect(() => {
     void refreshLab();

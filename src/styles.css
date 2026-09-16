@@ -4204,3 +4204,297 @@ body::before {
   height: 96px;
   border-radius: var(--radius);
 }
+
+/* ------------------------------------------------------------------ */
+/* v1.2.4 — Workspace work-environment panel, shortcut help overlay,  */
+/* and shared affordances (focus rings, skeletons). Additive only:    */
+/* every selector is new; existing rules are untouched.               */
+/* ------------------------------------------------------------------ */
+
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4, 16px);
+  max-width: 880px;
+}
+
+.wb-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+
+.wb-card-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.wb-summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.wb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-light);
+  font-size: 0.8rem;
+  max-width: 260px;
+}
+
+.wb-chip-label {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.wb-chip-value {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-chip.skeleton {
+  color: transparent;
+  background:
+    linear-gradient(90deg, var(--panel-light) 25%, var(--surface-elevated) 50%, var(--panel-light) 75%);
+  background-size: 200% 100%;
+  animation: wb-shimmer 1.2s linear infinite;
+}
+
+@keyframes wb-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.wb-summary-path {
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.wb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wb-action-note {
+  border: 1px solid rgba(67, 233, 123, 0.25);
+  background: rgba(67, 233, 123, 0.06);
+  color: var(--text-soft);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 0.85rem;
+}
+
+.wb-switch-form {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-switch-form label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.wb-switch-form input {
+  background: var(--panel-light);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.wb-switch-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.wb-recents {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.wb-chip-btn {
+  cursor: pointer;
+  background: var(--panel-light);
+  color: var(--text-soft);
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.wb-chip-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.wb-muted {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.wb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4, 16px);
+}
+
+.wb-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-fact {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.wb-fact dt {
+  flex: 0 0 96px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.wb-fact dd {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.wb-fact dd code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.wb-verified {
+  color: var(--green);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.wb-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-files li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.wb-files li:last-child {
+  border-bottom: none;
+}
+
+.wb-file-name {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wb-file-meta {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* Keyboard-shortcut help overlay ("?"). Plain card, no animation. */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.shortcuts-card {
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px 22px;
+  width: min(420px, calc(100vw - 32px));
+}
+
+.shortcuts-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.shortcuts-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.shortcuts-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+}
+
+.shortcuts-row dt {
+  color: var(--text-soft);
+  font-size: 0.86rem;
+}
+
+.shortcuts-row dd {
+  margin: 0;
+}
+
+.shortcuts-row kbd {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--panel-light);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}

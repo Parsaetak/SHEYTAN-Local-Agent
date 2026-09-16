@@ -1,4 +1,10 @@
-export type WorkspaceView = "agent" | "lab" | "research" | "system" | "settings";
+export type WorkspaceView =
+  | "agent"
+  | "workspace"
+  | "lab"
+  | "research"
+  | "system"
+  | "settings";
 
 export type WorkspaceMode = "chat" | "agent";
 
@@ -17,9 +23,11 @@ export type WorkspaceLayer = {
 };
 
 const AGENT_LAYER: WorkspaceLayer = {
+  // v1.2.4: the agent surface is labelled honestly ("Agent") — the
+  // Workspace word now belongs to the dedicated work-environment layer.
   id: "agent",
-  label: "Workspace",
-  eyebrow: "WORKSPACE",
+  label: "Agent",
+  eyebrow: "AGENT",
   title: "SHEYTAN",
   description: "Interactive local intelligence",
   icon: "◈",
@@ -28,6 +36,18 @@ const AGENT_LAYER: WorkspaceLayer = {
 
 export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
   AGENT_LAYER,
+  {
+    // v1.2.4: the Workspace work-environment layer — current project,
+    // recent files, active session, model/runtime state, project health
+    // and the quick actions, in one view.
+    id: "workspace",
+    label: "Workspace",
+    eyebrow: "WORKSPACE",
+    title: "Work Environment",
+    description: "Project, sessions, runtime state, quick actions",
+    icon: "⌂",
+    modes: ["chat", "agent"],
+  },
   {
     id: "lab",
     label: "Coding Lab",
@@ -90,6 +110,28 @@ export function parseWorkspaceHash(): WorkspaceView {
   const hash = window.location.hash.replace(/^#/, "").trim().toLowerCase();
 
   return isWorkspaceView(hash) ? hash : "agent";
+}
+
+// v1.2.4: persisted view state — the last visited layer is remembered and
+// restored intelligently on restart (an invalid stored value falls back to
+// the hash/default instead of breaking the app).
+const VIEW_STORAGE_KEY = "sheytan.workspace.view";
+
+export function rememberView(view: WorkspaceView): void {
+  try {
+    window.localStorage.setItem(VIEW_STORAGE_KEY, view);
+  } catch {
+    // storage unavailable (private mode) — view memory is best-effort
+  }
+}
+
+export function restoreView(): WorkspaceView | null {
+  try {
+    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY);
+    return stored && isWorkspaceView(stored) ? stored : null;
+  } catch {
+    return null;
+  }
 }
 
 export function workspaceHash(view: WorkspaceView): string {

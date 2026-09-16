@@ -5,9 +5,13 @@ import {
   getWorkspaceHref,
   getWorkspaceLayer,
   parseWorkspaceHash,
+  rememberView,
+  restoreView,
   visibleWorkspaceLayers,
   type WorkspaceView,
 } from "./workspace";
+import { installShortcuts } from "./shortcuts";
+import { SHORTCUTS } from "./shortcuts";
 import { PanelErrorBoundary } from "./ErrorBoundary";
 import { useRuntimeStore } from "./store";
 
@@ -18,6 +22,7 @@ const LabPanel = lazy(() => import("./LabPanel"));
 const ResearchPanel = lazy(() => import("./ResearchPanel"));
 const SettingsPanel = lazy(() => import("./SettingsPanel"));
 const SystemPanel = lazy(() => import("./SystemPanel"));
+const WorkspacePanel = lazy(() => import("./WorkspacePanel"));
 
 function PanelLoading({ label }: { label: string }) {
   return (
@@ -39,6 +44,53 @@ function SidebarLayerLoading() {
   );
 }
 
+// v1.2.4: the "?" shortcut help overlay — a plain card, no heavy
+// animation, closed by Escape or the close button.
+function ShortcutHelpOverlay({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="shortcuts-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard shortcuts"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="shortcuts-card">
+        <div className="shortcuts-card-head">
+          <strong>Keyboard shortcuts</strong>
+          <button type="button" className="btn btn-sm" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <dl className="shortcuts-list">
+          {SHORTCUTS.map((shortcut) => (
+            <div className="shortcuts-row" key={shortcut.id}>
+              <dt>{shortcut.description}</dt>
+              <dd>
+                <kbd>{shortcut.keys}</kbd>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const appVersion = useRuntimeStore((state) => state.app?.appVersion ?? null);
   const connection = useRuntimeStore((state) => state.connection);
@@ -47,6 +99,19 @@ function App() {
   const mode = useRuntimeStore((state) => state.mode);
 
   const [view, setView] = useState<WorkspaceView>(() => parseWorkspaceHash());
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  // v1.2.4: restore the last visited layer on restart when the URL carries
+  // no explicit hash (deep links still win).
+  useEffect(() => {
+    if (!window.location.hash) {
+      const stored = restoreView();
+      if (stored && stored !== "agent") {
+        window.history.replaceState(null, "", getWorkspaceHref(stored));
+        setView(stored);
+      }
+    }
+  }, []);
 
   useEffect(() => {
     function syncViewFromLocation() {
@@ -77,6 +142,7 @@ function App() {
 
     window.history.pushState(null, "", getWorkspaceHref(nextView));
     setView(nextView);
+    rememberView(nextView);
   }
 
   const layer = getWorkspaceLayer(view);
@@ -97,6 +163,32 @@ function App() {
     document.title =
       effectiveView === "agent" ? "SHEYTAN" : `SHEYTAN — ${activeLayer.label}`;
   }, [effectiveView, activeLayer.label]);
+
+  // v1.2.4: global keyboard shortcuts (single listener, registered once).
+  useEffect(() => {
+    return installShortcuts({
+      onView: (next) => {
+        if (next === view) return;
+        // Only offer layers the current mode surfaces.
+        if (!visibleWorkspaceLayers(mode).some((l) => l.id === next)) return;
+        window.history.pushState(null, "", getWorkspaceHref(next));
+        setView(next);
+        rememberView(next);
+      },
+      onNewSession: () => {
+        window.dispatchEvent(new CustomEvent("sheytan:new-session"));
+      },
+      onFocusComposer: () => {
+        const composer = document.querySelector<HTMLTextAreaElement>(
+          ".composer-shell textarea, .composer textarea",
+        );
+        composer?.focus();
+      },
+      onToggleHelp: () => setHelpOpen((open) => !open),
+    });
+    // view/mode are read through refs via closures — re-register when they
+    // change so the guard sees fresh values.
+  }, [view, mode]);
 
   const statusLabel =
     connection === "connected"
@@ -196,6 +288,12 @@ function App() {
                   <AgentBody />
                 </Suspense>
               </PanelErrorBoundary>
+            ) : effectiveView === "workspace" ? (
+              <PanelErrorBoundary label="Workspace" resetKey="workspace">
+                <Suspense fallback={<PanelLoading label="Workspace" />}>
+                  <WorkspacePanel />
+                </Suspense>
+              </PanelErrorBoundary>
             ) : effectiveView === "lab" ? (
               <PanelErrorBoundary label="Coding Lab" resetKey="lab">
                 <Suspense fallback={<PanelLoading label="Coding Lab" />}>
@@ -224,6 +322,8 @@ function App() {
           </div>
         </main>
       </div>
+
+      {helpOpen ? <ShortcutHelpOverlay onClose={() => setHelpOpen(false)} /> : null}
     </div>
   );
 }

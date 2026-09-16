@@ -30,8 +30,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/ctxtelemetry"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 // gpuSampleInterval bounds how often nvidia-smi may run.
@@ -148,8 +151,36 @@ type perfPayload struct {
 	// Context usage of the last measured generation.
 	Context *contextUsage `json:"context,omitempty"`
 
+	// v1.2.4: runtime memory-policy telemetry — allocations/reclaims made
+	// measurable (heap before/after last cleanup, bytes freed, cache trims,
+	// bounded-capture counters, cache hit ratios).
+	Memory *memoryStatsAPI `json:"memory,omitempty"`
+
 	// Recommended settings (apply is always explicit, never automatic).
 	Recommended *recommendedSettings `json:"recommended,omitempty"`
+}
+
+// memoryStatsAPI is the wire form of the coordinated memory telemetry.
+type memoryStatsAPI struct {
+	HeapAllocBytes    uint64 `json:"heapAllocBytes"`
+	HeapInuseBytes    uint64 `json:"heapInuseBytes"`
+	SysBytes          uint64 `json:"sysBytes"`
+	ActiveRuns        int64  `json:"activeRuns"`
+	CleanupsRun       uint64 `json:"cleanupsRun"`
+	PressureCleanups  uint64 `json:"pressureCleanups"`
+	LastCleanupAt     string `json:"lastCleanupAt,omitempty"`
+	LastCleanupReason string `json:"lastCleanupReason,omitempty"`
+	LastCleanupDurMs  int64  `json:"lastCleanupDurMs"`
+	LastFreedBytes    int64  `json:"lastFreedBytes"`
+	FreedBytesTotal   int64  `json:"freedBytesTotal"`
+	HeapBeforeLast    uint64 `json:"heapBeforeLast,omitempty"`
+	HeapAfterLast     uint64 `json:"heapAfterLast,omitempty"`
+
+	// Data-path telemetry (v1.2.4): bytes moved vs bytes avoided.
+	ContextCache *contextcache.Stats `json:"contextCache,omitempty"`
+	ToolCapture  *tools.CaptureStats `json:"toolCapture,omitempty"`
+	CtxTelemetry *ctxtelemetry.Stats `json:"ctxTelemetry,omitempty"`
+	MemoryDedup  uint64              `json:"memoryDuplicatesSkipped,omitempty"`
 }
 
 // EnginePerfAPI mirrors llm.EnginePerfSnapshot for the wire (keeps the llm
@@ -274,7 +305,49 @@ func (s *Server) buildPerfPayload(perf llm.EnginePerfSnapshot) perfPayload {
 	// Recommended settings from detected hardware + model + capability.
 	payload.Recommended = s.buildRecommended(engineSnap.LoadedPath)
 
+	// v1.2.4: coordinated memory telemetry (nil-safe for tests).
+	payload.Memory = s.buildMemoryStats()
+
 	return payload
+}
+
+// buildMemoryStats assembles the runtime memory-policy snapshot plus the
+// data-path counters (bytes avoided by cache hits and deduplication) from
+// the components that own them.
+func (s *Server) buildMemoryStats() *memoryStatsAPI {
+	if s.stack == nil || s.stack.MemMgr == nil {
+		return nil
+	}
+	ms := s.stack.MemMgr.Stats()
+	out := &memoryStatsAPI{
+		HeapAllocBytes:    ms.HeapAllocBytes,
+		HeapInuseBytes:    ms.HeapInuseBytes,
+		SysBytes:          ms.SysBytes,
+		ActiveRuns:        ms.ActiveRuns,
+		CleanupsRun:       ms.CleanupsRun,
+		PressureCleanups:  ms.PressureCleanups,
+		LastCleanupAt:     ms.LastCleanupAt,
+		LastCleanupReason: ms.LastCleanupReason,
+		LastCleanupDurMs:  ms.LastCleanupDurMs,
+		LastFreedBytes:    ms.LastFreedBytes,
+		FreedBytesTotal:   ms.FreedBytesTotal,
+		HeapBeforeLast:    ms.HeapBeforeLast,
+		HeapAfterLast:     ms.HeapAfterLast,
+	}
+	if s.stack.Cache != nil {
+		cs := s.stack.Cache.Stats()
+		out.ContextCache = &cs
+	}
+	tc := tools.GetCaptureStats()
+	out.ToolCapture = &tc
+	if s.stack.Telemetry != nil {
+		ts := s.stack.Telemetry.Stats()
+		out.CtxTelemetry = &ts
+	}
+	if s.stack.Mem != nil {
+		out.MemoryDedup = s.stack.Mem.DuplicatesSkipped()
+	}
+	return out
 }
 
 // buildRecommended derives settings advice from measurable inputs only:

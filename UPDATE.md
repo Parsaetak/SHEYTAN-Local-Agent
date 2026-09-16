@@ -1,307 +1,277 @@
-# UPDATE.md — v1.2.3 SHEYTAN-LA Engine-Race Fix, Download Manager & Honest Download Progress Package
+# UPDATE.md — v1.2.4 SHEYTAN-LA Data-Path Speed, Coordinated Memory Policy, Real Workspace & Usability Package
 
-**Release:** `v1.2.3` (codename Zeta) · **Base:** `main @ f0ef0d2` (`v1.2.2`)
-**Date:** 2026-09-15
-**Package:** `SHEYTAN-Local-Agent-v1.2.3-UPDATE.zip`
+**Release:** `v1.2.4` (codename Zeta) · **Base:** `main @ 8d8858d` (`v1.2.3`)
+**Date:** 2026-09-16
+**Package:** `SHEYTAN-Local-Agent-v1.2.4-UPDATE.zip`
 
-This package repairs the failing Linux CI job at its ROOT (the native
-engine's unload-guard race — a real engine contract gap, not merely a flaky
-test), replaces every ad-hoc remote-asset download with ONE reusable,
-verifiable, resumable, observable Download Manager, makes app-update staging
-asynchronous and cancellable with live progress, and applies a coherent
-downloader/UX pass across the whole application. It is a COMPLETE
-REPLACEMENT of the files it lists; every path is relative to the repository
-root. No second runtime is introduced and no unrelated feature work was
-made.
+This package makes SHEYTAN process data faster, reclaim memory under an
+explicit coordinated policy instead of ad-hoc self-bounding, turn the
+Workspace into a genuine work environment, and apply a whole-app usability
+pass — all without a major rewrite, and every optimization tied to a
+measured baseline taken BEFORE the change. No second runtime is introduced;
+the language split is unchanged (TypeScript for UI state, Go for
+orchestration/filesystem/caches, C++ untouched — its mmap zero-copy hot
+paths were already correct and no measured bottleneck justified moving
+data across the Go/C++ boundary).
 
-The version moves `1.2.2` → `1.2.3` through the established identity chain
+The version moves `1.2.3` → `1.2.4` through the established identity chain
 (package.json → release-version.mjs → internal/config/config.go,
 build/config.yml, SIGNATURE — `--check` is green).
 
-## 0. The CI failure and its root cause (what this package fixes first)
+## 0. The measured baseline (what this package fixes first)
 
-Failed run: **34921857962** (`Build Desktop` #67), job `Linux x64`, step
-"Native engine (C++) build for Go integration tests" (ctest exit 8).
-`native/engine/tests/test_generate.cpp` failed at the unload-guard check.
+Everything below was benchmarked on the identical machine before any edit
+(`-benchmem`, steady-state fixtures; numbers are that sandbox, relative
+gains are what matter):
 
-Root cause chain, code-pinned:
+| Hot path | v1.2.3 baseline | Root cause |
+|---|---|---|
+| `ctxtelemetry.Record` (2000 records) | **7.43 ms/op, 6.49 MB/op, 18685 allocs** | whole JSONL file re-read, re-marshalled and rewritten on EVERY turn |
+| `ctxtelemetry.Recent` | 3.31 ms/op, 4.1 MB/op, 12032 allocs | same, on the UI read path |
+| `sessions.AppendMessage` (400-msg session) | 2.54 ms/op, 1.21 MB/op, 3287 allocs | full session file re-read + unmarshal + marshal + rewrite per message |
+| `sessions.Get` | 426 µs/op, 274 KB/op | same re-read on every load |
+| `aicontext.SystemMessageWithTools` | 31.3 µs/op, 100 KB/op | AI-CONTEXT.md re-read from disk every turn |
+| `projectintel.Card` | 8.9 µs/op | per-project facts re-read + re-parsed every turn |
+| `chunking.FormatFileAttachment` (1 MB file) | 746 µs/op, **2.93 MB/op** | read + full string copy + windowed concat ≈ 3× file size live |
+| `tools.Shell/CodeExec/Git` | **unbounded** | `CombinedOutput()` buffered an agent-triggered command's entire output in RAM — the only unbounded allocation in the app |
+| `llm.Client` image cache | ≤ 8 × 6 MB base64 ≈ **48 MB** worst case | count-only bound, no byte bound |
+| `memory` remember path | unbounded file growth | repeated identical facts appended forever |
 
-1. The test's sequencer polled `shtn_engine_scheduler_info()` until
-   `active_requests > 0`. That observable comes from the scheduler's active
-   slot, set in `worker_loop` BEFORE the executor runs.
-2. The load/unload guard counted a DIFFERENT variable —
-   `active_generations`, incremented inside `detail_runner_execute`, i.e.
-   strictly later.
-3. An unload landing in the window between the two observations found
-   `active_generations == 0`, SUCCEEDED, and tore the model out from under
-   the in-flight generation (the generation then failed with
-   `SHTN_ERR_NO_MODEL`); the test's unconditional
-   `CHECK(unload == SHTN_ERR_MODEL_STATE)` failed. ~25% of loaded CI runs
-   (the test's own comment); reproduced locally at **56/200** iterations
-   before the fix and **0/1200** after it.
+Frontend profiling (existing perf-HUD + store inspection) additionally
+showed: a fresh `engine` object written every 2.5 s re-rendering
+AgentBody/AgentHeader/ModelPicker even when nothing changed, LabPanel
+subscribing to the ENTIRE store, four non-memoized panels under AgentBody,
+and index-shifting message keys causing memoized-bubble remounts.
 
-The fix has two halves — neither weakens CI:
+## 1. Smarter internal data pipeline
 
-* **Engine contract:** one authority, `generation_in_flight()`
-  (native/engine/src/engine.cpp), covers the WHOLE in-flight window —
-  registered work (the generate call is in flight), the scheduler's active
-  slot (popped, executor not yet entered) and the executor count — for BOTH
-  `shtn_engine_load_model` and `shtn_engine_unload_model`. Observable state
-  can never contradict the guard again: if any observer can see an active
-  request, unload/load return `SHTN_ERR_MODEL_STATE`.
-* **Test determinism:** the sequencer now waits on an EXPLICIT signal — the
-  first streamed non-final token, which is emitted only from inside the
-  runner's decode loop, strictly after the guard state is established — via
-  a bounded condvar wait (60 s; a broken engine FAILS the test instead of
-  hanging CI). It then asserts scheduler coherence (`active_requests == 1`),
-  the unload rejection, the reload rejection (same guard), cancels the
-  request, verifies the blocked `generate` returned `SHTN_ERR_CANCELLED`
-  with finish reason `cancelled`, checks scheduler totals and reuses the
-  engine. No sleeps, no poll budgets, no timing luck. Verified: 12/12
-  ctest; 10/10 idle runs; 5/5 niced runs; 3/3 runs under CPU saturation
-  (2 busy-loops on 2 cores).
+All fixes are in the measured hot paths; behavior is preserved
+byte-for-byte on the wire and on disk.
 
-## 1. Download Manager — architecture, verification/security model
+- **ctxtelemetry** (`internal/ctxtelemetry/ctxtelemetry.go`): the record
+  set is cached in memory and read served from it; the file is rewritten
+  only when a coalescing window closes (64 records or 10 s) or when
+  `Flush()` is called at run boundaries/shutdown. On-disk format is
+  unchanged; compaction-to-half semantics unchanged; a hard crash loses at
+  most one coalescing window of OBSERVATIONAL telemetry (never user
+  content). New `Stats()` exposes records/flushes/coalesced/dirty-max/
+  last-flush duration.
+- **sessions** (`internal/sessions/sessions.go`): a bounded hot cache
+  (8 fully-loaded sessions, validated by (size, mtime) on every hit so
+  external edits are still detected) removes the re-read from appends and
+  repeat loads; `Get` returns a read-isolated copy so out-of-lock API
+  mutations can never tear the cached state; the activity sidecar is
+  cached the same way; session files are now STREAMED into the tmp file
+  through a buffered `json.Encoder` (no full-JSON blob in memory per
+  save); LRU eviction via `TrimHot(keep)`.
+- **aicontext** (`internal/aicontext/aicontext.go`): (size, mtime)-
+  validated text cache — one stat per turn, zero re-reads.
+- **projectintel** (`internal/projectintel/projectintel.go`): validated
+  parse cache per project root.
+- **chunking** (`internal/chunking/chunking.go`): `WindowHeadTailBytes`
+  windows the raw bytes directly (75/25 head/tail at line boundaries,
+  explicit elision marker — identical semantics, pinned by a differential
+  test against the string path). The composed attachment block now holds
+  ~budget bytes, not ~3× file size.
+- **tools** (`internal/tools/capture.go`, `tools.go`): bounded streaming
+  capture for Shell/CodeExec/Git — stdout+stderr drain continuously (the
+  child never blocks on a full pipe), the first 1 MiB is retained, and
+  when output is cut an honest marker states the TRUE total plus how to
+  get the rest. Aggregate counters (bytes produced / retained /
+  truncations) make the saving measurable via `/api/perf`.
+- **memory** (`internal/memory/memory.go`): the agent `remember` path
+  suppresses EXACT duplicates (same class, same normalized content,
+  case-insensitive) and tells the model "already known"; `AppendEntry`
+  semantics are unchanged for every other caller; suppressed duplicates
+  are counted. The FIRST copy of a fact stays authoritative.
+- **llm** (`internal/llm/client.go`): image data-URL cache bounded by
+  TOTAL BYTES (24 MiB) with oldest-first eviction — worst case drops from
+  ~48 MB of retained base64 to the cap.
+- **contextcache** (`internal/contextcache/contextcache.go`): new
+  `TrimIdle(keep)` sheds the least-recently-used cold tail under
+  coordinated cleanup; the existing LRU/byte/TTL bounds stay in force at
+  all times (trimming is pressure relief, never correctness).
 
-New package `internal/downloader` (native Go, no external tools, no second
-runtime). Every remote asset the app pulls now flows through it:
+Context pipeline requirements are already structural in this codebase and
+were preserved, not regressed: bounded chunks, priority-aware retention
+(contextplan degradation ladder), evidence-first model, no silent drops —
+the guaranteed-fit refusal gate and the untouchable current user turn are
+exactly where they were.
 
-* **Transport** — shared `http.Transport` with keep-alive pooling and
-  HTTP/2 where negotiated (persistent connections across jobs). Dial 15 s,
-  TLS 10 s, response-header 60 s caps.
-* **HTTPS only by default** — every source URL and EVERY redirect hop is
-  scheme-checked; a https→http redirect is refused. Plain `http://` is
-  accepted only for loopback hosts (`IsLoopbackURL`: 127.0.0.0/8, ::1,
-  localhost) so the Go test doubles work — remote sources are always HTTPS.
-* **Stream to disk, never RAM** — the body is copied to `<dest>.part` in
-  64 KiB chunks; hashing streams the file; nothing is buffered whole.
-* **.part → verify → atomic rename** — the artifact is activated ONLY after
-  verification passes: SHA-256 when pinned (mismatch deletes the .part and
-  refuses), declared size when known, hard `MaxBytes` cap (default 2 GiB)
-  against hostile sources. Activation is a same-directory `os.Rename` plus
-  a directory fsync; a partially downloaded or corrupt asset is NEVER
-  activated.
-* **Resume** — an existing `.part` continues via `Range: bytes=<n>-`;
-  a 206 response continues, a 200 restarts honestly from zero. A `.part`
-  oversized vs the pinned size is discarded. Cancellation (context or
-  `Job.Cancel`) stops network + file activity immediately (the in-flight
-  request context is cancelled so a blocked `Read` unblocks at once) and
-  KEEPS the .part for a resumable retry.
-* **Pause/Resume** — supported during the downloading phase where
-  technically safe (flush + suspend + Range continue on resume).
-* **Ordered sources & trust boundary** — candidates are
-  authoritative release asset → configured/verified mirror → fallback.
-  `TrustFallback` sources are SKIPPED unless the caller explicitly sets
-  `AllowFallback`; the chosen source (URL, label, trust) travels with every
-  progress report and the result — an untrusted mirror is never silently
-  substituted. No user-provided URL is downloaded without such an explicit
-  trust boundary.
-* **Retries** — transient failures (network, 5xx, 429, 408) retry with
-  bounded exponential backoff (500 ms → 8 s) + jitter; permanent 4xx move
-  straight to the next source; a verification failure poisons THAT source's
-  bytes (no retries on it).
-* **Source cache** — `sheytan-source-cache/<key>.json` (TTL 24 h) remembers
-  the last VERIFIED source per key so routine startup tries the known-good
-  endpoint first instead of probing every mirror; failures fall through to
-  the normal ordered list.
-* **Rollback** — with `KeepBackup`, the previous working file is preserved
-  as `<dest>.bak` before the new asset takes its place; if the rename
-  fails, the backup is restored.
-* **Progress** — phase (resolving / connecting / downloading / verifying /
-  installing / ready), bytes done/total, speed (EWMA ~2 s window), ETA,
-  attempt/retry count, source + trust label, verification state, pause
-  state and retry/error reasons; `Job.Progress()` snapshot + throttled
-  `OnProgress` callback (~4 Hz).
+## 2. Coordinated memory policy (new: internal/memmanager)
 
-Callers: engine bootstrap (`llm.ensureBinary` → `downloadEngineArchive`),
-engine self-update (`updater.UpdateEngineWithProgress`), scheduled engine
-updater (`updater.downloadEngine`), app-update staging
-(`updater.AppUpdateStagingJob` / `StageAppUpdateWithProgress`).
+One owner for reclamation instead of scattered self-bounding:
 
-## 2. Runtime/update flow changes
-
-* **Engine bootstrap** — the llama.cpp archive is fetched by the manager
-  (resume-capable, verified, source-cached per GOOS/GOARCH) and extraction
-  happens ONLY from the verified archive; the staged archive is removed
-  after successful extraction. Live progress rides `EngineEvent.Download`
-  → WS `engine` frames + `/api/engine` snapshot (`download` block);
-  `POST /api/llama {"action":"cancel-download"}` stops it immediately
-  (the .part resumes on retry).
-* **Engine self-update / scheduled update** — same manager, same progress
-  surface; the binary swap path (stop → stage → extract → swap → restart)
-  is unchanged.
-* **App updater** — `POST /api/update/download` now RETURNS IMMEDIATELY:
-  it re-fetches the manifest (bounded), builds the pinned staging job
-  (SHA-256 REQUIRED from the manifest, size verified when declared) and
-  runs it on a background goroutine (single slot; second request → 409;
-  15-minute cap). `GET /api/update/status` carries live `download`
-  progress; `POST /api/update/cancel` stops network + file activity at
-  once. `Server.Close()` cancels in-flight staging — the updater can never
-  outlive the server. Staged installers are still NEVER executed by the
-  app.
-* **UI/runtime lifecycle** — the Updates card polls status only while a
-  download runs (interval cleaned up on state change/unmount); the Agent
-  runtime panel and the System Centre render compact download progress;
-  the header phase pill shows a live percentage during engine bootstrap.
+- **Registered trims**: `sessions-hot` (TrimHot(1) — the most recent
+  session stays warm), `image-cache` (client trim), `ctxtelemetry` (flush
+  at boundaries). Components keep their own bounds; the manager only
+  sheds the cold tail.
+- **Run tracking**: `TrackRunStart`/`TrackRunEnd` around every agent run
+  (the run's defer is cancellation-aware, so aborts release exactly like
+  completions). Post-run cleanup releases one-shot state while it is safe.
+- **Pressure**: above a 1 GiB heap watermark a cleanup (GC + trims) is
+  triggered — but ONLY when no run is active. Active generation, current
+  workspace, user-visible data and hot caches are never sacrificed for
+  bytes. Nothing user-owned (sessions, memory entries, attachments) is
+  ever a trim target.
+- **Idle maintenance**: a 2-minute loop performs housekeeping only while
+  the app is idle (started by `EnsureSetup`, stopped by `Stack.Close`).
+- **Telemetry**: heap before/after last cleanup, bytes freed per trim and
+  cumulative, cleanup duration, pressure count, plus the data-path
+  counters (contextcache hit ratio, tool-capture bytes produced/retained/
+  truncations, ctxtelemetry flush stats, memory dedup counter) — surfaced
+  on `/api/perf` under `memory`.
+- **session-aware isolation**: one shared session store now lives on the
+  runtime Stack (the API layer previously constructed its own over the
+  same directory); one hot cache to bound, one owner to trim.
 
 ## 3. Change map (authoritative)
 
-Status vocabulary: `ADD` (new file) · `REPLACE` (file fully replaced by
-this package) · `MODIFY` (edited in place) · `DELETE` (removed by this
-package) · `DO NOT TOUCH`.
-
 ```text
-internal/downloader/downloader.go       ADD       Download Manager core (Options/Sources/Job/Run, retry + mirror orchestration, source cache reorder)
-internal/downloader/transfer.go         ADD       HTTPS/scheme enforcement, persistent transport, Range resume, streaming + speed/ETA, verify + atomic activate + rollback
-internal/downloader/meta.go             ADD       sheytan-source-cache (TTL'd last-good source memory)
-internal/downloader/downloader_test.go  ADD       14 behavioural tests (happy path, skip-existing, checksum/size refusal, failover, resume, cancel, pause, trust boundary, retry classes, cache, backup, oversize)
-src/DownloadProgress.tsx                ADD       shared downloader UI (phase chain, determinate bar, speed/ETA/source/verification, actions)
-
-native/engine/src/engine.cpp            MODIFY    generation_in_flight() — whole-window load/unload guard (CI root cause)
-native/engine/tests/test_generate.cpp   MODIFY    deterministic unload-guard block (first-token condvar signal, coherence + reload asserts, cancelled-rc asserts, reuse check)
-native/engine/src/tokenizer.cpp         MODIFY    dead utf8_encode removed (warning cleanup)
-native/engine/src/tensor.cpp            MODIFY    unused nbytes local removed (warning cleanup)
-
-internal/llm/llama.go                   MODIFY    engine downloads via Download Manager (downloadEngineArchive/publishDownloadProgress/DownloadProgress/CancelDownload/engineArchiveSuffix/extractEngineArchive); EngineEvent.Download; dlJob/dlProgress
-internal/updater/updater.go             MODIFY    downloadEngine on the manager (+onProgress); UpdateEngineWithProgress
-internal/updater/appupdate.go           MODIFY    StageAppUpdate(WithProgress)/AppUpdateStagingJob on the manager; AppUpdateStatus.Download
-internal/updater/appupdate_test.go      MODIFY    tamper case clears the staging dir first (skip-existing semantics documented)
-internal/api/update.go                  REPLACE   async staging + /api/update/cancel + live progress in status
-internal/api/engine.go                  MODIFY    engineSnapshot.Download + WS engine frames carry progress
-internal/api/server.go                  MODIFY    appUpdateJob/appUpdateStaging/appUpdateCancel fields; "cancel-download" action; route
-internal/api/lifecycle.go               MODIFY    Close() cancels in-flight staging
-internal/config/config.go               MODIFY    AppVersion "1.2.3"
-build/config.yml                        MODIFY    productVersion "1.2.3"
-SIGNATURE                               MODIFY    first line v1.2.3 (release-version.mjs repair)
-package.json / package-lock.json        MODIFY    version "1.2.3"
-
-cmd/stress_release.go                   MODIFY    +downloader_integrity_resume, +downloader_untrusted_fallback
-
-src/api.ts                              MODIFY    DownloadProgress type; engine/update download fields; updateCancel(); "cancel-download" action
-src/store.ts                            MODIFY    modelsLoading flag (skeleton, not fake empty)
-src/AgentBody.tsx                       MODIFY    compact engine-download panel + cancel in the runtime panel
-src/AgentHeader.tsx                     MODIFY    live download percentage in the phase pill
-src/ModelPicker.tsx                     MODIFY    loading skeleton branch (aria-busy)
-src/SettingsVisionUpdates.tsx           MODIFY    async UpdatesCard: poll-while-downloading, progress panel, cancel, retry
-src/SystemPanel.tsx                     MODIFY    compact download slot in RuntimeCard
-src/styles.css                          MODIFY    .dl-* downloader styles on canonical tokens (+ skeleton card)
-README.md                               MODIFY    v1.2.3 section + release header
-agent.md                                MODIFY    v1.2.3 notes for the next agent
-worklog.md                              MODIFY    v1.2.3 entry appended
-
-web/static/**                           MODIFY    regenerated embedded frontend (vite build + sync:web; new content hashes)
-UPDATE.md                               REPLACE   this document
-REPLACEMENT-MANIFEST.txt                REPLACE   this package's manifest
-REPLACEMENT-SHA256.txt                  REPLACE   SHA-256 of every file in this package
+package.json                                         MODIFY  version 1.2.4 (identity chain source of truth)
+SIGNATURE                                            MODIFY  version sync via release-version.mjs
+build/config.yml                                     MODIFY  version sync via release-version.mjs
+internal/config/config.go                            MODIFY  WorkspaceRoot + RecentWorkspaces + EffectiveWorkspaceRoot + PushRecentWorkspace
+internal/ctxtelemetry/ctxtelemetry.go                MODIFY  in-memory cache + coalesced persistence + Stats/Flush
+internal/sessions/sessions.go                        MODIFY  hot cache, read-isolated Get, streamed writes, TrimHot, sidecar cache
+internal/aicontext/aicontext.go                      MODIFY  (size,mtime) text cache + ResetFileCache
+internal/projectintel/projectintel.go                MODIFY  validated parse cache for facts
+internal/chunking/chunking.go                        MODIFY  WindowHeadTailBytes + byte-windowed FormatFileAttachment
+internal/tools/tools.go                              MODIFY  Shell/CodeExec/Git switched to boundedCombinedOutput
+internal/tools/capture.go                            ADD     bounded streaming output capture + telemetry
+internal/memory/memory.go                            MODIFY  AppendEntryUnique + remember-path dedup + DuplicatesSkipped
+internal/llm/client.go                               MODIFY  byte-bounded LRU image cache + TrimImageCache
+internal/contextcache/contextcache.go                MODIFY  TrimIdle cold-tail shedding
+internal/memmanager/memmanager.go                    ADD     coordinated memory policy (trims, runs, pressure, idle, telemetry)
+internal/memmanager/memmanager_test.go               ADD     policy + repeated-run bounded-memory tests (race-clean)
+internal/runtime/runtime.go                          MODIFY  Stack.Sessions/MemMgr/Intel, trim registration, shared store, StartMemoryManager, Close flush
+internal/api/server.go                               MODIFY  shared session store, run tracking in handleRun, workspace routes, idle-loop start
+internal/api/perf.go                                 MODIFY  memory telemetry block on /api/perf
+internal/api/workspace.go                            ADD     GET summary / reveal / switch endpoints
+internal/api/workspace_test.go                       ADD     workspace endpoint contract tests
+internal/aicontext/bench_test.go                     ADD     per-turn system-message benchmark
+internal/chunking/format_bench_test.go               ADD     1 MB attachment compose benchmark
+internal/chunking/window_bytes_test.go               ADD     byte-path differential + non-aliasing + large-file tests
+internal/ctxtelemetry/bench_test.go                  ADD     steady-state record/read benchmarks
+internal/projectintel/bench_test.go                  ADD     per-turn card benchmark
+internal/sessions/bench_test.go                      ADD     append/get hot-path benchmarks
+src/workspace.ts                                     MODIFY  workspace layer, Agent relabel, view persistence
+src/api.ts                                           MODIFY  workspace types + endpoints
+src/WorkspacePanel.tsx                               ADD     work-environment panel
+src/shortcuts.ts                                     ADD     global shortcut registry + help data
+src/App.tsx                                          MODIFY  workspace route, view restore, shortcuts, help overlay
+src/store.ts                                         MODIFY  engine snapshot change-detection (re-render churn)
+src/LabPanel.tsx                                     MODIFY  explicit store selectors
+src/MessageStream.tsx                                MODIFY  memo export + stable message keys
+src/ModelPicker.tsx                                  MODIFY  memo export
+src/PerfStrip.tsx                                    MODIFY  memo export
+src/ActivityStream.tsx                               MODIFY  memo export
+src/styles.css                                       MODIFY  additive v1.2.4 section (workspace panel, overlay, skeletons)
+web/static/index.html                                MODIFY  rebuilt frontend bundle references
+web/static/.vite/manifest.json                       MODIFY  rebuilt frontend manifest
+web/static/assets/AgentBody-cMt13HM9.js              NEW     rebuilt bundle (hashed)
+web/static/assets/AgentHeader-dCYmm522.js            NEW     rebuilt bundle (hashed)
+web/static/assets/AgentSidebar-CWp3SdAx.js           NEW     rebuilt bundle (hashed)
+web/static/assets/DownloadProgress-28j0D3i-.js       NEW     rebuilt bundle (hashed)
+web/static/assets/LabPanel-DFJX1ZVA.js               NEW     rebuilt bundle (hashed)
+web/static/assets/ResearchPanel-BXiEx0Sd.js          NEW     rebuilt bundle (hashed)
+web/static/assets/SettingsPanel-BdbLpW4s.js          NEW     rebuilt bundle (hashed)
+web/static/assets/SystemPanel-BEI2b4hF.js            NEW     rebuilt bundle (hashed)
+web/static/assets/WorkspacePanel-BV8_VjyW.js         NEW     new lazy panel bundle
+web/static/assets/index-B_uB5cBU.js                  NEW     rebuilt entry bundle
+web/static/assets/index-gFgARQCb.css                 NEW     rebuilt stylesheet
+worklog.md                                           MODIFY  this release's work-log entry
+UPDATE.md                                            REPLACE this file
+REPLACEMENT-MANIFEST.txt                             REPLACE this package's manifest
+REPLACEMENT-SHA256.txt                               REPLACE this package's hashes
 ```
 
-## 4. DELETE list
+## 4. DELETE list (apply after copying)
 
-The regenerated embedded frontend replaces its own hashed artifacts
-(apply over the base, then delete these v1.2.2 build outputs if the
-archiver did not already exclude them):
+Stale v1.2.3 hashed assets, replaced by the rebuilt bundles above:
 
 ```text
-web/static/assets/AgentBody-CyMQd0oP.js
-web/static/assets/AgentBody-EocjZLgJ.js
-web/static/assets/AgentHeader-C5gpAJAl.js
-web/static/assets/AgentHeader-Dezw4syJ.js
-web/static/assets/AgentSidebar-D2AIsqsa.js
-web/static/assets/AgentSidebar-D_scJRE6.js
-web/static/assets/LabPanel-DNdaVwnC.js
-web/static/assets/LabPanel-Ys_1jxhi.js
-web/static/assets/ResearchPanel-DVSjuNFM.js
-web/static/assets/ResearchPanel-cRC5-t9l.js
-web/static/assets/SettingsPanel-C5otSLaN.js
-web/static/assets/SettingsPanel-DrGWWN7P.js
-web/static/assets/SystemPanel-BOrHcKSv.js
-web/static/assets/SystemPanel-CzupHX9T.js
-web/static/assets/index-Bto0wA8H.css
-web/static/assets/index-CTp-kOgC.js
-web/static/assets/index-DHBcE2Kp.js
-web/static/assets/index-DJQM74Q8.css
+web/static/assets/AgentBody-BjrGu1AP.js
+web/static/assets/AgentHeader-Du6Ox9Mq.js
+web/static/assets/AgentSidebar-DvyhjsPE.js
+web/static/assets/DownloadProgress-CO-h6FaB.js
+web/static/assets/LabPanel-BaaTabl2.js
+web/static/assets/ResearchPanel-MRM_MVdu.js
+web/static/assets/SettingsPanel-DALRLl1e.js
+web/static/assets/SystemPanel-CAyGQpds.js
+web/static/assets/index-CjGSRCFB.js
+web/static/assets/index-DwewjhlI.css
 ```
 
-No source file is deleted. Nothing under `web/static/assets` outside the
-hash lists above is referenced by `web/static/index.html` after apply.
+## 5. DO NOT TOUCH list
 
-## 5. DO NOT TOUCH list (this package deliberately leaves alone)
-
-```text
-native/engine/** (except the four files above)   engine core, tokenizer,
-                                                 KV cache, sampler,
-                                                 scheduler, host — the fix
-                                                 is scoped to the guard +
-                                                 one test + warning sites
-internal/agent/**                                orchestrator loop, tool
-                                                 pipeline, verification —
-                                                 untouched
-internal/native/**                               Go-side native host
-                                                 supervision — untouched
-internal/sessions/**                             session persistence —
-                                                 untouched
-internal/memory/**, internal/recall/**           memory/recall — untouched
-internal/hardware/**, internal/sysinfo/**        telemetry — untouched
-packaging/nsis/**                                installer — untouched
-.github/workflows/**                             CI — untouched (the fix is
-                                                 in the code CI runs)
-cmd/stress.go, cmd/stress_zeta.go                stress core — untouched
-scripts/**                                       tooling — untouched
-web/static/index.html structure                  only asset hashes change
-user data: models/, sessions/, config.json,      NEVER touched by update
-installed.json, updates/ staged artifacts        machinery
-.git/, native/engine/build/, node_modules/,      excluded from the package
-dist/, caches, temp files
-```
+User data and runtime state are never touched by the update machinery or
+by the new memory policy: `models/`, `workspace/`, `sessions/`,
+`attachments/`, `memory.jsonl`, `config.json` (except the additive
+`workspaceRoot`/`recentWorkspaces` keys written by an explicit switch),
+`ctxtelemetry.jsonl`, `scheduler/`, `lab/`. The memmanager's trims
+deliberately exclude all of these; telemetry JSONL is only flushed, never
+truncated by policy.
 
 ## 6. Safe-apply procedure
 
-1. Apply over a clean checkout of the base commit (`f0ef0d2`, v1.2.2).
+1. Apply over a clean checkout of the base commit (`8d8858d`, v1.2.3).
 2. Copy every file from this package over the tree (REPLACE/MODIFY/ADD).
-3. Delete the v1.2.2 hashed assets listed in §4 if present.
+3. Delete the v1.2.3 hashed assets listed in §4 if present.
 4. Verify identity: `node scripts/release-version.mjs --check` must report
-   all surfaces at 1.2.3.
-5. Rebuild: `cmake -S native/engine -B native/engine/build && cmake --build
-   native/engine/build && ctest --test-dir native/engine/build`,
+   all surfaces at 1.2.4.
+5. Rebuild: `cmake -S native/engine -B native/engine/build && cmake
+   --build native/engine/build && ctest --test-dir native/engine/build`,
    `npm ci && npm run build`, `go test ./internal/... -tags headless`.
-6. Launch; the engine bootstrap/update and the Settings → Updates card now
-   report live, verified download progress.
+6. Launch; the new Workspace layer (sidebar "Workspace") shows the current
+   project, recent files, active session, model/runtime state and quick
+   actions; pressing `?` lists the keyboard shortcuts; Settings →
+   Performance carries the new `memory` telemetry block.
 
 ## 7. Executed automated checks (this package, before packaging)
 
-* `ctest --test-dir native/engine/build` — **12/12 pass**, zero compiler
-  warnings on a clean rebuild (gcc 14, -Wall -Wextra -Wpedantic);
-  test_generate repeated 10× idle, 5× niced, 3× under CPU saturation —
-  all pass.
-* Race repro of the original defect: 0/1200 post-fix (was 56/200).
-* `go build ./...` (headless), `go vet ./...` — clean.
-* `go test ./internal/... -tags headless` + `go test ./... -run Test` —
-  all 38 packages pass (incl. the real shtn-engine-host integration
-  tests against the rebuilt binary and the new downloader suite,
-  race-clean ×3 via `-race`).
-* Stress suite — **47/47 pass, 0 hangs, 0 crashes** (45 existing + the 2
-  new downloader hardening scenarios).
-* Frontend — `npm run typecheck` clean, `npm run lint` 0 warnings/0
-  errors, `npm run build` + `sync:web` green (embedded `web/static`
-  regenerated).
-* Release identity — `node scripts/release-version.mjs` reports
-  package.json 1.2.3 with config.go / build/config.yml / SIGNATURE
-  consistent.
+Measured improvements (identical machine, `-benchmem`, before vs after):
+
+| Benchmark | v1.2.3 | v1.2.4 | Gain |
+|---|---|---|---|
+| ctxtelemetry.RecordSteady | 7430968 ns/op, 6492054 B/op, 18685 allocs | 64681 ns/op, 59462 B/op, 144 allocs | **115× faster · 109× less memory** |
+| ctxtelemetry.RecentSteady | 3312198 ns/op, 4099584 B/op, 12032 allocs | 4253 ns/op, 18432 B/op, 1 alloc | **778× faster · 223× less memory** |
+| sessions.AppendMessageGrowing | 2535120 ns/op, 1209299 B/op, 3287 allocs | 1255804 ns/op, 339100 B/op, 1475 allocs | **2.0× faster · 3.6× less memory** |
+| sessions.GetLoaded | 425778 ns/op, 274176 B/op, 830 allocs | 26356 ns/op, 75200 B/op, 15 allocs | **16× faster · 3.6× less memory** |
+| aicontext.SystemMessageSteady | 31320 ns/op, 100443 B/op | 9812 ns/op, 34796 B/op | 3.2× faster · 2.9× less memory |
+| projectintel.CardSteady | 8894 ns/op, 2472 B/op | 2166 ns/op, 1272 B/op | 4.1× faster |
+| chunking.FormatFileAttachment1MB | 746256 ns/op, 2926039 B/op | 678094 ns/op, 1869102 B/op | 1.56× less memory (read buffer is now the floor) |
+
+Tool-output safety: the unbounded `CombinedOutput` path is gone; a
+runaway command's result is capped at 1 MiB retained with an honest
+total-count marker (covered by the capture counters on `/api/perf`).
+
+Correctness suites (all green after the changes):
+
+- `go vet ./...` clean; `go test ./internal/... -tags headless -count=1`
+  fully green; `go test ./... -run Test` green (the Wails desktop shell
+  package requires GTK/WebKit system libraries that CI provides).
+- Race detector clean on the five touched-concurrency packages
+  (memmanager, sessions, ctxtelemetry, memory, contextcache).
+- Stress suite: `STRESS-RESULT pass=47 fail=0 hangs=0 crashes=0`
+  (includes the contextcache bound proof and the 10k-message plan
+  bound).
+- New policy test: 200 simulated run cycles with a would-be-leaking cache
+  keep steady-state heap bounded (`TestRepeatedRunMemoryStaysBounded`);
+  cleanup deferral while a run is active is asserted directly.
+- Frontend: `npm run typecheck`, `npm run lint` (0/0), `npm run
+  test:units` (20/20), `npm run build` + `sync:web` green.
+- Native engine: NO C++ changes; rebuilt and 12/12 CTest suites pass;
+  Go↔native integration tests pass against the real host binary.
 
 ## 8. Known platform limitations
 
-* Resume requires the server to honour HTTP Range; GitHub release assets
-  do. If a source answers 200 to a Range request, the manager restarts
-  from zero rather than producing a corrupt hybrid file.
-* Concurrency is deliberately single-stream; parallel chunked download is
-  not attempted against hosts that have not proven Range support.
-* The source cache is advisory (reorder-only) and expires after 24 h; it
-  never ADDS sources and never overrides the trust gate.
-* Engine download progress is surfaced for the llama.cpp archive; the
-  native engine host (`shtn-engine-host`) is built from source, never
-  downloaded.
-* The Windows job of the CI workflow is unaffected by the guard change and
-  was already green; the fix is verified on Linux locally (the sandbox has
-  no Windows host) — the guard is platform-independent C++.
-* Plain-HTTP staging against a user-hosted mirror would be refused by the
-  HTTPS-only rule by design; mirrors must be HTTPS.
+- The GUI (Wails/GTK) shell cannot be exercised on a headless CI runner
+  without GTK4/WebKitGTK system libraries; all logic is covered through
+  the `headless` tag suite, which is what CI runs.
+- Opening a terminal at the workspace (`/api/workspace/reveal` with
+  `target: "terminal"`) is best-effort on Linux (first of the common
+  terminal emulators found) and returns an honest error when none exists.
+- Telemetry flush coalescing (64 records / 10 s) means a hard crash can
+  lose at most one window of observational context telemetry; user data
+  is never coalesced.

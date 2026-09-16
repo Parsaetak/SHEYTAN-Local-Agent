@@ -2113,3 +2113,100 @@ Stage Summary:
   asset with honest measured progress in the UI, async cancellable
   app-update staging, a coherent downloader UX across panels, warnings
   cleaned, all suites green, update package built and verified.
+
+---
+Task ID: 1 (single-agent full pass)
+Agent: Super Z (GLM)
+Task: v1.2.4 — faster data processing, intelligent memory reclamation, a genuinely useful Workspace, and a whole-app usability pass, without a major rewrite.
+
+Work Log:
+- INSPECTED before changing anything: four parallel deep-dives over the Go
+  context pipeline (chunking/aicontext/contextcache/contextplan/ctxtelemetry/
+  memory/recall/pipeline/projectintel), runtime/tools/attachments/sessions/
+  llm/api, the React frontend (store/streaming/workspace/perf-hud), and the
+  native C++ engine + release conventions. Baseline established FIRST:
+  go build/test/vet headless green; stress 47/47; hot-path benchmarks
+  captured for the exact paths later touched.
+- Measured baseline (v1.2.3, 2-CPU sandbox): ctxtelemetry.Record 7.43 ms/op
+  6.49 MB/op 18685 allocs (full-file rewrite per turn); ctxtelemetry.Recent
+  3.31 ms/op 4.1 MB/op; sessions.AppendMessage 2.54 ms/op 1.21 MB/op 3287
+  allocs (re-read + rewrite per message); sessions.Get 426 µs/op;
+  aicontext.SystemMessage 31.3 µs/op 100 KB/op (file re-read per turn);
+  projectintel.Card 8.9 µs/op; chunking.FormatFileAttachment(1 MB) 746 µs
+  2.93 MB/op (~3x file size live); tools Shell/CodeExec/Git used
+  CombinedOutput() with NO cap — the only unbounded allocation in the app.
+- DATA PIPELINE (all evidence-first, each fix tied to a measured number):
+  ctxtelemetry in-memory record cache + coalesced persistence (flush at
+  64 records / 10 s / run boundary; on-disk format unchanged; reads served
+  from memory); sessions bounded hot cache (8 entries, (size,mtime)-
+  validated, read-isolated copies on Get, sidecar cache, LRU TrimHot) +
+  streamed session-file writes (buffered json.Encoder, no full-blob
+  marshal); aicontext (size,mtime) text cache; projectintel parse cache;
+  chunking WindowHeadTailBytes (window raw bytes, never a full string copy;
+  byte path pinned equal to the string path by test); tools bounded
+  streaming output capture (1 MiB head + honest total-count truncation
+  marker, never blocks the child, aggregate counters) replacing
+  CombinedOutput in Shell/CodeExec/Git; memory remember-path exact-
+  duplicate suppression (AppendEntryUnique; AppendEntry semantics
+  unchanged; duplicate writes counted); llm imgCache byte-bounded (24 MiB,
+  LRU eviction) replacing count-only bound (was ~48 MB worst case).
+- MEMORY POLICY: new internal/memmanager — registered trims (sessions-hot
+  TrimHot(1), image-cache trim, ctxtelemetry flush), run tracking
+  (TrackRunStart/TrackRunEnd; cleanup is cancellation-aware via the run
+  defer), pressure-triggered GC+trim above a 1 GiB heap watermark (never
+  while a generation is live), idle maintenance loop (2 min, no-op during
+  runs), full telemetry (heap before/after, bytes freed per trim and
+  cumulative, durations). Wired into runtime.NewStack, api.EnsureSetup,
+  handleRun defer, Stack.Close (final telemetry flush). contextcache
+  gained TrimIdle (cold-tail shedding; own bounds always stay in force).
+  sessions store unified: one shared instance on the Stack (the API layer
+  previously built its own over the same dir). /api/perf now carries the
+  coordinated memory telemetry + data-path counters (contextcache stats,
+  tool capture bytes produced/retained/truncations, ctxtelemetry flush
+  stats, memory dedup counter).
+- WORKSPACE: new config WorkspaceRoot + RecentWorkspaces (max 5) with
+  EffectiveWorkspaceRoot as the single resolution point; project card
+  closure now reads the LIVE source (switch takes effect next run, no
+  restart); new /api/workspace (compact Project → files → task → model →
+  runtime → state summary from existing infrastructure), /api/workspace/
+  reveal (Explorer/Finder/xdg-open + best-effort terminal with honest
+  errors), /api/workspace/switch (refusal-first: 409 while a run is
+  active, 400 on missing/file paths, atomic tools.SetBaseDir rebind,
+  bounded re-observe, persisted config, response states exactly what
+  changed). Frontend: new Workspace layer + WorkspacePanel (summary chips,
+  quick actions, change-workspace form, recent-workspace chips, project
+  health facts, recent files); Agent layer relabelled honestly ("Agent").
+- USABILITY: global keyboard shortcuts (Ctrl+1..6 layers, Ctrl+N new
+  session, "/" composer focus, "?" help overlay, Esc closes) via a single
+  window listener; view state persisted + restored on restart (deep links
+  still win); engine snapshot change-detection kills the 2.5 s re-render
+  churn of AgentBody/AgentHeader/ModelPicker; LabPanel switched from
+  whole-store subscription to explicit selectors; MessageStream/ModelPicker/
+  PerfStrip/ActivityStream memoized; stable message keys; additive CSS
+  (workspace panel, help overlay, skeletons) with zero existing-rule
+  rewrites.
+- VERIFIED (before/after, same machine): RecordSteady 7.43 ms → 64.7 µs
+  (115x), 6.49 MB → 59 KB (109x); RecentSteady 3.31 ms → 4.25 µs (778x),
+  12032 → 1 allocs; AppendMessageGrowing 2.54 ms → 1.26 ms, 1.21 MB →
+  339 KB; GetLoaded 426 µs → 26.4 µs (16x); SystemMessage 31.3 µs →
+  9.8 µs; Card 8.9 µs → 2.2 µs; FormatFileAttachment(1 MB) 2.93 MB →
+  1.87 MB/op. Frontend: typecheck/lint/test:units/build+sync green.
+  Go: vet + full headless suite green (88 packages); race detector clean
+  on memmanager/sessions/ctxtelemetry/memory/contextcache; stress 47/47;
+  native engine rebuilt + 12/12 CTest suites pass (no C++ changes; Go
+  native-bridge integration green against the real host); version chain
+  1.2.4 via release-version.mjs (--check green).
+- Packaged SHEYTAN-Local-Agent-v1.2.4-UPDATE.zip (UPDATE.md +
+  REPLACEMENT-MANIFEST.txt + REPLACEMENT-SHA256.txt + changed/new sources
+  + regenerated web/static with the stale hashed assets deleted) and
+  copied a byte-identical copy to the repository root; both ZIPs'
+  identity verified by SHA-256.
+
+Stage Summary:
+- v1.2.4 complete per the brief: every optimization is measured (the table
+  above is baseline → after on the same machine), nothing was freed
+  aggressively (active generation, current workspace, user data and hot
+  caches are protected by policy), the Workspace is now a real work
+  environment rather than a settings screen, and the whole-app usability
+  pass is additive and honest. The package builds, all suites pass, and
+  the update ZIP is reproducible from this tree.

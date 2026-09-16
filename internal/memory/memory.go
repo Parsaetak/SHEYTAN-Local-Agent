@@ -89,6 +89,7 @@ type Store struct {
         cacheKey         cacheKey
         fullParses       uint64
         incrementalAddes uint64
+        duplicatesSkipped uint64 // v1.2.4: exact-duplicate writes suppressed
 }
 
 // ParseStats reports the measured cache behavior of this store:
@@ -336,6 +337,76 @@ func (s *Store) AppendEntry(entry Entry) error {
         }
 
         return nil
+}
+
+// AppendEntryUnique appends one entry UNLESS an exact duplicate (same
+// memory class, same normalized content, case-insensitive) already exists.
+// v1.2.4: repeated identical facts used to grow memory.jsonl forever and,
+// with it, the in-memory parsed cache; exact-duplicate suppression keeps
+// the store lean without touching user data semantics — the FIRST copy of
+// a fact is authoritative, later identical writes are counted and skipped.
+// added=false signals a suppressed duplicate (never an error).
+func (s *Store) AppendEntryUnique(entry Entry) (bool, error) {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        entry = NormalizeEntry(entry)
+
+        if entry.Content == "" {
+                return false, fmt.Errorf("memory content is required")
+        }
+
+        // Make sure the dedup check covers the full history: a cold cache must
+        // be warmed once before comparing (cachedLocked stat-validates).
+        if _, ok := s.cachedLocked(); !ok {
+                if _, err := s.allLocked(); err != nil {
+                        return false, err
+                }
+        }
+        for i := range s.cache {
+                if s.cache[i].Class == entry.Class && strings.EqualFold(s.cache[i].Content, entry.Content) {
+                        s.duplicatesSkipped++
+                        return false, nil
+                }
+        }
+
+        f, err := os.OpenFile(
+                s.path,
+                os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+                0o644,
+        )
+        if err != nil {
+                return false, err
+        }
+
+        defer f.Close()
+
+        enc := json.NewEncoder(f)
+        enc.SetEscapeHTML(false)
+
+        if err := enc.Encode(entry); err != nil {
+                return false, err
+        }
+
+        // Phase 3: fold the new entry into the parsed cache instead of letting
+        // the next Search re-parse the whole file. Only valid when the cache is
+        // already warm (never loaded → the next read parses everything once,
+        // which includes this entry).
+        if s.cache != nil {
+                s.cache = append(s.cache, entry)
+                s.incrementalAddes++
+                s.refreshCacheKeyLocked()
+        }
+
+        return true, nil
+}
+
+// DuplicatesSkipped reports how many exact-duplicate memory writes were
+// suppressed (v1.2.4 telemetry for bytes avoided by deduplication).
+func (s *Store) DuplicatesSkipped() uint64 {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        return s.duplicatesSkipped
 }
 
 // refreshCacheKeyLocked re-observes the file stat after a write so the
@@ -860,8 +931,20 @@ func (t Tool) Run(
                 // the returned ID/class/trust exactly match what was stored.
                 entry = NormalizeEntry(entry)
 
-                if err := t.Store.AppendEntry(entry); err != nil {
+                // v1.2.4: the remember path suppresses EXACT duplicates (same
+                // class + same normalized content) so repeated model writes of
+                // an already-known fact no longer grow memory.jsonl and the
+                // parsed cache forever. Honest feedback: the model is told the
+                // fact was already known.
+                added, err := t.Store.AppendEntryUnique(entry)
+                if err != nil {
                         return "", err
+                }
+                if !added {
+                        return fmt.Sprintf(
+                                "already known — an identical %s memory exists (duplicate write skipped)",
+                                entry.Class,
+                        ), nil
                 }
 
                 return fmt.Sprintf(

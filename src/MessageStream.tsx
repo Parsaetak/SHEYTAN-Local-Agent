@@ -683,7 +683,7 @@ function MessageStream() {
           <>
             {visibleMessages.map((message, index) => (
               <MessageBubble
-                key={`${index}-${message.role}-${message.at ?? ""}`}
+                key={`${message.at ?? "na"}-${message.role}-${index}`}
                 message={message}
                 query={queryWindow[index] ?? null}
               />
@@ -743,4 +743,7 @@ function MessageStream() {
 
 export { AttachmentChip, CopyButton };
 
-export default MessageStream;
+// v1.2.4: memoized export — AgentBody re-renders on many store slices;
+// memo keeps the (bounded but non-trivial) message list subtree out of
+// those cascades unless its own data changed.
+export default memo(MessageStream);
