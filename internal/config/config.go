@@ -17,7 +17,7 @@ import (
 
 const (
         AppName     = "SHEYTAN-Local-Agent"
-        AppVersion  = "1.2.2"
+        AppVersion  = "1.2.3"
         AppCodename = "Zeta"
 )
 

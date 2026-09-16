@@ -112,6 +112,43 @@ namespace {
 
 using shtn::copy_cstr;
 
+// generation_in_flight — the single authority for the model-state guard.
+//
+// A generation is in flight across THREE windows, and every one of them
+// must reject load/unload (tearing the model out under a forward pass is
+// undefined behaviour):
+//
+//   1. registered → queued: shtn_engine_generate() inserted the work entry
+//      (work map non-empty) but the scheduler has not popped it yet;
+//   2. popped → executor-entered: the worker set its active slot
+//      (scheduler stats active_requests == 1) but the executor has not
+//      incremented active_generations yet — this is exactly the window
+//      the unload-guard test used to race over (CI run 34921857962):
+//      observers see the scheduler slot, the old guard counted only
+//      active_generations, and an unload landing in between SUCCEEDED
+//      while a request was observably active, tearing the model from
+//      under the generation (it then failed with SHTN_ERR_NO_MODEL);
+//   3. executor-entered → exited: active_generations > 0, the window the
+//      old guard covered.
+//
+// With all three covered, the guard is coherent with what every observer
+// can see: if scheduler_info/metrics report an active request, or a
+// generate() call is blocked in flight, load/unload returns
+// SHTN_ERR_MODEL_STATE.
+bool generation_in_flight(shtn_engine* engine) {
+    {
+        // Windows 1 + 3 under the generation mutex.
+        std::lock_guard<std::mutex> lock(engine->gen_mu);
+        if (engine->active_generations > 0 || !engine->work.empty()) {
+            return true;
+        }
+    }
+    // Window 2 under the scheduler mutex (never nested with gen_mu: the
+    // executor takes gen_mu outside the scheduler lock, so no cycle).
+    const shtn::sched::Stats s = engine->scheduler.stats();
+    return s.active_requests > 0;
+}
+
 void summarize_model(const shtn::model::Model& model, char* dst, size_t cap) {
     shtn_model_info info{};
     model.fill_info(&info);
@@ -285,14 +322,12 @@ int32_t shtn_engine_load_model(shtn_engine* engine, const char* path,
         return SHTN_ERR_INVALID_ARG;
     }
 
-    // A load while a generation is executing would tear the mapping out
+    // A load while a generation is in flight would tear the mapping out
     // from under the forward pass — reject it (the caller retries after
-    // the generation finishes).
-    {
-        std::lock_guard<std::mutex> lock(engine->gen_mu);
-        if (engine->active_generations > 0) {
-            return SHTN_ERR_MODEL_STATE;
-        }
+    // the generation finishes). The guard covers the WHOLE in-flight
+    // window; see generation_in_flight().
+    if (generation_in_flight(engine)) {
+        return SHTN_ERR_MODEL_STATE;
     }
 
     shtn_model_load_options defaults{};
@@ -315,12 +350,11 @@ int32_t shtn_engine_unload_model(shtn_engine* engine) {
     }
 
     // Same guard as load: the mapping cannot disappear under an active
-    // forward pass.
-    {
-        std::lock_guard<std::mutex> lock(engine->gen_mu);
-        if (engine->active_generations > 0) {
-            return SHTN_ERR_MODEL_STATE;
-        }
+    // forward pass. The guard covers the WHOLE in-flight window — queued,
+    // popped, and executor-entered — so an unload can never slip between
+    // the observable scheduler state and the executor counter.
+    if (generation_in_flight(engine)) {
+        return SHTN_ERR_MODEL_STATE;
     }
 
     const int32_t rc = engine->model.unload();

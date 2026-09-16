@@ -1,10 +1,17 @@
 {
+  "_DownloadProgress-CO-h6FaB.js": {
+    "file": "assets/DownloadProgress-CO-h6FaB.js",
+    "name": "DownloadProgress",
+    "imports": [
+      "index.html"
+    ]
+  },
   "_vision-Dw0T2tjy.js": {
     "file": "assets/vision-Dw0T2tjy.js",
     "name": "vision"
   },
   "index.html": {
-    "file": "assets/index-DHBcE2Kp.js",
+    "file": "assets/index-CjGSRCFB.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -18,21 +25,22 @@
       "src/SystemPanel.tsx"
     ],
     "css": [
-      "assets/index-Bto0wA8H.css"
+      "assets/index-DwewjhlI.css"
     ]
   },
   "src/AgentBody.tsx": {
-    "file": "assets/AgentBody-EocjZLgJ.js",
+    "file": "assets/AgentBody-BjrGu1AP.js",
     "name": "AgentBody",
     "src": "src/AgentBody.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
+      "_DownloadProgress-CO-h6FaB.js",
       "_vision-Dw0T2tjy.js"
     ]
   },
   "src/AgentHeader.tsx": {
-    "file": "assets/AgentHeader-C5gpAJAl.js",
+    "file": "assets/AgentHeader-Du6Ox9Mq.js",
     "name": "AgentHeader",
     "src": "src/AgentHeader.tsx",
     "isDynamicEntry": true,
@@ -41,7 +49,7 @@
     ]
   },
   "src/AgentSidebar.tsx": {
-    "file": "assets/AgentSidebar-D_scJRE6.js",
+    "file": "assets/AgentSidebar-DvyhjsPE.js",
     "name": "AgentSidebar",
     "src": "src/AgentSidebar.tsx",
     "isDynamicEntry": true,
@@ -50,7 +58,7 @@
     ]
   },
   "src/LabPanel.tsx": {
-    "file": "assets/LabPanel-Ys_1jxhi.js",
+    "file": "assets/LabPanel-BaaTabl2.js",
     "name": "LabPanel",
     "src": "src/LabPanel.tsx",
     "isDynamicEntry": true,
@@ -59,7 +67,7 @@
     ]
   },
   "src/ResearchPanel.tsx": {
-    "file": "assets/ResearchPanel-cRC5-t9l.js",
+    "file": "assets/ResearchPanel-MRM_MVdu.js",
     "name": "ResearchPanel",
     "src": "src/ResearchPanel.tsx",
     "isDynamicEntry": true,
@@ -68,22 +76,24 @@
     ]
   },
   "src/SettingsPanel.tsx": {
-    "file": "assets/SettingsPanel-DrGWWN7P.js",
+    "file": "assets/SettingsPanel-DALRLl1e.js",
     "name": "SettingsPanel",
     "src": "src/SettingsPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
+      "_DownloadProgress-CO-h6FaB.js",
       "_vision-Dw0T2tjy.js"
     ]
   },
   "src/SystemPanel.tsx": {
-    "file": "assets/SystemPanel-BOrHcKSv.js",
+    "file": "assets/SystemPanel-CAyGQpds.js",
     "name": "SystemPanel",
     "src": "src/SystemPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
-      "index.html"
+      "index.html",
+      "_DownloadProgress-CO-h6FaB.js"
     ]
   }
 }

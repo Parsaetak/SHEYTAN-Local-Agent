@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
@@ -77,6 +78,12 @@ type engineSnapshot struct {
 	VisionProjectorName  string `json:"visionProjectorName,omitempty"`
 	VisionProjectorBytes int64  `json:"visionProjectorBytes,omitempty"`
 	VisionActive         bool   `json:"visionActive,omitempty"`
+
+	// v1.2.3: live asset-download progress (phase, bytes, speed, ETA,
+	// source, verification state) from the Download Manager while the
+	// engine downloads its llama.cpp archive or a model package. Nil
+	// outside downloads.
+	Download *downloader.Progress `json:"download,omitempty"`
 }
 
 // nativeEngineSnapshot is the native engine status block (local reads
@@ -149,6 +156,12 @@ func (s *Server) engineSnapshot() engineSnapshot {
 	snap.Provider = "local"
 	snap.Model = s.src.Load().DisplayModel()
 	snap.Vision = s.llama.VisionActive()
+
+	// v1.2.3: live download progress for the UI (nil outside downloads).
+	if dp := s.llama.DownloadProgress(); dp != nil {
+		p := *dp
+		snap.Download = &p
+	}
 
 	// v1.2.0: full runtime vision readiness block.
 	if vs := s.llama.VisionStatus(); vs.State != "" {
@@ -251,18 +264,24 @@ func enginePhase(state string, verified bool, remote bool) string {
 }
 
 // engineActivity converts one engine transition into an agent.Activity so
-// it flows through the normal hub machinery.
+// it flows through the normal hub machinery. v1.2.3: live Download Manager
+// progress (when present) rides along so WS consumers can render real
+// bytes/speed/ETA instead of a bare "downloading" label.
 func engineActivity(ev llm.EngineEvent) agent.Activity {
+	detail := map[string]any{
+		"state":    ev.State,
+		"previous": ev.Previous,
+		"model":    ev.Model,
+		"detail":   ev.Detail,
+	}
+	if ev.Download != nil {
+		detail["download"] = *ev.Download
+	}
 	return agent.Activity{
 		Type:      "engine",
 		Caption:   engineCaption(ev.State),
 		Timestamp: ev.Timestamp,
-		Detail: map[string]any{
-			"state":    ev.State,
-			"previous": ev.Previous,
-			"model":    ev.Model,
-			"detail":   ev.Detail,
-		},
+		Detail:    detail,
 	}
 }
 

@@ -373,7 +373,6 @@ int32_t Weights::vec_f32(const std::string& name, uint32_t expected_elems,
     switch (t->type) {
     case 0: {
         const uint8_t* src = nullptr;
-        uint64_t nbytes = 0;
         // Manual span computation for the 1-D case.
         RowLayout layout{};
         if (!row_layout_for(t->type, n, layout)) {

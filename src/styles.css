@@ -4010,3 +4010,197 @@ body::before {
   align-items: center;
   gap: 12px;
 }
+
+/* ==========================================================================
+   v1.2.3 Download Manager UI — shared visual language for every remote
+   asset pull (app installer, llama.cpp archive, model packages).
+   Uses the canonical tokens only; respects the reduced-motion collapse.
+   ========================================================================== */
+
+.dl-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  margin-top: 12px;
+}
+
+.dl-panel-compact {
+  padding: 8px 0 0;
+  border: none;
+  background: transparent;
+  margin-top: 6px;
+  gap: 6px;
+}
+
+/* phase chain */
+.dl-phases {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex-wrap: wrap;
+}
+
+.dl-phase {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 3px 8px;
+  border-radius: 999px;
+  transition: color var(--dur-2) var(--ease-snap),
+    background var(--dur-2) var(--ease-snap);
+}
+
+.dl-phase + .dl-phase::before {
+  content: "→";
+  margin-right: 4px;
+  color: var(--line);
+  font-size: 10px;
+}
+
+.dl-phase-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line);
+  transition: background var(--dur-2) var(--ease-snap),
+    box-shadow var(--dur-2) var(--ease-snap);
+}
+
+.dl-phase.done {
+  color: var(--text-soft);
+}
+
+.dl-phase.done .dl-phase-dot {
+  background: var(--green);
+}
+
+.dl-phase.active {
+  color: var(--text);
+  background: var(--line-soft);
+}
+
+.dl-phase.active .dl-phase-dot {
+  background: var(--red-hot);
+  box-shadow: 0 0 8px rgba(255, 70, 56, 0.55);
+  animation: status-pulse 1.6s ease-in-out infinite;
+}
+
+.dl-phase.todo {
+  opacity: 0.72;
+}
+
+/* progress row */
+.dl-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dl-state {
+  min-width: 96px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.dl-track {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+}
+
+.dl-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--red-deep),
+    var(--red-hot)
+  );
+  transition: width var(--dur-3) var(--ease-snap);
+}
+
+.dl-bar.indeterminate {
+  width: 38%;
+  animation: m-progress-indeterminate 1.4s var(--ease-inout-soft) infinite;
+}
+
+.dl-pct {
+  min-width: 44px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* measured facts */
+.dl-facts {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.dl-source {
+  color: var(--text-soft);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dl-verified {
+  color: var(--green);
+}
+
+.dl-retries,
+.dl-resumed {
+  color: var(--yellow);
+}
+
+.dl-message {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.dl-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.dl-action {
+  font-size: 12px;
+}
+
+/* v1.2.3: model picker loading skeleton (never fake an empty state). */
+.model-picker-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.model-picker-skeleton strong {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.model-card-skeleton {
+  height: 96px;
+  border-radius: var(--radius);
+}

@@ -42,6 +42,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
 )
 
 // AppManifestURL is the authoritative release source: the latest GitHub
@@ -198,6 +200,10 @@ type AppUpdateStatus struct {
 	StagedSHA256 string         `json:"stagedSHA256,omitempty"`
 	CheckedAt    string         `json:"checkedAt,omitempty"`
 	Message      string         `json:"message,omitempty"`
+	// Download (v1.2.3) carries live staging progress while the state
+	// is "downloading": phase, bytes, speed, ETA, source, verification.
+	// Nil outside downloads.
+	Download *downloader.Progress `json:"download,omitempty"`
 }
 
 // CheckAppUpdate fetches the manifest and compares against installed.
@@ -236,75 +242,76 @@ func CheckAppUpdate(ctx context.Context, installedVersion, manifestURL string) (
 // file is renamed into place. It returns the staged path + digest. The
 // caller decides what to do with a staged installer — this function never
 // executes one.
+//
+// v1.2.3: the transfer runs through the reusable Download Manager —
+// streamed to a .part file, resumable via HTTP Range, retried with
+// bounded backoff, and atomically activated only after verification.
+// A cancelled download keeps its .part so a retry resumes where it left
+// off instead of restarting from zero.
 func StageAppUpdate(ctx context.Context, dataDir string, manifest *AppManifest, platformID string) (path, sha string, err error) {
+	return StageAppUpdateWithProgress(ctx, dataDir, manifest, platformID, nil)
+}
+
+// StageAppUpdateWithProgress is StageAppUpdate with a live progress
+// callback for callers with UI to feed. onProgress may be nil.
+func StageAppUpdateWithProgress(ctx context.Context, dataDir string, manifest *AppManifest, platformID string, onProgress func(downloader.Progress)) (path, sha string, err error) {
+	job, err := AppUpdateStagingJob(dataDir, manifest, platformID, onProgress)
+	if err != nil {
+		return "", "", err
+	}
+	res, err := job.Run(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	return res.Path, res.SHA256, nil
+}
+
+// AppUpdateStagingJob validates the manifest and BUILDS (but does not
+// start) the staging download job — v1.2.3's seam for asynchronous UI
+// staging: the caller owns the goroutine, observes job.Progress() live
+// and can job.Cancel() at any moment. Every pinned-identity rule applies:
+// the manifest must carry sha256 for the platform, and the job verifies
+// digest + size before the staged file is activated.
+func AppUpdateStagingJob(dataDir string, manifest *AppManifest, platformID string, onProgress func(downloader.Progress)) (*downloader.Job, error) {
 	if manifest == nil {
-		return "", "", errors.New("nil manifest")
+		return nil, errors.New("nil manifest")
 	}
 	p, ok := manifest.Platforms[platformID]
 	if !ok || strings.TrimSpace(p.URL) == "" {
-		return "", "", fmt.Errorf("no update artifact for platform %q", platformID)
+		return nil, fmt.Errorf("no update artifact for platform %q", platformID)
 	}
 	if strings.TrimSpace(p.SHA256) == "" {
-		return "", "", errors.New("manifest artifact carries no sha256 — refusing unverified download")
-	}
-
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, p.URL, nil)
-	if err != nil {
-		return "", "", err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("download: HTTP %d", resp.StatusCode)
+		return nil, errors.New("manifest artifact carries no sha256 — refusing unverified download")
 	}
 
 	stagingDir := filepath.Join(dataDir, "updates", "staging")
 	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
-		return "", "", err
-	}
-	tmp, err := os.CreateTemp(stagingDir, ".download-*")
-	if err != nil {
-		return "", "", err
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		if err != nil {
-			os.Remove(tmpName)
-		}
-	}()
-
-	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, appDownloadCap))
-	if err != nil {
-		tmp.Close()
-		return "", "", err
-	}
-	if err := tmp.Close(); err != nil {
-		return "", "", err
-	}
-	if p.SizeBytes > 0 && n != p.SizeBytes {
-		return "", "", fmt.Errorf("size mismatch: got %d, manifest says %d", n, p.SizeBytes)
-	}
-
-	got := hex.EncodeToString(h.Sum(nil))
-	want := strings.ToLower(strings.TrimSpace(p.SHA256))
-	if got != want {
-		return "", "", fmt.Errorf("sha256 mismatch: got %s, manifest says %s", got, want)
+		return nil, err
 	}
 
 	name := updateArtifactName(manifest.Version, p.Kind)
 	final := filepath.Join(stagingDir, name)
-	if err := os.Rename(tmpName, final); err != nil {
-		return "", "", err
+
+	opts := downloader.Options{
+		Dest: final,
+		Sources: []downloader.Source{{
+			URL:   p.URL,
+			Label: "GitHub release asset (authoritative)",
+			Trust: downloader.TrustPrimary,
+		}},
+		SHA256:    strings.ToLower(strings.TrimSpace(p.SHA256)),
+		SizeBytes: p.SizeBytes,
+		MaxBytes:  appDownloadCap,
+		FileMode:  0o644,
+		Resume:    true,
+		// HTTPS-only for remote sources; loopback test doubles may
+		// speak plain HTTP (the Go tests use httptest).
+		AllowHTTP:  downloader.IsLoopbackURL(p.URL),
+		CacheKey:   "app-update-" + manifest.Version + "-" + platformID,
+		CacheDir:   stagingDir,
+		OnProgress: onProgress,
 	}
-	return final, got, nil
+	return downloader.New(opts)
 }
 
 func updateArtifactName(version, kind string) string {

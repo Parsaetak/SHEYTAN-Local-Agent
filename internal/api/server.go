@@ -21,6 +21,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
@@ -73,6 +74,14 @@ type Server struct {
 	// /api/update/status never blocks on the network. Written only by
 	// /api/update/check and /api/update/download; read by status.
 	lastAppUpdate atomic.Value
+
+	// v1.2.3: the asynchronous app-update staging job (Download Manager).
+	// appUpdateJob is the live handle for progress + cancel; appUpdateStaging
+	// claims the single slot; appUpdateCancel stops the transfer goroutine
+	// (also called from Close so staging never outlives the server).
+	appUpdateJob     atomic.Pointer[downloader.Job]
+	appUpdateStaging atomic.Bool
+	appUpdateCancel  atomic.Pointer[context.CancelFunc]
 
 	// active runs: sessionID → runState
 	runsMu sync.Mutex
@@ -361,6 +370,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/recommendation", s.handleRecommendation)
 	mux.HandleFunc("/api/update/status", s.handleUpdateStatus)
 	mux.HandleFunc("/api/update/check", s.handleUpdateCheck)
+	mux.HandleFunc("/api/update/cancel", s.handleUpdateCancel)
 	mux.HandleFunc("/api/update/download", s.handleUpdateDownload)
 
 	// WebSocket: real-time agent activity for a session
@@ -746,6 +756,17 @@ func (s *Server) handleLlama(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+
+		case "cancel-download":
+			// v1.2.3: stop an in-flight engine asset download
+			// (llama.cpp archive) immediately; the .part file stays
+			// so a retry resumes instead of restarting from zero.
+			cancelled := s.llama.CancelDownload()
+			writeJSON(w, map[string]any{
+				"cancelled": cancelled,
+				"state":     s.llama.State(),
+			})
+			return
 
 		case "stop":
 			// v1.1.5Z: stop both engines (native bounded, errors

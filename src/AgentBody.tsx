@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { api, type EngineState, type RuntimeConfig } from "./api";
+import { DownloadProgressPanel } from "./DownloadProgress";
 import { initializeAgent } from "./agent-init";
 import MessageStream, { AttachmentChip } from "./MessageStream";
 import ActivityStream from "./ActivityStream";
@@ -624,6 +625,18 @@ function AgentBody() {
                 Degraded startup: the serving model could not be verified
                 {engine.detail ? ` — ${engine.detail}` : ""}
               </span>
+            )}
+
+            {/* v1.2.3: live engine-asset download (llama.cpp archive,
+                model packages) with measured bytes/speed/ETA from the
+                Download Manager, cancellable mid-flight. */}
+            {engine?.download && (
+              <DownloadProgressPanel
+                progress={engine.download}
+                compact
+                onCancel={() => void api.llama("cancel-download").catch(() => {})}
+                cancelLabel="Stop download"
+              />
             )}
 
             <div className="header-actions">

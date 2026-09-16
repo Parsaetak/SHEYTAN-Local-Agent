@@ -231,6 +231,35 @@ export interface AppUpdateStatus {
   stagedSHA256?: string;
   checkedAt?: string;
   message?: string;
+  // v1.2.3: live staging progress from the Download Manager while the
+  // state is "downloading" — phase, bytes, speed, ETA, source, checks.
+  download?: DownloadProgress;
+}
+
+// v1.2.3 Download Manager progress (mirrors internal/downloader.Progress).
+// `bytesTotal`/`etaSeconds` go negative when the server did not declare a
+// size; the UI must render indeterminate states honestly.
+export interface DownloadProgress {
+  phase:
+    | "resolving"
+    | "connecting"
+    | "downloading"
+    | "verifying"
+    | "installing"
+    | "ready";
+  sourceUrl?: string;
+  sourceLabel?: string;
+  sourceTrust?: string;
+  attempt?: number;
+  bytesDone: number;
+  bytesTotal: number;
+  bytesPerSec?: number;
+  etaSeconds?: number;
+  retries?: number;
+  resumable?: boolean;
+  verified?: boolean;
+  paused?: boolean;
+  message?: string;
 }
 
 export interface Model {
@@ -639,6 +668,9 @@ export interface EngineSnapshot {
   visionProjectorName?: string;
   visionProjectorBytes?: number;
   visionActive?: boolean;
+  // v1.2.3: live asset-download progress (llama.cpp archive, model
+  // packages) from the Download Manager. Present only mid-download.
+  download?: DownloadProgress;
   logs?: string[];
   cacheStats?: {
     entries: number;
@@ -969,11 +1001,13 @@ export const api = {
     });
   },
 
-  llama(action: "start" | "stop"): Promise<unknown> {
+  llama(
+    action: "start" | "stop" | "cancel-download",
+  ): Promise<unknown> {
     return request<unknown>("/llama", {
       method: "POST",
       body: JSON.stringify({ action }),
-    }, LONG_OPERATION_TIMEOUT_MS);
+    }, action === "cancel-download" ? 15_000 : LONG_OPERATION_TIMEOUT_MS);
   },
 
   sessions(): Promise<Session[]> {
@@ -1211,6 +1245,12 @@ export const api = {
       { method: "POST" },
       LONG_OPERATION_TIMEOUT_MS,
     );
+  },
+
+  // v1.2.3: stop the running staging download immediately. The .part
+  // file stays on disk so a retry resumes instead of restarting.
+  updateCancel(): Promise<AppUpdateStatus> {
+    return request<AppUpdateStatus>("/update/cancel", { method: "POST" });
   },
 
   lab(): Promise<LabListResponse> {

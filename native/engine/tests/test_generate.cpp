@@ -16,6 +16,8 @@
 #include "util.h"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -382,6 +384,20 @@ int main() {
     }
 
     // --- model unload during active generation → rejected ------------------------
+    // Invariant under test: load/unload must be REJECTED while a generation
+    // is in flight, and the rejection must hold for the WHOLE observable
+    // window (registered → queued → popped → executing). The first version
+    // of this test raced: its sequencer polled scheduler_info (the
+    // scheduler's active slot) while the engine's guard counted a different
+    // variable (executor-entered generations), so an unload landing in the
+    // window between the two SUCCEEDED, tore the model out from under the
+    // in-flight generation, and failed the CHECK (~25% of loaded CI runs;
+    // repro'd at 28% locally — CI run 34921857962). The engine guard now
+    // covers the entire in-flight window, and this test synchronizes on an
+    // EXPLICIT signal — the first streamed token — which is emitted only
+    // from inside the runner's decode loop, strictly after the guard state
+    // is set. Once that signal is observed, the unload/load rejection is
+    // deterministic: no polling budget, no sleeps, no timing luck.
     {
         shtn_engine* slow = nullptr;
         shtn_engine_options so{};
@@ -393,46 +409,104 @@ int main() {
               SHTN_OK);
 
         auto o = base_opts("hello", 200);
-        // Greedy (NOT temperature 1.1 sampling): the unload guard below
-        // needs the generation to still be ACTIVE when the sequencer
-        // thread unloads. With sampling, the toy model can emit EOS
-        // within the first few tokens, completing the generation before
-        // the sequencer's unload lands — an intermittent test failure
-        // with no engine defect behind it (observed ~25% of runs under
-        // load). Greedy decode on this fixture deterministically runs
-        // to max_tokens (finish reason "length", no early EOS — pinned
-        // by the greedy-determinism test above), so the 200-token
-        // generation stays active for the whole poll window and the
-        // sequencer reliably observes active_requests > 0 before it
-        // attempts the unload.
+        // Greedy decode: on this fixture it deterministically runs to
+        // max_tokens (finish reason "length", no early EOS — pinned by the
+        // greedy-determinism test above), so after the first streamed token
+        // the generation is guaranteed to still be in flight while the
+        // sequencer does its checks (each further token takes milliseconds).
         o.temperature = 0.0f;
         o.seed = 0;
         o.request_id = "unload-guard";
 
-        // One sequencer thread: while the generation is active, an unload
-        // must be REJECTED; then the request is cancelled so the test
-        // finishes quickly (deterministic order — no race).
-        std::thread sequencer([&slow]() {
-            for (int i = 0; i < 3000; ++i) {
-                shtn_scheduler_info s{};
-                shtn_engine_scheduler_info(slow, &s);
-                if (s.active_requests > 0) {
-                    break;
+        // Explicit start-of-decode signal: the first non-final chunk. Emitted
+        // from Runner::execute → strictly after the engine's guard state is
+        // established, so observing it implies the invariant's precondition.
+        struct GuardSink {
+            std::mutex mu;
+            std::condition_variable cv;
+            bool first_token = false;
+            int tokens = 0;
+
+            static int32_t emit(void* user, const shtn_generation_chunk* c) {
+                auto* s = static_cast<GuardSink*>(user);
+                if (c == nullptr) return 0;
+                {
+                    std::lock_guard<std::mutex> lock(s->mu);
+                    if (!c->final && !s->first_token) {
+                        s->first_token = true;
+                    }
+                    if (!c->final) {
+                        s->tokens += 1;
+                    }
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                s->cv.notify_all();
+                return 0;
             }
+        } sink;
+
+        // One sequencer thread: wait for the explicit signal (bounded — a
+        // broken engine fails the test instead of hanging CI), verify the
+        // observable scheduler state is coherent, assert BOTH guard surfaces
+        // reject, then cancel so the test finishes quickly and cleanly.
+        std::thread sequencer([&slow, &sink, &fixtures]() {
+            bool signalled = false;
+            {
+                std::unique_lock<std::mutex> lock(sink.mu);
+                signalled = sink.cv.wait_for(lock, std::chrono::seconds(60),
+                                             [&] { return sink.first_token; });
+            }
+            CHECK(signalled);
+
+            // Coherent observable state: the request must be reported
+            // active by the scheduler at this point (this is the state the
+            // old test raced against — it must never contradict the guard).
+            shtn_scheduler_info si{};
+            CHECK(shtn_engine_scheduler_info(slow, &si) == SHTN_OK);
+            CHECK(si.active_requests == 1);
+
+            // THE invariant: unload rejected while generation is active.
             CHECK(shtn_engine_unload_model(slow) == SHTN_ERR_MODEL_STATE);
+
+            // The same guard protects the reload path (load must also be
+            // rejected — it tears the mapping just the same).
+            shtn_model_load_options rlo{};
+            CHECK(shtn_engine_load_model(
+                      slow, (fixtures + "/tiny-llama-slow.gguf").c_str(),
+                      &rlo) == SHTN_ERR_MODEL_STATE);
+
+            // Cancel the request; the blocked generate() returns
+            // SHTN_ERR_CANCELLED and the engine is reused below.
             int32_t cancelled = 0;
             char reason[128] = {0};
-            (void)shtn_engine_cancel_generation(slow, "unload-guard",
-                                                &cancelled, reason);
+            CHECK(shtn_engine_cancel_generation(slow, "unload-guard",
+                                                &cancelled, reason) == SHTN_OK);
+            CHECK(cancelled == 1);
         });
 
-        Sink sink;
         shtn_generation_result res{};
         char d[256] = {0};
-        (void)shtn_engine_generate(slow, &o, Sink::emit, &sink, &res, d);
+        const int32_t rc = shtn_engine_generate(slow, &o, GuardSink::emit,
+                                                &sink, &res, d);
         sequencer.join();
+
+        // The blocked generate() observed the cancellation cleanly.
+        CHECK(rc == SHTN_ERR_CANCELLED);
+        CHECK(std::string(res.finish_reason) == SHTN_FINISH_CANCELLED);
+        CHECK(res.metrics.generated_tokens > 0);
+
+        // Scheduler state consistent + engine reusable after the whole
+        // sequence (rejected unload, rejected reload, cancelled generation).
+        shtn_scheduler_info si{};
+        CHECK(shtn_engine_scheduler_info(slow, &si) == SHTN_OK);
+        CHECK(si.active_requests == 0);
+        CHECK(si.total_cancelled == 1);
+
+        auto o2 = base_opts("hello", 2);
+        Sink sink2;
+        shtn_generation_result res2{};
+        char d2[256] = {0};
+        CHECK(shtn_engine_generate(slow, &o2, Sink::emit, &sink2, &res2,
+                                   d2) == SHTN_OK);
         shtn_engine_destroy(slow);
     }
 

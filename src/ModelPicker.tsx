@@ -377,6 +377,7 @@ const ModelPicker = function ModelPicker({
   onClose?: () => void;
 }) {
   const models = useRuntimeStore((state) => state.models);
+  const modelsLoading = useRuntimeStore((state) => state.modelsLoading);
   const sysinfo = useRuntimeStore((state) => state.sysinfo);
   const refreshModels = useRuntimeStore((state) => state.refreshModels);
   const engineAlive = useRuntimeStore((state) => state.engine?.state);
@@ -492,7 +493,14 @@ const ModelPicker = function ModelPicker({
         </div>
       </header>
 
-      {sorted.length === 0 ? (
+      {sorted.length === 0 && modelsLoading ? (
+        <div className="model-picker-skeleton" aria-busy="true" aria-live="polite">
+          <strong>Loading models…</strong>
+          <div className="model-card-skeleton m-skeleton" />
+          <div className="model-card-skeleton m-skeleton" />
+          <div className="model-card-skeleton m-skeleton" />
+        </div>
+      ) : sorted.length === 0 ? (
         <div className="model-picker-empty">
           <strong>Choose a model</strong>
 

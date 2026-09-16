@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   api,
@@ -8,6 +8,7 @@ import {
   type AppUpdateStatus,
   type TaskProfileInfo,
 } from "./api";
+import { DownloadProgressPanel } from "./DownloadProgress";
 import { useRuntimeStore } from "./store";
 import { visionBadge } from "./vision";
 
@@ -449,6 +450,9 @@ export function UpdatesCard() {
   const [status, setStatus] = useState<AppUpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v1.2.3: the download endpoint returns immediately now; progress is
+  // observed by polling /update/status while the state is "downloading".
+  const pollRef = useRef<number | null>(null);
 
   const load = useCallback(() => {
     api
@@ -463,6 +467,20 @@ export function UpdatesCard() {
     load();
   }, [load]);
 
+  // Poll while a staging download runs; stop the moment it settles.
+  useEffect(() => {
+    if (status?.state === "downloading") {
+      pollRef.current = window.setInterval(load, 1200);
+      return () => {
+        if (pollRef.current !== null) {
+          window.clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      };
+    }
+    return undefined;
+  }, [status?.state, load]);
+
   const check = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -476,6 +494,8 @@ export function UpdatesCard() {
     }
   }, []);
 
+  // v1.2.3: START staging; the response arrives immediately and the
+  // poller above tracks live progress (bytes, speed, ETA, source).
   const stage = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -484,10 +504,23 @@ export function UpdatesCard() {
       setStatus(await api.updateDownload());
     } catch (err) {
       setError(err instanceof Error ? err.message : "download failed");
+      load();
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [load]);
+
+  const cancelDownload = useCallback(async () => {
+    setBusy(true);
+    try {
+      setStatus(await api.updateCancel());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "cancel failed");
+    } finally {
+      setBusy(false);
+      load();
+    }
+  }, [load]);
 
   const state = status?.state ?? "unknown";
 
@@ -516,12 +549,12 @@ export function UpdatesCard() {
       <div className="env-grid">
         <div className="session-detail">
           <span>Current version</span>
-          <strong>v{status?.version ?? appVersion ?? "—"}</strong>
+          <strong>v{status?.version ?? appVersion ?? "\u2014"}</strong>
         </div>
 
         <div className="session-detail">
           <span>Latest</span>
-          <strong>{status?.latest ? `v${status.latest}` : "—"}</strong>
+          <strong>{status?.latest ? `v${status.latest}` : "\u2014"}</strong>
         </div>
 
         <div className="session-detail">
@@ -531,7 +564,7 @@ export function UpdatesCard() {
 
         <div className="session-detail">
           <span>Checked</span>
-          <strong>{status?.checkedAt ? new Date(status.checkedAt).toLocaleString() : "—"}</strong>
+          <strong>{status?.checkedAt ? new Date(status.checkedAt).toLocaleString() : "\u2014"}</strong>
         </div>
       </div>
 
@@ -545,6 +578,14 @@ export function UpdatesCard() {
         </span>
       ) : null}
 
+      {state === "downloading" || status?.download ? (
+        <DownloadProgressPanel
+          progress={status?.download}
+          onCancel={() => void cancelDownload()}
+          busy={busy}
+        />
+      ) : null}
+
       {error ? <p className="feedback-error">{error}</p> : null}
 
       <div className="header-actions">
@@ -554,25 +595,30 @@ export function UpdatesCard() {
           onClick={() => void check()}
           disabled={busy}
         >
-          {busy ? "Working…" : "Check now"}
+          {busy ? "Working\u2026" : "Check now"}
         </button>
 
-        {state === "update-available" ? (
+        {state === "update-available" || state === "failed" ? (
           <button
             type="button"
             className="primary-button"
             onClick={() => void stage()}
             disabled={busy}
           >
-            {busy ? "Downloading…" : "Download & verify"}
+            {busy
+              ? "Starting\u2026"
+              : state === "failed"
+                ? "Retry download"
+                : "Download & verify"}
           </button>
         ) : null}
       </div>
 
       <span className="runtime-hint">
         Updates are verified against the release manifest's SHA-256 before
-        staging. This build never applies an update silently and never
-        touches your models.
+        staging. Downloads stream to disk, resume when interrupted, and never
+        stage a byte that fails verification. This build never applies an
+        update silently and never touches your models.
       </span>
     </section>
   );

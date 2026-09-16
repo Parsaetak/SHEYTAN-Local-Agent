@@ -38,6 +38,7 @@ import (
         "time"
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
 )
@@ -441,6 +442,12 @@ func engineBinaryName() string {
 // non-nil and running, the engine is STOPPED for the swap (Windows locks a
 // running exe) and restarted afterwards. Returns the human-readable outcome.
 func UpdateEngine(ctx context.Context, cfg *config.Config, eng Engine, tag string) (string, error) {
+        return UpdateEngineWithProgress(ctx, cfg, eng, tag, nil)
+}
+
+// UpdateEngineWithProgress is UpdateEngine with a live progress callback
+// (v1.2.3 Download Manager) for callers with UI to feed.
+func UpdateEngineWithProgress(ctx context.Context, cfg *config.Config, eng Engine, tag string, onProgress func(downloader.Progress)) (string, error) {
         url := AssetURL(tag)
         if url == "" {
                 return "", fmt.Errorf("no prebuilt llama.cpp asset for %s/%s", runtime.GOOS, runtime.GOARCH)
@@ -468,7 +475,7 @@ func UpdateEngine(ctx context.Context, cfg *config.Config, eng Engine, tag strin
         }
 
         logging.Default().Info("updater", "downloading engine %s from %s", tag, url)
-        if err := downloadEngine(ctx, url, tag, binDir); err != nil {
+        if err := downloadEngine(ctx, url, tag, binDir, onProgress); err != nil {
                 // Best effort: bring the old engine back up.
                 if wasRunning {
                         _ = eng.Restart()
@@ -604,58 +611,68 @@ func RunScheduled(ctx context.Context, src *config.Source, eng Engine, notify fu
 //
 // v1.1.4Z: the transfer is capped (engineUpdateCapBytes) — the previous
 // io.Copy accepted an arbitrarily large body.
+// v1.2.3: the transfer runs through the reusable Download Manager:
+// HTTPS-only (loopback test doubles excepted), streamed to a .part file,
+// resume-capable via HTTP Range, retried with bounded backoff, and the
+// archive is verified before extraction. onProgress (when non-nil)
+// receives measured progress.
 const engineUpdateCapBytes = 2 << 30 // 2 GiB; Vulkan bundles are ~300 MB
 
-func downloadEngine(ctx context.Context, url, tag, binDir string) error {
+func downloadEngine(ctx context.Context, url, tag, binDir string, onProgress func(downloader.Progress)) error {
         ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
         defer cancel()
-        req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-        if err != nil {
-                return err
-        }
-        resp, err := http.DefaultClient.Do(req)
-        if err != nil {
-                return err
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != 200 {
-                return fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
-        }
-        tmp, err := os.CreateTemp("", "llama-update-*")
-        if err != nil {
-                return err
-        }
-        tmpPath := tmp.Name()
-        defer os.Remove(tmpPath)
 
-        written, err := io.Copy(tmp, io.LimitReader(resp.Body, engineUpdateCapBytes+1))
-        if err != nil {
-                tmp.Close()
+        stage := filepath.Join(binDir, ".engine-download")
+        if err := os.MkdirAll(stage, 0o755); err != nil {
                 return err
         }
-        if written > engineUpdateCapBytes {
-                tmp.Close()
-                return fmt.Errorf("engine download exceeds %d bytes", engineUpdateCapBytes)
-        }
-        tmp.Close()
 
-        stage := filepath.Join(binDir, ".update-stage")
-        _ = os.RemoveAll(stage)
-        if err := extractZip(tmpPath, stage); err != nil {
-                _ = os.RemoveAll(stage)
+        opts := downloader.Options{
+                Dest: filepath.Join(stage, AssetName(tag)),
+                Sources: []downloader.Source{{
+                        URL:   url,
+                        Label: "llama.cpp release " + tag + " (github.com/ggml-org/llama.cpp)",
+                        Trust: downloader.TrustPrimary,
+                }},
+                MaxBytes:   engineUpdateCapBytes,
+                FileMode:   0o644,
+                Resume:     true,
+                AllowHTTP:  downloader.IsLoopbackURL(url),
+                CacheKey:   "llama-engine-update-" + tag,
+                CacheDir:   stage,
+                OnProgress: onProgress,
+        }
+        job, err := downloader.New(opts)
+        if err != nil {
                 return err
         }
-        found := findBinary(stage)
+
+        res, err := job.Run(ctx)
+        if err != nil {
+                return err
+        }
+
+        archive := res.Path
+        defer os.Remove(archive)
+
+        stageDir := filepath.Join(binDir, ".update-stage")
+        _ = os.RemoveAll(stageDir)
+        if err := extractZip(archive, stageDir); err != nil {
+                _ = os.RemoveAll(stageDir)
+                return err
+        }
+        found := findBinary(stageDir)
         if found == "" {
-                _ = os.RemoveAll(stage)
+                _ = os.RemoveAll(stageDir)
                 return fmt.Errorf("release zip for %s contained no server binary", tag)
         }
         _ = os.RemoveAll(filepath.Join(binDir, ".update-old"))
         if err := copyAll(filepath.Dir(found), binDir); err != nil {
-                _ = os.RemoveAll(stage)
+                _ = os.RemoveAll(stageDir)
                 return err
         }
-        _ = os.RemoveAll(stage)
+        _ = os.RemoveAll(stageDir)
+        _ = os.Remove(archive + ".part")
         _ = os.Chmod(filepath.Join(binDir, engineBinaryName()), 0o755)
         return nil
 }

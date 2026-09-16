@@ -2027,3 +2027,89 @@ Work Log:
 
 Stage Summary:
 - v1.2.2 complete per the 2-hour repair brief: every reported symptom traced to a code-level root cause and fixed at the source (boundaries + wire contract + ownership lease + replace-semantics + honest errors + session banners); stability and generation visibility first; no unrelated features; no architecture rewrite. Go-side verification remains pending CI (no toolchain in this environment).
+
+---
+Task ID: v1.2.3
+Agent: maintenance-implementation (Super Z)
+Task: v1.2.3 — Linux CI unload-guard race fixed at the root, reusable Download Manager, async verified app-update staging, downloader progress UI, UX coherence pass.
+
+Work Log:
+- REPRODUCED the CI failure locally before touching anything: a targeted
+  stress repro (scripts/repro_unload_race.cpp pattern) hit the unload-guard
+  race 56/200 times — the sequencer observed the scheduler's active slot
+  while the engine's guard counted `active_generations` (set later, inside
+  the executor), so unload succeeded and tore the model from under an
+  in-flight generation (generation then failed with SHTN_ERR_NO_MODEL).
+- ENGINE FIX — native/engine/src/engine.cpp: one authority,
+  `generation_in_flight()`, covers the whole in-flight window (registered
+  work map non-empty + scheduler active slot + executor count) for BOTH
+  shtn_engine_load_model and shtn_engine_unload_model. Observable state can
+  no longer contradict the guard. Post-fix repro: 0/1200.
+- TEST FIX — test_generate.cpp unload-guard block rewritten: explicit
+  first-streamed-token signal (mutex+condvar, 60 s bounded), scheduler
+  coherence assert (active_requests==1), unload AND reload must both be
+  rejected, the blocked generate must return SHTN_ERR_CANCELLED with
+  finish_reason "cancelled", scheduler totals consistent, engine reused
+  afterwards. Deterministic: 10/10 idle, 5/5 niced, 3/3 under CPU
+  saturation; full ctest 12/12.
+- WARNINGS — dead `utf8_encode` (tokenizer.cpp) removed; unused `nbytes`
+  local (tensor.cpp) removed; clean rebuild emits zero warnings, no
+  suppression pragmas.
+- DOWNLOAD MANAGER — new internal/downloader package (downloader.go /
+  transfer.go / meta.go + downloader_test.go): HTTPS-only (enforced across
+  redirects; loopback exemption for test doubles), persistent pooled
+  transport, single-stream by design, stream-to-`.part` → SHA-256/size
+  verify → atomic rename + dir fsync, `.bak` rollback preservation,
+  HTTP-Range resume (200-fallback restarts honestly), ordered sources
+  primary/mirror/fallback with explicit AllowFallback gate, TTL'd source
+  cache (sheytan-source-cache), bounded backoff+jitter, permanent-4xx
+  no-retry, cancel (unblocks in-flight Read via attempt context) and
+  pause/resume, 4 Hz throttled progress with speed EWMA + ETA. 14 tests,
+  race-clean ×3.
+- INTEGRATION — llm.ensureBinary + engine self-update
+  (updater.UpdateEngineWithProgress) + scheduled updater downloadEngine +
+  app staging (updater.StageAppUpdate(WithProgress) via
+  AppUpdateStagingJob) all run on the manager; verified-archive-only
+  extraction; llamaDownloadURL unchanged (its honest classification from
+  v1.2.2 remains).
+- API — /api/engine + WS engine frames carry `download` progress;
+  POST /api/llama {action:"cancel-download"}; /api/update/download is
+  ASYNC (immediate return, staging goroutine, single-slot claim,
+  15-min cap), /api/update/cancel added, Close() cancels in-flight
+  staging; AppUpdateStatus carries `download`.
+- FRONTEND — src/DownloadProgress.tsx (phase chain, determinate bar, %,
+  speed, ETA, source+trust, verification badge, retry reason,
+  Cancel/Retry; role=status aria-live=polite) + `.dl-*` styles on the
+  canonical tokens (reduced-motion collapse applies); wired into
+  UpdatesCard (1.2 s status poll while downloading, async start, cancel,
+  retry-after-failure), AgentBody runtime panel (compact + Stop download)
+  and SystemPanel RuntimeCard; AgentHeader pill shows live %; store gained
+  modelsLoading so the model picker renders skeletons instead of a fake
+  empty state.
+- STRESS — two new scenarios: downloader_integrity_resume (Range resume →
+  verified activation → no residue) and downloader_untrusted_fallback
+  (fallback never contacted without opt-in; checksum refused).
+  47/47 scenarios green.
+- VERSION — 1.2.2 → 1.2.3 via the identity chain (package.json →
+  release-version.mjs repaired config.go / build/config.yml / SIGNATURE).
+- CHECKS EXECUTED — ctest 12/12 (0 warnings); go build/vet + full
+  internal suite + root tests green (38 ok packages); stress 47/47;
+  npm run typecheck / lint (0/0) / build + sync:web green; downloader
+  tests race-clean ×3; unload race repro 0/1200 post-fix.
+- DIFF HYGIENE — workspace-style gofmt reformatting reverted; every Go
+  file re-patched in the repo's existing indentation (space-style files
+  space-indented, tab-style files tab-indented); final Go diff is surgical
+  (llama.go +221/-? focused, appupdate.go ~111, updater.go ~77,
+  stress_release.go +137, api files ~+63/-7).
+- Packaged SHEYTAN-Local-Agent-v1.2.3-UPDATE.zip (UPDATE.md +
+  REPLACEMENT-MANIFEST.txt + REPLACEMENT-SHA256.txt + changed/new sources +
+  regenerated web/static) and copied a byte-identical copy to the
+  repository root; both ZIPs' identity verified by SHA-256.
+
+Stage Summary:
+- v1.2.3 complete per the brief: the failing CI condition reproduced and
+  fixed at the source (engine guard contract + deterministic test — not by
+  weakening CI), one reusable verified download mechanism for every remote
+  asset with honest measured progress in the UI, async cancellable
+  app-update staging, a coherent downloader UX across panels, warnings
+  cleaned, all suites green, update package built and verified.

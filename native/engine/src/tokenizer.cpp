@@ -529,28 +529,6 @@ Utf8Unit utf8_decode_one(const std::string& s, size_t i) {
     return u; // invalid lead byte
 }
 
-// utf8_encode appends the UTF-8 encoding of `cp` to `out`.
-void utf8_encode(uint32_t cp, std::string& out) {
-    if (cp < 0x80u) {
-        out.push_back(static_cast<char>(cp));
-    } else if (cp < 0x800u) {
-        out.push_back(static_cast<char>(0xC0u | (cp >> 6)));
-        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
-    } else if (cp < 0x10000u) {
-        out.push_back(static_cast<char>(0xE0u | (cp >> 12)));
-        out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
-        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
-    } else if (cp < 0x110000u) {
-        out.push_back(static_cast<char>(0xF0u | (cp >> 18)));
-        out.push_back(static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu)));
-        out.push_back(static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu)));
-        out.push_back(static_cast<char>(0x80u | (cp & 0x3Fu)));
-    } else {
-        // Out of range — emit replacement.
-        out.append("\xEF\xBF\xBD");
-    }
-}
-
 // preprocess_bpe_input transforms raw input text into the symbol stream
 // the BPE merge algorithm expects. For Llama-style BPE models, every
 // word boundary becomes a U+2581 (▁) marker — including the implicit

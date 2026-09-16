@@ -18,6 +18,7 @@ import (
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/contextplan"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
@@ -46,6 +47,8 @@ func stressReleaseScenarios() []stressTest {
                 {"update_size_mismatch", stressUpdateSizeMismatch},
                 {"update_staged_drift", stressUpdateStagedDrift},
                 {"update_zip_slip_members", stressUpdateZipSlipMembers},
+                {"downloader_integrity_resume", stressDownloaderIntegrityResume},
+                {"downloader_untrusted_fallback", stressDownloaderUntrustedFallback},
                 {"vision_missing_projector", stressVisionMissingProjector},
                 {"vision_incompatible_arch", stressVisionIncompatibleArch},
                 {"memory_parallel_appends_unique", stressMemoryParallelAppendsUnique},
@@ -293,6 +296,139 @@ func stressUpdateZipSlipMembers() error {
 }
 
 // --- vision readiness state machine (internal/vision) -----------------------
+
+// --- v1.2.3 Download Manager hardening ---------------------------------------
+
+// stressDownloaderIntegrityResume proves the core download contract on a
+// live local server: a partial .part resumes via HTTP Range, the verified
+// artifact activates, and nothing partial is ever activated.
+func stressDownloaderIntegrityResume() error {
+        payload := bytes.Repeat([]byte("SHEYTAN-DL-resume-payload!"), 400) // ~10 KB
+        want := sha256.Sum256(payload)
+        wantHex := hex.EncodeToString(want[:])
+
+        var sawRange bool
+        srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                if rng := r.Header.Get("Range"); rng != "" {
+                        sawRange = true
+                        var start int64
+                        _, _ = fmt.Sscanf(rng, "bytes=%d-", &start)
+                        if start >= int64(len(payload)) {
+                                http.Error(w, "range past EOF", http.StatusRequestedRangeNotSatisfiable)
+                                return
+                        }
+                        w.WriteHeader(http.StatusPartialContent)
+                        _, _ = w.Write(payload[start:])
+                        return
+                }
+                _, _ = w.Write(payload)
+        }))
+        defer srv.Close()
+
+        dir := tTempDir("downloader-integrity")
+        defer os.RemoveAll(dir)
+        dest := filepath.Join(dir, "asset.bin")
+
+        // Pre-seed HALF the payload as a partial .part, then resume.
+        half := len(payload) / 2
+        if err := os.WriteFile(dest+".part", payload[:half], 0o644); err != nil {
+                return err
+        }
+
+        job, err := downloader.New(downloader.Options{
+                Dest: dest,
+                Sources: []downloader.Source{
+                        {URL: srv.URL, Label: "primary", Trust: downloader.TrustPrimary},
+                },
+                SHA256:    wantHex,
+                Resume:    true,
+                AllowHTTP: true, // loopback test double
+        })
+        if err != nil {
+                return err
+        }
+
+        ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+        defer cancel()
+
+        res, err := job.Run(ctx)
+        if err != nil {
+                return fmt.Errorf("resume download failed: %w", err)
+        }
+        if !sawRange {
+                return fmt.Errorf("server never saw a Range request — resume contract lost")
+        }
+        if res.ResumedFrom != int64(half) {
+                return fmt.Errorf("resumedFrom = %d, want %d", res.ResumedFrom, half)
+        }
+        got, err := os.ReadFile(dest)
+        if err != nil || string(got) != string(payload) {
+                return fmt.Errorf("activated artifact corrupt or missing")
+        }
+        if _, err := os.Stat(dest + ".part"); !os.IsNotExist(err) {
+                return fmt.Errorf(".part survived activation")
+        }
+        return nil
+}
+
+// stressDownloaderUntrustedFallback proves the trust boundary: a fallback
+// source is NEVER contacted without the explicit opt-in, and a checksum
+// mismatch is refused outright.
+func stressDownloaderUntrustedFallback() error {
+        good := []byte("authoritative bytes")
+        bad := []byte("untrusted mirror bytes")
+        want := sha256.Sum256(good)
+
+        var fallbackHits int
+        var mu sync.Mutex
+        srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                if r.URL.Path == "/fallback" {
+                        mu.Lock()
+                        fallbackHits++
+                        mu.Unlock()
+                        _, _ = w.Write(bad)
+                        return
+                }
+                _, _ = w.Write(bad) // BOTH sources serve wrong bytes here
+        }))
+        defer srv.Close()
+
+        dir := tTempDir("downloader-fallback")
+        defer os.RemoveAll(dir)
+        dest := filepath.Join(dir, "asset.bin")
+
+        // Without AllowFallback the fallback must not be contacted; the job
+        // fails on the primary's checksum mismatch alone.
+        job, err := downloader.New(downloader.Options{
+                Dest: dest,
+                Sources: []downloader.Source{
+                        {URL: srv.URL + "/primary", Trust: downloader.TrustPrimary},
+                        {URL: srv.URL + "/fallback", Trust: downloader.TrustFallback},
+                },
+                SHA256:    hex.EncodeToString(want[:]),
+                AllowHTTP: true,
+        })
+        if err != nil {
+                return err
+        }
+
+        ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+        defer cancel()
+
+        if _, err := job.Run(ctx); err == nil {
+                return fmt.Errorf("checksum mismatch accepted — verification gate lost")
+        }
+        mu.Lock()
+        hits := fallbackHits
+        mu.Unlock()
+        if hits != 0 {
+                return fmt.Errorf("untrusted fallback contacted %d times without opt-in", hits)
+        }
+        if _, err := os.Stat(dest); !os.IsNotExist(err) {
+                return fmt.Errorf("mismatched asset was activated")
+        }
+        return nil
+}
 
 func stressVisionMissingProjector() error {
         dir := tTempDir("vision-missing")

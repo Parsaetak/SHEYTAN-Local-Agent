@@ -5,6 +5,7 @@ import (
         "compress/gzip"
         "context"
         "encoding/json"
+        "errors"
         "fmt"
         "io"
         "net"
@@ -15,10 +16,12 @@ import (
         "runtime"
         "strings"
         "sync"
+        "sync/atomic"
         "syscall"
         "time"
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
@@ -66,6 +69,12 @@ type EngineEvent struct {
         Model     string    `json:"model,omitempty"`
         Detail    string    `json:"detail,omitempty"`
         Timestamp time.Time `json:"timestamp"`
+        // Download carries live asset-download progress (phase, bytes,
+        // speed, ETA, source, verification) while the state is
+        // "downloading" — the v1.2.3 Download Manager surfaces REAL
+        // measured progress instead of a bare state label. Nil outside
+        // downloads.
+        Download *downloader.Progress `json:"download,omitempty"`
 }
 
 // LlamaServer manages a llama.cpp server subprocess. This is the standalone
@@ -141,6 +150,13 @@ type LlamaServer struct {
         subsMu sync.Mutex
         subs   map[int]chan EngineEvent
         subSeq int
+
+        // dlJob / dlProgress expose the v1.2.3 Download Manager job while
+        // an engine asset (llama.cpp archive, future model packages) is
+        // being fetched: measured progress for the UI and a cancellation
+        // handle. dlProgress is nil outside downloads.
+        dlJob      atomic.Pointer[downloader.Job]
+        dlProgress atomic.Pointer[downloader.Progress]
 }
 
 // maxAutoRestarts bounds the watchdog's automatic recovery attempts per
@@ -355,7 +371,14 @@ func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
 
         s.logf("Downloading llama.cpp server from %s", url)
 
-        if err := downloadAndExtract(url, dir); err != nil {
+        // v1.2.3: the fetch runs through the reusable Download Manager —
+        // streamed to disk, resume-capable, verified, retried with
+        // bounded backoff, observable (progress in engine events) and
+        // cancellable. Extraction happens only from the VERIFIED archive.
+        if err := s.downloadEngineArchive(url, dir); err != nil {
+                if errors.Is(err, downloader.ErrCancelled) {
+                        return "", fmt.Errorf("engine download cancelled")
+                }
                 return "", fmt.Errorf("download llama.cpp: %w", err)
         }
 
@@ -1691,11 +1714,12 @@ func (s *LlamaServer) updateEngineForModel(cfg *config.Config) bool {
 
         s.setState(StateDownloading)
 
-        if _, err := updater.UpdateEngine(
+        if _, err := updater.UpdateEngineWithProgress(
                 ctx,
                 cfg,
                 nil,
                 latest,
+                s.publishDownloadProgress,
         ); err != nil {
                 s.logf(
                         "engine auto-update failed: %v",
@@ -2008,6 +2032,12 @@ func (s *LlamaServer) setStateLocked(st string) {
                 Detail:    detail,
                 Timestamp: time.Now(),
         }
+        // Live download progress rides along with "downloading"
+        // transitions; leaving the state clears it so the UI never shows
+        // stale progress.
+        if st == StateDownloading {
+                ev.Download = s.dlProgress.Load()
+        }
 
         // The subscriber fan-out must never run under s.mu: a slow subscriber
         // would block the state machine. The snapshot+unlock below keeps the
@@ -2139,86 +2169,171 @@ const engineDownloadTimeout = 10 * time.Minute
 const engineDownloadCapBytes = 2 << 30
 
 // downloadAndExtract downloads url and extracts it into dir.
-func downloadAndExtract(url, dir string) error {
+// downloadEngineArchive fetches the llama.cpp server archive through the
+// reusable Download Manager (v1.2.3) and extracts it into dir.
+//
+// The archive is streamed to "<dir>/.engine-download/<name>.part",
+// verified, atomically renamed, and only then extracted — a partially
+// downloaded or truncated archive can never reach extraction. Interrupted
+// transfers resume via HTTP Range when the release server supports it,
+// and the last working source is remembered so a retry does not re-probe
+// every endpoint.
+func (s *LlamaServer) downloadEngineArchive(url, dir string) error {
         ctx, cancel := context.WithTimeout(
                 context.Background(),
                 engineDownloadTimeout,
         )
         defer cancel()
 
-        req, err := http.NewRequestWithContext(
-                ctx,
-                http.MethodGet,
-                url,
-                nil,
+        stage := filepath.Join(dir, ".engine-download")
+        if err := os.MkdirAll(stage, 0o755); err != nil {
+                return err
+        }
+
+        dest := filepath.Join(stage, "llama-server"+engineArchiveSuffix(url))
+
+        opts := downloader.Options{
+                Dest: dest,
+                Sources: []downloader.Source{{
+                        URL:   url,
+                        Label: "llama.cpp release (github.com/ggml-org/llama.cpp)",
+                        Trust: downloader.TrustPrimary,
+                }},
+                MaxBytes:   engineDownloadCapBytes,
+                FileMode:   0o644,
+                Resume:     true,
+                CacheKey:   "llama-engine-" + runtime.GOOS + "-" + runtime.GOARCH,
+                CacheDir:   stage,
+                OnProgress: s.publishDownloadProgress,
+        }
+
+        job, err := downloader.New(opts)
+        if err != nil {
+                return err
+        }
+        s.dlJob.Store(job)
+        defer func() {
+                s.dlJob.Store(nil)
+                s.dlProgress.Store(nil)
+        }()
+
+        res, err := job.Run(ctx)
+        if err != nil {
+                return err
+        }
+
+        s.logf(
+                "llama.cpp archive verified (%d bytes, source %s, resumed %d)",
+                res.Bytes, res.Source.Label, res.ResumedFrom,
         )
-        if err != nil {
+
+        if err := extractEngineArchive(res.Path, url, dir); err != nil {
                 return err
         }
 
-        resp, err := http.DefaultClient.Do(req)
-        if err != nil {
-                return err
+        // Extraction succeeded: the staged archive has served its purpose.
+        // The source cache under the stage dir survives for the next retry.
+        _ = os.Remove(dest)
+        _ = os.Remove(dest + ".part")
+        return nil
+}
+
+// publishDownloadProgress stores the latest measured progress and fans it
+// out to engine-event subscribers (throttled upstream to ~4 Hz). It runs
+// on the download goroutine; fan-out is non-blocking by contract.
+func (s *LlamaServer) publishDownloadProgress(p downloader.Progress) {
+        snapshot := p
+        s.dlProgress.Store(&snapshot)
+
+        ev := EngineEvent{
+                State:     StateDownloading,
+                Timestamp: time.Now(),
+                Download:  &snapshot,
         }
 
-        defer resp.Body.Close()
-
-        if resp.StatusCode != http.StatusOK {
-                return fmt.Errorf(
-                        "download %s: HTTP %d",
-                        url,
-                        resp.StatusCode,
-                )
+        s.subsMu.Lock()
+        subs := make([]chan EngineEvent, 0, len(s.subs))
+        for _, ch := range s.subs {
+                subs = append(subs, ch)
         }
+        s.subsMu.Unlock()
 
-        tmp, err := os.CreateTemp("", "llama-*")
-        if err != nil {
-                return err
+        for _, ch := range subs {
+                select {
+                case ch <- ev:
+                default:
+                }
         }
+}
 
-        defer os.Remove(tmp.Name())
-        defer tmp.Close()
+// DownloadProgress returns the live engine-asset download progress, or
+// nil when nothing is being downloaded.
+func (s *LlamaServer) DownloadProgress() *downloader.Progress {
+        return s.dlProgress.Load()
+}
 
-        if _, err := io.Copy(
-                tmp,
-                io.LimitReader(resp.Body, engineDownloadCapBytes+1),
-        ); err != nil {
-                return fmt.Errorf("download llama.cpp: %w", err)
+// CancelDownload aborts an in-flight engine asset download. Network and
+// file activity stop immediately; the .part file is kept so a retry can
+// resume instead of restarting from zero.
+func (s *LlamaServer) CancelDownload() bool {
+        job := s.dlJob.Load()
+        if job == nil {
+                return false
         }
+        job.Cancel()
+        return true
+}
 
-        if fi, err := tmp.Stat(); err == nil && fi.Size() > engineDownloadCapBytes {
-                return fmt.Errorf(
-                        "engine download exceeds %d bytes — refusing to extract",
-                        engineDownloadCapBytes,
-                )
-        }
-
-        if _, err := tmp.Seek(0, 0); err != nil {
-                return err
-        }
-
+// engineArchiveSuffix maps a release URL to its archive suffix so the
+// extraction format can be detected even when the staged file uses a
+// neutral local name.
+func engineArchiveSuffix(url string) string {
         switch {
         case strings.HasSuffix(url, ".zip"):
-                stat, err := tmp.Stat()
+                return ".zip"
+        case strings.HasSuffix(url, ".tar.gz"):
+                return ".tar.gz"
+        case strings.HasSuffix(url, ".tgz"):
+                return ".tgz"
+        default:
+                return filepath.Ext(url)
+        }
+}
+
+// extractEngineArchive unpacks a VERIFIED archive into dir. The format
+// is chosen from the source URL suffix (the staged name is neutral).
+// Zip members go through the shared zip-slip guard; tar.gz extraction is
+// delegated to the system tar the same way the previous implementation
+// did.
+func extractEngineArchive(archivePath, url, dir string) error {
+        switch engineArchiveSuffix(url) {
+        case ".zip":
+                f, err := os.Open(archivePath)
+                if err != nil {
+                        return err
+                }
+                defer f.Close()
+
+                stat, err := f.Stat()
                 if err != nil {
                         return err
                 }
 
-                zr, err := zip.NewReader(tmp, stat.Size())
+                zr, err := zip.NewReader(f, stat.Size())
                 if err != nil {
                         return err
                 }
 
-                for _, f := range zr.File {
+                for _, fm := range zr.File {
                         out, err := safeArchivePath(
                                 dir,
-                                f.Name,
+                                fm.Name,
                         )
                         if err != nil {
                                 return err
                         }
 
-                        if f.FileInfo().IsDir() {
+                        if fm.FileInfo().IsDir() {
                                 if err := os.MkdirAll(
                                         out,
                                         0o755,
@@ -2236,7 +2351,7 @@ func downloadAndExtract(url, dir string) error {
                                 return err
                         }
 
-                        rc, err := f.Open()
+                        rc, err := fm.Open()
                         if err != nil {
                                 return err
                         }
@@ -2268,13 +2383,14 @@ func downloadAndExtract(url, dir string) error {
                         }
                 }
 
-        case strings.HasSuffix(url, ".tar.gz"),
-                strings.HasSuffix(url, ".tgz"):
-                if _, err := tmp.Seek(0, 0); err != nil {
+        case ".tar.gz", ".tgz":
+                f, err := os.Open(archivePath)
+                if err != nil {
                         return err
                 }
+                defer f.Close()
 
-                gz, err := gzip.NewReader(tmp)
+                gz, err := gzip.NewReader(f)
                 if err != nil {
                         return err
                 }
@@ -2300,10 +2416,6 @@ func downloadAndExtract(url, dir string) error {
                 }
 
         default:
-                if _, err := tmp.Seek(0, 0); err != nil {
-                        return err
-                }
-
                 out, err := os.Create(
                         filepath.Join(
                                 dir,
@@ -2314,11 +2426,18 @@ func downloadAndExtract(url, dir string) error {
                         return err
                 }
 
-                defer out.Close()
-
-                if _, err := io.Copy(out, tmp); err != nil {
+                f, err := os.Open(archivePath)
+                if err != nil {
+                        out.Close()
                         return err
                 }
+                defer f.Close()
+
+                if _, err := io.Copy(out, f); err != nil {
+                        out.Close()
+                        return err
+                }
+                out.Close()
         }
 
         return nil

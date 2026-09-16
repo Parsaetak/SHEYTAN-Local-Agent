@@ -73,6 +73,8 @@ type RuntimeState = {
   app: AppState | null;
   sysinfo: SysInfo | null;
   models: ModelsResponse | null;
+  /** v1.2.3: true while /api/models is in flight (skeleton, not fake empty). */
+  modelsLoading: boolean;
   presets: Preset[];
   tools: ToolInfo[];
 
@@ -922,6 +924,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   app: null,
   sysinfo: null,
   models: null,
+  modelsLoading: false,
   presets: [],
   tools: [],
 
@@ -979,12 +982,16 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   },
 
   refreshModels: async () => {
+    // v1.2.3: surface the in-flight state so UIs render a skeleton
+    // instead of mistaking "not loaded yet" for "no models".
+    set({ modelsLoading: true });
     try {
       const models = await api.models();
 
-      set({ models });
+      set({ models, modelsLoading: false });
     } catch (error) {
       set({
+        modelsLoading: false,
         error:
           error instanceof Error ? error.message : "Failed to refresh models.",
       });

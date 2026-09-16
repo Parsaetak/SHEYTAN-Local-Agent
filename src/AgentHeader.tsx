@@ -167,7 +167,11 @@ const AgentHeader = memo(function AgentHeader() {
             ? "RUNNING"
             : engine?.phase === "ready"
               ? "READY"
-              : (engine?.phase ?? "READY").toUpperCase().replace(/-/g, " ")}
+              : engine?.download && engine.download.bytesTotal > 0
+                ? `DOWNLOADING ${Math.round(
+                    (engine.download.bytesDone / engine.download.bytesTotal) * 100,
+                  )}%`
+                : (engine?.phase ?? "READY").toUpperCase().replace(/-/g, " ")}
         </span>
       </div>
     </>

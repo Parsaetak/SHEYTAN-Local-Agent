@@ -1,7 +1,7 @@
-SHEYTAN-Local-Agent v1.2.2 — Generation Visibility & Black-Screen Repair Replacement Manifest
-===================================================================
-Base: main @ 3bc4008 (v1.2.1)
-Package: SHEYTAN-Local-Agent-v1.2.2-UPDATE.zip
+SHEYTAN-Local-Agent v1.2.3 — Engine-Race Fix, Download Manager & Honest Download Progress Replacement Manifest
+====================================================================================================
+Base: main @ f0ef0d2 (v1.2.2)
+Package: SHEYTAN-Local-Agent-v1.2.3-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
@@ -21,148 +21,122 @@ checks and the known limitations live in UPDATE.md.
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  src/ErrorBoundary.tsx
-    status:   new
-    reason:   AppErrorBoundary + PanelErrorBoundary — the black-screen
-              class fix (recover/reload cards, view-switch reset)
-  src/run-phase.ts
-    status:   new
-    reason:   pure generation lifecycle state machine (backend events
-              only; unit-tested)
-  src/run-phase.test.ts
-    status:   new
-    reason:   regression tests for every fixed state-machine transition
-  src/stream-accumulator.ts
-    status:   new
-    reason:   cumulative-snapshot streaming accumulator — replace
-              semantics, replay-idempotent (the duplication fix)
-  src/stream-accumulator.test.ts
-    status:   new
-    reason:   regression tests for the streaming wire contract
-  internal/hardware/hardware_test.go
-    status:   new
-    reason:   locks "gpus" never marshals as JSON null (crash source)
-  internal/logging/logging_sessionbanner_test.go
-    status:   new
-    reason:   locks the session banner markers + noop safety
-  internal/updater/updater_noasset_test.go
-    status:   new
-    reason:   locks no-asset vs network error classification
+  internal/downloader/downloader.go
+    reason:   D
+    ies, mirror order, source cache
+  internal/downloader/transfer.go
+    reason:   H
+    eaming, verify + atomic activate + rollback
+  internal/downloader/meta.go
+    reason:   T
+  internal/downloader/downloader_test.go
+    reason:   1
+    undary, retry classes
+  src/DownloadProgress.tsx
+    reason:   s
+    ETA/source/verification, actions
 
 [MODIFIED FILES]
-  src/store.ts
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  src/MessageStream.tsx
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  src/SystemPanel.tsx
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  src/AgentBody.tsx
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  src/App.tsx
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  src/main.tsx
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  src/api.ts
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  src/styles.css
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  tsconfig.app.json
-    status:   modified
-    reason:   see UPDATE.md §1 change map
-  package.json
-    status:   modified
-    reason:   version 1.2.2 + test:units script
-  package-lock.json
-    status:   modified
-    reason:   version 1.2.2
-  internal/hardware/hardware.go
-    status:   modified
-    reason:   GPUs guaranteed non-nil — "gpus": [] on the wire
-  internal/sysinfo/sysinfo.go
-    status:   modified
-    reason:   Probe nil-guards info.GPU (same wire contract)
-  internal/logging/logging.go
-    status:   modified
-    reason:   Manager.SessionBanner (session separator per boot)
-  cmd/root.go
-    status:   modified
-    reason:   SessionBanner wired before the boot line
-  internal/updater/updater.go
-    status:   modified
-    reason:   IsNoAssetError classification
-  internal/llm/llama.go
-    status:   modified
-    reason:   llamaDownloadURL honest error tails + WARN log
-  internal/config/config.go
-    status:   modified
-    reason:   AppVersion "1.2.2" (release-version.mjs repair)
-  build/config.yml
-    status:   modified
-    reason:   productVersion "1.2.2" (release-version.mjs repair)
-  SIGNATURE
-    status:   modified
-    reason:   first line v1.2.2 (release-version.mjs repair)
-  web/static/.vite/manifest.json
-    status:   modified
-    reason:   regenerated embedded frontend (vite build + sync:web)
-  web/static/index.html
-    status:   modified
-    reason:   regenerated embedded frontend (vite build + sync:web)
-  web/static/assets/AgentBody-EocjZLgJ.js
-    status:   new (build output)
-    reason:   regenerated embedded frontend
-  web/static/assets/AgentHeader-C5gpAJAl.js
-    status:   new (build output)
-    reason:   regenerated embedded frontend
-  web/static/assets/AgentSidebar-D_scJRE6.js
-    status:   new (build output)
-    reason:   regenerated embedded frontend
-  web/static/assets/LabPanel-Ys_1jxhi.js
-    status:   new (build output)
-    reason:   regenerated embedded frontend
-  web/static/assets/ResearchPanel-cRC5-t9l.js
-    status:   new (build output)
-    reason:   regenerated embedded frontend
-  web/static/assets/SettingsPanel-DrGWWN7P.js
-    status:   new (build output)
-    reason:   regenerated embedded frontend
-  web/static/assets/SystemPanel-BOrHcKSv.js
-    status:   new (build output)
-    reason:   regenerated embedded frontend
-  web/static/assets/index-Bto0wA8H.css
-    status:   new (build output)
-    reason:   regenerated embedded frontend
-  web/static/assets/index-DHBcE2Kp.js
-    status:   new (build output)
-    reason:   regenerated embedded frontend
   README.md
-    status:   modified
-    reason:   v1.2.2 section + release header
+    reason:   v1.2.3 section + release header
   agent.md
-    status:   modified
-    reason:   v1.2.2 notes for the next agent
+    reason:   v1.2.3 notes for the next agent
   worklog.md
-    status:   modified
-    reason:   v1.2.2 entry appended
+    reason:   v1.2.3 entry appended
+  package.json
+    reason:   version "1.2.3" (release identity source of truth)
+  package-lock.json
+    reason:   version "1.2.3" (lockfile sync)
+  SIGNATURE
+    reason:   first line v1.2.3 (release-version.mjs repair)
+  build/config.yml
+    reason:   productVersion "1.2.3"
+  internal/config/config.go
+    reason:   AppVersion = "1.2.3"
+  cmd/stress_release.go
+    reason:   +downloader_integrity_resume, +downloader_untrusted_fallba
+              ck
+  internal/api/engine.go
+    reason:   engineSnapshot.Download + WS engine frames carry live down
+              load progress
+  internal/api/lifecycle.go
+    reason:   Close() cancels in-flight app-update staging
+  internal/api/server.go
+    reason:   appUpdateJob/Staging/Cancel fields; cancel-download action
+              ; route
+  internal/api/update.go
+    reason:   ASYNC staging (immediate return), /api/update/cancel, live
+               progress in status
+    status:   replaced (complete file replacement)
+  internal/llm/llama.go
+    reason:   engine bootstrap via Download Manager; EngineEvent.Downloa
+              d; dlJob/dlProgress; cancel
+  internal/updater/updater.go
+    reason:   downloadEngine on the manager (+progress); UpdateEngineWit
+              hProgress
+  internal/updater/appupdate.go
+    reason:   StageAppUpdate(WithProgress)/AppUpdateStagingJob on the ma
+              nager; Status.Download
+  internal/updater/appupdate_test.go
+    reason:   tamper case clears staging first (skip-existing semantics)
+  native/engine/src/engine.cpp
+    reason:   generation_in_flight(): whole-window load/unload guard (CI
+               root cause fix)
+  native/engine/tests/test_generate.cpp
+    reason:   deterministic unload-guard test (first-token condvar signa
+              l + coherence/reload/cancel asserts)
+  native/engine/src/tokenizer.cpp
+    reason:   dead utf8_encode removed (warning cleanup)
+  native/engine/src/tensor.cpp
+    reason:   unused nbytes local removed (warning cleanup)
+  src/api.ts
+    reason:   DownloadProgress type; engine/update download fields; upda
+              teCancel(); cancel-download action
+  src/store.ts
+    reason:   modelsLoading flag (skeleton instead of fake empty state)
+  src/AgentBody.tsx
+    reason:   compact engine-download panel + cancel in the runtime pane
+              l
+  src/AgentHeader.tsx
+    reason:   live download percentage in the phase pill
+  src/ModelPicker.tsx
+    reason:   loading skeleton branch (aria-busy)
+  src/SettingsVisionUpdates.tsx
+    reason:   async UpdatesCard: poll-while-downloading, progress panel,
+               cancel, retry
+  src/SystemPanel.tsx
+    reason:   compact download slot in RuntimeCard
+  src/styles.css
+    reason:   .dl-* downloader styles on canonical tokens (+ skeleton ca
+              rd)
+  web/static/index.html
+    reason:   regenerated embedded frontend (new asset hashes)
+  web/static/.vite/manifest.json
+    reason:   regenerated embedded frontend (new asset hashes)
 
-[DELETED FILES — remove after applying, see UPDATE.md §2]
-  web/static/assets/AgentBody-CyMQd0oP.js        (v1.2.1 build output)
-  web/static/assets/AgentHeader-Dezw4syJ.js      (v1.2.1 build output)
-  web/static/assets/AgentSidebar-D2AIsqsa.js     (v1.2.1 build output)
-  web/static/assets/LabPanel-DNdaVwnC.js         (v1.2.1 build output)
-  web/static/assets/ResearchPanel-DVSjuNFM.js    (v1.2.1 build output)
-  web/static/assets/SettingsPanel-C5otSLaN.js    (v1.2.1 build output)
-  web/static/assets/SystemPanel-CzupHX9T.js      (v1.2.1 build output)
-  web/static/assets/index-CTp-kOgC.js            (v1.2.1 build output)
-  web/static/assets/index-DJQM74Q8.css           (v1.2.1 build output)
+[REPLACED PACKAGE METADATA]
+  UPDATE.md / REPLACEMENT-MANIFEST.txt / REPLACEMENT-SHA256.txt
+    status:   replaced — this package's own metadata (see above)
+
+[DELETED FILES — remove after applying, see UPDATE.md §4]
+  web/static/assets/AgentBody-CyMQd0oP.js        (v1.2.2 build output)
+  web/static/assets/AgentBody-EocjZLgJ.js        (v1.2.2 build output)
+  web/static/assets/AgentHeader-C5gpAJAl.js        (v1.2.2 build output)
+  web/static/assets/AgentHeader-Dezw4syJ.js        (v1.2.2 build output)
+  web/static/assets/AgentSidebar-D2AIsqsa.js        (v1.2.2 build output)
+  web/static/assets/AgentSidebar-D_scJRE6.js        (v1.2.2 build output)
+  web/static/assets/LabPanel-DNdaVwnC.js        (v1.2.2 build output)
+  web/static/assets/LabPanel-Ys_1jxhi.js        (v1.2.2 build output)
+  web/static/assets/ResearchPanel-DVSjuNFM.js        (v1.2.2 build output)
+  web/static/assets/ResearchPanel-cRC5-t9l.js        (v1.2.2 build output)
+  web/static/assets/SettingsPanel-C5otSLaN.js        (v1.2.2 build output)
+  web/static/assets/SettingsPanel-DrGWWN7P.js        (v1.2.2 build output)
+  web/static/assets/SystemPanel-BOrHcKSv.js        (v1.2.2 build output)
+  web/static/assets/SystemPanel-CzupHX9T.js        (v1.2.2 build output)
+  web/static/assets/index-Bto0wA8H.css        (v1.2.2 build output)
+  web/static/assets/index-CTp-kOgC.js        (v1.2.2 build output)
+  web/static/assets/index-DHBcE2Kp.js        (v1.2.2 build output)
+  web/static/assets/index-DJQM74Q8.css        (v1.2.2 build output)
 
 [Integrity]
   Every file's SHA-256 is listed in REPLACEMENT-SHA256.txt (sorted by

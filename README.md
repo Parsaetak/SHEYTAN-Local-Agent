@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.2.2
+Current release:  v1.2.3
 Codename:         Zeta
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
@@ -70,6 +70,22 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.2.3 — CI Engine-Race Fix, Download Manager, Honest Download Progress
+
+**The failing Linux CI job is fixed at its ROOT (a real engine guard gap, not a flaky test), every remote asset the app pulls now flows through one reusable, verifiable, resumable Download Manager with live UI progress, and the update/installer surface became asynchronous and cancellable. No new runtime, no second download path.**
+
+| Area | What changed |
+|---|---|
+| **CI root cause (engine guard coherence)** | `test_generate.cpp`'s unload-guard raced: it polled the scheduler's observable `active_requests` while the load/unload guard counted a DIFFERENT variable (`active_generations`, set later inside the executor). An unload landing in the window SUCCEEDED, tore the model out from under the in-flight generation and failed the CHECK (~25% of loaded CI runs; repro'd locally at 28/200 before the fix, 0/1200 after). The engine guard now covers the WHOLE in-flight window (registered work → scheduler slot → executor count) in one authority (`generation_in_flight`), so observable state can never contradict the guard. The test itself now synchronizes on an EXPLICIT signal — the first streamed token, emitted only from inside the runner's decode loop — with a bounded condvar wait (no polling budget, no sleeps), asserts BOTH the unload AND reload rejection plus scheduler coherence, verifies the cancelled result and engine reusability. Deterministic under CPU saturation (verified: 3/3 loaded runs, 5/5 niced runs, 10/10 idle runs) |
+| **Download Manager (`internal/downloader`)** | One native-Go mechanism for llama.cpp archives, future model packages, mmproj/projector assets and app updates: HTTPS-only by default (enforced across redirects; loopback exemption for tests only), persistent pooled connections, single-stream by design, streamed to `<dest>.part` → SHA-256/size verify → atomic rename (a partial or corrupt asset is NEVER activated), HTTP-Range resume of interrupted transfers, previous-version `.bak` preservation for rollback, ordered sources (authoritative release asset → configured mirror → fallback ONLY with an explicit `AllowFallback` opt-in — never a silent untrusted mirror), a TTL'd source cache so startup does not re-probe every endpoint, bounded exponential backoff + jitter, permanent 4xx never retried, immediate cancellation, pause/resume, and measured progress (phase, bytes, speed EWMA, ETA, source, verification state, retries) |
+| **Engine bootstrap + self-update** | `ensureBinary`, the model-architecture self-update and the scheduled engine updater all run on the Download Manager now; progress rides engine events (WS + `/api/engine`) and the runtime UI; engine downloads are cancellable (`POST /api/llama {action:"cancel-download"}`) and resume instead of restarting |
+| **App updater** | `POST /api/update/download` returns IMMEDIATELY (no more 5-minute blocking request); staging runs on the manager with SHA-256 + size pinned from a freshly re-fetched manifest; `GET /api/update/status` carries live progress; `POST /api/update/cancel` stops network + file activity at once (the .part resumes on retry); `Close()` cancels in-flight staging so the updater can never outlive the server |
+| **Downloader UI** | One shared visual language (`DownloadProgressPanel`): the Resolving → Connecting → Downloading → Verifying → Installing → Ready phase chain, determinate bar with %, MB/s, downloaded/total, ETA, active source + trust label, verification badge, retry reasons, and Cancel/Retry actions — wired into the Updates card (Settings), the Agent runtime panel and the System Centre; the header phase pill shows the live percentage during engine bootstrap |
+| **UX coherence pass** | Model picker renders loading skeletons instead of mistaking "not loaded" for "no models" (`modelsLoading` in the store, `aria-busy`); download panels are `role="status"`/`aria-live="polite"`; busy states on update actions; the unused `.m-progress-track`/`.m-skeleton` primitives are now real components' foundations; reduced-motion collapse still applies to every new animation |
+| **Warnings** | The two known native C++ warnings are cleaned at the root (dead `utf8_encode` removed, unused `nbytes` local removed) — no suppression pragmas; a clean rebuild emits zero warnings |
+| **Hardening suite** | Two new release stress scenarios: `downloader_integrity_resume` (Range resume → verified activation → no `.part` residue) and `downloader_untrusted_fallback` (fallback source NEVER contacted without explicit opt-in; checksum mismatch refused). 47/47 stress scenarios, 14 downloader tests (race-clean ×3), full native 12/12 |
+| **Version** | `1.2.2` → `1.2.3` through the established identity chain (package.json → release-version.mjs → config.go / build/config.yml / SIGNATURE) |
 
 ## v1.2.2 — Generation Visibility & Black-Screen Repair
 

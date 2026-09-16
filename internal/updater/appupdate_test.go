@@ -144,6 +144,11 @@ func TestStageAppUpdate_DownloadsVerifiesAndStages(t *testing.T) {
 	}
 
 	// Tampered artifact must be refused and leave no staged file.
+	// (v1.2.3: a verified staged artifact at the destination is skipped,
+	// so remove it first to exercise the actual download+verify path.)
+	if err := os.RemoveAll(filepath.Join(dir, "updates")); err != nil {
+		t.Fatal(err)
+	}
 	tampered := &AppManifest{
 		Version: "1.3.0",
 		Platforms: map[string]AppPlatformUpdate{

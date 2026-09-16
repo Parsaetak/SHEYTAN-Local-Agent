@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, type EnvironmentPayload, type HealthPayload } from "./api";
+import { useRuntimeStore } from "./store";
+import { DownloadProgressPanel } from "./DownloadProgress";
 
 // v1.2.0 — the Environment Centre (System Centre): one honest view over
 // device, runtime, verified health and the recommendation engine. Every
@@ -137,6 +139,9 @@ function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
 }
 
 function RuntimeCard({ env }: { env: EnvironmentPayload | null }) {
+  // v1.2.3: live engine-asset download progress from the shared engine
+  // snapshot (polled by the runtime store when this surface is owned).
+  const engineDownload = useRuntimeStore((state) => state.engine?.download);
   if (!env || !env.runtime) return null;
 
   const { runtime } = env;
@@ -156,6 +161,10 @@ function RuntimeCard({ env }: { env: EnvironmentPayload | null }) {
           {runtime.verified ? "✓ verified" : "not verified"}
         </span>
       </div>
+
+      {engineDownload ? (
+        <DownloadProgressPanel progress={engineDownload} compact />
+      ) : null}
 
       <div className="env-grid">
         <div className="session-detail">
