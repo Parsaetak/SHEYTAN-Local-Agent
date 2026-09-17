@@ -80,7 +80,17 @@ function phaseFor(item: ActivityEvent): PhaseId {
   }
 
   // Planning: context/session/engine preparation events that precede work.
-  if (type === "context" || type === "session" || type === "plan") {
+  // v1.2.5: tier escalations and live status lines are context-preparation
+  // signals — they group under Plan.
+  if (
+    type === "context" ||
+    type === "session" ||
+    type === "plan" ||
+    type === "escalation" ||
+    type === "status" ||
+    type === "thinking_start" ||
+    type === "thinking_end"
+  ) {
     return "plan";
   }
 

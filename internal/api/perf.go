@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/ctxtelemetry"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
@@ -158,6 +159,58 @@ type perfPayload struct {
 
 	// Recommended settings (apply is always explicit, never automatic).
 	Recommended *recommendedSettings `json:"recommended,omitempty"`
+
+	// v1.2.5: per-request timing + tier telemetry for the Advanced/System
+	// diagnostics view — the measured timeline of the most recent turns.
+	Requests []requestTimingAPI `json:"requests,omitempty"`
+
+	// v1.2.5: the data-ownership ladder (ACTIVE/SESSION/HOT/COLD/EXPIRED/
+	// RELEASE) with live counters.
+	Ownership []ownershipLevelAPI `json:"ownership,omitempty"`
+
+	// v1.2.5: the tool result/spec cache counters.
+	ToolCache *toolCacheAPI `json:"toolCache,omitempty"`
+}
+
+// requestTimingAPI is one recent turn's measured timeline (wire form).
+type requestTimingAPI struct {
+	At                 time.Time `json:"at"`
+	SessionID          string    `json:"sessionId,omitempty"`
+	Tier               string    `json:"tier,omitempty"`
+	FinalTier          string    `json:"finalTier,omitempty"`
+	Escalations        int       `json:"escalations,omitempty"`
+	ThinkingControl    string    `json:"thinkingControl,omitempty"`
+	ToolPolicyMode     string    `json:"toolPolicyMode,omitempty"`
+	FirstPromptTokens  int       `json:"firstPromptTokens,omitempty"`
+	ClassifyMs         int64     `json:"classifyMs,omitempty"`
+	ContextMs          int64     `json:"contextMs,omitempty"`
+	PromptMs           int64     `json:"promptMs,omitempty"`
+	SerializationMs    int64     `json:"serializationMs,omitempty"`
+	TTFTMs             int64     `json:"ttftMs,omitempty"`
+	GenerationMs       int64     `json:"generationMs,omitempty"`
+	ToolMs             int64     `json:"toolMs,omitempty"`
+	VerificationMs     int64     `json:"verificationMs,omitempty"`
+	TotalMs            int64     `json:"totalMs,omitempty"`
+	ToolCalls          int       `json:"toolCalls,omitempty"`
+	Verified           string    `json:"verified,omitempty"`
+}
+
+// ownershipLevelAPI is one ownership-ladder row (wire form).
+type ownershipLevelAPI struct {
+	Level       string   `json:"level"`
+	Owners      int      `json:"owners,omitempty"`
+	Names       []string `json:"names,omitempty"`
+	Bytes       int64    `json:"bytes,omitempty"`
+	At          string   `json:"at,omitempty"`
+	Description string   `json:"description"`
+}
+
+// toolCacheAPI carries the measured tool cache counters.
+type toolCacheAPI struct {
+	ResultHits    int `json:"resultHits"`
+	ResultMisses  int `json:"resultMisses"`
+	ResultEntries int `json:"resultEntries"`
+	ResultBytes   int `json:"resultBytes"`
 }
 
 // memoryStatsAPI is the wire form of the coordinated memory telemetry.
@@ -308,6 +361,16 @@ func (s *Server) buildPerfPayload(perf llm.EnginePerfSnapshot) perfPayload {
 	// v1.2.4: coordinated memory telemetry (nil-safe for tests).
 	payload.Memory = s.buildMemoryStats()
 
+	payload.Requests = s.buildRequestTimings()
+	payload.Ownership = s.buildOwnershipLevels()
+	hits, misses, entries, bytes := agent.ToolResultCacheStats()
+	payload.ToolCache = &toolCacheAPI{
+		ResultHits:    hits,
+		ResultMisses:  misses,
+		ResultEntries: entries,
+		ResultBytes:   bytes,
+	}
+
 	return payload
 }
 
@@ -423,4 +486,62 @@ func (s *Server) buildRecommended(loadedModelPath string) *recommendedSettings {
 	}
 
 	return rec
+}
+
+// buildRequestTimings renders the recent per-request measured timelines
+// (v1.2.5) — the Advanced/System diagnostics view's core table.
+func (s *Server) buildRequestTimings() []requestTimingAPI {
+	var out []requestTimingAPI
+
+	if s.stack.Telemetry == nil {
+		return nil
+	}
+
+	for _, rec := range s.stack.Telemetry.Recent(10) {
+		out = append(out, requestTimingAPI{
+			At:                rec.At,
+			SessionID:         rec.SessionID,
+			Tier:              rec.Tier,
+			FinalTier:         rec.FinalTier,
+			Escalations:       rec.Escalations,
+			ThinkingControl:   rec.ThinkingControl,
+			ToolPolicyMode:    rec.ToolPolicyMode,
+			FirstPromptTokens: rec.Timing.FirstPromptTokens,
+			ClassifyMs:        rec.Timing.ClassifyMs,
+			ContextMs:         rec.Timing.ContextMs,
+			PromptMs:          rec.Timing.PromptMs,
+			SerializationMs:   rec.Timing.SerializationMs,
+			TTFTMs:            rec.Timing.TTFTMs,
+			GenerationMs:      rec.Timing.GenerationMs,
+			ToolMs:            rec.Timing.ToolMs,
+			VerificationMs:    rec.Timing.VerificationMs,
+			TotalMs:           rec.Timing.TotalMs,
+			ToolCalls:         rec.ToolCalls,
+			Verified:          rec.Verified,
+		})
+	}
+
+	return out
+}
+
+// buildOwnershipLevels renders the data-ownership ladder (v1.2.5).
+func (s *Server) buildOwnershipLevels() []ownershipLevelAPI {
+	if s.stack.MemMgr == nil {
+		return nil
+	}
+
+	var out []ownershipLevelAPI
+
+	for _, lv := range s.stack.MemMgr.OwnershipSnapshot() {
+		out = append(out, ownershipLevelAPI{
+			Level:       string(lv.Level),
+			Owners:      lv.Owners,
+			Names:       lv.Names,
+			Bytes:       lv.Bytes,
+			At:          lv.At,
+			Description: lv.Description,
+		})
+	}
+
+	return out
 }

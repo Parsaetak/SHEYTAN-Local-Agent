@@ -1,7 +1,7 @@
-SHEYTAN-Local-Agent v1.2.4 — Data-Path Speed, Coordinated Memory Policy, Real Workspace & Usability Replacement Manifest
-========================================================================================================================
-Base: main @ 8d8858d (v1.2.3)
-Package: SHEYTAN-Local-Agent-v1.2.4-UPDATE.zip
+SHEYTAN-Local-Agent v1.2.5 — Adaptive Context Tiers, Global Tool Control, Thinking Mode & Per-Request Telemetry — Replacement Manifest
+================================================================================================================================================================
+Base: main @ dacae73 (v1.2.4)
+Package: SHEYTAN-Local-Agent-v1.2.5-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
@@ -21,132 +21,113 @@ checks and the known limitations live in UPDATE.md.
     purpose:  SHA-256 of every file in this package
 
 [NEW FILES]
-  internal/memmanager/memmanager.go
-    reason:   coordinated runtime memory policy (trims, run tracking, pressure, idle loop, telemetry)
-  internal/memmanager/memmanager_test.go
-    reason:   policy tests incl. repeated-run bounded-memory proof (race-clean)
-  internal/api/workspace.go
-    reason:   Workspace surface: compact summary + reveal + safe switch endpoints
-  internal/api/workspace_test.go
-    reason:   workspace endpoint contract tests
-  internal/tools/capture.go
-    reason:   bounded streaming command-output capture replacing unbounded CombinedOutput + counters
-  internal/aicontext/bench_test.go
-    reason:   per-turn system-message benchmark (baseline pinning)
-  internal/chunking/format_bench_test.go
-    reason:   1 MB attachment compose benchmark (baseline pinning)
-  internal/chunking/window_bytes_test.go
-    reason:   byte-window differential + non-aliasing + large-file tests
-  internal/ctxtelemetry/bench_test.go
-    reason:   steady-state record/read benchmarks (baseline pinning)
-  internal/projectintel/bench_test.go
-    reason:   per-turn project-card benchmark (baseline pinning)
-  internal/sessions/bench_test.go
-    reason:   append/get hot-path benchmarks (baseline pinning)
-  src/WorkspacePanel.tsx
-    reason:   work-environment panel (project → files → task → model → runtime → state + quick actions)
-  src/shortcuts.ts
-    reason:   global keyboard shortcut registry + help data
-  web/static/assets/AgentBody-cMt13HM9.js
-    reason:   rebuilt frontend bundle (hashed)
-  web/static/assets/AgentHeader-dCYmm522.js
-    reason:   rebuilt frontend bundle (hashed)
-  web/static/assets/AgentSidebar-CWp3SdAx.js
-    reason:   rebuilt frontend bundle (hashed)
-  web/static/assets/DownloadProgress-28j0D3i-.js
-    reason:   rebuilt frontend bundle (hashed)
-  web/static/assets/LabPanel-DFJX1ZVA.js
-    reason:   rebuilt frontend bundle (hashed)
-  web/static/assets/ResearchPanel-BXiEx0Sd.js
-    reason:   rebuilt frontend bundle (hashed)
-  web/static/assets/SettingsPanel-BdbLpW4s.js
-    reason:   rebuilt frontend bundle (hashed)
-  web/static/assets/SystemPanel-BEI2b4hF.js
-    reason:   rebuilt frontend bundle (hashed)
-  web/static/assets/WorkspacePanel-BV8_VjyW.js
-    reason:   new lazy workspace panel bundle
-  web/static/assets/index-B_uB5cBU.js
-    reason:   rebuilt entry bundle
-  web/static/assets/index-gFgARQCb.css
-    reason:   rebuilt stylesheet
+  internal/taskclassify/taskclassify.go
+    reason:   task classification (kinds, signals, complexity, depth control)
+  internal/taskclassify/tiers.go
+    reason:   FAST/STANDARD/DEEP/MAX policies, resource-aware SelectTier, escalation reasons
+  internal/taskclassify/taskclassify_test.go
+    reason:   classifier + tier + escalation-ladder tests
+  internal/agent/orchestrator_tiers.go
+    reason:   turnComposer (tier-scoped composition + upgrades), escalationWatch, hardware TTL snapshot, policy types
+  internal/agent/orchestrator_tiers_test.go
+    reason:   acceptance tests: FAST first prompt, card tiers, thinking control, manual policy, cache, escalation, clock, spec cache, ladder bound
+  internal/agent/pertiming.go
+    reason:   RunClock + Timing (16 measured stages)
+  internal/agent/toolcache.go
+    reason:   specCache memoization + bounded deterministic result cache
+  internal/agent/userflows_test.go
+    reason:   Phase 15 user-flow tests (old-conversation, research, vision, simple-chat recall skip)
+  internal/agent/v125_measurement_test.go
+    reason:   before/after first-prompt measurement (v1.2.4 ~10K -> v1.2.5 ~416 tok)
+  internal/memmanager/ownership.go
+    reason:   ACTIVE/SESSION/HOT/COLD/EXPIRED/RELEASE ladder + snapshot
+  src/run-events.ts
+    reason:   canonical wire-event mapping + control normalizers (pure)
+  src/run-events.test.ts
+    reason:   vocabulary/normalization unit tests
+  src/ComposerControls.tsx
+    reason:   Thinking + Tools composer controls + live status chip
 
 [MODIFIED FILES]
   package.json
-    reason:   version 1.2.4 (identity chain source of truth)
+    reason:   version 1.2.5 (identity chain source of truth)
   SIGNATURE
     reason:   version sync via release-version.mjs
   build/config.yml
     reason:   version sync via release-version.mjs
   internal/config/config.go
-    reason:   WorkspaceRoot + RecentWorkspaces config, EffectiveWorkspaceRoot resolution
+    reason:   AppVersion 1.2.5 (sync)
+  internal/contextplan/contextplan.go
+    reason:   Tier metadata, P0-P3 priority classes, MaxHistoryShare cap
+  internal/agent/orchestrator.go
+    reason:   RunDetailed adaptive pipeline (classify, tier, compose, escalate), per-request options, events, tool cache, run clock
+  internal/agent/reliability_test.go
+    reason:   card-position fixture updated to a card-carrying (coding) task for the tier era
   internal/ctxtelemetry/ctxtelemetry.go
-    reason:   in-memory record cache + coalesced persistence (removes per-turn full-file rewrite)
-  internal/sessions/sessions.go
-    reason:   bounded hot cache, read-isolated Get, streamed writes, TrimHot, sidecar cache
-  internal/aicontext/aicontext.go
-    reason:   (size,mtime) text cache for the per-turn briefing
-  internal/projectintel/projectintel.go
-    reason:   validated facts parse cache for the per-turn card
-  internal/chunking/chunking.go
-    reason:   WindowHeadTailBytes + byte-windowed attachment compose (no full string copy)
-  internal/tools/tools.go
-    reason:   Shell/CodeExec/Git switched to bounded output capture
-  internal/memory/memory.go
-    reason:   remember-path exact-duplicate suppression + counter
-  internal/llm/client.go
-    reason:   byte-bounded LRU image cache (worst case 48 MB → 24 MiB cap)
-  internal/contextcache/contextcache.go
-    reason:   TrimIdle cold-tail shedding for coordinated cleanup
+    reason:   Tier/FinalTier/Escalations/ThinkingControl/ToolPolicyMode/RequestTiming
+  internal/memmanager/memmanager.go
+    reason:   ownership wiring (named ACTIVE holders, release accounting)
   internal/runtime/runtime.go
-    reason:   Stack.Sessions/MemMgr/Intel, trim registration, StartMemoryManager, Close flush
+    reason:   project-intel observe moved off the startup critical path
   internal/api/server.go
-    reason:   shared session store, run lifecycle tracking, workspace routes, idle-loop start
+    reason:   handleRun parses thinking/toolMode/toolAllow + receivedAt; persistence skip list extended
   internal/api/perf.go
-    reason:   memory + data-path telemetry on /api/perf
-  src/workspace.ts
-    reason:   workspace layer registration, Agent relabel, view persistence
+    reason:   requests[] timeline table, ownership ladder, toolCache counters
   src/api.ts
-    reason:   workspace types + endpoints
-  src/App.tsx
-    reason:   workspace route, view restore, global shortcuts, help overlay
+    reason:   RunRequest controls + RequestTiming/OwnershipLevel types
   src/store.ts
-    reason:   engine snapshot change-detection (kills 2.5 s re-render churn)
-  src/LabPanel.tsx
-    reason:   explicit store selectors (was whole-store subscription)
+    reason:   controls state (persisted) + canonical event handling + liveStatus/tierEscalations/thinkingPanelOpen
+  src/AgentBody.tsx
+    reason:   composer mounts ComposerControls
   src/MessageStream.tsx
-    reason:   memo export + stable message keys
-  src/ModelPicker.tsx
-    reason:   memo export
-  src/PerfStrip.tsx
-    reason:   memo export
+    reason:   thinking panel follows backend thinking markers; escalation notices in the run activity
   src/ActivityStream.tsx
-    reason:   memo export
+    reason:   escalation/status group under Plan
   src/styles.css
-    reason:   additive v1.2.4 styles (workspace panel, shortcut overlay, skeletons)
-  web/static/index.html
-    reason:   rebuilt frontend bundle references
-  web/static/.vite/manifest.json
-    reason:   rebuilt frontend manifest
-  worklog.md
-    reason:   this release's work-log entry (append-only)
+    reason:   additive v1.2.5 section (control menus, status chip, escalation styling)
 
-[REPLACED PACKAGE METADATA]
-  UPDATE.md
-  REPLACEMENT-MANIFEST.txt
-  REPLACEMENT-SHA256.txt
+[REGENERATED WEB/STATIC]
+  web/static/index.html + web/static/.vite/manifest.json
+    reason:   rebuilt frontend bundle references (npm run build + sync:web)
+  web/static/assets/AgentBody-E9JJ_R6r.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/AgentHeader-BpWR6c2d.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/AgentSidebar-BJUTZobI.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/DownloadProgress-1en0mJCS.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/LabPanel-DG1YEr1n.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/ResearchPanel-ByYo7Bbc.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/SettingsPanel-DYKVli5M.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/SystemPanel-DkdYORg1.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/WorkspacePanel-aELe49Qv.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/index-5oqPjJgJ.css
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/index-B77WlYpt.js
+    reason:   rebuilt hashed bundle asset
+  web/static/assets/vision-Dw0T2tjy.js
+    reason:   rebuilt hashed bundle asset (unchanged content hash from v1.2.4 — included for a complete, self-consistent web/static tree)
 
-[DELETED FILES — remove after applying, see UPDATE.md §4]
-  web/static/assets/AgentBody-BjrGu1AP.js
-  web/static/assets/AgentHeader-Du6Ox9Mq.js
-  web/static/assets/AgentSidebar-DvyhjsPE.js
-  web/static/assets/DownloadProgress-CO-h6FaB.js
-  web/static/assets/LabPanel-BaaTabl2.js
-  web/static/assets/ResearchPanel-MRM_MVdu.js
-  web/static/assets/SettingsPanel-DALRLl1e.js
-  web/static/assets/SystemPanel-CAyGQpds.js
-  web/static/assets/index-CjGSRCFB.js
-  web/static/assets/index-DwewjhlI.css
+[DELETE LIST — apply after copying]
+  web/static/assets/AgentBody-cMt13HM9.js
+  web/static/assets/AgentHeader-dCYmm522.js
+  web/static/assets/AgentSidebar-CWp3SdAx.js
+  web/static/assets/DownloadProgress-28j0D3i-.js
+  web/static/assets/LabPanel-DFJX1ZVA.js
+  web/static/assets/ResearchPanel-BXiEx0Sd.js
+  web/static/assets/SettingsPanel-BdbLpW4s.js
+  web/static/assets/SystemPanel-BEI2b4hF.js
+  web/static/assets/WorkspacePanel-BV8_VjyW.js
+  web/static/assets/index-B_uB5cBU.js
+  web/static/assets/index-gFgARQCb.css
 
-[Integrity]
-  Every file in this package is covered by REPLACEMENT-SHA256.txt.
-  Verify with:  shasum -a 256 -c REPLACEMENT-SHA256.txt
+[EXCLUDED FROM PACKAGE]
+  .git, node_modules, models, logs, caches, temporary files, secrets,
+  unrelated build output — per the v1.2.5 packaging contract.
+

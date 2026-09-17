@@ -618,8 +618,11 @@ func TestProjectCardInjectionPosition(t *testing.T) {
                 return "## PROJECT INTELLIGENCE\n- Languages: Go"
         })
 
+        // v1.2.5: the adaptive tier composes the project card for
+        // coding-shaped work (STANDARD+); a trivial chat turn deliberately
+        // skips it. This fixture exercises the card-carrying tier.
         if _, err := orch.RunDetailed(context.Background(), []llm.Message{
-                {Role: "user", Content: "do the thing"},
+                {Role: "user", Content: "fix the bug in main.go"},
         }, func(_ Activity) {}); err != nil {
                 t.Fatalf("RunDetailed: %v", err)
         }

@@ -26,6 +26,14 @@ import {
   type RunPhase,
 } from "./run-phase";
 import {
+  normalizeEventKind,
+  normalizeThinkingControl,
+  normalizeToolAllowlist,
+  normalizeToolPolicyMode,
+  type ThinkingControl,
+  type ToolPolicyMode,
+} from "./run-events";
+import {
   applyReasoningSnapshot,
   applyResponseSnapshot,
   createStreamingAccumulator,
@@ -62,6 +70,69 @@ function persistWorkspaceMode(mode: WorkspaceMode): void {
   }
 }
 
+// v1.2.5: per-request composer controls persist the same way — the
+// thinking control and the manual tool selection survive reloads and are
+// sent with EVERY run request (they change the actual backend behaviour).
+const THINKING_STORAGE_KEY = "sheytan.thinking";
+const TOOLMODE_STORAGE_KEY = "sheytan.toolMode";
+const TOOLALLOW_STORAGE_KEY = "sheytan.toolAllow";
+
+function initialThinkingControl(): ThinkingControl {
+  try {
+    return normalizeThinkingControl(
+      window.localStorage.getItem(THINKING_STORAGE_KEY),
+    );
+  } catch {
+    return "auto";
+  }
+}
+
+function persistThinkingControl(v: ThinkingControl): void {
+  try {
+    window.localStorage.setItem(THINKING_STORAGE_KEY, v);
+  } catch {
+    // in-memory only
+  }
+}
+
+function initialToolPolicyMode(): ToolPolicyMode {
+  try {
+    return normalizeToolPolicyMode(
+      window.localStorage.getItem(TOOLMODE_STORAGE_KEY),
+    );
+  } catch {
+    return "auto";
+  }
+}
+
+function persistToolPolicyMode(v: ToolPolicyMode): void {
+  try {
+    window.localStorage.setItem(TOOLMODE_STORAGE_KEY, v);
+  } catch {
+    // in-memory only
+  }
+}
+
+function initialToolAllowlist(): string[] {
+  try {
+    const raw = window.localStorage.getItem(TOOLALLOW_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    return normalizeToolAllowlist(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+function persistToolAllowlist(list: string[]): void {
+  try {
+    window.localStorage.setItem(TOOLALLOW_STORAGE_KEY, JSON.stringify(list));
+  } catch {
+    // in-memory only
+  }
+}
+
 export type ActivityEvent = {
   id: string;
   type: string;
@@ -95,6 +166,25 @@ type RuntimeState = {
   runPhase: RunPhase;
   runStartedAt: number | null;
   runNote: string | null;
+
+  // v1.2.5: live status chip (backend "status" events only — measured
+  // tier/token telemetry, never fabricated) + the tier-escalation trail
+  // of the current/last run.
+  liveStatus: string | null;
+  tierEscalations: string[];
+
+  // v1.2.5: the thinking panel's open/fold state, driven ONLY by the
+  // backend's thinking_start/thinking_end markers (plus run end).
+  thinkingPanelOpen: boolean;
+
+  // v1.2.5: per-request composer controls (persisted; sent with every
+  // run — they shape the actual backend request).
+  thinkingControl: ThinkingControl;
+  setThinkingControl: (v: ThinkingControl) => void;
+  toolPolicyMode: ToolPolicyMode;
+  setToolPolicyMode: (v: ToolPolicyMode) => void;
+  toolAllowlist: string[];
+  setToolAllowed: (name: string, allowed: boolean) => void;
 
   // v1.2.2: socket/poll ownership. AgentBody acquires on mount and
   // releases on unmount; a LIVE run keeps the activity socket and the
@@ -548,6 +638,14 @@ const RUN_EVENT_TYPES = new Set([
   "done",
   "error",
   "session",
+  // v1.2.5 additions.
+  "assistant_delta",
+  "thinking_delta",
+  "thinking_start",
+  "thinking_end",
+  "complete",
+  "status",
+  "escalation",
 ]);
 
 function clearRunFinalizeTimer(): void {
@@ -766,8 +864,13 @@ function handleConversationEvent(event: ActivityEvent): void {
     runEventsReceived = true;
   }
 
-  switch (event.type) {
-    case "response": {
+  // v1.2.5: one canonical mapping for the whole wire vocabulary — legacy
+  // names and the new aliases flow through the SAME handlers, so nothing
+  // is processed (or displayed) twice.
+  const kind = normalizeEventKind(event.type);
+
+  switch (kind) {
+    case "assistant_delta": {
       const content =
         typeof event.data.caption === "string" ? event.data.caption : "";
 
@@ -779,7 +882,7 @@ function handleConversationEvent(event: ActivityEvent): void {
       break;
     }
 
-    case "reasoning": {
+    case "thinking_delta": {
       const reasoning =
         typeof event.data.caption === "string" ? event.data.caption : "";
 
@@ -791,10 +894,59 @@ function handleConversationEvent(event: ActivityEvent): void {
       break;
     }
 
-    case "thinking":
-    case "context":
+    case "thinking_open": {
+      // The backend began a reasoning burst — open the panel (actual
+      // backend event, never fabricated).
+      useRuntimeStore.setState({ thinkingPanelOpen: true });
+      transitionPhase("thinking_activity");
+      break;
+    }
+
+    case "thinking_close": {
+      // Reasoning finished — fold the panel by default.
+      useRuntimeStore.setState({ thinkingPanelOpen: false });
+      transitionPhase("thinking_activity");
+      break;
+    }
+
+    case "status": {
+      // v1.2.5: the backend's own live status line (measured tier/token
+      // telemetry) — displayed verbatim, never invented.
+      const caption =
+        typeof event.data.caption === "string" ? event.data.caption : "";
+
+      if (caption) {
+        useRuntimeStore.setState({ liveStatus: caption });
+      }
+
+      transitionPhase("thinking_activity");
+      break;
+    }
+
+    case "escalation": {
+      // v1.2.5: a tier move with its evidence reason — kept for the
+      // timeline and the post-run summary.
+      const caption =
+        typeof event.data.caption === "string" ? event.data.caption : "";
+
+      useRuntimeStore.setState((state) => ({
+        tierEscalations:
+          caption && !state.tierEscalations.includes(caption)
+            ? [...state.tierEscalations, caption]
+            : state.tierEscalations,
+      }));
+
+      transitionPhase("thinking_activity");
+      break;
+    }
+
     case "tool_start":
-    case "tool_end": {
+    case "tool_end":
+    case "context":
+    case "perf":
+    case "failure":
+    case "plan":
+    case "progress": {
       // Progressive activity alongside the generation — these advance
       // Preparing → Thinking but never demote Generating.
       transitionPhase("thinking_activity");
@@ -844,6 +996,7 @@ function handleConversationEvent(event: ActivityEvent): void {
     }
 
     case "done":
+    case "complete":
     case "error": {
       // THE v1.1.2Z dead-composer fix: a finished or failed run must
       // always release the composer. The old code only reset `running`
@@ -855,6 +1008,10 @@ function handleConversationEvent(event: ActivityEvent): void {
       // authoritative history (or the preserved partial) replaces it —
       // no blink, no lost output.
       flushStreaming();
+
+      // v1.2.5: the run ended — fold the thinking panel and freeze the
+      // status chip (it will refresh on the next run).
+      useRuntimeStore.setState({ thinkingPanelOpen: false });
 
       const caption =
         typeof event.data.caption === "string" ? event.data.caption : "";
@@ -943,6 +1100,14 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   runStartedAt: null,
   runNote: null,
 
+  // v1.2.5: live status + escalation trail + composer controls.
+  liveStatus: null,
+  tierEscalations: [],
+  thinkingPanelOpen: false,
+  thinkingControl: initialThinkingControl(),
+  toolPolicyMode: initialToolPolicyMode(),
+  toolAllowlist: initialToolAllowlist(),
+
   engine: null,
 
   // v1.1.6: per-session context status (fetched per active session).
@@ -996,6 +1161,38 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           error instanceof Error ? error.message : "Failed to refresh models.",
       });
     }
+  },
+
+  // v1.2.5: composer control actions — persisted + sent with every run.
+  setThinkingControl: (v) => {
+    const control = normalizeThinkingControl(v);
+    persistThinkingControl(control);
+    set({ thinkingControl: control });
+  },
+
+  setToolPolicyMode: (v) => {
+    const mode = normalizeToolPolicyMode(v);
+    persistToolPolicyMode(mode);
+    set({ toolPolicyMode: mode });
+  },
+
+  setToolAllowed: (name, allowed) => {
+    const clean = name.trim();
+    if (!clean) {
+      return;
+    }
+
+    const current = get().toolAllowlist;
+    const key = clean.toLowerCase();
+
+    const next = allowed
+      ? current.some((n) => n.toLowerCase() === key)
+        ? current
+        : [...current, clean]
+      : current.filter((n) => n.toLowerCase() !== key);
+
+    persistToolAllowlist(next);
+    set({ toolAllowlist: next });
   },
 
   refreshPresets: async () => {
@@ -1447,6 +1644,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       runPhase: "preparing",
       runStartedAt: Date.now(),
       runNote: null,
+      // v1.2.5: fresh run — fresh status line and escalation trail.
+      liveStatus: null,
+      tierEscalations: [],
     });
 
     // v1.1.3Z: optimistic user bubble — the conversation shows the sent
@@ -1472,10 +1672,20 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     set({ pendingAttachments: [] });
 
     try {
+      const state = get();
+
       await api.run({
         sessionId,
         message: message.trim(),
         ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+        // v1.2.5: the composer controls travel with the request — they
+        // change the actual backend behaviour (tier posture, tool surface).
+        ...(state.thinkingControl !== "auto"
+          ? { thinking: state.thinkingControl }
+          : {}),
+        ...(state.toolPolicyMode === "manual"
+          ? { toolMode: "manual", toolAllow: state.toolAllowlist }
+          : {}),
       });
 
       await get().refreshSessions();
@@ -1519,10 +1729,24 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       runPhase: "preparing",
       runStartedAt: Date.now(),
       runNote: null,
+      liveStatus: null,
+      tierEscalations: [],
     });
 
     try {
-      await api.run({ sessionId, message: "", regenerate: true });
+      const state = get();
+
+      await api.run({
+        sessionId,
+        message: "",
+        regenerate: true,
+        ...(state.thinkingControl !== "auto"
+          ? { thinking: state.thinkingControl }
+          : {}),
+        ...(state.toolPolicyMode === "manual"
+          ? { toolMode: "manual", toolAllow: state.toolAllowlist }
+          : {}),
+      });
 
       // Drop the trailing assistant bubble optimistically; the reload on
       // done restores the authoritative history.

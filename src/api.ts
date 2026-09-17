@@ -464,6 +464,15 @@ export interface RunRequest {
   message: string;
   attachmentIds?: string[];
   regenerate?: boolean;
+
+  // v1.2.5 per-request controls — these change the actual backend
+  // request (tier posture + tool surface), not just the UI.
+  /** "auto" | "fast" | "thinking" */
+  thinking?: string;
+  /** "auto" | "manual" */
+  toolMode?: string;
+  /** manual-mode allow-list (tool names); ignored in auto mode */
+  toolAllow?: string[];
 }
 
 export interface RunResponse {
@@ -833,6 +842,50 @@ export interface PerfSnapshot {
     source?: string;
   } | null;
   recommended?: RecommendedSettings | null;
+
+  // v1.2.5: per-request measured timelines (Advanced/System diagnostics).
+  requests?: RequestTimingEntry[];
+  /** the data-ownership ladder (ACTIVE/SESSION/HOT/COLD/EXPIRED/RELEASE) */
+  ownership?: OwnershipLevelEntry[];
+  toolCache?: {
+    resultHits: number;
+    resultMisses: number;
+    resultEntries: number;
+    resultBytes: number;
+  } | null;
+}
+
+/** One recent turn's measured timeline (v1.2.5). */
+export interface RequestTimingEntry {
+  at: string;
+  sessionId?: string;
+  tier?: string;
+  finalTier?: string;
+  escalations?: number;
+  thinkingControl?: string;
+  toolPolicyMode?: string;
+  firstPromptTokens?: number;
+  classifyMs?: number;
+  contextMs?: number;
+  promptMs?: number;
+  serializationMs?: number;
+  ttftMs?: number;
+  generationMs?: number;
+  toolMs?: number;
+  verificationMs?: number;
+  totalMs?: number;
+  toolCalls?: number;
+  verified?: string;
+}
+
+/** One ownership-ladder row (v1.2.5). */
+export interface OwnershipLevelEntry {
+  level: string;
+  owners?: number;
+  names?: string[];
+  bytes?: number;
+  at?: string;
+  description: string;
 }
 
 export interface RecommendedSettings {

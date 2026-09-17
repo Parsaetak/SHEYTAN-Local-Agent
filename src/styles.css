@@ -4498,3 +4498,204 @@ body::before {
   padding: 3px 8px;
   white-space: nowrap;
 }
+
+/* ==========================================================================
+   v1.2.5 — per-request composer controls (Thinking ▾ / Tools ▾), live
+   status chip, and escalation surface.
+   ========================================================================== */
+
+.composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 4px 2px;
+}
+
+.control-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.control-button {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-light);
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+  white-space: nowrap;
+}
+
+.control-button:hover {
+  color: var(--text);
+  border-color: var(--accent, #b48cff);
+}
+
+.control-button.active {
+  color: var(--text);
+  border-color: var(--accent, #b48cff);
+  background: color-mix(in srgb, var(--accent, #b48cff) 12%, transparent);
+}
+
+.control-menu-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  min-width: 240px;
+  max-width: 320px;
+  background: var(--panel, #17141d);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.control-option {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.control-option:hover {
+  background: var(--panel-light);
+}
+
+.control-option.selected {
+  background: color-mix(in srgb, var(--accent, #b48cff) 14%, transparent);
+}
+
+.control-option-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.control-option-hint {
+  font-size: 0.72rem;
+  color: var(--text-soft);
+  line-height: 1.35;
+}
+
+.control-policy-row {
+  display: flex;
+  gap: 6px;
+  padding: 4px 6px 8px;
+}
+
+.control-policy {
+  flex: 1;
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 5px 0;
+  cursor: pointer;
+}
+
+.control-policy.selected {
+  color: var(--text);
+  border-color: var(--accent, #b48cff);
+  background: color-mix(in srgb, var(--accent, #b48cff) 12%, transparent);
+}
+
+.control-tools-panel {
+  min-width: 280px;
+}
+
+.control-tool-list {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 4px 6px;
+}
+
+.control-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.control-tool-row:hover {
+  background: var(--panel-light);
+}
+
+.control-tool-row input[type="checkbox"] {
+  accent-color: var(--accent, #b48cff);
+  flex: none;
+}
+
+.control-tool-name {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text);
+  flex: none;
+}
+
+.control-tool-desc {
+  font-size: 0.7rem;
+  color: var(--text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-tools-hint {
+  padding: 4px 8px 8px;
+}
+
+.control-status-chip {
+  font-size: 0.72rem;
+  color: var(--text-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: color-mix(in srgb, var(--accent, #b48cff) 7%, transparent);
+  white-space: nowrap;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: status-fade-in 200ms ease;
+}
+
+@keyframes status-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Escalation notices stand out in the activity timeline. */
+.activity-item.escalation .activity-caption,
+.activity-row.escalation .activity-caption {
+  color: var(--accent, #b48cff);
+  font-weight: 600;
+}

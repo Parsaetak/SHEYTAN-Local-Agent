@@ -81,6 +81,10 @@ type Manager struct {
 	highWatermark uint64
 	now           func() time.Time // injectable for tests
 
+	// own (v1.2.5) is the explicit ownership ladder accounting
+	// (ACTIVE/SESSION/HOT/COLD/EXPIRED/RELEASE).
+	own *ownership
+
 	activeRuns atomic.Int64
 
 	stats struct {
@@ -99,7 +103,7 @@ type Manager struct {
 
 // New returns a Manager with the default high watermark.
 func New() *Manager {
-	return &Manager{highWatermark: DefaultHighWatermark, now: time.Now}
+	return &Manager{highWatermark: DefaultHighWatermark, now: time.Now, own: newOwnership()}
 }
 
 // WithHighWatermark overrides the pressure threshold (bytes).
@@ -109,6 +113,18 @@ func WithHighWatermark(b uint64) *Manager {
 		m.highWatermark = b
 	}
 	return m
+}
+
+// HoldActive marks a NAMED live request as an ACTIVE owner (v1.2.5):
+// while held, coordinated cleanup refuses to run — the request's data is
+// never evicted. Pair with ReleaseActive (defer).
+func (m *Manager) HoldActive(name string) {
+	m.own.HoldActive(name)
+}
+
+// ReleaseActive clears one named ACTIVE owner.
+func (m *Manager) ReleaseActive(name string) {
+	m.own.ReleaseActive(name)
 }
 
 // RegisterTrim registers a named shedding hook (idempotent by name).
@@ -128,7 +144,11 @@ func (m *Manager) RegisterTrim(name string, fn func() int64) {
 
 // TrackRunStart marks one agent run (or equivalent live generation) active.
 // Cleanup that could disturb a live run is deferred while any run is open.
-func (m *Manager) TrackRunStart() { m.activeRuns.Add(1) }
+// v1.2.5: the run is also a NAMED ACTIVE owner in the ownership ladder.
+func (m *Manager) TrackRunStart() {
+	m.activeRuns.Add(1)
+	m.own.HoldActive("run")
+}
 
 // TrackRunEnd releases the run claim and runs a bounded post-run cleanup:
 // one-shot large buffers are released while their absence is still safe
@@ -136,6 +156,7 @@ func (m *Manager) TrackRunStart() { m.activeRuns.Add(1) }
 // an aborted run also reaches TrackRunEnd via its owner's defer.
 func (m *Manager) TrackRunEnd() {
 	m.activeRuns.Add(-1)
+	m.own.ReleaseActive("run")
 	m.Cleanup("run-finished")
 }
 
@@ -181,6 +202,9 @@ func (m *Manager) Cleanup(reason string) Stats {
 	m.stats = s
 	out := m.snapshotLocked()
 	m.mu.Unlock()
+
+	// v1.2.5: the RELEASE level accounts what the cleanup actually freed.
+	m.own.recordRelease(freed, m.now())
 
 	return out
 }

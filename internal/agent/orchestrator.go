@@ -27,6 +27,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/skills"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/taskclassify"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/toolsets"
 )
 
@@ -81,6 +82,23 @@ type RunResult struct {
         // FailureTally (v1.1.5Z Phase 6): how many tool failures were
         // classified, by category — the reliability HUD for the timeline.
         FailureTally map[FailureCategory]int
+
+        // Tier (v1.2.5): the context tier the turn STARTED at
+        // (FAST/STANDARD/DEEP/MAX).
+        Tier string `json:"tier,omitempty"`
+
+        // FinalTier (v1.2.5): the tier the turn ENDED at (== Tier when no
+        // escalation fired).
+        FinalTier string `json:"finalTier,omitempty"`
+
+        // Escalations (v1.2.5): the recorded tier moves with their evidence
+        // reasons and token deltas.
+        Escalations []taskclassify.Escalation `json:"escalations,omitempty"`
+
+        // Timing (v1.2.5): the measured per-request timeline
+        // (classify/context/prompt/serialization/TTFT/generation/tool/
+        // verification/total).
+        Timing Timing `json:"timing,omitempty"`
 }
 
 // abortCaption renders the correct end caption for a canceled context:
@@ -158,6 +176,11 @@ type Orchestrator struct {
         toolsMu sync.RWMutex
         tools   map[string]Tool
 
+        // specs (v1.2.5) memoizes serialized tool schemas per registry
+        // generation — the per-turn double JSON marshal of every tool spec is
+        // gone. Invalidated on Register.
+        specs *specCache
+
         // genMu guards the router swap (set once at wiring; also readable
         // under race detector in tests).
         genMu sync.RWMutex
@@ -217,6 +240,7 @@ func New(src *config.Source, client *llm.Client) *Orchestrator {
                 src:    src,
                 client: client,
                 tools:  make(map[string]Tool),
+                specs:  newSpecCache(),
         }
 }
 
@@ -251,6 +275,11 @@ func (o *Orchestrator) Register(t Tool) {
         o.toolsMu.Lock()
         o.tools[t.Name()] = t
         o.toolsMu.Unlock()
+
+        // v1.2.5: a new/changed tool invalidates the memoized spec cache.
+        if o.specs != nil {
+                o.specs.Invalidate()
+        }
 }
 
 // Tools returns the tool registry (for schema export to the UI). The map
@@ -312,6 +341,19 @@ type RunOption func(*runOptions)
 // runOptions is the resolved per-run option set.
 type runOptions struct {
         sessionContext int
+
+        // thinking (v1.2.5) is the composer's thinking control:
+        // "auto" | "fast" | "thinking". It changes the ACTUAL backend
+        // behaviour — tier selection, the thinking nudge, verification
+        // posture — never just the UI.
+        thinking string
+
+        // toolPolicy (v1.2.5) is the per-request manual tool control.
+        toolPolicy ToolPolicy
+
+        // receivedAt (v1.2.5) carries the API layer's request-received
+        // timestamp so the run clock's TTFT/total cover the full path.
+        receivedAt time.Time
 }
 
 // WithSessionContext applies the per-session context policy (1.1.6) to
@@ -322,6 +364,40 @@ func WithSessionContext(tokens int) RunOption {
         return func(ro *runOptions) {
                 if tokens > 0 {
                         ro.sessionContext = tokens
+                }
+        }
+}
+
+// WithThinkingMode sets the per-request thinking control (v1.2.5):
+// "fast" (latency first, smaller initial context, no thinking nudge),
+// "thinking" (deeper reasoning, context escalation permitted, stronger
+// verification) or "auto" (adaptive decision). Invalid values resolve to
+// auto. This setting affects the real backend request.
+func WithThinkingMode(mode string) RunOption {
+        return func(ro *runOptions) {
+                ro.thinking = NormalizeThinkingControl(mode)
+        }
+}
+
+// WithToolPolicy sets the per-request manual tool control (v1.2.5). In
+// MANUAL mode only the allowed tools are offered and executable; the
+// restriction overrides automatic selection and is never widened by
+// context escalation.
+func WithToolPolicy(mode string, allowed []string) RunOption {
+        return func(ro *runOptions) {
+                ro.toolPolicy = ToolPolicy{
+                        Mode:    NormalizeToolPolicyMode(mode),
+                        Allowed: allowed,
+                }
+        }
+}
+
+// WithReceivedAt anchors the run clock to the moment the API layer
+// received the request (v1.2.5 telemetry).
+func WithReceivedAt(t time.Time) RunOption {
+        return func(ro *runOptions) {
+                if !t.IsZero() {
+                        ro.receivedAt = t
                 }
         }
 }
@@ -338,12 +414,18 @@ func (o *Orchestrator) RunDetailed(
         messages []llm.Message,
         onActivity func(Activity),
         opts ...RunOption,
-) (RunResult, error) {
+) (result RunResult, err error) {
         ro := runOptions{}
         for _, opt := range opts {
                 if opt != nil {
                         opt(&ro)
                 }
+        }
+
+        // v1.2.5: the per-request measured timeline.
+        clock := NewRunClock()
+        if !ro.receivedAt.IsZero() {
+                clock.SetReceived(ro.receivedAt)
         }
 
         o.mu.Lock()
@@ -358,8 +440,6 @@ func (o *Orchestrator) RunDetailed(
         // from the next run on.
         cfg := o.src.Load()
 
-        result := RunResult{}
-
         // v1.1.5Z Phase 6 reliability core: one loop guard (repeat detection,
         // tool-call/wall-clock budgets) and one evidence collector (objective
         // verification record) per run. Both are local to the run — nothing
@@ -368,34 +448,133 @@ func (o *Orchestrator) RunDetailed(
         evidence := NewEvidenceCollector()
         failTally := map[FailureCategory]int{}
 
-        // v1.0.1: every conversation now starts with the SHEYTAN AI-context
-        // briefing (AI-CONTEXT.md + live environment) as system message #1, so
-        // ANY plugged-in model knows where it runs, what tools exist and how to
-        // call them. Skipped when the caller already included it.
-        // Phase 7: wePrependedBriefing records that the full briefing is
-        // ours — the preflight degradation ladder may compact it when the
-        // context budget cannot carry the long form.
-        wePrependedBriefing := false
-        if !hasAIContext(messages) {
-                registeredToolNames := make(
-                        []string,
-                        0,
-                        len(o.tools),
-                )
+        // v1.2.5 escalation evidence watcher — REAL observations only.
+        watch := &escalationWatch{}
 
-                for name := range o.Tools() {
-                        if cfg.ToolEnabled(name) {
-                                registeredToolNames = append(
-                                        registeredToolNames,
-                                        name,
-                                )
-                        }
+        // =====================================================================
+        // v1.2.5 ADAPTIVE TURN PIPELINE.
+        //
+        //   request -> CLASSIFY -> tier (FAST/STANDARD/DEEP/MAX) ->
+        //   tier-scoped composition (P0 + the P1 the task actually signals)
+        //   -> plan -> engine -> first response -> evidence -> escalate ONLY
+        //   when required -> continue.
+        //
+        // The Phase 7 preflight fit gates and the degradation ladder remain
+        // the safety net BELOW the tier decision; what changes is the START:
+        // small requests now start small instead of paying the full ~10K
+        // token prefill for a one-line reply.
+        // =====================================================================
+
+        task := lastUserQuery(messages)
+
+        hasImages, _, attachmentBlockCount := requestFacts(messages)
+        _, stagedTokensProbe := countStagedBlocks(messages)
+
+        // --- CLASSIFY -------------------------------------------------------
+        profile := taskclassify.Classify(task, taskclassify.ClassifyOptions{
+                HasImages:       hasImages,
+                AttachmentCount: attachmentBlockCount,
+                HistoryMessages: len(messages),
+                UserDepth:       ro.thinking,
+        })
+
+        clock.Mark(StageClassified)
+
+        tier := "" // closure variable — status events read the LIVE tier
+
+        emitStatus := func(phase string) {
+                detail := map[string]any{
+                        "phase":     phase,
+                        "tier":      tier,
+                        "elapsedMs": clock.SinceReceived(),
                 }
 
-                ctxContent := aicontext.SystemMessageWithTools(
-                        cfg,
-                        registeredToolNames,
-                )
+                onActivity(Activity{
+                        Type:      "status",
+                        Caption:   phase,
+                        Timestamp: time.Now(),
+                        Detail:    detail,
+                })
+        }
+
+        logging.Default().Info(
+                "agent",
+                "task classified: kind=%s complexity=%d reason=%s",
+                profile.Kind, profile.Complexity, profile.Reason,
+        )
+
+        emitStatus("Classifying request…")
+
+        // Model-aware effective context: min(session policy, configured,
+        // GGUF model limit, engine limit) — resolved BEFORE tier selection
+        // because the tier decision needs the real window.
+        effCtx := o.resolveEffectiveContext(cfg, ro.sessionContext)
+        safety := contextSafetyMargin(effCtx.Effective)
+
+        // --- SELECT TIER (measured resources, no hard-coded sizes) ---------
+        ramTotalMB, ramAvailMB := RAMInfo()
+        historyTokens := chunking.EstimateMessagesTokens(messages)
+
+        enabledNames := make([]string, 0, len(o.tools))
+        for name := range o.Tools() {
+                if cfg.ToolEnabled(name) {
+                        enabledNames = append(enabledNames, name)
+                }
+        }
+        sort.Strings(enabledNames)
+
+        // Measured tool requirement: the task-relevant selection's cached
+        // spec cost (single source of truth with the composer below).
+        toolRequirementTokens := 0
+        if relevant := toolsets.SelectForTask(enabledNames, task, 0); len(relevant) > 0 {
+                relTools := make([]Tool, 0, len(relevant))
+                for _, n := range relevant {
+                        if t, ok := o.tool(n); ok {
+                                relTools = append(relTools, t)
+                        }
+                }
+                _, toolRequirementTokens = o.specs.BuildSpecs(relTools)
+        }
+
+        res := taskclassify.Resources{
+                EffectiveContext:    effCtx.Effective,
+                OutputReserve:       cfg.LLM.MaxTokens,
+                SystemRAMMB:         ramTotalMB,
+                AvailableRAMMB:      ramAvailMB,
+                VisionPayloadTokens: visionPayloadTokens(messages),
+                AttachmentTokens:    stagedTokensProbe,
+                ToolRequirement:     toolRequirementTokens,
+                HistoryTokens:       historyTokens,
+                UserDepth:           ro.thinking,
+        }
+
+        tier = taskclassify.SelectTier(profile, res)
+        result.Tier = tier
+
+        emitStatus("Preparing context · " + tier)
+
+        logging.Default().Info(
+                "agent",
+                "tier selected: %s (%s)",
+                tier, taskclassify.DescribeResources(res),
+        )
+
+        // --- TIER-SCOPED COMPOSITION ----------------------------------------
+        clock.Mark(StageContextStart)
+
+        composer := o.newTurnComposer(
+                cfg, effCtx, safety, ro.toolPolicy, ro.thinking,
+                tier, task, recaller, cardProvider,
+        )
+
+        // v1.0.1: every conversation still opens with the SHEYTAN briefing
+        // as system message #1 — but v1.2.5 composes the briefing the TIER
+        // chose: FAST uses the compact ~350-token form, deeper tiers the
+        // full instructions. Skipped when the caller already included it.
+        wePrependedBriefing := false
+        if !hasAIContext(messages) {
+                ctxContent, compact := composer.Briefing()
+                composer.usedCompact = compact
 
                 // When offline, fold the environment note into the briefing so the
                 // LLM knows which tools cannot work and wastes no iterations on
@@ -423,12 +602,14 @@ func (o *Orchestrator) RunDetailed(
                 wePrependedBriefing = true
         }
 
-        // v1.0.2 thinking mode: append the <think> nudge to the AI-context
-        // message (stable position — the prefix only changes when the user
-        // toggles the mode, which is rare).
-        if cfg.ThinkingMode {
+        // v1.0.2 thinking mode — v1.2.5: the per-request control resolves
+        // against the global toggle ("fast" disables the nudge for THIS
+        // request; "thinking" enables it even when the global toggle is off).
+        if composer.ThinkingEnabled() {
                 messages = ensureThinkingNudge(messages)
         }
+
+        clock.Mark(StageContextEnd)
 
         // =====================================================================
         // Phase 7 PREFLIGHT BUDGET PIPELINE — single authoritative path.
@@ -439,84 +620,12 @@ func (o *Orchestrator) RunDetailed(
         // FINAL request guaranteed to fit.
         //
         // Everything optional (recall, project card, skills, staged
-        // attachments) is COMPOSED first and INJECTED only when the plan
-        // keeps it; when fixed sections still overflow, the degradation
-        // ladder reduces lower-priority components automatically instead of
-        // merely warning. The engine is never called with a request that
-        // intentionally exceeds the effective window.
+        // attachments) is COMPOSED by the TIER first and INJECTED only when
+        // the plan keeps it; when fixed sections still overflow, the
+        // degradation ladder reduces lower-priority components automatically
+        // instead of merely warning. The engine is never called with a
+        // request that intentionally exceeds the effective window.
         // =====================================================================
-
-        task := lastUserQuery(messages)
-
-        // Phase 7B skills: load-on-demand — only trigger-matched skills
-        // reach the prompt, and the block is token-bounded.
-        skillBlock := ""
-        if o.skillSource != nil && task != "" {
-                if matched := o.skillSource.MatchTask(task, 2); len(matched) > 0 {
-                        skillBlock = skills.RenderBlock(matched, 400)
-                        for i := range matched {
-                                o.skillSource.RecordUse(matched[i].Identity.ID)
-                        }
-                }
-        }
-
-        // v1.0.2 persistent recall: compose the most relevant past-exchange
-        // digests now; inject later only if the budget keeps them.
-        var recallBlock string
-        var retrievalMs int64
-        if recaller != nil && cfg.RecallEnabled && task != "" {
-                started := time.Now()
-                recallBlock = recaller.RelevantBlock(
-                        task,
-                        cfg.EffectiveRecallTopK(),
-                        recallBlockTokenBudget,
-                )
-                retrievalMs = time.Since(started).Milliseconds()
-        }
-
-        // v1.1.5Z Phase 6 project intelligence: compose the measured project
-        // card now; inject later only if the budget keeps it.
-        var card string
-        if cardProvider != nil {
-                card = cardProvider()
-        }
-
-        // Tool schemas are measured BEFORE windowing so their exact
-        // serialized cost is part of the plan (the old per-tool guess
-        // under-counted by kilotokens and let real llama.cpp reject
-        // oversized requests).
-        allNames := make([]string, 0, len(o.tools))
-
-        for name := range o.tools {
-                if cfg.ToolEnabled(name) {
-                        allNames = append(allNames, name)
-                }
-        }
-
-        sort.Strings(allNames)
-
-        buildSpecs := func(selected []string) ([]llm.ToolSpec, int) {
-                specs := make([]llm.ToolSpec, 0, len(selected))
-
-                for _, name := range selected {
-                        t, ok := o.tool(name)
-                        if !ok {
-                                continue
-                        }
-
-                        spec := llm.ToolSpec{}
-                        spec.Type = "function"
-                        spec.Function.Name = t.Name()
-                        spec.Function.Description = t.Description()
-                        spec.Function.Parameters = t.Parameters()
-
-                        specs = append(specs, spec)
-                }
-
-                return specs, estimateToolSpecsTokens(specs)
-        }
-
-        toolSpecs, toolTokens := buildSpecs(allNames)
 
         // Measure the assembled messages: the briefing prefix (system) and
         // whatever optional blocks the caller already embedded.
@@ -535,12 +644,7 @@ func (o *Orchestrator) RunDetailed(
         overflowPrevented := false
         tokensCompressedNow := 0
 
-        // Model-aware effective context: min(session policy, configured,
-        // GGUF model limit, engine limit) — a small model is never handed
-        // a window larger than it actually has, and a per-session policy
-        // (1.1.6) narrows or raises the window for THIS chat only.
-        effCtx := o.resolveEffectiveContext(cfg, ro.sessionContext)
-        safety := contextSafetyMargin(effCtx.Effective)
+        clock.Mark(StagePromptStart)
 
         composePlan := func(sysTok, toolTok, optionalTok int) contextplan.Plan {
                 p := contextplan.Assemble(contextplan.Input{
@@ -550,34 +654,34 @@ func (o *Orchestrator) RunDetailed(
                         NumCtx:             effCtx.Effective,
                         MaxOutputTokens:    cfg.LLM.MaxTokens,
                         SafetyMarginTokens: safety,
+                        MaxHistoryShare:    composer.HistoryShare(),
                 })
 
+                p.Tier = tier
                 p.Recalled = result.Recalled
                 p.ModelSummary = strings.Join(effCtx.Reasons, "; ")
                 return p
         }
 
-        optionalTokens := stagedTokens +
-                chunking.EstimateTokens(card) +
-                chunking.EstimateTokens(skillBlock) +
-                chunking.EstimateTokens(recallBlock)
+        optionalTokens := composer.OptionalTokens(stagedTokens)
 
-        plan := composePlan(sysTokens, toolTokens, optionalTokens)
+        plan := composePlan(sysTokens, composer.toolTok, optionalTokens)
 
         // Degradation ladder — compress/elide lower-priority components
         // BEFORE dropping what the task cannot live without. Each step is
-        // recorded on the plan (the honest trail).
+        // recorded on the plan (the honest trail). v1.2.5: the tier already
+        // front-loads this work (FAST starts compact + task-relevant tools),
+        // so these steps now fire only under genuine pressure.
         if plan.Overflow() > 0 {
                 // Step 1: dynamic toolsets — the schemas of task-irrelevant
                 // tools are pure overhead under pressure.
-                if selected := toolsets.SelectForTask(allNames, task, 0); len(selected) > 0 && len(selected) < len(allNames) {
-                        before := len(allNames)
-                        toolSpecs, toolTokens = buildSpecs(selected)
-                        allNames = selected
-                        plan = composePlan(sysTokens, toolTokens, optionalTokens)
+                if selected := toolsets.SelectForTask(composer.allNames, task, 0); len(selected) > 0 && len(selected) < len(composer.allNames) {
+                        before := len(composer.allNames)
+                        composer.setTools(selected, task)
+                        plan = composePlan(sysTokens, composer.toolTok, optionalTokens)
                         plan.AddAdjustment(fmt.Sprintf(
                                 "dynamic toolset: reduced tool surface %d → %d for this task",
-                                before, len(selected)))
+                                before, len(composer.allNames)))
                 }
         }
 
@@ -585,10 +689,10 @@ func (o *Orchestrator) RunDetailed(
                 // Step 2: compact the system briefing (long-form guidance is
                 // the largest fixed block; the compact form keeps the
                 // binding rules).
-                if wePrependedBriefing {
+                if wePrependedBriefing && !composer.usedCompact {
                         compactMsg := llm.Message{
                                 Role:    "system",
-                                Content: aicontext.CompactSystemMessage(cfg, allNames),
+                                Content: aicontext.CompactSystemMessage(cfg, composer.allNames),
                         }
 
                         messages = append(
@@ -596,12 +700,13 @@ func (o *Orchestrator) RunDetailed(
                                 messages[1:]...,
                         )
 
-                        if cfg.ThinkingMode {
+                        if composer.ThinkingEnabled() {
                                 messages = ensureThinkingNudge(messages)
                         }
 
+                        composer.usedCompact = true
                         sysTokens, _, _ = classifyMessages(messages)
-                        plan = composePlan(sysTokens, toolTokens, optionalTokens)
+                        plan = composePlan(sysTokens, composer.toolTok, optionalTokens)
                         plan.AddAdjustment(
                                 "compact system briefing (context-pressure mode)")
                 }
@@ -613,14 +718,15 @@ func (o *Orchestrator) RunDetailed(
                 // task keep the budget.
                 if optionalTokens > 0 {
                         optionalTokens = 0
-                        recallBlock = ""
-                        card = ""
-                        skillBlock = ""
+                        composer.dropOptional()
                         stagedBlocksMsgs = nil
                         stagedTokens = 0
-                        plan = composePlan(sysTokens, toolTokens, 0)
+                        plan = composePlan(sysTokens, composer.toolTok, 0)
                         plan.AddAdjustment(
                                 "dropped recall/project-intelligence/skills/attachment blocks under context pressure")
+                        // Staged attachment content the tier could not carry
+                        // is escalation evidence (LargeAttachment).
+                        watch.observeAttachmentTruncation()
                 }
         }
 
@@ -659,7 +765,9 @@ func (o *Orchestrator) RunDetailed(
         // section below measures ONLY history — no double counting.
         injectedNow := 0
 
-        if card != "" {
+        card, skillBlk, recallBlk, cardOn, skillsOn, recallOn := composer.Injectables()
+
+        if cardOn {
                 messages = insertBeforeLastUser(
                         messages,
                         llm.Message{Role: "system", Content: card},
@@ -667,22 +775,22 @@ func (o *Orchestrator) RunDetailed(
                 injectedNow += chunking.EstimateTokens(card)
         }
 
-        if skillBlock != "" {
+        if skillsOn {
                 messages = insertBeforeLastUser(
                         messages,
-                        llm.Message{Role: "system", Content: skillBlock},
+                        llm.Message{Role: "system", Content: skillBlk},
                 )
-                injectedNow += chunking.EstimateTokens(skillBlock)
+                injectedNow += chunking.EstimateTokens(skillBlk)
         }
 
-        if recallBlock != "" {
+        if recallOn {
                 messages = insertBeforeLastUser(
                         messages,
-                        llm.Message{Role: "system", Content: recallBlock},
+                        llm.Message{Role: "system", Content: recallBlk},
                 )
-                injectedNow += chunking.EstimateTokens(recallBlock)
+                injectedNow += chunking.EstimateTokens(recallBlk)
 
-                result.Recalled = strings.Count(recallBlock, "user asked:")
+                result.Recalled = strings.Count(recallBlk, "user asked:")
                 plan.Recalled = result.Recalled
 
                 onActivity(Activity{
@@ -754,7 +862,7 @@ func (o *Orchestrator) RunDetailed(
         // the system prefix and the injected blocks already have their own
         // sections (the v1.1.3 double-count made the total exceed the real
         // prompt and is fatal under the Phase 7 fit gate).
-        historyTokens := chunking.EstimateMessagesTokens(windowed) - injectedNow
+        historyTokens = chunking.EstimateMessagesTokens(windowed) - injectedNow
         if historyTokens < 0 {
                 historyTokens = 0
         }
@@ -780,8 +888,13 @@ func (o *Orchestrator) RunDetailed(
                 Model:              cfg.EffectiveModel(),
                 BudgetTokens:       effCtx.Effective,
                 TokensAdded:        optionalTokens,
-                RetrievalLatencyMs: retrievalMs,
+                RetrievalLatencyMs: composer.recallRetrievalMs,
                 RetrievalHits:      result.Recalled,
+
+                // v1.2.5 adaptive-tier telemetry (measured values only).
+                Tier:            tier,
+                ThinkingControl: ro.thinking,
+                ToolPolicyMode:  ro.toolPolicy.Mode,
 
                 // 1.1.6 context telemetry: the full decision trail per turn.
                 ContextRequested:    effCtx.Requested,
@@ -819,7 +932,28 @@ func (o *Orchestrator) RunDetailed(
                 }
                 turnRecord.TaskSuccess = result.Text != ""
                 turnRecord.Verified = string(result.Verification.Outcome)
+                turnRecord.Escalations = len(composer.Escalations())
+                turnRecord.FinalTier = composer.Tier()
+                snap := clock.Snapshot()
+                turnRecord.Timing = ctxtelemetry.RequestTiming{
+                        ClassifyMs:        snap.ClassifyMs,
+                        ContextMs:         snap.ContextMs,
+                        PromptMs:          snap.PromptMs,
+                        SerializationMs:   snap.SerializationMs,
+                        TTFTMs:            snap.TTFTMs,
+                        GenerationMs:      snap.GenerationMs,
+                        ToolMs:            snap.ToolMs,
+                        VerificationMs:    snap.VerificationMs,
+                        TotalMs:           snap.TotalMs,
+                        FirstPromptTokens: plan.TotalTokens(),
+                }
                 o.recordTelemetry(turnRecord)
+
+                // v1.2.5: the result carries the measured timeline + tier trail.
+                snap.FirstPromptTokens = plan.TotalTokens()
+                result.Timing = snap
+                result.FinalTier = composer.Tier()
+                result.Escalations = composer.Escalations()
         }()
 
         // Final fit verification: the measured prompt must honor the
@@ -916,6 +1050,14 @@ func (o *Orchestrator) RunDetailed(
 
         toolsUsed := map[string]bool{}
 
+        // v1.2.5 escalation bookkeeping: the PRE-window body is retained so
+        // a MissingHistory upgrade can re-window from the full transcript;
+        // windowedLen/prefixLen locate the run-appended tail inside the
+        // live message list.
+        preWindowBody := append([]llm.Message{}, body...)
+        prefixLen := len(prefix)
+        windowedLen := len(windowed)
+
         // v1.0.7: peak prompt pressure across the turn's iterations — the
         // number the context meter shows after the reply lands. The budget
         // is the plan's explicit history allocation.
@@ -968,13 +1110,20 @@ func (o *Orchestrator) RunDetailed(
 
                 // 1.1.6: the wire request carries the SAME effective
                 // context the plan validated — never a second, larger
-                // number from the global config.
+                // number from the global config. v1.2.5: the offered tool
+                // surface is the tier/policy selection (composer), and the
+                // prompt/serialization stages are measured.
+                clock.Mark(StagePromptEnd)
+
                 req := o.client.BuildChatRequestWithOptions(
                         cfg.EffectiveModel(),
                         messages,
-                        toolSpecs,
+                        composer.toolSpecs,
                         effCtx.Effective,
                 )
+
+                clock.Mark(StageSerialized)
+                clock.Mark(StageRequestSent)
 
                 if u := continuum.EstimateUsage(
                         messages,
@@ -982,6 +1131,9 @@ func (o *Orchestrator) RunDetailed(
                 ); u.EstTokens > peakUsage.EstTokens {
                         peakUsage = u
                 }
+
+                var firstResponseSeen bool // v1.2.5: first-byte evidence for status events
+                var assistantStarted bool  // v1.2.5: one status flip when the answer begins
 
                 var raw strings.Builder    // raw content (may still contain <think> tags)
                 var native strings.Builder // native reasoning_content deltas
@@ -1001,6 +1153,8 @@ func (o *Orchestrator) RunDetailed(
                         emitEvery = cfg.EffectiveStreamEmitInterval()
                 }
 
+                reasoningEmitted := false
+
                 emitProgress := func(force bool) {
                         reasoning, content := SplitThink(raw.String())
 
@@ -1018,6 +1172,22 @@ func (o *Orchestrator) RunDetailed(
                         lastEmit = time.Now()
 
                         if r := reasoning + native.String(); r != "" {
+                                // v1.2.5: thinking_start marks the reasoning
+                                // panel OPEN (no content duplication — the
+                                // marker carries no text).
+                                if !reasoningEmitted {
+                                        reasoningEmitted = true
+                                        clock.Mark(StageFirstToken)
+
+                                        onActivity(Activity{
+                                                Type:      "thinking_start",
+                                                Caption:   "Thinking…",
+                                                Timestamp: time.Now(),
+                                        })
+
+                                        emitStatus("Thinking… · " + plan.TierSummary())
+                                }
+
                                 onActivity(Activity{
                                         Type:      "reasoning",
                                         Caption:   r,
@@ -1026,6 +1196,13 @@ func (o *Orchestrator) RunDetailed(
                         }
 
                         if content != "" {
+                                if firstResponseSeen && !assistantStarted {
+                                        assistantStarted = true
+                                        clock.Mark(StageFirstToken)
+
+                                        emitStatus("First response… · " + plan.TierSummary())
+                                }
+
                                 onActivity(Activity{
                                         Type:      "response",
                                         Caption:   content,
@@ -1039,11 +1216,15 @@ func (o *Orchestrator) RunDetailed(
                         req,
                         func(ev llm.StreamEvent) error {
                                 if ev.Content != "" {
+                                        clock.Mark(StageFirstByte)
+                                        firstResponseSeen = true
                                         raw.WriteString(ev.Content)
                                         emitProgress(false)
                                 }
 
                                 if ev.Reasoning != "" {
+                                        clock.Mark(StageFirstByte)
+                                        firstResponseSeen = true
                                         native.WriteString(ev.Reasoning)
                                         emitProgress(false)
                                 }
@@ -1055,6 +1236,8 @@ func (o *Orchestrator) RunDetailed(
                                 return nil
                         },
                 )
+
+                clock.Mark(StageGenerationEnd)
 
                 if err != nil {
                         if cerr := ctx.Err(); cerr != nil {
@@ -1096,6 +1279,19 @@ func (o *Orchestrator) RunDetailed(
 
                 emitProgress(true) // final flush — consumers always see the full text
 
+                // v1.2.5: thinking_end folds the reasoning panel (marker only).
+                if reasoningEmitted {
+                        onActivity(Activity{
+                                Type:      "thinking_end",
+                                Caption:   "Thinking complete",
+                                Timestamp: time.Now(),
+                        })
+                }
+
+                if firstResponseSeen {
+                        emitStatus("Generating… · " + plan.TierSummary())
+                }
+
                 // Split the completed stream into reasoning + clean content.
                 reasoning, content := SplitThink(raw.String())
 
@@ -1118,7 +1314,10 @@ func (o *Orchestrator) RunDetailed(
                         // evidence reports not_verified, so the UI (and the
                         // multi-agent critic) can demand verification instead
                         // of celebrating an unproven "done".
+                        clock.Mark(StageVerificationStart)
                         result.Verification = evidence.Report()
+                        clock.Mark(StageVerificationEnd)
+                        clock.AddVerificationMs(clock.sinceStages(StageVerificationStart, StageVerificationEnd))
                         result.LoopStats = guard.CallStats()
                         result.FailureTally = failTally
 
@@ -1134,9 +1333,20 @@ func (o *Orchestrator) RunDetailed(
                                 doneCaption = "Completed — verification FAILED: objective checks recorded and none passed"
                         }
 
+                        clock.Mark(StageDone)
+
                         onActivity(Activity{
                                 Type:      "done",
                                 Caption:   doneCaption,
+                                Timestamp: time.Now(),
+                        })
+
+                        // v1.2.5: the canonical completion marker for the new
+                        // event vocabulary (tiny, no content duplication).
+                        onActivity(Activity{
+                                Type:      "complete",
+                                Caption:   result.Verification.Summary(),
+                                Detail:    map[string]any{"tier": composer.Tier(), "escalations": len(composer.Escalations())},
                                 Timestamp: time.Now(),
                         })
 
@@ -1190,17 +1400,35 @@ func (o *Orchestrator) RunDetailed(
 
                         var result2 string
 
+                        // v1.2.5 MANUAL tool mode FIRST: the user's selection
+                        // overrides every automatic choice (tier budget
+                        // included) and is NEVER silently re-enabled — refuse
+                        // plainly, before any budget reasoning.
+                        if ok && !ro.toolPolicy.allows(tc.Function.Name) {
+                                ok = false
+
+                                result2 = fmt.Sprintf(
+                                        "Error: tool %q is excluded by the manual tool selection for this request. Allowed tools: %s. Do not call excluded tools — adapt your plan.",
+                                        tc.Function.Name,
+                                        strings.Join(composer.allNames, ", "),
+                                )
+                        }
+
                         // Phase 7A: when the dynamic toolset reduced the
                         // offered surface, a call to a non-offered tool is a
                         // planning error — refuse it with the offered list so
                         // the model re-plans within the budgeted toolset.
-                        if ok && !containsName(allNames, tc.Function.Name) {
+                        if ok && !containsName(composer.allNames, tc.Function.Name) {
                                 ok = false
+
+                                // v1.2.5: the model reached for a tool the tier
+                                // did not offer — escalation evidence.
+                                watch.observeRefusal()
 
                                 result2 = fmt.Sprintf(
                                         "Error: tool %q is not part of the toolset offered this turn (context budget). Offered tools: %s.",
                                         tc.Function.Name,
-                                        strings.Join(allNames, ", "),
+                                        strings.Join(composer.allNames, ", "),
                                 )
                         }
 
@@ -1217,7 +1445,7 @@ func (o *Orchestrator) RunDetailed(
                                         "Error: tool %q is disabled by the user. Enabled tools: %s. Do not call disabled tools — adapt your plan.",
                                         tc.Function.Name,
                                         strings.Join(
-                                                allNames,
+                                                composer.allNames,
                                                 ", ",
                                         ),
                                 )
@@ -1229,7 +1457,7 @@ func (o *Orchestrator) RunDetailed(
                                         "Error: unknown tool %q. Available: %s",
                                         tc.Function.Name,
                                         strings.Join(
-                                                allNames,
+                                                composer.allNames,
                                                 ", ",
                                         ),
                                 )
@@ -1300,14 +1528,101 @@ func (o *Orchestrator) RunDetailed(
 
                         start := time.Now()
 
-                        result2, err := tool.Run(
+                        // v1.2.5: identical successful deterministic calls are
+                        // served from the bounded result cache — a repeat is
+                        // evidence-free reuse, never a re-execution.
+                        cacheKey := tc.Function.Name + "\x00" + normalizeArgsForCache(tc.Function.Arguments)
+
+                        if cacheableCall(tc.Function.Name, tc.Function.Arguments) {
+                                if cached, hit := globalResultCache.Get(cacheKey); hit {
+                                        result2, err = cached, error(nil)
+
+                                        onActivity(Activity{
+                                                Type: "tool_end",
+                                                Caption: fmt.Sprintf(
+                                                        "Tool %s served from cache",
+                                                        tc.Function.Name,
+                                                ),
+                                                Detail:    cached,
+                                                Timestamp: time.Now(),
+                                        })
+
+                                        logging.Default().ToolCall(logging.ToolCallRecord{
+                                                TS:      start,
+                                                Tool:    tc.Function.Name,
+                                                Args:    tc.Function.Arguments,
+                                                Result:  cached,
+                                                Session: o.currentSessionID(),
+                                        })
+
+                                        toolsUsed[tc.Function.Name] = true
+                                        toolCallCount++
+                                        toolSuccessCount++
+
+                                        // v1.2.5: a cached result is the SAME
+                                        // escalation evidence (the file is
+                                        // still missing from the prompt).
+                                        watch.observeToolResult(tc.Function.Name, cached, false)
+
+                                        obs2 := guard.Observe(tc.Function.Name, tc.Function.Arguments)
+                                        if obs2.Warn != "" {
+                                                result2 += "\n\n" + obs2.Warn
+                                        }
+
+                                        messages = append(
+                                                messages,
+                                                llm.Message{
+                                                        Role:       "tool",
+                                                        Content:    result2,
+                                                        ToolCallID: tc.ID,
+                                                        Name:       tc.Function.Name,
+                                                },
+                                        )
+
+                                        continue
+                                }
+                        }
+
+                        result2, err = tool.Run(
                                 ctx,
                                 json.RawMessage(
                                         tc.Function.Arguments,
                                 ),
                         )
 
+                        // v1.2.5: genuinely retryable failures (transient
+                        // network/process) retry exactly once — never
+                        // side-effecting tools, never more than once.
+                        if err != nil && idempotentNetworkTool(tc.Function.Name) {
+                                cat := ClassifyFailure(ToolFailure{
+                                        Tool:   tc.Function.Name,
+                                        Args:   tc.Function.Arguments,
+                                        Err:    err.Error(),
+                                        Output: result2,
+                                        Timeout: errors.Is(err, context.DeadlineExceeded) ||
+                                                strings.Contains(err.Error(), "timeout"),
+                                })
+
+                                if cat == CatNetwork || cat == CatProcess {
+                                        logging.Default().Info(
+                                                "agent",
+                                                "tool %s transient failure (%s) — retrying once",
+                                                tc.Function.Name, cat,
+                                        )
+
+                                        result2, err = tool.Run(
+                                                ctx,
+                                                json.RawMessage(
+                                                        tc.Function.Arguments,
+                                                ),
+                                        )
+                                }
+                        }
+
                         dur := time.Since(start)
+
+                        clock.AddToolMs(dur.Milliseconds())
+                        clock.Mark(StageToolStart)
 
                         // v1.0.6 VISION: tools that produce images (screenshot,
                         // future chart renderers) tag them with [[IMG:path]]
@@ -1320,6 +1635,10 @@ func (o *Orchestrator) RunDetailed(
                         )
 
                         toolsUsed[tc.Function.Name] = true
+
+                        if len(toolImages) > 0 {
+                                watch.observeVisionPayload()
+                        }
 
                         // Log catcher: one structured record per tool call
                         rec := logging.ToolCallRecord{
@@ -1348,6 +1667,13 @@ func (o *Orchestrator) RunDetailed(
                                 tc.Function.Arguments,
                                 result2,
                         )
+
+                        // v1.2.5: escalation evidence + result caching.
+                        watch.observeToolResult(tc.Function.Name, result2, err != nil)
+
+                        if err == nil && cacheableCall(tc.Function.Name, tc.Function.Arguments) {
+                                globalResultCache.Put(cacheKey, result2)
+                        }
 
                         evidence.ObserveToolResult(
                                 tc.Function.Name,
@@ -1460,11 +1786,114 @@ func (o *Orchestrator) RunDetailed(
                                 return result, nil
                         }
                 }
+
+                // --------------------------------------------------------------
+                // v1.2.5 CONTEXT ESCALATION: after each tool round, apply the
+                // recorded evidence. The upgrade enriches the LIVE
+                // conversation (never a from-scratch rebuild): optional
+                // blocks the new tier allows are injected, the history
+                // window re-opens at the new share, and the offered tool
+                // surface widens (AUTO policy only — manual selection is
+                // never re-enabled).
+                // --------------------------------------------------------------
+                if reason, ok := watch.take(); ok {
+                        if up, ok2 := composer.Escalate(reason, task); ok2 {
+                                tier = up.tier
+
+                                // Re-plan at the new tier's share and re-window
+                                // FIRST — from the RETAINED pre-window body +
+                                // the run-appended tail — so the newly injected
+                                // blocks ride the FINAL list, never the tail
+                                // boundary.
+                                sysTokens, _, _ = classifyMessages(messages)
+                                plan = composePlan(sysTokens, composer.toolTok, composer.OptionalTokens(stagedTokens))
+
+                                tail := messages[min(prefixLen+windowedLen, len(messages)):]
+                                newBody := append(append([]llm.Message{}, preWindowBody...), tail...)
+                                windowed2, elided2 := chunking.WindowMessages(newBody, plan.HistoryBudget)
+
+                                prefix = messages[:prefixLen]
+                                messages = append(append([]llm.Message{}, prefix...), windowed2...)
+                                preWindowBody = newBody
+                                windowedLen = len(windowed2)
+
+                                // THEN enrich the live conversation: briefing
+                                // upgrade + the blocks the new tier allows.
+                                if up.fullBrief != "" && len(messages) > 0 && messages[0].Role == "system" {
+                                        messages[0] = llm.Message{Role: "system", Content: up.fullBrief}
+
+                                        if composer.ThinkingEnabled() {
+                                                messages = ensureThinkingNudge(messages)
+                                        }
+                                }
+
+                                if up.card != "" {
+                                        messages = insertBeforeLastUser(messages, llm.Message{Role: "system", Content: up.card})
+                                        injectedNow += chunking.EstimateTokens(up.card)
+                                }
+
+                                if up.skills != "" {
+                                        messages = insertBeforeLastUser(messages, llm.Message{Role: "system", Content: up.skills})
+                                        injectedNow += chunking.EstimateTokens(up.skills)
+                                }
+
+                                if up.recall != "" {
+                                        messages = insertBeforeLastUser(messages, llm.Message{Role: "system", Content: up.recall})
+                                        injectedNow += chunking.EstimateTokens(up.recall)
+
+                                        if n := strings.Count(up.recall, "user asked:"); n > 0 {
+                                                result.Recalled += n
+                                                plan.Recalled = result.Recalled
+                                        }
+                                }
+
+                                if elided2 != plan.Elided {
+                                        plan.Elided = elided2
+                                        result.Elided = elided2
+                                }
+
+                                historyTokens := chunking.EstimateMessagesTokens(windowed2) - injectedNow
+                                if historyTokens < 0 {
+                                        historyTokens = 0
+                                }
+                                plan.SetSectionTokens(contextplan.SectionHistory, historyTokens)
+                                plan.SetPromptBytes(int64(measureMessagesBytes(messages)))
+
+                                tokensRemovedNow = historyTokensBefore - chunking.EstimateMessagesTokens(windowed2)
+                                if tokensRemovedNow < 0 {
+                                        tokensRemovedNow = 0
+                                }
+
+                                logging.Default().Info(
+                                        "agent",
+                                        "context escalation: %s",
+                                        up.escalation.Describe(),
+                                )
+
+                                onActivity(Activity{
+                                        Type:      "escalation",
+                                        Caption:   up.escalation.Describe(),
+                                        Detail:    up.escalation,
+                                        Timestamp: time.Now(),
+                                })
+
+                                emitStatus("Using more context · " + plan.TierSummary())
+                        } else {
+                                logging.Default().Info(
+                                        "agent",
+                                        "escalation evidence (%s) at tier %s — ladder exhausted or bound reached, continuing",
+                                        reason, composer.Tier(),
+                                )
+                        }
+                }
         }
 
         result.ToolsUsed = toolList(toolsUsed)
         result.ContextUsage = peakUsage
+        clock.Mark(StageVerificationStart)
         result.Verification = evidence.Report()
+        clock.Mark(StageVerificationEnd)
+        clock.AddVerificationMs(clock.sinceStages(StageVerificationStart, StageVerificationEnd))
         result.LoopStats = guard.CallStats()
         result.FailureTally = failTally
 
@@ -1475,9 +1904,18 @@ func (o *Orchestrator) RunDetailed(
                 Timestamp: time.Now(),
         })
 
+        clock.Mark(StageDone)
+
         onActivity(Activity{
                 Type:      "done",
                 Caption:   "Max iterations reached",
+                Timestamp: time.Now(),
+        })
+
+        onActivity(Activity{
+                Type:      "complete",
+                Caption:   "Max iterations reached",
+                Detail:    map[string]any{"tier": composer.Tier(), "escalations": len(composer.Escalations())},
                 Timestamp: time.Now(),
         })
 
@@ -1935,10 +2373,10 @@ func (o *Orchestrator) resolveEffectiveContext(cfg *config.Config, sessionContex
 // compactToolResults brings an over-ceiling prompt back inside the budget
 // (in-loop fit guard):
 //
-//      pass 1 — elide every tool result except the freshest (explicit
-//               marker replaces the body; message structure preserved);
-//      pass 2 — if still over, BOUND the freshest result to the remaining
-//               room (head kept, tail replaced by an explicit marker).
+//	pass 1 — elide every tool result except the freshest (explicit
+//	         marker replaces the body; message structure preserved);
+//	pass 2 — if still over, BOUND the freshest result to the remaining
+//	         room (head kept, tail replaced by an explicit marker).
 //
 // The model keeps the newest evidence either way; older results carry a
 // re-run hint. Returns the number of tool results touched and the

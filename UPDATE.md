@@ -1,277 +1,333 @@
-# UPDATE.md — v1.2.4 SHEYTAN-LA Data-Path Speed, Coordinated Memory Policy, Real Workspace & Usability Package
+# UPDATE.md — v1.2.5 SHEYTAN-LA Adaptive Context Tiers, Global Tool Control, Thinking Mode & Per-Request Telemetry
 
-**Release:** `v1.2.4` (codename Zeta) · **Base:** `main @ 8d8858d` (`v1.2.3`)
-**Date:** 2026-09-16
-**Package:** `SHEYTAN-Local-Agent-v1.2.4-UPDATE.zip`
+**Release:** `v1.2.5` (codename Zeta) · **Base:** `main @ dacae73` (`v1.2.4`)
+**Date:** 2026-09-17
+**Package:** `SHEYTAN-Local-Agent-v1.2.5-UPDATE.zip`
 
-This package makes SHEYTAN process data faster, reclaim memory under an
-explicit coordinated policy instead of ad-hoc self-bounding, turn the
-Workspace into a genuine work environment, and apply a whole-app usability
-pass — all without a major rewrite, and every optimization tied to a
-measured baseline taken BEFORE the change. No second runtime is introduced;
-the language split is unchanged (TypeScript for UI state, Go for
-orchestration/filesystem/caches, C++ untouched — its mmap zero-copy hot
-paths were already correct and no measured bottleneck justified moving
-data across the Go/C++ boundary).
+This package replaces the v1.2.4 "build the full context first" behaviour
+with an adaptive, evidence-driven turn pipeline: classify the task, choose
+a context tier (FAST / STANDARD / DEEP / MAX) from the machine's measured
+resources, compose ONLY what that tier allows, send the request, and
+escalate the tier mid-run when — and only when — real run evidence
+demands it. It adds per-request controls that change the actual backend
+request (a ChatGPT-style thinking control and a manual tool policy), an
+expandable reasoning surface driven by the backend's own events, a live
+status chip with measured tier/token telemetry, per-request stage timing,
+and an explicit data-ownership ladder. No functionality was disabled to
+improve numbers: streaming, model lifecycle, tool execution, workspace,
+memory and CI systems are preserved, and the Phase 7 fit gates remain the
+safety net under every request.
 
-The version moves `1.2.3` → `1.2.4` through the established identity chain
-(package.json → release-version.mjs → internal/config/config.go,
+The version moves `1.2.4` → `1.2.5` through the established identity
+chain (package.json → release-version.mjs → internal/config/config.go,
 build/config.yml, SIGNATURE — `--check` is green).
 
 ## 0. The measured baseline (what this package fixes first)
 
-Everything below was benchmarked on the identical machine before any edit
-(`-benchmem`, steady-state fixtures; numbers are that sandbox, relative
-gains are what matter):
+Everything below was measured on the v1.2.4 tree BEFORE any edit (same
+fake-engine harness that pins the new behaviour; see
+`internal/agent/v125_measurement_test.go`):
 
-| Hot path | v1.2.3 baseline | Root cause |
+| Hot path | v1.2.4 baseline | Root cause |
 |---|---|---|
-| `ctxtelemetry.Record` (2000 records) | **7.43 ms/op, 6.49 MB/op, 18685 allocs** | whole JSONL file re-read, re-marshalled and rewritten on EVERY turn |
-| `ctxtelemetry.Recent` | 3.31 ms/op, 4.1 MB/op, 12032 allocs | same, on the UI read path |
-| `sessions.AppendMessage` (400-msg session) | 2.54 ms/op, 1.21 MB/op, 3287 allocs | full session file re-read + unmarshal + marshal + rewrite per message |
-| `sessions.Get` | 426 µs/op, 274 KB/op | same re-read on every load |
-| `aicontext.SystemMessageWithTools` | 31.3 µs/op, 100 KB/op | AI-CONTEXT.md re-read from disk every turn |
-| `projectintel.Card` | 8.9 µs/op | per-project facts re-read + re-parsed every turn |
-| `chunking.FormatFileAttachment` (1 MB file) | 746 µs/op, **2.93 MB/op** | read + full string copy + windowed concat ≈ 3× file size live |
-| `tools.Shell/CodeExec/Git` | **unbounded** | `CombinedOutput()` buffered an agent-triggered command's entire output in RAM — the only unbounded allocation in the app |
-| `llm.Client` image cache | ≤ 8 × 6 MB base64 ≈ **48 MB** worst case | count-only bound, no byte bound |
-| `memory` remember path | unbounded file growth | repeated identical facts appended forever |
+| First-request prompt, trivial chat ("hi") | **≈ 10K tokens** prefill before TTFT | full 29,691-char briefing (~7,368 tok) + ALL tool schemas + recall + project card + skills composed UNCONDITIONALLY every turn |
+| AI-context briefing | 7,368 tokens, full form always | no tier system — one context shape for every machine and task |
+| Recall retrieval | I/O + scoring on EVERY turn | composed before the plan regardless of task shape |
+| Tool schemas | JSON-marshaled 2× per turn (measure + request) | no memoization of stable serialized specs |
+| Optional composition | recall/card/skills composed even when dropped later | compose-first-then-degrade ladder only ever shrank under overflow |
+| Per-request visibility | only engine TTFT + token accounting | no classify/context/prompt/serialization/tool/verification timeline |
+| Thinking control | global settings toggle | not a per-request control; did not shape the tier or the nudge |
+| Tool restriction | global EnabledTools config only | no per-request manual policy, no enforcement distinction |
+| Startup | project-intel observe walked the workspace synchronously in NewStack | first chat waited on indexing |
 
-Frontend profiling (existing perf-HUD + store inspection) additionally
-showed: a fresh `engine` object written every 2.5 s re-rendering
-AgentBody/AgentHeader/ModelPicker even when nothing changed, LabPanel
-subscribing to the ENTIRE store, four non-memoized panels under AgentBody,
-and index-shifting message keys causing memoized-bubble remounts.
+## 1. Adaptive context tiers (FAST / STANDARD / DEEP / MAX)
 
-## 1. Smarter internal data pipeline
+New package `internal/taskclassify` (pure, deterministic, no I/O):
 
-All fixes are in the measured hot paths; behavior is preserved
-byte-for-byte on the wire and on disk.
+- **Classification**: 8 task kinds (chat, question, coding, architecture,
+  research, vision, system, data) via additive keyword scoring; complexity
+  0-100; explicit signals for files/terminal/tests/research/vision/
+  memory/depth and conversation-past references; the composer's thinking
+  control shifts complexity (fast −25, thinking +20).
+- **Tier ladder with policies, not sizes**: FAST uses the compact
+  ~353-token briefing, a 30% history share, a 700-token tool-schema
+  budget, ≤6 offered tools, and does NOT compose recall, project card or
+  skills at all; STANDARD/DEEP/MAX progressively restore the full
+  briefing (50/70/85% shares, 1400/2200/0 tool budgets, 12/16/0 tools)
+  and the optional blocks.
+- **Resource-aware selection (never one hard-coded size)**: the tier is
+  chosen from the measured effective context (min of configured, GGUF
+  model limit, engine-verified limit, session policy), TTL-cached
+  measured system RAM (low-RAM machines cap below DEEP), the vision
+  payload estimate (vision never runs FAST), staged-attachment tokens,
+  the task-relevant tool cost, the full-history size (long histories that
+  cannot fit the tier's share escalate one step), and the user's
+  explicit depth control (fast caps at FAST unless the payload needs
+  more; thinking floors at STANDARD).
 
-- **ctxtelemetry** (`internal/ctxtelemetry/ctxtelemetry.go`): the record
-  set is cached in memory and read served from it; the file is rewritten
-  only when a coalescing window closes (64 records or 10 s) or when
-  `Flush()` is called at run boundaries/shutdown. On-disk format is
-  unchanged; compaction-to-half semantics unchanged; a hard crash loses at
-  most one coalescing window of OBSERVATIONAL telemetry (never user
-  content). New `Stats()` exposes records/flushes/coalesced/dirty-max/
-  last-flush duration.
-- **sessions** (`internal/sessions/sessions.go`): a bounded hot cache
-  (8 fully-loaded sessions, validated by (size, mtime) on every hit so
-  external edits are still detected) removes the re-read from appends and
-  repeat loads; `Get` returns a read-isolated copy so out-of-lock API
-  mutations can never tear the cached state; the activity sidecar is
-  cached the same way; session files are now STREAMED into the tmp file
-  through a buffered `json.Encoder` (no full-JSON blob in memory per
-  save); LRU eviction via `TrimHot(keep)`.
-- **aicontext** (`internal/aicontext/aicontext.go`): (size, mtime)-
-  validated text cache — one stat per turn, zero re-reads.
-- **projectintel** (`internal/projectintel/projectintel.go`): validated
-  parse cache per project root.
-- **chunking** (`internal/chunking/chunking.go`): `WindowHeadTailBytes`
-  windows the raw bytes directly (75/25 head/tail at line boundaries,
-  explicit elision marker — identical semantics, pinned by a differential
-  test against the string path). The composed attachment block now holds
-  ~budget bytes, not ~3× file size.
-- **tools** (`internal/tools/capture.go`, `tools.go`): bounded streaming
-  capture for Shell/CodeExec/Git — stdout+stderr drain continuously (the
-  child never blocks on a full pipe), the first 1 MiB is retained, and
-  when output is cut an honest marker states the TRUE total plus how to
-  get the rest. Aggregate counters (bytes produced / retained /
-  truncations) make the saving measurable via `/api/perf`.
-- **memory** (`internal/memory/memory.go`): the agent `remember` path
-  suppresses EXACT duplicates (same class, same normalized content,
-  case-insensitive) and tells the model "already known"; `AppendEntry`
-  semantics are unchanged for every other caller; suppressed duplicates
-  are counted. The FIRST copy of a fact stays authoritative.
-- **llm** (`internal/llm/client.go`): image data-URL cache bounded by
-  TOTAL BYTES (24 MiB) with oldest-first eviction — worst case drops from
-  ~48 MB of retained base64 to the cap.
-- **contextcache** (`internal/contextcache/contextcache.go`): new
-  `TrimIdle(keep)` sheds the least-recently-used cold tail under
-  coordinated cleanup; the existing LRU/byte/TTL bounds stay in force at
-  all times (trimming is pressure relief, never correctness).
+**Measured result** (the acceptance test pins it): the first engine
+request for "hi" with 17 registered tools drops from ≈10K tokens
+(v1.2.4) to **≈416 tokens engine-received (557 plan-accounted)** — about
+**24× smaller**, with 3 offered tool schemas instead of all of them.
+Recall retrieval I/O on trivial chat: **every turn → zero**.
 
-Context pipeline requirements are already structural in this codebase and
-were preserved, not regressed: bounded chunks, priority-aware retention
-(contextplan degradation ladder), evidence-first model, no silent drops —
-the guaranteed-fit refusal gate and the untouchable current user turn are
-exactly where they were.
+## 2. Smart context building (P0-P3) and evidence-driven escalation
 
-## 2. Coordinated memory policy (new: internal/memmanager)
+- `contextplan` now speaks the four priority classes — **P0 mandatory**
+  (output reserve, system briefing), **P1 highly relevant** (tool
+  schemas, history/current turn), **P2 useful** (recall digests), **P3
+  optional** (attachment chunks) — as derived labels over the existing
+  numeric ladder, plus the tier's history-share cap in `Assemble`.
+  The initial request carries P0 + only the P1 the task signals need.
+- Token budgets everywhere (never character counts), via the shared
+  estimator; `cache_prompt=true` is preserved end-to-end.
+- **Escalation**: eight named evidence reasons — `MissingFileContext`,
+  `MissingHistory`, `MissingToolContext`, `RepositoryDependency`,
+  `VerificationFailure`, `LargeAttachment`, `VisionRequirement`,
+  `UserRequestedDepth` — derived only from real observations (tool
+  results reporting missing files, the orchestrator's own tool-surface
+  refusals, attachment-block drops, failed objective verification,
+  mid-run vision payloads). One upgrade applies per evidence round,
+  bounded at **2 per run** (FAST→STANDARD→DEEP; MAX only from DEEP).
+- An upgrade enriches the LIVE conversation — never a from-scratch
+  rebuild: the compact briefing is swapped for the full form, the newly
+  allowed card/skills/recall blocks are injected before the fresh turn,
+  the history window re-opens from the RETAINED pre-window transcript at
+  the new share, and the offered tool surface widens (AUTO policy only —
+  manual restrictions are never widened). Every move logs the honest
+  line, e.g. `FAST 3.8K → STANDARD 7.2K reason=MissingFileContext`, and
+  reaches the UI as an `escalation` event.
 
-One owner for reclamation instead of scattered self-bounding:
+## 3. One global tool system + smart selection + manual mode
 
-- **Registered trims**: `sessions-hot` (TrimHot(1) — the most recent
-  session stays warm), `image-cache` (client trim), `ctxtelemetry` (flush
-  at boundaries). Components keep their own bounds; the manager only
-  sheds the cold tail.
-- **Run tracking**: `TrackRunStart`/`TrackRunEnd` around every agent run
-  (the run's defer is cancellation-aware, so aborts release exactly like
-  completions). Post-run cleanup releases one-shot state while it is safe.
-- **Pressure**: above a 1 GiB heap watermark a cleanup (GC + trims) is
-  triggered — but ONLY when no run is active. Active generation, current
-  workspace, user-visible data and hot caches are never sacrificed for
-  bytes. Nothing user-owned (sessions, memory entries, attachments) is
-  ever a trim target.
-- **Idle maintenance**: a 2-minute loop performs housekeeping only while
-  the app is idle (started by `EnsureSetup`, stopped by `Stack.Close`).
-- **Telemetry**: heap before/after last cleanup, bytes freed per trim and
-  cumulative, cleanup duration, pressure count, plus the data-path
-  counters (contextcache hit ratio, tool-capture bytes produced/retained/
-  truncations, ctxtelemetry flush stats, memory dedup counter) — surfaced
-  on `/api/perf` under `memory`.
-- **session-aware isolation**: one shared session store now lives on the
-  runtime Stack (the API layer previously constructed its own over the
-  same directory); one hot cache to bound, one owner to trim.
+All legitimate tools already live in ONE orchestrator registry (files,
+search, edit/write, terminal, build/tests via lab, diff, verification,
+research [GitHub/Reddit/DuckDuckGo/SearXNG], browser, workspace, system,
+memory, vision, attachments, model management, diagnostics) — the
+workspace modes (Agent/Lab/Research/System) remain views over that same
+system. v1.2.5 completes the picture:
 
-## 3. Change map (authoritative)
+- **Selection from the START**: the task-relevant toolset
+  (`toolsets.SelectForTask`) is chosen BEFORE the first request under the
+  tier's token/count budget — available globally no longer means every
+  schema in every prompt (3 offered tools for trivial chat, measured).
+- **Manual tool mode** (`toolMode: "manual"` + `toolAllow: [...]` per
+  request, from the composer's Tools ▾ control): only the selected tools
+  are offered AND executable; out-of-policy calls are refused with a
+  clear instruction to re-plan; escalation never silently re-enables a
+  disabled tool.
+- **Repeat prevention & reuse**: identical successful calls to
+  deterministic tools (files read-shape, diff, json) are served from a
+  bounded LRU result cache (1 MiB / 64 entries) with a visible
+  "served from cache" event; mutating file actions are never cached;
+  genuinely retryable failures (transient network/process on idempotent
+  network tools) retry exactly once — never side-effecting tools.
+- **Tool-spec memoization**: serialized schemas are marshaled once per
+  registry generation (`specCache`, invalidated on Register) — the
+  per-turn double marshal of ~17-20 schemas is gone.
+
+## 4. Thinking control + thinking UI + live status
+
+- The composer gains a real **Thinking ▾** control (Auto / Fast /
+  Thinking). It is persisted (localStorage), sent with EVERY run request
+  (`thinking` field), and changes the actual backend behaviour:
+  **Fast** forces the FAST tier posture (unless the payload needs more)
+  and disables the thinking nudge; **Thinking** floors at STANDARD,
+  enables the reasoning nudge even when the global toggle is off, and
+  permits the deeper escalation/verification posture; **Auto** is the
+  adaptive decision. It is NOT a visual-only control — the acceptance
+  tests assert both the tier and the nudge change.
+- **Thinking UI**: an expandable reasoning panel driven only by actual
+  backend events — `thinking_start` opens it, `reasoning`/`thinking_delta`
+  fill it (cumulative snapshots, no duplication), `thinking_end` folds
+  it; the run timeline (run-phase machine) is unchanged and still driven
+  only by real events. The backend emits the canonical vocabulary
+  (`thinking_start/delta/end`, `assistant_delta`, `complete`, `status`,
+  `escalation`) while the legacy names keep flowing for compatibility —
+  one canonical mapping in `src/run-events.ts` (unit-tested) guarantees
+  no streamed output is processed twice.
+- **Clear live status**: the backend's own `status` events render in a
+  compact chip — "Classifying request…", "Preparing context · FAST",
+  "Thinking… · STANDARD · 7.2k tok", "First response…", "Generating…",
+  "Using more context · …" — measured tier/token values only, plus
+  "Running tool…" via the existing tool events and "Verifying…" via the
+  verification report.
+
+## 5. Memory ownership + background work
+
+- New `internal/memmanager/ownership.go`: the explicit ladder
+  **ACTIVE → SESSION → HOT CACHE → COLD CACHE → EXPIRED → RELEASE** with
+  named ACTIVE holders (`HoldActive`/`ReleaseActive` wired into
+  TrackRunStart/End), `OwnershipSnapshot()` on `/api/perf`, and release
+  accounting in `Cleanup`. Active request data is never evicted — by
+  name and by counter (the pressure/idle cleanup still refuses to run
+  while any run is live). Duplicate-suppression, bounded caches and
+  coordinated trims from v1.2.4 are unchanged; forced GC remains a
+  non-optimization.
+- Startup critical path: the initial project-intelligence observation
+  (bounded workspace walk) moved to a background goroutine — a valid
+  installed local engine is usable immediately and the first chat never
+  waits for indexing. Updater/network failures remain off the local-chat
+  path (scheduled updates and engine prewarm were already async; the
+  offline briefing note still informs the model).
+
+## 6. Per-request performance telemetry
+
+`internal/agent/pertiming.go` — one `RunClock` per turn with 16 stage
+marks (`received`, `classified`, `context_start/end`, `prompt_start/end`,
+`serialized`, `request_sent`, `first_byte`, `first_token`,
+`generation_end`, `tool_start/end`, `verification_start/end`, `done`)
+deriving `classify_ms`, `context_ms`, `prompt_ms`, `serialization_ms`,
+`TTFT`, `generation_ms`, `tool_ms`, `verification_ms`, `total_ms` and
+`firstPromptTokens`. Unmarked stages report 0 — never invented. The
+values travel on `RunResult.Timing`, on the ctxtelemetry `TurnRecord`
+(with `Tier`, `FinalTier`, `Escalations`, `ThinkingControl`,
+`ToolPolicyMode`), and surface in Advanced/System diagnostics via
+`/api/perf` (`requests[]` — the 10 most recent measured timelines — plus
+`ownership[]` and `toolCache`).
+
+## 7. Change map (authoritative)
 
 ```text
-package.json                                         MODIFY  version 1.2.4 (identity chain source of truth)
+package.json                                         MODIFY  version 1.2.5 (identity chain source of truth)
 SIGNATURE                                            MODIFY  version sync via release-version.mjs
 build/config.yml                                     MODIFY  version sync via release-version.mjs
-internal/config/config.go                            MODIFY  WorkspaceRoot + RecentWorkspaces + EffectiveWorkspaceRoot + PushRecentWorkspace
-internal/ctxtelemetry/ctxtelemetry.go                MODIFY  in-memory cache + coalesced persistence + Stats/Flush
-internal/sessions/sessions.go                        MODIFY  hot cache, read-isolated Get, streamed writes, TrimHot, sidecar cache
-internal/aicontext/aicontext.go                      MODIFY  (size,mtime) text cache + ResetFileCache
-internal/projectintel/projectintel.go                MODIFY  validated parse cache for facts
-internal/chunking/chunking.go                        MODIFY  WindowHeadTailBytes + byte-windowed FormatFileAttachment
-internal/tools/tools.go                              MODIFY  Shell/CodeExec/Git switched to boundedCombinedOutput
-internal/tools/capture.go                            ADD     bounded streaming output capture + telemetry
-internal/memory/memory.go                            MODIFY  AppendEntryUnique + remember-path dedup + DuplicatesSkipped
-internal/llm/client.go                               MODIFY  byte-bounded LRU image cache + TrimImageCache
-internal/contextcache/contextcache.go                MODIFY  TrimIdle cold-tail shedding
-internal/memmanager/memmanager.go                    ADD     coordinated memory policy (trims, runs, pressure, idle, telemetry)
-internal/memmanager/memmanager_test.go               ADD     policy + repeated-run bounded-memory tests (race-clean)
-internal/runtime/runtime.go                          MODIFY  Stack.Sessions/MemMgr/Intel, trim registration, shared store, StartMemoryManager, Close flush
-internal/api/server.go                               MODIFY  shared session store, run tracking in handleRun, workspace routes, idle-loop start
-internal/api/perf.go                                 MODIFY  memory telemetry block on /api/perf
-internal/api/workspace.go                            ADD     GET summary / reveal / switch endpoints
-internal/api/workspace_test.go                       ADD     workspace endpoint contract tests
-internal/aicontext/bench_test.go                     ADD     per-turn system-message benchmark
-internal/chunking/format_bench_test.go               ADD     1 MB attachment compose benchmark
-internal/chunking/window_bytes_test.go               ADD     byte-path differential + non-aliasing + large-file tests
-internal/ctxtelemetry/bench_test.go                  ADD     steady-state record/read benchmarks
-internal/projectintel/bench_test.go                  ADD     per-turn card benchmark
-internal/sessions/bench_test.go                      ADD     append/get hot-path benchmarks
-src/workspace.ts                                     MODIFY  workspace layer, Agent relabel, view persistence
-src/api.ts                                           MODIFY  workspace types + endpoints
-src/WorkspacePanel.tsx                               ADD     work-environment panel
-src/shortcuts.ts                                     ADD     global shortcut registry + help data
-src/App.tsx                                          MODIFY  workspace route, view restore, shortcuts, help overlay
-src/store.ts                                         MODIFY  engine snapshot change-detection (re-render churn)
-src/LabPanel.tsx                                     MODIFY  explicit store selectors
-src/MessageStream.tsx                                MODIFY  memo export + stable message keys
-src/ModelPicker.tsx                                  MODIFY  memo export
-src/PerfStrip.tsx                                    MODIFY  memo export
-src/ActivityStream.tsx                               MODIFY  memo export
-src/styles.css                                       MODIFY  additive v1.2.4 section (workspace panel, overlay, skeletons)
+internal/config/config.go                            MODIFY  AppVersion 1.2.5 (sync)
+internal/taskclassify/taskclassify.go                ADD     task classification (kinds, signals, complexity, depth control)
+internal/taskclassify/taskclassify_test.go           ADD     classifier + tier + escalation-ladder tests
+internal/taskclassify/tiers.go                       ADD     FAST/STANDARD/DEEP/MAX policies, resource-aware SelectTier, escalation reasons
+internal/contextplan/contextplan.go                  MODIFY  Tier metadata, P0-P3 priority classes, MaxHistoryShare cap
+internal/agent/orchestrator.go                       MODIFY  RunDetailed adaptive pipeline (classify→tier→compose→escalate), per-request options, events, tool cache, clock
+internal/agent/orchestrator_tiers.go                 ADD     turnComposer (tier-scoped composition + upgrades), escalationWatch, hardware TTL snapshot, policy types
+internal/agent/orchestrator_tiers_test.go            ADD     acceptance: FAST first prompt, card tiers, thinking control, manual policy, cache, escalation, clock, spec cache, ladder bound
+internal/agent/pertiming.go                          ADD     RunClock + Timing (16 measured stages)
+internal/agent/toolcache.go                          ADD     specCache memoization + bounded deterministic result cache
+internal/agent/userflows_test.go                     ADD     Phase 15 user-flow tests (old-conversation, research, vision, simple-chat recall skip)
+internal/agent/v125_measurement_test.go               ADD     the before/after first-prompt measurement (v1.2.4 ≈10K → v1.2.5 ≈416 tok)
+internal/agent/reliability_test.go                   MODIFY  card-position fixture updated to a card-carrying (coding) task for the tier era
+internal/ctxtelemetry/ctxtelemetry.go                MODIFY  Tier/FinalTier/Escalations/ThinkingControl/ToolPolicyMode/RequestTiming
+internal/memmanager/memmanager.go                    MODIFY  ownership wiring (named ACTIVE holders, release accounting)
+internal/memmanager/ownership.go                     ADD     ACTIVE→SESSION→HOT→COLD→EXPIRED→RELEASE ladder + snapshot
+internal/runtime/runtime.go                          MODIFY  project-intel observe moved off the startup critical path
+internal/api/server.go                               MODIFY  handleRun parses thinking/toolMode/toolAllow + receivedAt; persistence skip list extended
+internal/api/perf.go                                 MODIFY  requests[] timeline table, ownership ladder, toolCache counters
+src/run-events.ts                                    ADD     canonical wire-event mapping + control normalizers (pure)
+src/run-events.test.ts                               ADD     vocabulary/normalization unit tests
+src/ComposerControls.tsx                             ADD     Thinking ▾ + Tools ▾ composer controls + live status chip
+src/api.ts                                           MODIFY  RunRequest controls + RequestTiming/OwnershipLevel types
+src/store.ts                                         MODIFY  controls state (persisted) + canonical event handling + liveStatus/tierEscalations/thinkingPanelOpen
+src/AgentBody.tsx                                    MODIFY  composer mounts ComposerControls
+src/MessageStream.tsx                                MODIFY  thinking panel follows backend thinking markers; escalation notices in the run activity
+src/ActivityStream.tsx                               MODIFY  escalation/status group under Plan
+src/styles.css                                       MODIFY  additive v1.2.5 section (control menus, status chip, escalation styling)
 web/static/index.html                                MODIFY  rebuilt frontend bundle references
 web/static/.vite/manifest.json                       MODIFY  rebuilt frontend manifest
-web/static/assets/AgentBody-cMt13HM9.js              NEW     rebuilt bundle (hashed)
-web/static/assets/AgentHeader-dCYmm522.js            NEW     rebuilt bundle (hashed)
-web/static/assets/AgentSidebar-CWp3SdAx.js           NEW     rebuilt bundle (hashed)
-web/static/assets/DownloadProgress-28j0D3i-.js       NEW     rebuilt bundle (hashed)
-web/static/assets/LabPanel-DFJX1ZVA.js               NEW     rebuilt bundle (hashed)
-web/static/assets/ResearchPanel-BXiEx0Sd.js          NEW     rebuilt bundle (hashed)
-web/static/assets/SettingsPanel-BdbLpW4s.js          NEW     rebuilt bundle (hashed)
-web/static/assets/SystemPanel-BEI2b4hF.js            NEW     rebuilt bundle (hashed)
-web/static/assets/WorkspacePanel-BV8_VjyW.js         NEW     new lazy panel bundle
-web/static/assets/index-B_uB5cBU.js                  NEW     rebuilt entry bundle
-web/static/assets/index-gFgARQCb.css                 NEW     rebuilt stylesheet
+web/static/assets/AgentBody-E9JJ_R6r.js              NEW     rebuilt bundle (hashed)
+web/static/assets/AgentHeader-BpWR6c2d.js            NEW     rebuilt bundle (hashed)
+web/static/assets/AgentSidebar-BJUTZobI.js           NEW     rebuilt bundle (hashed)
+web/static/assets/DownloadProgress-1en0mJCS.js       NEW     rebuilt bundle (hashed)
+web/static/assets/LabPanel-DG1YEr1n.js               NEW     rebuilt bundle (hashed)
+web/static/assets/ResearchPanel-ByYo7Bbc.js          NEW     rebuilt bundle (hashed)
+web/static/assets/SettingsPanel-DYKVli5M.js          NEW     rebuilt bundle (hashed)
+web/static/assets/SystemPanel-DkdYORg1.js            NEW     rebuilt bundle (hashed)
+web/static/assets/WorkspacePanel-aELe49Qv.js         NEW     rebuilt bundle (hashed)
+web/static/assets/index-B77WlYpt.js                  NEW     rebuilt entry bundle
+web/static/assets/index-5oqPjJgJ.css                 NEW     rebuilt stylesheet
+web/static/assets/vision-Dw0T2tjy.js                 UNCHANGED (same content hash as v1.2.4 — included for a complete, self-consistent web/static tree)
 worklog.md                                           MODIFY  this release's work-log entry
 UPDATE.md                                            REPLACE this file
 REPLACEMENT-MANIFEST.txt                             REPLACE this package's manifest
 REPLACEMENT-SHA256.txt                               REPLACE this package's hashes
 ```
 
-## 4. DELETE list (apply after copying)
+## 8. DELETE list (apply after copying)
 
-Stale v1.2.3 hashed assets, replaced by the rebuilt bundles above:
+Stale v1.2.4 hashed assets, replaced by the rebuilt bundles above:
 
 ```text
-web/static/assets/AgentBody-BjrGu1AP.js
-web/static/assets/AgentHeader-Du6Ox9Mq.js
-web/static/assets/AgentSidebar-DvyhjsPE.js
-web/static/assets/DownloadProgress-CO-h6FaB.js
-web/static/assets/LabPanel-BaaTabl2.js
-web/static/assets/ResearchPanel-MRM_MVdu.js
-web/static/assets/SettingsPanel-DALRLl1e.js
-web/static/assets/SystemPanel-CAyGQpds.js
-web/static/assets/index-CjGSRCFB.js
-web/static/assets/index-DwewjhlI.css
+web/static/assets/AgentBody-cMt13HM9.js
+web/static/assets/AgentHeader-dCYmm522.js
+web/static/assets/AgentSidebar-CWp3SdAx.js
+web/static/assets/DownloadProgress-28j0D3i-.js
+web/static/assets/LabPanel-DFJX1ZVA.js
+web/static/assets/ResearchPanel-BXiEx0Sd.js
+web/static/assets/SettingsPanel-BdbLpW4s.js
+web/static/assets/SystemPanel-BEI2b4hF.js
+web/static/assets/WorkspacePanel-BV8_VjyW.js
+web/static/assets/index-B_uB5cBU.js
+web/static/assets/index-gFgARQCb.css
 ```
 
-## 5. DO NOT TOUCH list
+## 9. DO NOT TOUCH list
 
-User data and runtime state are never touched by the update machinery or
-by the new memory policy: `models/`, `workspace/`, `sessions/`,
-`attachments/`, `memory.jsonl`, `config.json` (except the additive
-`workspaceRoot`/`recentWorkspaces` keys written by an explicit switch),
-`ctxtelemetry.jsonl`, `scheduler/`, `lab/`. The memmanager's trims
+User data and runtime state are never touched by this update: `models/`,
+`workspace/`, `sessions/`, `attachments/`, `memory.jsonl`, `config.json`,
+`ctxtelemetry.jsonl`, `scheduler/`, `lab/`. The ownership ladder's trims
 deliberately exclude all of these; telemetry JSONL is only flushed, never
 truncated by policy.
 
-## 6. Safe-apply procedure
+## 10. Safe-apply procedure
 
-1. Apply over a clean checkout of the base commit (`8d8858d`, v1.2.3).
-2. Copy every file from this package over the tree (REPLACE/MODIFY/ADD).
-3. Delete the v1.2.3 hashed assets listed in §4 if present.
-4. Verify identity: `node scripts/release-version.mjs --check` must report
-   all surfaces at 1.2.4.
-5. Rebuild: `cmake -S native/engine -B native/engine/build && cmake
-   --build native/engine/build && ctest --test-dir native/engine/build`,
-   `npm ci && npm run build`, `go test ./internal/... -tags headless`.
-6. Launch; the new Workspace layer (sidebar "Workspace") shows the current
-   project, recent files, active session, model/runtime state and quick
-   actions; pressing `?` lists the keyboard shortcuts; Settings →
-   Performance carries the new `memory` telemetry block.
+1. Apply over a clean checkout of the base commit (`dacae73`, v1.2.4).
+2. Copy every file from this package over the tree (REPLACE/MODIFY/ADD),
+   then delete the v1.2.4 hashed assets listed in §8 if present.
+3. Verify identity: `node scripts/release-version.mjs --check` must
+   report all surfaces at 1.2.5.
+4. Rebuild and validate: `go vet -tags headless ./...`, `go test
+   -tags headless ./internal/... -count=1`, `npm ci && npm run typecheck
+   && npm run lint && npm run test:units && npm run build`, and for the
+   native engine `cmake -S native/engine -B native/engine/build &&
+   cmake --build native/engine/build && ctest --test-dir
+   native/engine/build` (no C++ changes; the rebuild simply re-confirms).
+5. Launch: the composer shows **Thinking ▾** and **Tools ▾**; a trivial
+   chat answers from the FAST tier (status chip shows the tier), coding
+   work carries the project card, the reasoning panel opens only when
+   the model actually reasons, and Settings → Performance → Advanced
+   shows the per-request timeline table and the ownership ladder.
 
-## 7. Executed automated checks (this package, before packaging)
-
-Measured improvements (identical machine, `-benchmem`, before vs after):
-
-| Benchmark | v1.2.3 | v1.2.4 | Gain |
-|---|---|---|---|
-| ctxtelemetry.RecordSteady | 7430968 ns/op, 6492054 B/op, 18685 allocs | 64681 ns/op, 59462 B/op, 144 allocs | **115× faster · 109× less memory** |
-| ctxtelemetry.RecentSteady | 3312198 ns/op, 4099584 B/op, 12032 allocs | 4253 ns/op, 18432 B/op, 1 alloc | **778× faster · 223× less memory** |
-| sessions.AppendMessageGrowing | 2535120 ns/op, 1209299 B/op, 3287 allocs | 1255804 ns/op, 339100 B/op, 1475 allocs | **2.0× faster · 3.6× less memory** |
-| sessions.GetLoaded | 425778 ns/op, 274176 B/op, 830 allocs | 26356 ns/op, 75200 B/op, 15 allocs | **16× faster · 3.6× less memory** |
-| aicontext.SystemMessageSteady | 31320 ns/op, 100443 B/op | 9812 ns/op, 34796 B/op | 3.2× faster · 2.9× less memory |
-| projectintel.CardSteady | 8894 ns/op, 2472 B/op | 2166 ns/op, 1272 B/op | 4.1× faster |
-| chunking.FormatFileAttachment1MB | 746256 ns/op, 2926039 B/op | 678094 ns/op, 1869102 B/op | 1.56× less memory (read buffer is now the floor) |
-
-Tool-output safety: the unbounded `CombinedOutput` path is gone; a
-runaway command's result is capped at 1 MiB retained with an honest
-total-count marker (covered by the capture counters on `/api/perf`).
+## 11. Executed automated checks (this package, before packaging)
 
 Correctness suites (all green after the changes):
 
-- `go vet ./...` clean; `go test ./internal/... -tags headless -count=1`
-  fully green; `go test ./... -run Test` green (the Wails desktop shell
-  package requires GTK/WebKit system libraries that CI provides).
-- Race detector clean on the five touched-concurrency packages
-  (memmanager, sessions, ctxtelemetry, memory, contextcache).
-- Stress suite: `STRESS-RESULT pass=47 fail=0 hangs=0 crashes=0`
-  (includes the contextcache bound proof and the 10k-message plan
-  bound).
-- New policy test: 200 simulated run cycles with a would-be-leaking cache
-  keep steady-state heap bounded (`TestRepeatedRunMemoryStaysBounded`);
-  cleanup deferral while a run is active is asserted directly.
+- `go vet -tags headless ./internal/...` clean; `go test -tags headless
+  ./internal/... -count=1` fully green (41 packages, including the 20
+  new v1.2.5 tests); the full suite was run twice back-to-back for
+  stability.
+- Race detector clean on the touched concurrency packages (agent,
+  memmanager, taskclassify, ctxtelemetry, contextcache, sessions).
 - Frontend: `npm run typecheck`, `npm run lint` (0/0), `npm run
-  test:units` (20/20), `npm run build` + `sync:web` green.
-- Native engine: NO C++ changes; rebuilt and 12/12 CTest suites pass;
-  Go↔native integration tests pass against the real host binary.
+  test:units` (28/28 — 8 new), `npm run build` + `sync:web` green.
+- Native engine: NO C++ changes; rebuilt and 12/12 CTest suites pass.
 
-## 8. Known platform limitations
+Measured before/after (identical fake-engine harness, before vs after):
 
-- The GUI (Wails/GTK) shell cannot be exercised on a headless CI runner
+| Metric | v1.2.4 | v1.2.5 | Gain |
+|---|---|---|---|
+| First-request prompt, trivial chat (17 tools) | ≈10K tok | ≈416 tok engine-received / 557 plan-accounted | **~24× smaller** |
+| Tool schemas offered, trivial chat | all (~17) | 3 (tier-bounded ≤6) | ~6× fewer |
+| Recall retrieval I/O, trivial chat | every turn | 0 (FAST never composes it) | eliminated |
+| Tool-schema JSON marshals per turn | 2 × N tools | 0 after first composition per registry generation | memoized |
+| Optional composition work before TTFT | recall + card + skills always | tier-gated (zero on FAST) | eliminated on small tasks |
+
+User-flow verification (Phase 15, as acceptance tests): simple chat,
+normal question, coding bug (targeted card at STANDARD+), long/old
+conversation retrieval (recall at STANDARD+ with digest injection),
+research task, tool-heavy task (cache reuse + repeat prevention), vision
+task (image_url wire part + tier floor), Thinking=Fast / Auto /
+Thinking (tier + nudge verified on the engine side), manual tool
+selection + restriction (offer AND execution refusal), context
+escalation (FAST→STANDARD on MissingFileContext; enrichment verified in
+the next engine request; ladder bound ≤2), engine paths unchanged
+(PrewarmLLM async, offline note preserved).
+
+## 12. Known platform limitations
+
+- The GUI (Wails/GTK) shell cannot be exercised on a headless runner
   without GTK4/WebKitGTK system libraries; all logic is covered through
   the `headless` tag suite, which is what CI runs.
-- Opening a terminal at the workspace (`/api/workspace/reveal` with
-  `target: "terminal"`) is best-effort on Linux (first of the common
-  terminal emulators found) and returns an honest error when none exists.
-- Telemetry flush coalescing (64 records / 10 s) means a hard crash can
-  lose at most one window of observational context telemetry; user data
-  is never coalesced.
+- The per-image vision token figure used for tier selection is a
+  documented planning estimate (mmproj tile cost); the plan's reported
+  tokens remain measured text tokens.
+- The escalation ladder is bounded at two upgrades per run by design —
+  evidence that would demand a third step is logged ("ladder exhausted")
+  rather than silently ignored.

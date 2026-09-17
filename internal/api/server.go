@@ -1087,12 +1087,21 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 Message       string   `json:"message"`
                 AttachmentIDs []string `json:"attachmentIds,omitempty"`
                 Regenerate    bool     `json:"regenerate,omitempty"`
+
+                // v1.2.5 per-request controls — they shape the ACTUAL backend
+                // request (tier posture, tool surface), never just the UI.
+                Thinking  string   `json:"thinking,omitempty"`  // "auto" | "fast" | "thinking"
+                ToolMode  string   `json:"toolMode,omitempty"`  // "auto" | "manual"
+                ToolAllow []string `json:"toolAllow,omitempty"` // manual-mode allow-list
         }
 
         if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
                 writeErr(w, http.StatusBadRequest, err)
                 return
         }
+
+        // v1.2.5: the run clock anchors to the moment the request landed.
+        receivedAt := time.Now()
 
         if body.SessionID == "" {
                 writeErr(w, http.StatusBadRequest, fmt.Errorf("sessionId required"))
@@ -1449,8 +1458,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                 // Persist milestone events only. Streaming response/reasoning
                                 // deltas are intentionally not persisted individually because
                                 // each persistence operation rewrites the session JSON.
+                                // v1.2.5: the status/thinking-marker deltas join the
+                                // skip list (tiny, high-frequency, no persisted value).
                                 switch a.Type {
-                                case "response", "thinking", "reasoning":
+                                case "response", "thinking", "reasoning",
+                                        "status", "thinking_start", "thinking_end":
                                         return
                                 }
 
@@ -1472,6 +1484,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                 }
                         },
                         agent.WithSessionContext(sess.Context.ContextTokens),
+                        agent.WithThinkingMode(body.Thinking),
+                        agent.WithToolPolicy(body.ToolMode, body.ToolAllow),
+                        agent.WithReceivedAt(receivedAt),
                 )
 
                 if err != nil {

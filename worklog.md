@@ -2210,3 +2210,117 @@ Stage Summary:
   environment rather than a settings screen, and the whole-app usability
   pass is additive and honest. The package builds, all suites pass, and
   the update ZIP is reproducible from this tree.
+
+---
+
+## v1.2.5 — 2026-09-17: Adaptive Context Tiers, Global Tool Control, Thinking Mode & Per-Request Telemetry
+
+Base: main @ dacae73 (v1.2.4). Everything below is measured against the
+v1.2.4 baseline taken BEFORE any edit (same machine, same fake-engine
+harness; numbers in internal/agent/v125_measurement_test.go).
+
+### The measured v1.2.4 bottleneck this release fixes
+
+- Full AI-context briefing composed on EVERY turn: 29,691 chars ≈ 7,368
+  tokens — prepended even for "hi" (probe: TestBaselinePromptCost).
+- ALL tool schemas JSON-marshaled per turn (measure + request build =
+  double marshal of ~17-20 specs); recall retrieval + project card +
+  skills composed UNCONDITIONALLY before the first engine call.
+- Net effect: a trivial chat turn paid a ~10K-token prefill before TTFT;
+  degradation only ever shrank under overflow — nothing ever started
+  small and escalated on evidence.
+
+### v1.2.5 changes (all evidence-based, nothing disabled)
+
+- NEW internal/taskclassify: task classification (8 kinds, additive
+  keyword scoring, complexity 0-100, past-reference + depth signals) and
+  the FAST/STANDARD/DEEP/MAX tier ladder — tier policies select the
+  briefing form (compact ~353 tok vs full ~7.4K), the history share
+  (30/50/70/85% of usable), the tool-schema token budget, and whether
+  recall/project-card/skills composition runs AT ALL. Tier selection uses
+  MEASURED resources: effective context (min of configured/model/engine/
+  session), TTL-cached hardware RAM, vision payload estimate, staged
+  attachment tokens, task-relevant tool cost, full-history size, and the
+  user's explicit thinking control.
+- Orchestrator RunDetailed restructured: classify → select tier →
+  tier-scoped composition → plan (tier + share cap) → degradation ladder
+  (kept as the safety net) → engine → evidence → escalate ONLY when
+  required → continue. Escalation applies mid-run to the LIVE
+  conversation (briefing swap compact→full, inject card/skills/recall,
+  re-window from the retained pre-window body at the new share, widen the
+  tool surface — AUTO policy only), bounded at 2 upgrades per run, with
+  the honest log line "FAST 3.8K → STANDARD 7.2K reason=MissingFileContext".
+  Eight named evidence reasons (MissingFileContext, MissingHistory,
+  MissingToolContext, RepositoryDependency, VerificationFailure,
+  LargeAttachment, VisionRequirement, UserRequestedDepth) — every one
+  derived from real tool results/refusals/verification outcomes.
+- Per-request controls that change the ACTUAL backend request:
+  WithThinkingMode (fast = latency-first, no nudge; thinking = depth,
+  nudge + escalation ceiling) and WithToolPolicy (manual allow-list
+  enforced at BOTH offer and execution; NEVER silently re-enabled by
+  escalation). handleRun parses thinking/toolMode/toolAllow from
+  POST /api/run and anchors the run clock with receivedAt.
+- NEW internal/agent/pertiming.go: the per-request RunClock — 16 stage
+  marks (received → classified → context_start/end → prompt_start/end →
+  serialized → request_sent → first_byte → first_token → generation_end →
+  tool_start/end → verification_start/end → done) deriving
+  classify/context/prompt/serialization/TTFT/generation/tool/
+  verification/total_ms. Unmarked stages report 0 — never invented.
+- NEW internal/agent/toolcache.go: specCache (tool schemas marshaled once
+  per registry generation — the per-turn double marshal is gone) and a
+  bounded LRU resultCache for deterministic tools only (files read-shape/
+  diff/json; mutating actions never cached); identical repeats are served
+  from cache with a visible "served from cache" event; genuinely
+  retryable failures (transient network/process on idempotent network
+  tools) retry exactly once.
+- ctxtelemetry TurnRecord extended with Tier/FinalTier/Escalations/
+  ThinkingControl/ToolPolicyMode/RequestTiming; /api/perf now carries the
+  10 most recent measured request timelines, the data-ownership ladder
+  and the tool-cache counters.
+- NEW internal/memmanager/ownership.go: the explicit ownership ladder
+  (ACTIVE → SESSION → HOT CACHE → COLD CACHE → EXPIRED → RELEASE) with
+  named ACTIVE holders (HoldActive/ReleaseActive wired into
+  TrackRunStart/End), OwnershipSnapshot() telemetry, and release
+  accounting in Cleanup — active request data is never evicted, by name
+  and by counter.
+- Startup critical path: the initial project-intel observation (bounded
+  filesystem walk) moved to a background goroutine — the first chat no
+  longer waits for indexing; updater/network failures remain off the
+  local-chat path (RunScheduled + PrewarmLLM are already async).
+- Frontend: NEW ComposerControls (Thinking ▾ auto/fast/thinking + Tools ▾
+  AUTO/MANUAL with per-tool checkboxes, persisted in localStorage, sent
+  with every run request) + the live status chip (backend "status" events
+  only: "Preparing context · FAST", "Thinking… · STANDARD · 7.2k tok");
+  NEW run-events.ts canonical event mapping (thinking_start/thinking_end/
+  assistant_delta/complete/status/escalation aliases — legacy names keep
+  their meaning, no streamed content is duplicated); the thinking panel
+  follows the backend's own thinking markers; escalation notices join the
+  visible timeline; additive CSS section.
+
+### Verified before/after (same harness, measured, not estimated)
+
+- First-request prompt for "hi" (17 registered tools): v1.2.4 ≈ 10K
+  tokens (7.4K briefing + all schemas + composed optionals) → v1.2.5
+  FAST ≈ 416 tokens engine-received (557 plan-accounted incl. 3 offered
+  tool schemas) — ~24x smaller; tools offered 3 (tier-bounded ≤6).
+- Recall retrieval I/O on trivial chat: v1.2.4 every turn → v1.2.5 zero
+  (FAST never composes it; TestUserFlowSimpleChatSkipsRecallRetrieval).
+- Tool-schema marshals per turn: 2×N → 0 after the first composition per
+  registry generation (specCache; TestSpecCacheMemoizesSerialization).
+- All user flows (Phase 15): simple chat, question, coding (card at
+  STANDARD+), large-history retrieval (recall at STANDARD+), research,
+  tool-heavy (cache + repeat reuse), vision (image_url wire part, tier
+  floor STANDARD), thinking=fast/auto/thinking, manual tool selection +
+  restriction (offer AND execution refusal), context escalation
+  (FAST→STANDARD on MissingFileContext with the card enrichment landing
+  in the next engine request), escalation ladder bound (≤2/run).
+
+### Executed checks
+
+- go vet -tags headless ./internal/... clean; full headless suite green
+  (41 packages, incl. 20 new v1.2.5 tests); race detector clean on
+  agent/memmanager/taskclassify/ctxtelemetry/contextcache/sessions.
+- Frontend: typecheck ✓, oxlint 0/0, test:units 28/28 (8 new), build +
+  sync:web ✓ (stale v1.2.4 hashed assets deleted).
+- Native engine: no C++ changes; rebuilt + 12/12 CTest suites pass;
+  version identity chain 1.2.5 via release-version.mjs (--check green).

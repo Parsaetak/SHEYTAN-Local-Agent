@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { api, type EngineState, type RuntimeConfig } from "./api";
+import ComposerControls from "./ComposerControls";
 import { DownloadProgressPanel } from "./DownloadProgress";
 import { initializeAgent } from "./agent-init";
 import MessageStream, { AttachmentChip } from "./MessageStream";
@@ -860,6 +861,10 @@ function AgentBody() {
             ({vision.label.toLowerCase()}) — images will be ignored.
           </div>
         ) : null}
+
+        {/* v1.2.5: per-request controls — Thinking selector, tool policy,
+            and the live status chip (backend-measured tier telemetry). */}
+        <ComposerControls />
 
         <div className="composer-shell">
           <input

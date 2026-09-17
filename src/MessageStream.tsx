@@ -386,7 +386,9 @@ function GenerationBubble() {
         item.type === "tool_end" ||
         item.type === "engine" ||
         item.type === "context" ||
-        item.type === "thinking",
+        item.type === "thinking" ||
+        // v1.2.5: tier escalation notices join the visible timeline.
+        item.type === "escalation",
     );
 
     return interesting.slice(-6);
@@ -395,9 +397,12 @@ function GenerationBubble() {
   const reasoning = streaming?.reasoning ?? "";
   const content = streaming?.content ?? "";
 
-  // Auto-open reasoning while the model thinks, fold when the answer
-  // streams (explicit user choice overrides both directions).
-  const reasoningLive = runPhase === "thinking" || runPhase === "preparing";
+  // v1.2.5: the panel follows the backend's OWN thinking_start/end
+  // markers (store thinkingPanelOpen) — auto-open while the model thinks,
+  // fold when the answer streams (explicit user choice overrides both).
+  const thinkingPanelOpen = useRuntimeStore((s) => s.thinkingPanelOpen);
+  const reasoningLive =
+    thinkingPanelOpen || runPhase === "thinking" || runPhase === "preparing";
 
   return (
     <article

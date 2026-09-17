@@ -387,13 +387,26 @@ func NewStack(cfg *config.Config) *Stack {
         )
         stack.Intel = intel
 
-        if _, err := intel.Observe(cfg.WorkspaceDir()); err != nil {
-                logging.Default().Warn(
+        // v1.2.5: the initial workspace observation (a bounded filesystem walk)
+        // moved OFF the startup critical path — the first chat must not wait
+        // for project indexing. The card renders empty until the background
+        // pass lands (typically well under a second); escalation and later
+        // runs pick it up normally.
+        go func() {
+                if _, err := intel.Observe(cfg.WorkspaceDir()); err != nil {
+                        logging.Default().Warn(
+                                "runtime",
+                                "project intelligence observe (background): %v",
+                                err,
+                        )
+                        return
+                }
+                logging.Default().Info(
                         "runtime",
-                        "project intelligence observe: %v",
-                        err,
+                        "project intelligence ready (background observe): %s",
+                        cfg.WorkspaceDir(),
                 )
-        }
+        }()
 
         if cfg.LabEnabled {
                 var err error
