@@ -92,13 +92,36 @@ func TestFireRefusesConcurrentRun(t *testing.T) {
 
 	_ = s.AddTask(Task{ID: "m1", Name: "manual", Trigger: EventManual, Prompt: "hello"})
 
-	go func() { _, _ = s.Fire(context.Background(), "m1") }()
+	// v1.2.5 repair: the first Fire() runs on a goroutine and its result is
+	// collected through a channel. The test MUST wait for that completion
+	// before returning: Fire's epilogue persists the report into the temp
+	// dir, and an early return raced t.TempDir()'s RemoveAll cleanup
+	// ("directory not empty"). Result ownership is deterministic — no sleep.
+	type fireResult struct {
+		report Report
+		err    error
+	}
+
+	done := make(chan fireResult, 1)
+
+	go func() {
+		report, err := s.Fire(context.Background(), "m1")
+		done <- fireResult{report: report, err: err}
+	}()
 	<-started
 
 	if _, err := s.Fire(context.Background(), "m1"); err == nil {
 		t.Fatal("concurrent fire of the same task must be refused")
 	}
 	close(release)
+
+	first := <-done
+	if first.err != nil {
+		t.Fatalf("first fire: %v", first.err)
+	}
+	if !first.report.OK || first.report.Output != "done" {
+		t.Fatalf("first fire report: %+v", first.report)
+	}
 }
 
 func TestTimerTickFiresDueTasks(t *testing.T) {

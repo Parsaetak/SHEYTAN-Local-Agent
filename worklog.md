@@ -2324,3 +2324,77 @@ harness; numbers in internal/agent/v125_measurement_test.go).
   sync:web ✓ (stale v1.2.4 hashed assets deleted).
 - Native engine: no C++ changes; rebuilt + 12/12 CTest suites pass;
   version identity chain 1.2.5 via release-version.mjs (--check green).
+
+---
+## v1.2.5 Full Repair — engine lifecycle, deterministic shutdown, System Centre, context truthfulness
+
+Date: 2026-09-17 (repair pass on top of the v1.2.5 adaptive-tiers work)
+
+Reproduced first, then fixed:
+
+1. CI TempDir races REPRODUCED at HEAD and fixed:
+   - `TestRunTimeoutBudgetApplies` (internal/api): `runtime.NewStack` spawned
+     UNOWNED background workers writing into DataDir (project-intel observe,
+     recall backfill, native prewarm, PrewarmLLM, EnsureLLMContext boot);
+     `StartMemoryManager`/`StartScheduler` loops were never awaited;
+     `Stack.Close()` returned while they could still write. Now every
+     background worker is OWNED (lifeCtx + lifeWG + per-loop done channels),
+     `Close()` is idempotent (sync.Once) with the ordered teardown
+     cancel → stop loops → wait loops → wait workers → flush → engines,
+     and `Stack.Close()` returning means no Stack-owned goroutine can still
+     write Stack-owned filesystem state. 50×/100× + `-race` stress green.
+   - `TestFireRefusesConcurrentRun` (internal/scheduler): the test never
+     waited for the first Fire() to complete (its epilogue persists
+     reports.jsonl). Fixed with a result channel — deterministic completion,
+     no sleep. 200× + `-race` 100× green.
+2. Engine lifecycle (internal/llm/llama.go) — the v1.2.4 runtime log
+   ("engine exited while running: exit status 1" + "automatic restart 1/3"
+   during a NORMAL shutdown) root-caused and repaired:
+   - the exit watcher now snapshots `stopping` IN THE SAME critical section
+     that classifies the exit: a deliberate stop logs
+     "engine stopped (deliberate shutdown, …)" — never an ERROR, never a
+     restart, never a counter increment;
+   - an unexpected death logs "engine exited unexpectedly: code N" with a
+     full evidence bundle (pid, tag, model, state-before, busy, stop
+     requested, vision state, stderr/stdout tails) and the honest detail
+     "Unexpected exit: code 1" / "Unexpected exit — restarting 1/3 in 1s"
+     surfaced through /api/engine (new `restarts` field);
+   - the watchdog is lifecycle-OWNED: cancelable timer channels (no naked
+     time.Sleep), one armed restart at a time, generation-token guard (a
+     stale restart from an older episode can never resurrect a newer
+     lifecycle), Stop() cancels + reaps it, and a boot that raced a Stop()
+     aborts at its episode checkpoint (fresh child killed);
+   - the restart budget resets ONLY after a genuinely stable episode
+     (stability window), so a crash-loop exhausts the bounded budget and
+     surfaces `failed` instead of recovering forever;
+   - 7 new lifecycle contract tests (unexpected-exit recovery, deliberate
+     stop, stop-during-backoff cancellation, budget exhaustion, stale
+     watchdog, budget reset semantics, no watchdog goroutine after
+     shutdown) — all green on the fake-engine harness.
+3. System Centre — the real failure was FRONTEND: `RecommendationCard`
+   returned early BEFORE a `useCallback`, so the first render with
+   environment data threw "Rendered more hooks than during the previous
+   render". Fixed (all hooks unconditional; early return after them), plus
+   honest loading/unavailable/retry states for the device card; the
+   defensive reads stay. Backend: every sysinfo external probe (PowerShell
+   CIM, wmic, nvidia-smi, df, sysctl, system_profiler) is now bounded by an
+   8 s per-call timeout (a hung probe used to block the sync.Once — and
+   every later caller — forever), and the first probe cost is measured and
+   logged.
+4. Context telemetry truthfulness: the per-turn plan log claimed
+   `status=compressed` whenever ANY automatic adjustment existed — even at
+   compressed=0 (the exact v1.2.4 log contradiction). New status contract
+   (raw | compressed | elided | recalled | adjusted | session-policy),
+   pinned by TestContextPlanStatusContract; tier escalation is reported
+   separately (it happens after assembly). Unknown model/engine context
+   limits are now logged as `modelMax=unknown` / `engineMax=unknown`
+   instead of a false `0`, and the GGUF card reader accepts signed
+   int32/int64 per-arch fields (real-world GGUF files emit
+   context_length as int32 — the silent `modelMax=0` root cause).
+
+Verification: `go test ./internal/... -tags headless -count=1` fully green;
+`-race` on api/scheduler/llm/runtime ×10 green; `go vet -tags headless`
+clean; Windows cross-build (GOOS=windows, all internal packages) green;
+frontend typecheck + lint (0/0) + 8/8 unit tests + production build green;
+native engine rebuilt, CTest 12/12. Identity chain at 1.2.5 (release
+version check green).

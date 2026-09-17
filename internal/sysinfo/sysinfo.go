@@ -3,6 +3,7 @@
 package sysinfo
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,11 +12,31 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
 )
 
 var _ = proc.Command // used below on windows/darwin probes
+
+// probeTimeout is the HARD per-call bound for one external probe command
+// (v1.2.5). A hung PowerShell/CIM/wmic call used to block the probe
+// forever — and because Probe() is a sync.Once, every later caller
+// (engine start GPU checks, /api/environment, /api/health) would block
+// behind it too. Every probe is now bounded; a timed-out probe yields
+// "unknown" facts, never a hang.
+const probeTimeout = 8 * time.Second
+
+// probeOutput runs one external probe with the bounded timeout.
+func probeOutput(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+
+	cmd := proc.CommandContext(ctx, name, args...)
+
+	return cmd.Output()
+}
 
 // SysInfo is the full hardware/software snapshot of the host.
 type SysInfo struct {
@@ -87,6 +108,12 @@ var (
 )
 
 func probeUncached() *SysInfo {
+	// v1.2.5: the first probe cost is MEASURED (brief §10) — one honest
+	// duration log per process, so a slow Windows diagnostic is visible
+	// instead of silent. Every external call inside is bounded by
+	// probeTimeout, so the worst case is bounded, not unbounded.
+	started := time.Now()
+
 	info := &SysInfo{
 		OS:       runtime.GOOS,
 		Arch:     runtime.GOARCH,
@@ -105,6 +132,14 @@ func probeUncached() *SysInfo {
 	info.WSL2 = detectWSL2()
 	info.Docker = detectDocker()
 	info.Recommended = recommend(info)
+
+	logging.Default().Info(
+		"sysinfo",
+		"hardware probe completed in %d ms (bounded: max %v per external call)",
+		time.Since(started).Milliseconds(),
+		probeTimeout,
+	)
+
 	return info
 }
 
@@ -133,20 +168,20 @@ func probeCPU() CPUInfo {
 			}
 		}
 	case "darwin":
-		if out, err := proc.Command("sysctl", "-n", "machdep.cpu.brand_string").Output(); err == nil {
+		if out, err := probeOutput("sysctl", "-n", "machdep.cpu.brand_string"); err == nil {
 			c.Name = strings.TrimSpace(string(out))
 		}
-		if out, err := proc.Command("sysctl", "-n", "hw.physicalcpu").Output(); err == nil {
+		if out, err := probeOutput("sysctl", "-n", "hw.physicalcpu"); err == nil {
 			if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
 				c.PhysicalCores = n
 			}
 		}
-		if out, err := proc.Command("sysctl", "-n", "hw.logicalcpu").Output(); err == nil {
+		if out, err := probeOutput("sysctl", "-n", "hw.logicalcpu"); err == nil {
 			if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil {
 				c.LogicalCores = n
 			}
 		}
-		if out, err := proc.Command("sysctl", "-n", "hw.cpufrequency").Output(); err == nil {
+		if out, err := probeOutput("sysctl", "-n", "hw.cpufrequency"); err == nil {
 			if n, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); err == nil {
 				c.FrequencyMHz = int(n / 1_000_000)
 			}
@@ -158,7 +193,7 @@ func probeCPU() CPUInfo {
 		// lifetime (Probe is a sync.Once), so the extra cost is paid once.
 		if v := cimScalar("Win32_Processor", "Name"); v != "" {
 			c.Name = v
-		} else if out, err := proc.Command("wmic", "cpu", "get", "name").Output(); err == nil {
+		} else if out, err := probeOutput("wmic", "cpu", "get", "name"); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) > 1 {
 				c.Name = strings.TrimSpace(lines[1])
@@ -169,7 +204,7 @@ func probeCPU() CPUInfo {
 			if n, err := strconv.Atoi(v); err == nil {
 				c.PhysicalCores = n
 			}
-		} else if out, err := proc.Command("wmic", "cpu", "get", "NumberOfCores").Output(); err == nil {
+		} else if out, err := probeOutput("wmic", "cpu", "get", "NumberOfCores"); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) > 1 {
 				if n, err := strconv.Atoi(strings.TrimSpace(lines[1])); err == nil {
@@ -190,10 +225,10 @@ func probeCPU() CPUInfo {
 // cimScalar reads one property of the first instance of a CIM/WMI class
 // through PowerShell (returns "" on any failure).
 func cimScalar(class, property string) string {
-	out, err := proc.Command(
+	out, err := probeOutput(
 		"powershell", "-NoProfile", "-Command",
 		fmt.Sprintf("(Get-CimInstance -ClassName %s).%s", class, property),
-	).Output()
+	)
 	if err != nil {
 		return ""
 	}
@@ -227,7 +262,7 @@ func probeRAM() RAMInfo {
 			}
 		}
 	case "darwin":
-		if out, err := proc.Command("sysctl", "-n", "hw.memsize").Output(); err == nil {
+		if out, err := probeOutput("sysctl", "-n", "hw.memsize"); err == nil {
 			if n, err := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64); err == nil {
 				r.TotalBytes = n
 			}
@@ -238,7 +273,7 @@ func probeRAM() RAMInfo {
 			if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 				r.TotalBytes = n * 1024
 			}
-		} else if out, err := proc.Command("wmic", "OS", "get", "TotalVisibleMemorySize").Output(); err == nil {
+		} else if out, err := probeOutput("wmic", "OS", "get", "TotalVisibleMemorySize"); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) > 1 {
 				if n, err := strconv.ParseUint(strings.TrimSpace(lines[1]), 10, 64); err == nil {
@@ -262,7 +297,7 @@ func probeDisk(path string) DiskInfo {
 	d.Path = abs
 	// Use 'df' on linux/darwin; wmic on windows
 	if runtime.GOOS == "windows" {
-		if out, err := proc.Command("wmic", "logicaldisk", "where", "DeviceID='"+filepath.VolumeName(abs)+"'", "get", "FreeSpace,Size").Output(); err == nil {
+		if out, err := probeOutput("wmic", "logicaldisk", "where", "DeviceID='"+filepath.VolumeName(abs)+"'", "get", "FreeSpace,Size"); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) > 1 {
 				fields := strings.Fields(strings.TrimSpace(lines[1]))
@@ -273,7 +308,7 @@ func probeDisk(path string) DiskInfo {
 			}
 		}
 	} else {
-		if out, err := proc.Command("df", "-k", abs).Output(); err == nil {
+		if out, err := probeOutput("df", "-k", abs); err == nil {
 			lines := strings.Split(string(out), "\n")
 			if len(lines) > 1 {
 				fields := strings.Fields(lines[1])
@@ -293,9 +328,9 @@ func probeGPUs() []GPUInfo {
 	var gpus []GPUInfo
 	// NVIDIA via nvidia-smi
 	if _, err := exec.LookPath("nvidia-smi"); err == nil {
-		if out, err := proc.Command("nvidia-smi",
+		if out, err := probeOutput("nvidia-smi",
 			"--query-gpu=name,driver_version,memory.total",
-			"--format=csv,noheader,nounits").Output(); err == nil {
+			"--format=csv,noheader,nounits"); err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				fields := strings.Split(line, ", ")
 				if len(fields) < 3 {
@@ -313,7 +348,7 @@ func probeGPUs() []GPUInfo {
 	}
 	// Apple Metal via system_profiler
 	if runtime.GOOS == "darwin" {
-		if out, err := proc.Command("system_profiler", "SPDisplaysDataType").Output(); err == nil {
+		if out, err := probeOutput("system_profiler", "SPDisplaysDataType"); err == nil {
 			text := string(out)
 			for _, line := range strings.Split(text, "\n") {
 				if strings.Contains(line, "Chipset Model") {
@@ -348,9 +383,8 @@ func probeGPUs() []GPUInfo {
 // presence/detection signal; VRAM sizes at or above the cap are reported
 // as 4 GB.
 func probeGPUsWindows() []GPUInfo {
-	cmd := proc.Command("powershell", "-NoProfile", "-Command",
+	out, err := probeOutput("powershell", "-NoProfile", "-Command",
 		`Get-CimInstance Win32_VideoController | ForEach-Object { "$($_.Name)|$($_.AdapterRAM)" }`)
-	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}

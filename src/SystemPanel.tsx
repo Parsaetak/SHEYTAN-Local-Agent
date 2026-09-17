@@ -38,7 +38,39 @@ const HEALTH_SYMBOL: Record<string, string> = {
   na: "–",
 };
 
-function DeviceCard({ env }: { env: EnvironmentPayload | null }) {
+function DeviceCard({
+  env,
+  status,
+  onRetry,
+}: {
+  env: EnvironmentPayload | null;
+  status: "loading" | "ready" | "error";
+  onRetry: () => void;
+}) {
+  // v1.2.5: honest states — loading says MEASURING, error says UNAVAILABLE
+  // with a retry. The old fallback rendered "Measuring this machine…"
+  // forever when the probe failed, which lied about the state.
+  if (status === "error" || (status === "ready" && (!env || !env.device))) {
+    return (
+      <div className="settings-card">
+        <span className="eyebrow">DEVICE</span>
+        <p className="env-loading">
+          Device information is unavailable right now (the hardware probe
+          failed or timed out).
+        </p>
+        <div className="header-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={onRetry}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!env || !env.device) {
     return (
       <div className="settings-card">
@@ -235,10 +267,15 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
     };
   }, []);
 
-  if (!env || !env.recommendation) return null;
-
-  const rec = env.recommendation;
-  const task = rec.task || "chat";
+  // v1.2.5 REPAIR: every hook must run on EVERY render. The early return
+  // used to sit ABOVE the useCallback below — when the environment payload
+  // arrived, React saw one more hook than on the first (null-env) render
+  // and threw "Rendered more hooks than during the previous render", which
+  // crashed the System Centre on every load that had data. The optional
+  // data is now read BEFORE the hook and the early return comes after ALL
+  // hooks; the defensive reads stay.
+  const rec = env?.recommendation ?? null;
+  const task = rec?.task || "chat";
 
   const apply = useCallback(async () => {
     setApplying(true);
@@ -273,6 +310,9 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
       }
     }
   }, [task]);
+
+  // The early return now lives AFTER every hook (hooks-order contract).
+  if (!rec) return null;
 
   return (
     <div className="settings-card">
@@ -442,30 +482,52 @@ function HealthCard() {
 
 const SystemPanel = function SystemPanel() {
   const [env, setEnv] = useState<EnvironmentPayload | null>(null);
+  // v1.2.5: the environment fetch exposes its real state — loading, ready
+  // (possibly partial) or error with retry. The shell always renders; each
+  // card degrades independently.
+  const [status, setStatus] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
 
   // v1.2.2: cancellable environment fetch — leaving the tab mid-probe
   // aborts the request; a late response can never touch unmounted state
   // (and never races a subsequent mount's fetch).
-  useEffect(() => {
+  const controllerRef = useRef<AbortController | null>(null);
+
+  const load = useCallback(() => {
+    controllerRef.current?.abort();
+
     const controller = new AbortController();
+    controllerRef.current = controller;
+
+    setStatus("loading");
 
     api
       .environment(controller.signal)
       .then((payload) => {
-        if (!controller.signal.aborted) setEnv(payload);
+        if (controller.signal.aborted) return;
+        setEnv(payload);
+        setStatus("ready");
       })
       .catch(() => {
-        if (!controller.signal.aborted) setEnv(null);
+        if (controller.signal.aborted) return;
+        setEnv(null);
+        setStatus("error");
       });
+  }, []);
+
+  useEffect(() => {
+    load();
 
     return () => {
-      controller.abort();
+      controllerRef.current?.abort();
+      controllerRef.current = null;
     };
-  }, []);
+  }, [load]);
 
   return (
     <section className="system-panel">
-      <DeviceCard env={env} />
+      <DeviceCard env={env} status={status} onRetry={load} />
       <RuntimeCard env={env} />
       <RecommendationCard env={env} />
       <HealthCard />

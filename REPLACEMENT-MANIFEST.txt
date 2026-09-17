@@ -1,36 +1,33 @@
-SHEYTAN-Local-Agent v1.2.5 — Adaptive Context Tiers, Global Tool Control, Thinking Mode & Per-Request Telemetry — Replacement Manifest
-================================================================================================================================================================
+SHEYTAN-Local-Agent v1.2.5 — Adaptive Context Tiers, Global Tool Control, Thinking Mode & Per-Request Telemetry + Full Repair (engine lifecycle, deterministic shutdown, System Centre, context truthfulness) — Replacement Manifest
+==============================================================================================================
 Base: main @ dacae73 (v1.2.4)
 Package: SHEYTAN-Local-Agent-v1.2.5-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
 Status vocabulary: new | modified | deleted | unchanged
-The exact per-file change map (with reasons), the DELETE list, the
-DO NOT TOUCH list, the safe-apply procedure, the executed automated
-checks and the known limitations live in UPDATE.md.
+The exact per-file change map (with reasons), the DELETE
+list, the DO NOT TOUCH list, the safe-apply procedure, the
+executed automated checks and the known limitations live in
+UPDATE.md (Part I §7-§12, Part II §13-§18).
 
 [PACKAGE METADATA]
   UPDATE.md
     status:   replaced
-    purpose:  This replacement package's exact change map
+    purpose:  This replacement package's bookkeeping
   REPLACEMENT-MANIFEST.txt
     status:   replaced
-    purpose:  This manifest
+    purpose:  This replacement package's bookkeeping
   REPLACEMENT-SHA256.txt
     status:   replaced
-    purpose:  SHA-256 of every file in this package
+    purpose:  This replacement package's bookkeeping
 
 [NEW FILES]
-  internal/taskclassify/taskclassify.go
-    reason:   task classification (kinds, signals, complexity, depth control)
-  internal/taskclassify/tiers.go
-    reason:   FAST/STANDARD/DEEP/MAX policies, resource-aware SelectTier, escalation reasons
-  internal/taskclassify/taskclassify_test.go
-    reason:   classifier + tier + escalation-ladder tests
+  internal/agent/orchestrator_status_test.go
+    reason:   TestContextPlanStatusContract (§16)
   internal/agent/orchestrator_tiers.go
     reason:   turnComposer (tier-scoped composition + upgrades), escalationWatch, hardware TTL snapshot, policy types
   internal/agent/orchestrator_tiers_test.go
-    reason:   acceptance tests: FAST first prompt, card tiers, thinking control, manual policy, cache, escalation, clock, spec cache, ladder bound
+    reason:   acceptance: FAST first prompt, card tiers, thinking control, manual policy, cache, escalation, clock, spec cache, ladder bound
   internal/agent/pertiming.go
     reason:   RunClock + Timing (16 measured stages)
   internal/agent/toolcache.go
@@ -38,96 +35,119 @@ checks and the known limitations live in UPDATE.md.
   internal/agent/userflows_test.go
     reason:   Phase 15 user-flow tests (old-conversation, research, vision, simple-chat recall skip)
   internal/agent/v125_measurement_test.go
-    reason:   before/after first-prompt measurement (v1.2.4 ~10K -> v1.2.5 ~416 tok)
+    reason:   the before/after first-prompt measurement (v1.2.4 ≈10K → v1.2.5 ≈416 tok)
+  internal/llm/exitdetail_unix.go
+    reason:   unix-only signal extraction for the exit evidence bundle
+  internal/llm/exitdetail_windows.go
+    reason:   windows variant (exit code only — no signals on Windows)
   internal/memmanager/ownership.go
-    reason:   ACTIVE/SESSION/HOT/COLD/EXPIRED/RELEASE ladder + snapshot
-  src/run-events.ts
-    reason:   canonical wire-event mapping + control normalizers (pure)
+    reason:   ACTIVE→SESSION→HOT→COLD→EXPIRED→RELEASE ladder + snapshot
+  internal/taskclassify/taskclassify.go
+    reason:   task classification (kinds, signals, complexity, depth control)
+  internal/taskclassify/taskclassify_test.go
+    reason:   classifier + tier + escalation-ladder tests
+  internal/taskclassify/tiers.go
+    reason:   FAST/STANDARD/DEEP/MAX policies, resource-aware SelectTier, escalation reasons
+  src/ComposerControls.tsx
+    reason:   Thinking ▾ + Tools ▾ composer controls + live status chip
   src/run-events.test.ts
     reason:   vocabulary/normalization unit tests
-  src/ComposerControls.tsx
-    reason:   Thinking + Tools composer controls + live status chip
+  src/run-events.ts
+    reason:   canonical wire-event mapping + control normalizers (pure)
+  web/static/assets/SystemPanel-BCvk6sqj.js
+    reason:   rebuilt bundle (hashed) — includes the v1.2.5 hooks-order repair
+  web/static/assets/index-D96cavMe.js
+    reason:   rebuilt entry bundle
 
 [MODIFIED FILES]
-  package.json
-    reason:   version 1.2.5 (identity chain source of truth)
+  REPLACEMENT-MANIFEST.txt
+    reason:   this package's manifest
+  REPLACEMENT-SHA256.txt
+    reason:   this package's hashes
   SIGNATURE
     reason:   version sync via release-version.mjs
+  UPDATE.md
+    reason:   this file
   build/config.yml
     reason:   version sync via release-version.mjs
+  internal/agent/orchestrator.go
+    reason:   honest context-plan status contract + modelMax/engineMax "unknown" reporting
+  internal/agent/reliability_test.go
+    reason:   card-position fixture updated to a card-carrying (coding) task for the tier era
+  internal/api/engine.go
+    reason:   engineSnapshot exposes restarts (watchdog attempts for the current episode)
+  internal/api/lifecycle.go
+    reason:   part of the v1.2.5 change set
+  internal/api/perf.go
+    reason:   requests[] timeline table, ownership ladder, toolCache counters
+  internal/api/server.go
+    reason:   handleRun parses thinking/toolMode/toolAllow + receivedAt; persistence skip list extended
   internal/config/config.go
     reason:   AppVersion 1.2.5 (sync)
   internal/contextplan/contextplan.go
     reason:   Tier metadata, P0-P3 priority classes, MaxHistoryShare cap
-  internal/agent/orchestrator.go
-    reason:   RunDetailed adaptive pipeline (classify, tier, compose, escalate), per-request options, events, tool cache, run clock
-  internal/agent/reliability_test.go
-    reason:   card-position fixture updated to a card-carrying (coding) task for the tier era
   internal/ctxtelemetry/ctxtelemetry.go
     reason:   Tier/FinalTier/Escalations/ThinkingControl/ToolPolicyMode/RequestTiming
+  internal/llm/gguf.go
+    reason:   per-arch fields accept int32/int64 (modelMax=0 root cause) + ggufInt helper
+  internal/llm/llama.go
+    reason:   exit classification (deliberate vs unexpected), owned cancelable generation-guarded watchdog, stability-windowed restart budget, exit diagnostics, episode bookkeeping, fresh-boot abort on raced Stop
+  internal/llm/llama_test.go
+    reason:   7 lifecycle contract tests (§13.6)
   internal/memmanager/memmanager.go
     reason:   ownership wiring (named ACTIVE holders, release accounting)
   internal/runtime/runtime.go
-    reason:   project-intel observe moved off the startup critical path
-  internal/api/server.go
-    reason:   handleRun parses thinking/toolMode/toolAllow + receivedAt; persistence skip list extended
-  internal/api/perf.go
-    reason:   requests[] timeline table, ownership ladder, toolCache counters
-  src/api.ts
-    reason:   RunRequest controls + RequestTiming/OwnershipLevel types
-  src/store.ts
-    reason:   controls state (persisted) + canonical event handling + liveStatus/tierEscalations/thinkingPanelOpen
+    reason:   deterministic lifecycle ownership: lifeCtx/lifeCancel/lifeWG, owned workers (observe, backfill, prewarm, boot helpers), awaited memory-manager/scheduler loops, idempotent ordered Close
+  internal/scheduler/scheduler_test.go
+    reason:   TestFireRefusesConcurrentRun waits for the first Fire completion (result channel — no sleep, no TempDir race)
+  internal/sysinfo/sysinfo.go
+    reason:   every external probe bounded by an 8 s timeout (proc.CommandContext); first-probe cost measured and logged
+  package.json
+    reason:   version 1.2.5 (identity chain source of truth)
+  src/ActivityStream.tsx
+    reason:   escalation/status group under Plan
   src/AgentBody.tsx
     reason:   composer mounts ComposerControls
   src/MessageStream.tsx
     reason:   thinking panel follows backend thinking markers; escalation notices in the run activity
-  src/ActivityStream.tsx
-    reason:   escalation/status group under Plan
+  src/SystemPanel.tsx
+    reason:   hooks-order repair in RecommendationCard (THE System-tab crash), honest loading/error/retry device state, shell always renders
+  src/api.ts
+    reason:   EngineSnapshot.restarts type
+  src/store.ts
+    reason:   controls state (persisted) + canonical event handling + liveStatus/tierEscalations/thinkingPanelOpen
   src/styles.css
     reason:   additive v1.2.5 section (control menus, status chip, escalation styling)
-
-[REGENERATED WEB/STATIC]
-  web/static/index.html + web/static/.vite/manifest.json
-    reason:   rebuilt frontend bundle references (npm run build + sync:web)
-  web/static/assets/AgentBody-E9JJ_R6r.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/AgentHeader-BpWR6c2d.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/AgentSidebar-BJUTZobI.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/DownloadProgress-1en0mJCS.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/LabPanel-DG1YEr1n.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/ResearchPanel-ByYo7Bbc.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/SettingsPanel-DYKVli5M.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/SystemPanel-DkdYORg1.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/WorkspacePanel-aELe49Qv.js
-    reason:   rebuilt hashed bundle asset
+  web/static/.vite/manifest.json
+    reason:   rebuilt frontend manifest
+  web/static/assets/AgentBody-B4ReoJUO.js
+    reason:   rebuilt bundle (hashed)
+  web/static/assets/AgentHeader-CKcRxY-U.js
+    reason:   rebuilt bundle (hashed)
+  web/static/assets/AgentSidebar-CP-LAb_G.js
+    reason:   rebuilt bundle (hashed)
+  web/static/assets/DownloadProgress-CijVeY2v.js
+    reason:   rebuilt bundle (hashed)
+  web/static/assets/LabPanel-ClUYA1M7.js
+    reason:   rebuilt bundle (hashed)
+  web/static/assets/ResearchPanel-DAr0A1lO.js
+    reason:   rebuilt bundle (hashed)
+  web/static/assets/SettingsPanel-CgZjmrVu.js
+    reason:   rebuilt bundle (hashed)
+  web/static/assets/WorkspacePanel-of8Oe_U7.js
+    reason:   rebuilt bundle (hashed)
   web/static/assets/index-5oqPjJgJ.css
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/index-B77WlYpt.js
-    reason:   rebuilt hashed bundle asset
-  web/static/assets/vision-Dw0T2tjy.js
-    reason:   rebuilt hashed bundle asset (unchanged content hash from v1.2.4 — included for a complete, self-consistent web/static tree)
+    reason:   rebuilt stylesheet
+  web/static/index.html
+    reason:   rebuilt frontend bundle references
+  worklog.md
+    reason:   this release's work-log entry
 
-[DELETE LIST — apply after copying]
-  web/static/assets/AgentBody-cMt13HM9.js
-  web/static/assets/AgentHeader-dCYmm522.js
-  web/static/assets/AgentSidebar-CWp3SdAx.js
-  web/static/assets/DownloadProgress-28j0D3i-.js
-  web/static/assets/LabPanel-DFJX1ZVA.js
-  web/static/assets/ResearchPanel-BXiEx0Sd.js
-  web/static/assets/SettingsPanel-BdbLpW4s.js
-  web/static/assets/SystemPanel-BEI2b4hF.js
-  web/static/assets/WorkspacePanel-BV8_VjyW.js
-  web/static/assets/index-B_uB5cBU.js
-  web/static/assets/index-gFgARQCb.css
+[DELETED FILES]
+  Cannot ship inside a ZIP. DELETE list: UPDATE.md §8 —
+  apply it after copying (stale hashed frontend bundles).
 
-[EXCLUDED FROM PACKAGE]
-  .git, node_modules, models, logs, caches, temporary files, secrets,
-  unrelated build output — per the v1.2.5 packaging contract.
-
+[UNCHANGED FILES]
+  Not included — apply over a clean v1.2.4 checkout, which already
+  carries every unchanged file, including the unchanged asset
+  file vision-Dw0T2tjy.js under web/static/assets/.

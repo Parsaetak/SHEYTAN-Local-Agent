@@ -222,39 +222,67 @@ src/ActivityStream.tsx                               MODIFY  escalation/status g
 src/styles.css                                       MODIFY  additive v1.2.5 section (control menus, status chip, escalation styling)
 web/static/index.html                                MODIFY  rebuilt frontend bundle references
 web/static/.vite/manifest.json                       MODIFY  rebuilt frontend manifest
-web/static/assets/AgentBody-E9JJ_R6r.js              NEW     rebuilt bundle (hashed)
-web/static/assets/AgentHeader-BpWR6c2d.js            NEW     rebuilt bundle (hashed)
-web/static/assets/AgentSidebar-BJUTZobI.js           NEW     rebuilt bundle (hashed)
-web/static/assets/DownloadProgress-1en0mJCS.js       NEW     rebuilt bundle (hashed)
-web/static/assets/LabPanel-DG1YEr1n.js               NEW     rebuilt bundle (hashed)
-web/static/assets/ResearchPanel-ByYo7Bbc.js          NEW     rebuilt bundle (hashed)
-web/static/assets/SettingsPanel-DYKVli5M.js          NEW     rebuilt bundle (hashed)
-web/static/assets/SystemPanel-DkdYORg1.js            NEW     rebuilt bundle (hashed)
-web/static/assets/WorkspacePanel-aELe49Qv.js         NEW     rebuilt bundle (hashed)
-web/static/assets/index-B77WlYpt.js                  NEW     rebuilt entry bundle
+web/static/assets/AgentBody-B4ReoJUO.js              NEW     rebuilt bundle (hashed)
+web/static/assets/AgentHeader-CKcRxY-U.js            NEW     rebuilt bundle (hashed)
+web/static/assets/AgentSidebar-CP-LAb_G.js           NEW     rebuilt bundle (hashed)
+web/static/assets/DownloadProgress-CijVeY2v.js       NEW     rebuilt bundle (hashed)
+web/static/assets/LabPanel-ClUYA1M7.js               NEW     rebuilt bundle (hashed)
+web/static/assets/ResearchPanel-DAr0A1lO.js          NEW     rebuilt bundle (hashed)
+web/static/assets/SettingsPanel-CgZjmrVu.js          NEW     rebuilt bundle (hashed)
+web/static/assets/SystemPanel-BCvk6sqj.js            NEW     rebuilt bundle (hashed) — includes the v1.2.5 hooks-order repair
+web/static/assets/WorkspacePanel-of8Oe_U7.js         NEW     rebuilt bundle (hashed)
+web/static/assets/index-D96cavMe.js                  NEW     rebuilt entry bundle
 web/static/assets/index-5oqPjJgJ.css                 NEW     rebuilt stylesheet
 web/static/assets/vision-Dw0T2tjy.js                 UNCHANGED (same content hash as v1.2.4 — included for a complete, self-consistent web/static tree)
 worklog.md                                           MODIFY  this release's work-log entry
 UPDATE.md                                            REPLACE this file
 REPLACEMENT-MANIFEST.txt                             REPLACE this package's manifest
 REPLACEMENT-SHA256.txt                               REPLACE this package's hashes
+
+v1.2.5 full-repair additions (Part II of this document):
+
+internal/llm/exitdetail_unix.go                      ADD     unix-only signal extraction for the exit evidence bundle
+internal/llm/exitdetail_windows.go                   ADD     windows variant (exit code only — no signals on Windows)
+internal/llm/llama.go                                MODIFY  exit classification (deliberate vs unexpected), owned cancelable generation-guarded watchdog, stability-windowed restart budget, exit diagnostics, episode bookkeeping, fresh-boot abort on raced Stop
+internal/llm/llama_test.go                           ADD     7 lifecycle contract tests (§13.6)
+internal/llm/gguf.go                                 MODIFY  per-arch fields accept int32/int64 (modelMax=0 root cause) + ggufInt helper
+internal/agent/orchestrator.go                       MODIFY  honest context-plan status contract + modelMax/engineMax "unknown" reporting
+internal/agent/orchestrator_status_test.go           ADD     TestContextPlanStatusContract (§16)
+internal/runtime/runtime.go                          MODIFY  deterministic lifecycle ownership: lifeCtx/lifeCancel/lifeWG, owned workers (observe, backfill, prewarm, boot helpers), awaited memory-manager/scheduler loops, idempotent ordered Close
+internal/api/engine.go                               MODIFY  engineSnapshot exposes restarts (watchdog attempts for the current episode)
+internal/scheduler/scheduler_test.go                 MODIFY  TestFireRefusesConcurrentRun waits for the first Fire completion (result channel — no sleep, no TempDir race)
+internal/sysinfo/sysinfo.go                          MODIFY  every external probe bounded by an 8 s timeout (proc.CommandContext); first-probe cost measured and logged
+src/SystemPanel.tsx                                  MODIFY  hooks-order repair in RecommendationCard (THE System-tab crash), honest loading/error/retry device state, shell always renders
+src/api.ts                                           MODIFY  EngineSnapshot.restarts type
 ```
 
 ## 8. DELETE list (apply after copying)
 
-Stale v1.2.4 hashed assets, replaced by the rebuilt bundles above:
+Stale hashed assets, replaced by the rebuilt bundles above — BOTH the
+v1.2.4 originals AND any intermediate v1.2.5 bundle hashes (delete them
+all if present; the authoritative final set is the asset list in §7):
 
 ```text
 web/static/assets/AgentBody-cMt13HM9.js
+web/static/assets/AgentBody-E9JJ_R6r.js
 web/static/assets/AgentHeader-dCYmm522.js
+web/static/assets/AgentHeader-BpWR6c2d.js
 web/static/assets/AgentSidebar-CWp3SdAx.js
+web/static/assets/AgentSidebar-BJUTZobI.js
 web/static/assets/DownloadProgress-28j0D3i-.js
+web/static/assets/DownloadProgress-1en0mJCS.js
 web/static/assets/LabPanel-DFJX1ZVA.js
+web/static/assets/LabPanel-DG1YEr1n.js
 web/static/assets/ResearchPanel-BXiEx0Sd.js
+web/static/assets/ResearchPanel-ByYo7Bbc.js
 web/static/assets/SettingsPanel-BdbLpW4s.js
+web/static/assets/SettingsPanel-DYKVli5M.js
 web/static/assets/SystemPanel-BEI2b4hF.js
+web/static/assets/SystemPanel-DkdYORg1.js
 web/static/assets/WorkspacePanel-BV8_VjyW.js
+web/static/assets/WorkspacePanel-aELe49Qv.js
 web/static/assets/index-B_uB5cBU.js
+web/static/assets/index-B77WlYpt.js
 web/static/assets/index-gFgARQCb.css
 ```
 
@@ -331,3 +359,243 @@ the next engine request; ladder bound ≤2), engine paths unchanged
 - The escalation ladder is bounded at two upgrades per run by design —
   evidence that would demand a third step is logged ("ladder exhausted")
   rather than silently ignored.
+
+# Part II — v1.2.5 Full Repair (engine lifecycle, deterministic shutdown, System Centre, context truthfulness)
+
+The adaptive-tier work above changed WHAT the engine receives. This repair
+pass fixes the remaining product/lifecycle defects reported against the
+v1.2.4 runtime — reproduced first, then fixed, never patched around.
+
+## 13. Engine lifecycle: a deliberate stop is NEVER a crash
+
+### 13.1 Root cause of the false "engine exited while running"
+
+The exit watcher classified an exit with `wasAlive` (process was the live
+child, the model was loaded, state alive) WITHOUT consulting the
+deliberate-shutdown flag in the same decision. `Stop()` arms `stopping`,
+but the watcher could classify the termination first — logging
+`ERROR engine exited while running` and arming the auto-restart for a
+shutdown the user requested. That is exactly the v1.2.4 log:
+
+```text
+18:47:07 engine ready automatically
+18:47:07.538 ERROR engine exited while running: exit status 1
+18:47:07.538 WARN  engine died — automatic restart 1/3 in 1s
+18:47:07.538 INFO  boot exit code 0
+```
+
+### 13.2 The fix — intent snapshot at exit time
+
+- The watcher now snapshots `deliberate := s.stopping` INSIDE the same
+  mutex critical section that computes `wasAlive`. Intent is never inferred
+  after the fact.
+- `wasAlive && deliberate` → INFO `engine stopped (deliberate shutdown,
+  code N)`; no ERROR, no restart, no restart-count increment.
+- `wasAlive && !deliberate` → unexpected death: ERROR
+  `engine exited unexpectedly: code N` with a full evidence bundle (§13.3),
+  state → stopped, bounded recovery armed.
+
+### 13.3 Diagnostics that actually diagnose
+
+Unexpected deaths now log and expose a captured-at-exit bundle: exit code
+or terminating signal (unix; Windows is exit-code-only by OS design), PID,
+engine tag, model, state-before (including busy), whether a stop was
+requested, vision state + reason, and the last stderr/stdout lines.
+`/api/engine` additionally exposes `restarts` (the current episode's
+watchdog attempts) and the detail line reads honestly:
+
+```text
+Unexpected exit: code 1
+Unexpected exit — restarting 1/3 in 1s
+```
+
+After a recovery the detail is cleared and ready/verified model/verified
+context report the fresh, real episode.
+
+### 13.4 Lifecycle-owned watchdog (no orphan goroutines)
+
+`scheduleAutoRestart` no longer launches a naked `time.Sleep` goroutine.
+The pending restart is an OWNED, cancelable timer:
+
+- exactly ONE restart can be armed at a time;
+- each watchdog is armed for ONE generation token (`gen`), bumped on every
+  verified boot — a stale watchdog from an older episode re-validates at
+  fire time and stands down, so it can never resurrect an engine after a
+  newer lifecycle started or stopped;
+- `Stop()` cancels the pending watchdog and WAITS (bounded) for its
+  goroutine to exit — after Stop returns, no delayed watchdog can call
+  `Start()`;
+- a boot that raced a `Stop()` aborts at its episode checkpoint: the fresh
+  child is killed and the state lands on stopped — a lost race can never
+  overwrite a shutdown.
+
+### 13.5 Bounded recovery that actually terminates
+
+The restart budget previously reset on EVERY successful boot — a
+crash-loop (boot → ready → die within 500 ms) would have recovered
+forever. The budget now resets only after an episode that stayed healthy
+for the stability window (60 s; test-shrinkable), so:
+`unexpected death → restart 1 → restart 2 → restart 3 → terminal failed`,
+with the detail `Unexpected exit: engine failed 3 times — automatic
+recovery exhausted`.
+
+### 13.6 Contract tests (fake-engine harness, all green)
+
+1. `TestEngineDeathTriggersBoundedAutoRestart` — unexpected exit recovers.
+2. `TestDeliberateStopDoesNotRestart` — no restart, no counter, no
+   resurrection; state = stopped.
+3. `TestStopDuringRestartBackoffCancelsRestart` — the pending restart is
+   canceled; no boot follows within the backoff window.
+4. `TestRepeatedCrashesExhaustBoundedBudget` — crash-loop reaches
+   terminal `failed` with the exhausted-recovery detail.
+5. `TestStaleWatchdogCannotResurrectOldEpisode` — a watchdog armed before a
+   new episode began stands down (generation guard).
+6. `TestRestartBudgetResetsOnlyAfterStableEpisode` — short-lived episodes
+   keep their place on the ladder; a stable episode resets it.
+7. `TestStopLeavesNoWatchdogGoroutineBehind` — Stop cancels + reaps the
+   watchdog goroutine; provably no delayed Start.
+
+## 14. Deterministic shutdown (the TempDir RemoveAll race class)
+
+### 14.1 Root cause
+
+`runtime.NewStack` spawned background workers with NO owner: the
+project-intel observe walk, the recall backfill, the native prewarm,
+`PrewarmLLM`'s boot and `EnsureLLMContext`'s boot helper. The
+memory-manager idle loop was stopped but never awaited; the scheduler loop
+was canceled by context but never awaited. `Stack.Close()` returned while
+those goroutines could still write into DataDir — racing `t.TempDir()`'s
+RemoveAll ("directory not empty"), the exact CI failure.
+
+### 14.2 The fix — ownership, not sleeps
+
+Every Stack-owned background worker is now owned deterministically:
+
+- a stack lifecycle context (`lifeCtx`) + cancel, plus a `lifeWG` tracking
+  every one-shot worker (observe, backfill, prewarmNative, prewarm boot,
+  bounded boot helper);
+- the memory-manager and scheduler loops publish completion channels; both
+  also guard against double-start;
+- `Stack.Close()` is idempotent (`sync.Once`) and executes the ordered
+  teardown: cancel lifecycle context → stop + await memory-manager loop →
+  await scheduler loop → wait (bounded) for all one-shot workers → flush
+  telemetry → close browser/sandbox → stop native engine → stop llama.cpp.
+
+Invariant, by construction: `Stack.Close()` returning means no Stack-owned
+goroutine can still write to Stack-owned filesystem state. The API
+server's `Close()` order above it is unchanged (update/download jobs →
+runs → engine subscriptions → stack). The scheduler PRODUCTION code needed
+no change (Fire/finalize are synchronous); only the TEST failed to wait
+for the first Fire — fixed with a result channel, no sleep.
+
+## 15. System Centre: the real failure and the repair
+
+### 15.1 The failing layer was React, not the backend
+
+`RecommendationCard` executed an early `return null` BEFORE a
+`useCallback`. First render (no data) ran four hooks; the render with
+environment data ran five — React throws "Rendered more hooks than during
+the previous render", the panel error boundary catches, and the System tab
+shows its failure state on every load that has data. Navigation, lazy
+loading, the API layer and the backend handlers were verified healthy
+(routes registered; payloads defensively typed; 20 s request timeouts;
+AbortController cancellation).
+
+### 15.2 The fix
+
+- All hooks run on EVERY render; the early return lives after them. The
+  defensive reads (null-array guards, optional fields) are untouched.
+- The panel shell always renders; each card degrades independently. The
+  device card now shows measured LOADING, honest UNAVAILABLE + RETRY on
+  probe failure — never an eternal "Measuring this machine…".
+
+### 15.3 Bounded, fast backend
+
+- Every `sysinfo` external probe (PowerShell CIM, wmic, nvidia-smi, df,
+  sysctl, system_profiler) is bounded by an 8-second hard timeout
+  (`proc.CommandContext`); a hung probe used to block the process-wide
+  `sync.Once` — and every later caller (engine GPU checks,
+  /api/environment, /api/health) — forever. Timed-out probes yield
+  "unknown" facts, never a hang.
+- The first-probe cost is measured and logged once per process
+  ("hardware probe completed in N ms"), so a slow Windows diagnostic is
+  visible instead of silent.
+- Existing infrastructure is reused (no duplicated probes): hardware
+  facts flow from the single `sysinfo.Probe()` cache to /api/sysinfo,
+  /api/environment, /api/health and /api/recommendation.
+
+## 16. Context telemetry truthfulness
+
+### 16.1 status=compressed with compressed=0 (the v1.2.4 contradiction)
+
+The plan log flipped to `status=compressed` whenever ANY automatic
+adjustment existed (e.g. a toolset reduction) — even with
+`compressed=0`. The status now follows a pinned contract
+(`TestContextPlanStatusContract`):
+
+```text
+raw            nothing was reduced or injected
+compressed     history/tool results were ACTUALLY compressed this turn
+elided         history windowed without compression
+recalled       recall digests injected, nothing reduced
+adjusted       automatic repairs (toolset/briefing) without compression
+session-policy a per-session policy shaped the window
+```
+
+Tier escalation is reported separately ("context escalation" log plus
+telemetry Escalations/FinalTier) because it happens AFTER assembly, during
+the tool loop.
+
+### 16.2 modelMax=0 (the false zero-capacity claim)
+
+Two root causes, both fixed:
+
+- The GGUF card reader matched `<arch>.context_length` (and
+  block_count/embedding_length) ONLY as uint32/uint64. Real-world GGUF
+  files legitimately emit these as int32/int64; the type assertion failed
+  silently and the model limit stayed 0. Every integer representation is
+  accepted now (`ggufInt`).
+- When a limit is genuinely unknown it is reported as `modelMax=unknown`
+  / `engineMax=unknown` in the plan log — never as a bare 0, which read
+  like a measured zero-capacity claim. Unknown never converts into
+  unlimited either: the planner still budgets against configured/engine
+  limits.
+
+## 17. Executed automated checks (Part II, before packaging)
+
+- Reproduction first: both CI failures reproduced at HEAD before any edit
+  (scheduler 1st run; api 2/50), then re-run green:
+  `TestFireRefusesConcurrentRun` 200× + `-race` 100×;
+  `TestRunTimeoutBudgetApplies` 50× + `-race` 100×; full
+  `./internal/api` headless suite.
+- `go test ./internal/... -tags headless -count=1` fully green (all
+  packages, including the 7 new lifecycle tests and the status-contract
+  test).
+- `-race` ×10 green on internal/api, internal/scheduler, internal/llm
+  (fake-engine lifecycle paths), internal/runtime.
+- `go vet -tags headless ./internal/... . ./cmd/...` clean; changed files
+  gofmt-clean.
+- Cross-platform compile: `GOOS=windows GOARCH=amd64 go build
+  ./internal/...` green (the product's target platform; the Windows-only
+  exit-detail split compiles on both).
+- Frontend: `npm run typecheck` green, `npm run lint` 0/0, vitest 8/8,
+  `npm run build` + sync:web green (SystemPanel bundle rebuilt).
+- Native engine (no C++ changes): CMake configure + build green, CTest
+  12/12.
+- Identity: `node scripts/release-version.mjs --check` — all surfaces
+  1.2.5.
+
+## 18. Known platform limitations (Part II)
+
+- The REAL Windows application (launch → download → ready → System Centre
+  → chat → close, repeated; crash/recovery/exhaustion paths) could NOT be
+  executed on this headless Linux runner: it has no Windows GUI stack. The
+  engine lifecycle behaviours are pinned by the fake-engine subprocess
+  harness (real process spawn/exit/kill semantics on the host OS), the
+  Windows cross-build compiles, and the platform-specific exit-detail code
+  is split per GOOS. Running the §17 checklist once on a Windows desktop
+  remains the operator's step.
+- The engine "exit status 1" from the v1.2.4 log cannot be re-diagnosed
+  post-hoc — with this repair, any future occurrence carries its full
+  evidence bundle (exit code, pid, tag, model, state, vision, stderr
+  tail), so the next diagnosis needs no guessing.

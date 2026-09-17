@@ -231,26 +231,46 @@ func ReadModelCard(path string) (*ModelCard, error) {
 		card.Quant = quantName(v)
 	}
 	// per-architecture fields: llama.context_length, qwen2.context_length…
+	//
+	// v1.2.5 repair: the lookups previously matched ONLY uint32/uint64.
+	// GGUF writers in the wild also emit these fields as SIGNED integers
+	// (int32/int64 — both are legal GGUF types and both appear in real
+	// model files); a signed value silently failed the type assertion and
+	// left ContextLength at 0 — the "modelMax=0" defect. Every integer
+	// type is now accepted (readGGUFValue already normalizes the narrow
+	// types to uint32/int32).
 	if card.Arch != "" {
-		if v, ok := kvs[card.Arch+".context_length"].(uint32); ok {
-			card.ContextLength = int(v)
-		} else if v, ok := kvs[card.Arch+".context_length"].(uint64); ok {
-			card.ContextLength = int(v)
-		}
-		if v, ok := kvs[card.Arch+".block_count"].(uint32); ok {
-			card.Layers = int(v)
-		} else if v, ok := kvs[card.Arch+".block_count"].(uint64); ok {
-			card.Layers = int(v)
-		}
-		if v, ok := kvs[card.Arch+".embedding_length"].(uint32); ok {
-			card.EmbeddingLen = int(v)
-		} else if v, ok := kvs[card.Arch+".embedding_length"].(uint64); ok {
-			card.EmbeddingLen = int(v)
-		}
+		card.ContextLength = ggufInt(kvs[card.Arch+".context_length"])
+		card.Layers = ggufInt(kvs[card.Arch+".block_count"])
+		card.EmbeddingLen = ggufInt(kvs[card.Arch+".embedding_length"])
 	}
 	// Missing parameter count: derive from bits-per-weight heuristics is
 	// unreliable — leave 0 (the card shows the file size regardless).
 	return card, nil
+}
+
+// ggufInt converts a parsed GGUF scalar into a Go int for the per-arch
+// numeric fields (context_length, block_count, embedding_length). Accepts
+// every integer representation (uint32/uint64/int32 — the narrow types are
+// normalized at parse time) and rejects negatives/overflow, which leave the
+// field at 0 = unknown. A non-integer (string, float, array) also stays 0.
+func ggufInt(v any) int {
+	switch n := v.(type) {
+	case uint32:
+		return int(n) // safe: GGUF lengths fit 32 bits
+	case uint64:
+		if n > uint64(^uint(0)>>1) {
+			return 0
+		}
+		return int(n)
+	case int32:
+		if n < 0 {
+			return 0
+		}
+		return int(n)
+	}
+
+	return 0
 }
 
 // readGGUFValue reads (or skips) one typed value.

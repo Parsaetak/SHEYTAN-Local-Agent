@@ -680,6 +680,10 @@ export interface EngineSnapshot {
   // v1.2.3: live asset-download progress (llama.cpp archive, model
   // packages) from the Download Manager. Present only mid-download.
   download?: DownloadProgress;
+  // v1.2.5: watchdog auto-restart attempts for the current alive episode
+  // (bounded, reset after a stable healthy episode). Present when > 0 so
+  // the UI can report recovery honestly next to the detail line.
+  restarts?: number;
   logs?: string[];
   cacheStats?: {
     entries: number;

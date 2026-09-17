@@ -446,3 +446,308 @@ func TestResolveModelPathPicksFirstAvailable(t *testing.T) {
 
 // compile-time guard: exec used by helper re-exec through proc package.
 var _ = exec.Command
+
+// ---------------------------------------------------------------------------
+// v1.2.5 engine lifecycle contract tests (watchdog ownership + honest
+// exit classification). These pin the invariants from the repair brief:
+//
+//	1. unexpected exit triggers restart          (bounded recovery)
+//	2. deliberate stop does not restart          (no false crash)
+//	3. stop during backoff cancels the restart   (cancelable watchdog)
+//	4. repeated crashes exhaust the budget       (terminal failed)
+//	5. stale restart cannot resurrect an engine  (generation guard)
+//	6. budget resets only after a stable episode (crash loops terminate)
+//	7. shutdown leaves no watchdog goroutine     (deterministic ownership)
+// ---------------------------------------------------------------------------
+
+// waitForState drains the subscription channel until one of the wanted
+// states arrives (or the deadline passes).
+func waitForState(t *testing.T, events <-chan EngineEvent, deadline time.Duration, wanted ...string) (EngineEvent, bool) {
+	t.Helper()
+
+	timer := time.After(deadline)
+
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return EngineEvent{}, false
+			}
+
+			for _, w := range wanted {
+				if ev.State == w {
+					return ev, true
+				}
+			}
+
+		case <-timer:
+			return EngineEvent{}, false
+		}
+	}
+}
+
+func TestUnexpectedExitReportsDiagnosticDetail(t *testing.T) {
+	cfg, _ := fakeEngineConfig(t, "crash")
+
+	srv := NewLlamaServer(config.NewSource(cfg))
+	defer func() { _ = srv.Stop() }()
+
+	events, unsubscribe := srv.SubscribeEvents()
+	defer unsubscribe()
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if _, ok := waitForState(t, events, 10*time.Second, StateReady); !ok {
+		t.Fatal("engine never became ready")
+	}
+
+	// The fake dies ~500ms after becoming healthy. The honest contract:
+	// the detail exposes what happened, not a generic failure.
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		if d := srv.Detail(); strings.Contains(d, "Unexpected exit") {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("detail never reported the unexpected exit: %q", srv.Detail())
+		}
+
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Recovery: a fresh ready episode clears the recovery detail — the
+	// engine is ready again, verified, and no longer "restarting".
+	if _, ok := waitForState(t, events, 15*time.Second, StateReady); !ok {
+		t.Fatal("engine never recovered to ready after the crash")
+	}
+
+	if d := srv.Detail(); strings.Contains(d, "restarting") {
+		t.Fatalf("recovered engine still reports a restart in flight: %q", d)
+	}
+}
+
+func TestDeliberateStopDoesNotRestart(t *testing.T) {
+	cfg, _ := fakeEngineConfig(t, "")
+
+	srv := NewLlamaServer(config.NewSource(cfg))
+
+	events, unsubscribe := srv.SubscribeEvents()
+	defer unsubscribe()
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if _, ok := waitForState(t, events, 10*time.Second, StateReady); !ok {
+		t.Fatal("engine never became ready")
+	}
+
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	if got := srv.State(); got != StateStopped {
+		t.Fatalf("deliberate stop must end stopped, got %s", got)
+	}
+
+	if got := srv.Restarts(); got != 0 {
+		t.Fatalf("deliberate stop must not count a restart, got %d", got)
+	}
+
+	// No delayed watchdog may bring the engine back: no starting/ready
+	// event may arrive after the deliberate stop.
+	if ev, ok := waitForState(t, events, 2*time.Second,
+		StateStarting, StateReady, StateRunning, StateBusy, StateDownloading); ok {
+		t.Fatalf("engine resurrected after a deliberate stop: %s (detail %q)", ev.State, ev.Detail)
+	}
+}
+
+func TestStopDuringRestartBackoffCancelsRestart(t *testing.T) {
+	cfg, _ := fakeEngineConfig(t, "crash")
+
+	srv := NewLlamaServer(config.NewSource(cfg))
+	defer func() { _ = srv.Stop() }()
+
+	events, unsubscribe := srv.SubscribeEvents()
+	defer unsubscribe()
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if _, ok := waitForState(t, events, 10*time.Second, StateReady); !ok {
+		t.Fatal("engine never became ready")
+	}
+
+	// Wait for the crash (stopped) — the watchdog is now in its 1s backoff.
+	if _, ok := waitForState(t, events, 10*time.Second, StateStopped); !ok {
+		t.Fatal("crashed engine never reported stopped")
+	}
+
+	// Deliberate stop DURING the backoff must cancel the pending restart.
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("Stop during backoff: %v", err)
+	}
+
+	if got := srv.State(); got != StateStopped {
+		t.Fatalf("state after stop-during-backoff = %s, want stopped", got)
+	}
+
+	// The 1s watchdog would have fired well inside this window if the
+	// cancellation leaked: no boot may follow.
+	if ev, ok := waitForState(t, events, 2500*time.Millisecond,
+		StateStarting, StateReady, StateRunning, StateBusy, StateDownloading); ok {
+		t.Fatalf("pending restart was not canceled by Stop: %s", ev.State)
+	}
+}
+
+func TestRepeatedCrashesExhaustBoundedBudget(t *testing.T) {
+	cfg, _ := fakeEngineConfig(t, "crash")
+
+	srv := NewLlamaServer(config.NewSource(cfg))
+
+	events, unsubscribe := srv.SubscribeEvents()
+	defer unsubscribe()
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// The fake crashes ~500ms after every healthy boot. Backoff 1s+2s+4s
+	// plus boot overhead must exhaust the budget in bounded time and land
+	// in the terminal failed state — never loop forever.
+	if _, ok := waitForState(t, events, 60*time.Second, StateFailed); !ok {
+		t.Fatalf("crash loop never reached the terminal failed state (state=%s restarts=%d)",
+			srv.State(), srv.Restarts())
+	}
+
+	if d := srv.Detail(); !strings.Contains(d, "recovery exhausted") {
+		t.Fatalf("failed detail must say recovery is exhausted, got %q", d)
+	}
+
+	_ = srv.Stop()
+}
+
+func TestStaleWatchdogCannotResurrectOldEpisode(t *testing.T) {
+	cfg, _ := fakeEngineConfig(t, "")
+
+	srv := NewLlamaServer(config.NewSource(cfg))
+
+	// Arm a watchdog for episode 0 (no engine has ever started — the
+	// server is idle and the arming path is purely state-machine work).
+	srv.scheduleAutoRestart("fake-model.gguf")
+
+	srv.mu.Lock()
+	armed := srv.watchArmed
+	oldGen := srv.gen
+	srv.mu.Unlock()
+
+	if !armed {
+		t.Fatal("watchdog must arm when a restart is scheduled")
+	}
+
+	// A NEW lifecycle episode begins (e.g. a manual start). The stale
+	// watchdog from the old episode must stand down.
+	srv.mu.Lock()
+	srv.beginEpisodeLocked()
+	newGen := srv.gen
+	srv.mu.Unlock()
+
+	if newGen != oldGen+1 {
+		t.Fatalf("episode generation must advance, %d -> %d", oldGen, newGen)
+	}
+
+	// Wait past the 1s backoff: the stale watchdog must NOT have started
+	// anything.
+	time.Sleep(2200 * time.Millisecond)
+
+	if got := srv.State(); got != StateIdle {
+		t.Fatalf("stale watchdog resurrected the engine: state=%s, want idle", got)
+	}
+}
+
+func TestRestartBudgetResetsOnlyAfterStableEpisode(t *testing.T) {
+	cfg, _ := fakeEngineConfig(t, "")
+
+	// Shrink the stability window so the test proves both branches.
+	old := restartBudgetResetAfter
+	restartBudgetResetAfter = 150 * time.Millisecond
+	t.Cleanup(func() { restartBudgetResetAfter = old })
+
+	srv := NewLlamaServer(config.NewSource(cfg))
+
+	// Episode 1.
+	srv.mu.Lock()
+	srv.beginEpisodeLocked()
+	srv.restarts = 2
+	srv.mu.Unlock()
+
+	// Episode 2 starts IMMEDIATELY: the previous episode was far below
+	// the stability window, so the budget must NOT reset.
+	srv.mu.Lock()
+	srv.beginEpisodeLocked()
+	got := srv.restarts
+	srv.mu.Unlock()
+
+	if got != 2 {
+		t.Fatalf("short-lived episode must keep the restart budget (got %d, want 2)", got)
+	}
+
+	// Let the episode live past the stability window, then begin episode 3:
+	// a genuinely healthy episode resets the budget.
+	time.Sleep(250 * time.Millisecond)
+
+	srv.mu.Lock()
+	srv.beginEpisodeLocked()
+	got = srv.restarts
+	srv.mu.Unlock()
+
+	if got != 0 {
+		t.Fatalf("stable episode must reset the restart budget (got %d, want 0)", got)
+	}
+}
+
+func TestStopLeavesNoWatchdogGoroutineBehind(t *testing.T) {
+	cfg, _ := fakeEngineConfig(t, "")
+
+	srv := NewLlamaServer(config.NewSource(cfg))
+
+	srv.scheduleAutoRestart("fake-model.gguf")
+
+	srv.mu.Lock()
+	armed := srv.watchArmed
+	srv.mu.Unlock()
+
+	if !armed {
+		t.Fatal("watchdog must be armed before Stop")
+	}
+
+	// Stop (no live process — the early path) must cancel the pending
+	// watchdog AND wait for its goroutine to exit.
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	srv.mu.Lock()
+	armed = srv.watchArmed
+	pendingStop := srv.watchStop != nil
+	pendingDone := srv.watchDone != nil
+	srv.mu.Unlock()
+
+	if armed || pendingStop || pendingDone {
+		t.Fatalf("watchdog survived shutdown: armed=%v pendingStop=%v pendingDone=%v",
+			armed, pendingStop, pendingDone)
+	}
+
+	// watchDone was awaited inside Stop, so the goroutine has provably
+	// exited — no delayed Start() can follow. Belt and braces: no boot.
+	time.Sleep(1500 * time.Millisecond)
+
+	if got := srv.State(); got != StateStopped {
+		t.Fatalf("engine state after shutdown = %s, want stopped", got)
+	}
+}

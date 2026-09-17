@@ -8,6 +8,10 @@ import "time"
 // The API server is the owner of the Stack instance created by New(), so
 // shutting down the API must also shut down the runtime resources it owns.
 func (s *Server) Close() {
+	if s == nil {
+		return
+	}
+
 	// v1.2.3: stop an in-flight app-update staging download immediately —
 	// the .part file stays for a resumable retry next launch.
 	if fn := s.appUpdateCancel.Load(); fn != nil {
@@ -15,10 +19,6 @@ func (s *Server) Close() {
 	}
 	if job := s.appUpdateJob.Load(); job != nil {
 		job.Cancel()
-	}
-
-	if s == nil {
-		return
 	}
 
 	// Stop the scheduled engine-update loop FIRST and wait (bounded) for

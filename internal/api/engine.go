@@ -84,6 +84,11 @@ type engineSnapshot struct {
 	// engine downloads its llama.cpp archive or a model package. Nil
 	// outside downloads.
 	Download *downloader.Progress `json:"download,omitempty"`
+
+	// v1.2.5: watchdog auto-restart attempts for the current alive
+	// episode (bounded by maxAutoRestarts; reset after a stable healthy
+	// episode). Lets the UI report recovery honestly.
+	Restarts int `json:"restarts,omitempty"`
 }
 
 // nativeEngineSnapshot is the native engine status block (local reads
@@ -115,6 +120,10 @@ func (s *Server) engineSnapshot() engineSnapshot {
 		Detail:    s.llama.Detail(),
 		Pid:       s.llama.Pid(),
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		// v1.2.5: the CURRENT episode's watchdog attempts — the UI
+		// can show an honest recovery count next to the detail
+		// ("Unexpected exit — restarting 1/3").
+		Restarts: s.llama.Restarts(),
 	}
 
 	// v1.1.5Z: effective generation backend per the selection policy.
