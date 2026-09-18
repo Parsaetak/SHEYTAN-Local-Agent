@@ -1,14 +1,12 @@
-SHEYTAN-Local-Agent v1.2.5 — Adaptive Context Tiers, Global Tool Control, Thinking Mode & Per-Request Telemetry + Full Repair (engine lifecycle, deterministic shutdown, System Centre, context truthfulness) — Replacement Manifest
+SHEYTAN-Local-Agent v1.2.6 — Verified-Runtime Repair (missing-answer root cause, honest context tiers, progressive UI, batched Windows hardware probe, evidence-based accelerator resolution) — Replacement Manifest
 ==============================================================================================================
-Base: main @ dacae73 (v1.2.4)
-Package: SHEYTAN-Local-Agent-v1.2.5-UPDATE.zip
+Base: main @ fc5b500 (v1.2.5)
+Package: SHEYTAN-Local-Agent-v1.2.6-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
-Status vocabulary: new | modified | deleted | unchanged
-The exact per-file change map (with reasons), the DELETE
-list, the DO NOT TOUCH list, the safe-apply procedure, the
-executed automated checks and the known limitations live in
-UPDATE.md (Part I §7-§12, Part II §13-§18).
+Status vocabulary: new | modified
+The per-file reasons, the verification results and the honest
+limitations live in UPDATE.md (§1-§8).
 
 [PACKAGE METADATA]
   UPDATE.md
@@ -22,132 +20,143 @@ UPDATE.md (Part I §7-§12, Part II §13-§18).
     purpose:  This replacement package's bookkeeping
 
 [NEW FILES]
-  internal/agent/orchestrator_status_test.go
-    reason:   TestContextPlanStatusContract (§16)
-  internal/agent/orchestrator_tiers.go
-    reason:   turnComposer (tier-scoped composition + upgrades), escalationWatch, hardware TTL snapshot, policy types
-  internal/agent/orchestrator_tiers_test.go
-    reason:   acceptance: FAST first prompt, card tiers, thinking control, manual policy, cache, escalation, clock, spec cache, ladder bound
-  internal/agent/pertiming.go
-    reason:   RunClock + Timing (16 measured stages)
-  internal/agent/toolcache.go
-    reason:   specCache memoization + bounded deterministic result cache
-  internal/agent/userflows_test.go
-    reason:   Phase 15 user-flow tests (old-conversation, research, vision, simple-chat recall skip)
-  internal/agent/v125_measurement_test.go
-    reason:   the before/after first-prompt measurement (v1.2.4 ≈10K → v1.2.5 ≈416 tok)
-  internal/llm/exitdetail_unix.go
-    reason:   unix-only signal extraction for the exit evidence bundle
-  internal/llm/exitdetail_windows.go
-    reason:   windows variant (exit code only — no signals on Windows)
-  internal/memmanager/ownership.go
-    reason:   ACTIVE→SESSION→HOT→COLD→EXPIRED→RELEASE ladder + snapshot
-  internal/taskclassify/taskclassify.go
-    reason:   task classification (kinds, signals, complexity, depth control)
-  internal/taskclassify/taskclassify_test.go
-    reason:   classifier + tier + escalation-ladder tests
-  internal/taskclassify/tiers.go
-    reason:   FAST/STANDARD/DEEP/MAX policies, resource-aware SelectTier, escalation reasons
-  src/ComposerControls.tsx
-    reason:   Thinking ▾ + Tools ▾ composer controls + live status chip
-  src/run-events.test.ts
-    reason:   vocabulary/normalization unit tests
-  src/run-events.ts
-    reason:   canonical wire-event mapping + control normalizers (pure)
-  web/static/assets/SystemPanel-BCvk6sqj.js
-    reason:   rebuilt bundle (hashed) — includes the v1.2.5 hooks-order repair
-  web/static/assets/index-D96cavMe.js
-    reason:   rebuilt entry bundle
+  internal/accelerator/accelerator.go
+    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
+  internal/accelerator/accelerator_test.go
+    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
+  internal/accelerator/library_other.go
+    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
+  internal/accelerator/library_windows.go
+    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
+  internal/accelerator/openvino.go
+    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
+  internal/agent/v126_measurement_test.go
+    reason:   the measured v1.2.5→v1.2.6 thinking-prompt reduction + zero-tools trivial-chat lock
+  internal/api/perf_accelerator_test.go
+    reason:   the /api/perf accelerator-resolution contract test
+  internal/api/runregistry.go
+    reason:   the bounded run-outcome registry + WS replay (the missing-answer root-cause fix) + regression tests
+  internal/api/runregistry_test.go
+    reason:   the bounded run-outcome registry + WS replay (the missing-answer root-cause fix) + regression tests
+  internal/llm/devices.go
+    reason:   engine --list-devices enumeration (cached per binary) + runtime offload-line evidence
+  internal/llm/devices_test.go
+    reason:   engine --list-devices enumeration (cached per binary) + runtime offload-line evidence
+  internal/sysinfo/cim_parse.go
+    reason:   the ONE batched Windows CIM invocation + the pure fixture-tested parser
+  internal/sysinfo/cim_parse_test.go
+    reason:   the ONE batched Windows CIM invocation + the pure fixture-tested parser
+  internal/sysinfo/cim_windows.go
+    reason:   the ONE batched Windows CIM invocation + the pure fixture-tested parser
+  internal/sysinfo/sysinfo_fast_other.go
+    reason:   the in-process fast snapshot (Win32 APIs on Windows; /proc+statfs elsewhere)
+  internal/sysinfo/sysinfo_fast_windows.go
+    reason:   the in-process fast snapshot (Win32 APIs on Windows; /proc+statfs elsewhere)
+  src/resources.test.ts
+    reason:   the shared frontend resource layer (dedup, TTL, stale-while-revalidate, last-known-good)
+  src/resources.ts
+    reason:   the shared frontend resource layer (dedup, TTL, stale-while-revalidate, last-known-good)
+  src/useResource.ts
+    reason:   the React binding hook for the shared layer
 
 [MODIFIED FILES]
   REPLACEMENT-MANIFEST.txt
-    reason:   this package's manifest
+    purpose:  v1.2.6 change (see UPDATE.md)
   REPLACEMENT-SHA256.txt
-    reason:   this package's hashes
+    purpose:  v1.2.6 change (see UPDATE.md)
   SIGNATURE
-    reason:   version sync via release-version.mjs
+    purpose:  version identity chain to 1.2.6
   UPDATE.md
-    reason:   this file
+    purpose:  v1.2.6 change (see UPDATE.md)
+  agent.md
+    purpose:  the next-agent handoff notes for v1.2.6
   build/config.yml
-    reason:   version sync via release-version.mjs
+    purpose:  version identity chain to 1.2.6
   internal/agent/orchestrator.go
-    reason:   honest context-plan status contract + modelMax/engineMax "unknown" reporting
-  internal/agent/reliability_test.go
-    reason:   card-position fixture updated to a card-carrying (coding) task for the tier era
-  internal/api/engine.go
-    reason:   engineSnapshot exposes restarts (watchdog attempts for the current episode)
-  internal/api/lifecycle.go
-    reason:   part of the v1.2.5 change set
+    purpose:  Activity.RunID field + reconciled output reserve + refused-tool escalation threading
+  internal/agent/orchestrator_tiers.go
+    purpose:  zero-tool pure chat, refused-tool re-entry on escalation, watch refusal evidence
+  internal/agent/orchestrator_tiers_test.go
+    purpose:  updated tier/escalation expectations under the honest context contract
+  internal/agent/preflight_test.go
+    purpose:  impossible-budget test now signals the tool by name (task-selective surface)
+  internal/api/environment.go
+    purpose:  non-blocking environment/health (hardware.Snapshot + deepReady + NPU on the wire)
   internal/api/perf.go
-    reason:   requests[] timeline table, ownership ladder, toolCache counters
+    purpose:  the accelerator resolution block (measured evidence assembly)
   internal/api/server.go
-    reason:   handleRun parses thinking/toolMode/toolAllow + receivedAt; persistence skip list extended
+    purpose:  runId stamping + run timeline + outcome recording + sysinfo fast path + startup deep warm
   internal/config/config.go
-    reason:   AppVersion 1.2.5 (sync)
+    purpose:  version identity chain + the accelerator config field (default auto)
   internal/contextplan/contextplan.go
-    reason:   Tier metadata, P0-P3 priority classes, MaxHistoryShare cap
-  internal/ctxtelemetry/ctxtelemetry.go
-    reason:   Tier/FinalTier/Escalations/ThinkingControl/ToolPolicyMode/RequestTiming
-  internal/llm/gguf.go
-    reason:   per-arch fields accept int32/int64 (modelMax=0 root cause) + ggufInt helper
+    purpose:  OutputReserveFor — the single clamped reserve shared by tier selection and planning
+  internal/hardware/hardware.go
+    purpose:  Snapshot (non-blocking) + Collect + WarmDeep + NPU passthrough + deepReady
   internal/llm/llama.go
-    reason:   exit classification (deliberate vs unexpected), owned cancelable generation-guarded watchdog, stability-windowed restart budget, exit diagnostics, episode bookkeeping, fresh-boot abort on raced Stop
-  internal/llm/llama_test.go
-    reason:   7 lifecycle contract tests (§13.6)
-  internal/memmanager/memmanager.go
-    reason:   ownership wiring (named ACTIVE holders, release accounting)
-  internal/runtime/runtime.go
-    reason:   deterministic lifecycle ownership: lifeCtx/lifeCancel/lifeWG, owned workers (observe, backfill, prewarm, boot helpers), awaited memory-manager/scheduler loops, idempotent ordered Close
-  internal/scheduler/scheduler_test.go
-    reason:   TestFireRefusesConcurrentRun waits for the first Fire completion (result channel — no sleep, no TempDir race)
+    purpose:  evidence-ladder autoGPUOffload (enumeration/log evidence, not DLL presence) + offload capture
   internal/sysinfo/sysinfo.go
-    reason:   every external probe bounded by an 8 s timeout (proc.CommandContext); first-probe cost measured and logged
+    purpose:  fast/deep probe split, batched CIM wiring, NPUInfo, per-source measurement
+  internal/taskclassify/taskclassify.go
+    purpose:  thinking no longer adds +20 complexity
+  internal/taskclassify/taskclassify_test.go
+    purpose:  updated depth-control pins (reasoning ≠ context)
+  internal/taskclassify/tiers.go
+    purpose:  thinking no longer floors STANDARD — the tier stays what the task signals justify
+  internal/toolsets/toolsets.go
+    purpose:  zero-signal chat → no tools; tool-name-as-signal; word-boundary matching
+  package-lock.json
+    purpose:  version 1.2.6 + the resources unit test in test:units
   package.json
-    reason:   version 1.2.5 (identity chain source of truth)
-  src/ActivityStream.tsx
-    reason:   escalation/status group under Plan
-  src/AgentBody.tsx
-    reason:   composer mounts ComposerControls
-  src/MessageStream.tsx
-    reason:   thinking panel follows backend thinking markers; escalation notices in the run activity
+    purpose:  version 1.2.6 + the resources unit test in test:units
+  src/SettingsPanel.tsx
+    purpose:  progressive loading (config immediate; models/sysinfo lazy per tab) through the shared layer
   src/SystemPanel.tsx
-    reason:   hooks-order repair in RecommendationCard (THE System-tab crash), honest loading/error/retry device state, shell always renders
+    purpose:  progressive System Centre + NPU row + deep-fact polling
   src/api.ts
-    reason:   EngineSnapshot.restarts type
+    purpose:  AbortSignal support for the shared resource layer + NPU/deepReady types
   src/store.ts
-    reason:   controls state (persisted) + canonical event handling + liveStatus/tierEscalations/thinkingPanelOpen
-  src/styles.css
-    reason:   additive v1.2.5 section (control menus, status chip, escalation styling)
+    purpose:  authoritative lastRun finalisation + bounded grace re-check + socket-attach guarantee
   web/static/.vite/manifest.json
-    reason:   rebuilt frontend manifest
-  web/static/assets/AgentBody-B4ReoJUO.js
-    reason:   rebuilt bundle (hashed)
-  web/static/assets/AgentHeader-CKcRxY-U.js
-    reason:   rebuilt bundle (hashed)
-  web/static/assets/AgentSidebar-CP-LAb_G.js
-    reason:   rebuilt bundle (hashed)
-  web/static/assets/DownloadProgress-CijVeY2v.js
-    reason:   rebuilt bundle (hashed)
-  web/static/assets/LabPanel-ClUYA1M7.js
-    reason:   rebuilt bundle (hashed)
-  web/static/assets/ResearchPanel-DAr0A1lO.js
-    reason:   rebuilt bundle (hashed)
-  web/static/assets/SettingsPanel-CgZjmrVu.js
-    reason:   rebuilt bundle (hashed)
-  web/static/assets/WorkspacePanel-of8Oe_U7.js
-    reason:   rebuilt bundle (hashed)
-  web/static/assets/index-5oqPjJgJ.css
-    reason:   rebuilt stylesheet
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/AgentBody-11pyfdmi.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/AgentHeader-zw6wjeZX.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/AgentSidebar-C-x0egcx.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/DownloadProgress-AF2gtMcs.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/LabPanel-y7cQkYG6.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/ResearchPanel-BpGTNKW-.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/SettingsPanel-ByU84JLg.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/SystemPanel-biLjqRpo.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/WorkspacePanel-jK9TN2-o.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/index-wqpsY0yO.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+  web/static/assets/useResource-DCdLFELl.js
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
   web/static/index.html
-    reason:   rebuilt frontend bundle references
+    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
   worklog.md
-    reason:   this release's work-log entry
+    purpose:  the v1.2.6 implementation log (root causes, changes, measurements, limitations)
 
 [DELETED FILES]
-  Cannot ship inside a ZIP. DELETE list: UPDATE.md §8 —
-  apply it after copying (stale hashed frontend bundles).
+  Apply procedure deletes these stale hashed frontend assets
+  (replaced by the rebuilt bundle — web/static is go:embedded, so
+  stale files MUST be removed to keep the binary clean):
+  DELETE web/static/assets/AgentBody-B4ReoJUO.js
+  DELETE web/static/assets/AgentHeader-CKcRxY-U.js
+  DELETE web/static/assets/AgentSidebar-CP-LAb_G.js
+  DELETE web/static/assets/DownloadProgress-CijVeY2v.js
+  DELETE web/static/assets/LabPanel-ClUYA1M7.js
+  DELETE web/static/assets/ResearchPanel-DAr0A1lO.js
+  DELETE web/static/assets/SettingsPanel-CgZjmrVu.js
+  DELETE web/static/assets/SystemPanel-BCvk6sqj.js
+  DELETE web/static/assets/WorkspacePanel-of8Oe_U7.js
+  DELETE web/static/assets/index-D96cavMe.js
 
-[UNCHANGED FILES]
-  Not included — apply over a clean v1.2.4 checkout, which already
-  carries every unchanged file, including the unchanged asset
-  file vision-Dw0T2tjy.js under web/static/assets/.

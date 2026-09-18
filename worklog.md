@@ -2,7 +2,7 @@
 
 ## Current State
 
-Date: 2026-09-13 (Phase 6: reliability, coding effectiveness, context intelligence, multi-agent efficiency; phase logs below)
+Date: 2026-09-18 (v1.2.6: the missing-answer repair, honest context tiers, progressive UI, batched hardware probe, evidence-based accelerator resolution; v1.2.6 log first below)
 
 Repository:
 
@@ -15,39 +15,154 @@ Branch: `main`
 Current release:
 
 ```text
-v1.1.5Z
+v1.2.6
 ```
 
-v1.1.5Z is the **SHEYTAN Native AI Engine** release line. Phase 1
-established the backend abstraction, the supervised native engine path
-and the C++ engine skeleton. Phase 2 added **native GGUF model
-loading**: a hardened C++ GGUF reader, memory-mapped model access, real
-metadata extraction, load-time memory planning, the model lifecycle and
-the `ModelInfo` surface through Go. Phase 3 rebuilt the **local data
-pipeline for memory efficiency**: a shared chunk engine with full
-provenance metadata, single-flight content caching, streaming attachment
-staging, append-aware memory-store caching and allocation-free recall
-scoring — all measured with before/after benchmarks. Phase 4 added the
-**native engine foundation primitives**: a real GGUF-backed tokenizer
-(BPE/Unigram/WPM), a real KV-cache data structure sized from model dims
-(GQA-aware, bounded), a real bounded scheduler, real sampling
-primitives, and a frame-budget-aware streaming UI with a diagnostic
-perf HUD. Phase 5 (this log, first below) implemented the **REAL native
-transformer inference path**: the llama-architecture forward pass
-(RMSNorm / RoPE / GQA causal attention over a true fp16 KV cache /
-SwiGLU / logits), the sampler consuming REAL logits, REAL token-by-token
-generation with coarse-grained streamed chunks over the IPC protocol,
-REAL cooperative cancellation, measured generation metrics, the
-load-time llama-graph capability verdict, and the backend selection
-router wired through the orchestrator (native when selected AND capable
-AND plain-text; llama.cpp otherwise with a logged, inspectable reason).
-Native generation support is deliberately narrow and honest: llama
-architecture only, F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 tensor types only,
-and the current forward pass is portable scalar C++ measured SLOWER
-than llama.cpp (the numbers are below — no native-speed claim is
-made). llama.cpp remains fully functional as the fallback (and the
-default generation engine for everything the native path does not
-support). Full phase logs below.
+v1.2.6 is the **verified-runtime repair** release. The v1.2.5 field
+report — "simple prompts complete but no answer is visible; Settings and
+System feel slow; a 1-word prompt cost 1.1K tokens on FAST and 13K on
+THINKING; the Windows hardware probe measured 5,399 ms; GPU acceleration
+was assumed from a Vulkan DLL" — was root-caused from source evidence and
+fixed at the root. See the v1.2.6 log (first below) for every change,
+measurement and honest limitation. The v1.1.5Z native-engine line remains
+authoritative below (phases 1–6: backend abstraction, native GGUF
+loading, memory-efficient data pipeline, engine primitives, REAL native
+transformer inference, reliability/verification/safe-edits core).
+llama.cpp remains the default generation engine; the native engine serves
+the narrow, honestly-documented llama-architecture path.
+
+---
+
+# v1.2.6 Implementation Log (2026-09-18)
+
+Baseline: `main @ fc5b500858abe29aaba2c2ecd4c14c37f091e519` (v1.2.5).
+
+## Root causes found (source-audited, not guessed)
+
+RC1 — Missing answer (WS late-attach race). The activity hub has NO
+replay. A run that completes before the activity socket attaches parks
+the socket in standby, and the only frame it ever sees is the bare
+`idle` sentinel — which the frontend's 2,500 ms attach-race grace guard
+DROPS when the run produced no streamed evidence. A fast simple prompt
+(sub-2.5 s on a warm engine) therefore leaves `running=true` forever
+with no visible answer. RC2 — Context over-injection. The composer's
+thinking control added +20 complexity AND forced the STANDARD tier
+floor: a one-line question paid the full ~7.4K-token briefing + recall +
+project card + up to 12 tool schemas (measured 12,962 tokens). Core
+tools (files/shell/memory) rode EVERY request, even zero-signal chat.
+Tier selection and context planning disagreed on the output reserve
+(raw MaxTokens vs clamped). RC3 — Windows probe latency. sysinfo spawned
+~7 SEQUENTIAL PowerShell/CIM processes (~700-900 ms each ≈ the measured
+5,399 ms); /api/environment and /api/health called the blocking probe
+per request; Settings fetched config+models+presets+tools+sysinfo in ONE
+global Promise.all. RC4 — GPU posture by assumption. autoGPUOffload ==
+"ggml-vulkan.dll exists AND any WMI adapter present" → --n-gpu-layers
+99, with no device enumeration, no runtime offload verification, no NPU
+evaluation anywhere.
+
+## Changes (all verified by the tests below)
+
+1. Bounded run-outcome registry + WS replay (internal/api/runregistry.go
+   NEW): the idle sentinel now carries the session's latest terminal run
+   outcome (runId, endedAt, outcome, persisted, replyChars — 4-entry ring
+   per session, 256-session LRU bound). runId stamps EVERY activity of
+   one run; the API-side stages (runAccepted, runRegistered,
+   engineGateStart/Ready, assistantPersisted, donePublished) are
+   measured and logged per run. Frontend: recoverRunFromIdle trusts the
+   authoritative lastRun evidence (recover immediately when endedAt ≥
+   runStartedAt), and a grace-ignored sentinel now arms a BOUNDED
+   re-check — the composer can never freeze forever again. run() and
+   regenerate() ensure the activity socket is attaching BEFORE the POST.
+
+2. Honest context tiers (taskclassify, tiers, toolsets, composer): the
+   thinking control no longer adds complexity or floors the tier —
+   reasoning depth is the nudge + the evidence-driven escalation ladder,
+   never context size. A zero-signal conversational turn offers ZERO
+   tool schemas and composes the compact briefing only; naming a
+   registered tool in the request is itself a capability signal (custom
+   tools included); a refused tool call re-enters the offered surface on
+   escalation via the refusal evidence. Tier selection and context
+   planning now share ONE clamped output reserve
+   (contextplan.OutputReserveFor).
+
+3. Windows probe batching + fast/deep split (internal/sysinfo): ONE
+   batched PowerShell/CIM invocation (KEY=VALUE protocol, NPU via
+   Win32_PnPEntity incl. PNPClass ND) replaces the ~7 spawns; the fast
+   snapshot uses in-process Win32 APIs (GlobalMemoryStatusEx via
+   kernel32, GetDiskFreeSpaceEx via x/sys) — zero spawns, served
+   instantly by /api/sysinfo, /api/environment, /api/health; the deep
+   probe warms in the background at startup (hardware.WarmDeep) and each
+   source logs its own duration + success. GPU/NPU facts are merged when
+   they land (deepReady flag on the wire).
+
+4. Progressive UI (src/resources.ts NEW + useResource.ts NEW +
+   Settings/System rework): one shared resource layer — per-resource
+   states (unavailable/loading/ready/stale/error), request
+   deduplication, TTL, stale-while-revalidate, last-known-good,
+   AbortController, subscription. Settings loads config IMMEDIATELY,
+   presets/tools in background, models/sysinfo lazy per tab. System
+   renders the fast environment instantly and polls (2 s) for the deep
+   facts. One slow endpoint can no longer block any other.
+
+5. Accelerator abstraction (internal/accelerator NEW): kinds
+   CPU/GPU_VULKAN/GPU_OPENVINO/NPU_OPENVINO; requested profiles
+   AUTO/GPU/NPU/CPU (config `accelerator`, default auto); AUTO resolves
+   to INTERACTIVE_GPU/LOW_POWER_NPU/CPU_SAFE/VISION_GPU/MAXIMUM.
+   GPU requires ENGINE evidence (the installed engine's --list-devices
+   enumeration — cached per binary — or the runtime "offloaded N/M
+   layers to GPU" log line; the DLL-presence rule survives ONLY as the
+   documented weaker fallback for builds without enumeration, with the
+   verification plan in the reason). NPU requires presence + measured
+   OpenVINO runtime LOAD (LoadLibrary/dlopen probe) + arch/quant gates +
+   a MEASURED benchmark beating GPU — presence alone never wins, every
+   failed gate is a recorded fallback. /api/perf carries the full
+   resolution (requested/resolved/backend/device/profile/layers/reason/
+   fallbacks) from measured evidence only.
+
+## Measured results (this machine, test rig)
+
+- THINKING simple prompt: 12,962 tokens (v1.2.5 field report) → ~548
+  tokens measured under the same test rig (tier FAST, 0 tool schemas,
+  0 optional blocks) — TestV126ThinkingSimplePromptStaysCompact.
+- FAST simple prompt: ~443 tokens (0 tools).
+- Baseline suite BEFORE any change: 40 packages ok, 0 fail; typecheck 0
+  errors; lint 0; test:units 28/28. AFTER: 42 packages ok, 0 fail
+  (2 new: accelerator, +runregistry/api/perf tests inside existing
+  packages); typecheck 0 errors; lint 0; test:units 34/34 (6 new
+  resource-layer tests). Race + vet: clean (commands below).
+- The Windows CIM batching itself could NOT be timed here (no Windows
+  host in the CI sandbox — honest limitation below). The process-spawn
+  count is verifiable from source: 7 → 1.
+
+## Honest limitations (read literally)
+
+- This release was implemented and tested on Linux (Debian 13, Go
+  1.26.8, Node 24). The Windows-only paths (batched CIM script,
+  in-process Win32 memory/disk reads, OpenVINO LoadLibrary probe,
+  --list-devices against a real llama-server.exe, Intel Arc/AI Boost
+  enumeration) compile for GOOS=windows and their parsers are
+  unit-tested with fixture outputs — but were NOT executed on a real
+  Windows machine by this agent. Real-hardware validation of §13 of the
+  v1.2.6 brief remains to be performed on the target machine.
+- NPU_OPENVINO is implemented as an evidence-gated RESOLUTION only: no
+  OpenVINO execution engine is wired (the native engine and llama.cpp
+  remain the only inference backends), so NPU can never be selected in
+  practice until an OpenVINO backend with measured benchmarks exists.
+- The GPU runtime verification (offload-line parsing) observes llama.cpp
+  stdout/stderr at boot; a build that offloads silently (no standard
+  line) will fall back to CPU on machines without enumeration support.
+  The evidence ladder records which rung decided.
+
+## Verification commands (all clean at fc5b500 + these changes)
+
+```text
+go test -tags headless ./internal/... -count=1     # 42 ok, 0 FAIL
+go test -race -tags headless ./internal/agent/ ./internal/llm/ ./internal/api/
+go vet -tags headless ./...
+npm run typecheck && npm run lint && npm run test:units
+node scripts/release-version.mjs --check
+GOOS=windows go build ./...                          # cross-compile gate
+```
 
 ---
 

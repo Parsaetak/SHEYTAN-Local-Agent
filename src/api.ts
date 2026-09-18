@@ -107,6 +107,17 @@ export interface HardwareBackend {
   engineTag?: string;
 }
 
+// v1.2.6 — the measured neural accelerator identity (Intel AI Boost
+// etc.). Presence is HARDWARE identity only — it never implies an inference
+// backend can use it; runtime capability is a separate, measured verdict.
+export interface HardwareNPU {
+  vendor?: string;
+  name?: string;
+  driverVersion?: string;
+  status?: string;
+  detectedBy?: string;
+}
+
 export interface EnvironmentPayload {
   device: {
     os: string;
@@ -115,6 +126,8 @@ export interface EnvironmentPayload {
     ram: HardwareRAM;
     storage: HardwareStorage;
     gpus: HardwareGPU[];
+    npu?: HardwareNPU;
+    deepReady?: boolean;
     backend: HardwareBackend;
     identity: {
       product: string;
@@ -1086,24 +1099,24 @@ export const api = {
     return request<AppState>("/state");
   },
 
-  sysinfo(): Promise<SysInfo> {
-    return request<SysInfo>("/sysinfo");
+  sysinfo(signal?: AbortSignal): Promise<SysInfo> {
+    return request<SysInfo>("/sysinfo", { signal });
   },
 
-  presets(): Promise<Preset[]> {
-    return request<Preset[]>("/presets");
+  presets(signal?: AbortSignal): Promise<Preset[]> {
+    return request<Preset[]>("/presets", { signal });
   },
 
-  models(): Promise<ModelsResponse> {
-    return request<ModelsResponse>("/models");
+  models(signal?: AbortSignal): Promise<ModelsResponse> {
+    return request<ModelsResponse>("/models", { signal });
   },
 
-  tools(): Promise<ToolInfo[]> {
-    return request<ToolInfo[]>("/tools");
+  tools(signal?: AbortSignal): Promise<ToolInfo[]> {
+    return request<ToolInfo[]>("/tools", { signal });
   },
 
-  config(): Promise<RuntimeConfig> {
-    return request<RuntimeConfig>("/config");
+  config(signal?: AbortSignal): Promise<RuntimeConfig> {
+    return request<RuntimeConfig>("/config", { signal });
   },
 
   updateConfig(payload: Record<string, unknown>): Promise<RuntimeConfig> {

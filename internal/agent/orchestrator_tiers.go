@@ -228,6 +228,10 @@ func (o *Orchestrator) newTurnComposer(
 
         // Tier- and policy-scoped tool selection — from the START, not only
         // under overflow. Manual policy intersects; auto uses task signals.
+        // v1.2.6: a ZERO-tool selection is a VALID outcome (pure conversation:
+        // no capability signal → no schemas). The old `len(picked) > 0` guard
+        // fell back to EVERY enabled tool — the exact over-injection the
+        // contract prohibits.
         selected := c.enabled
         if policy.Mode == ToolPolicyManual {
                 manual := make([]string, 0, len(policy.Allowed))
@@ -244,9 +248,7 @@ func (o *Orchestrator) newTurnComposer(
                         selected = manual
                 }
         } else {
-                if picked := toolsets.SelectForTask(c.enabled, task, spec.MaxTools); len(picked) > 0 {
-                        selected = picked
-                }
+                selected = toolsets.SelectForTask(c.enabled, task, spec.MaxTools)
         }
 
         c.setTools(selected, task)
@@ -433,7 +435,9 @@ type upgrade struct {
 
 // Escalate upgrades the composer's tier, composing the blocks the new
 // tier newly allows. Manual tool policy is NEVER widened by escalation.
-func (c *turnComposer) Escalate(reason taskclassify.EscalationReason, task string) (*upgrade, bool) {
+// refusedTool (v1.2.6) re-enters the offered surface when the escalation
+// evidence was a tool-surface refusal (auto policy only).
+func (c *turnComposer) Escalate(reason taskclassify.EscalationReason, task, refusedTool string) (*upgrade, bool) {
         if c.escalated >= maxEscalations {
                 return nil, false
         }
@@ -484,9 +488,58 @@ func (c *turnComposer) Escalate(reason taskclassify.EscalationReason, task strin
         }
 
         // Tool surface widening (auto policy only — manual never re-enables).
+        // v1.2.6: the refused tool re-enters the surface FIRST (it is the
+        // exact capability the run proved it needs), then the new tier's
+        // task selection applies on top — union, deduplicated, bounded by
+        // the new tier's MaxTools/token budget inside setTools.
         if c.policy.Mode != ToolPolicyManual {
-                if picked := toolsets.SelectForTask(c.enabled, task, c.spec.MaxTools); len(picked) > len(c.allNames) {
-                        c.setTools(picked, task)
+                names := c.allNames
+
+                if refusedTool != "" {
+                        found := false
+
+                        for _, n := range names {
+                                if strings.EqualFold(n, refusedTool) {
+                                        found = true
+                                        break
+                                }
+                        }
+
+                        if !found {
+                                for _, e := range c.enabled {
+                                        if strings.EqualFold(e, refusedTool) {
+                                                names = append([]string{e}, names...)
+                                                break
+                                        }
+                                }
+                        }
+                }
+
+                if picked := toolsets.SelectForTask(c.enabled, task, c.spec.MaxTools); len(picked) > 0 {
+                        seen := map[string]bool{}
+                        merged := make([]string, 0, len(picked)+len(names))
+
+                        for _, n := range names {
+                                if n == "" || seen[strings.ToLower(n)] {
+                                        continue
+                                }
+                                seen[strings.ToLower(n)] = true
+                                merged = append(merged, n)
+                        }
+
+                        for _, n := range picked {
+                                if n == "" || seen[strings.ToLower(n)] {
+                                        continue
+                                }
+                                seen[strings.ToLower(n)] = true
+                                merged = append(merged, n)
+                        }
+
+                        names = merged
+                }
+
+                if len(names) > len(c.allNames) {
+                        c.setTools(names, task)
                 } else if c.spec.ToolTokenBudget > 0 && c.toolTok > c.spec.ToolTokenBudget {
                         c.setTools(c.allNames, task)
                 }
@@ -567,6 +620,13 @@ type escalationWatch struct {
         mu      sync.Mutex
         pending taskclassify.EscalationReason
         has     bool
+
+        // refusedTool (v1.2.6) is the tool the model tried to call while it
+        // was NOT part of the offered surface. The escalation re-offers
+        // exactly this tool — without it, a pure-conversation task
+        // (zero-signal → zero tools) could never recover from its own
+        // refusal.
+        refusedTool string
 }
 
 // note records one escalation signal; the FIRST signal of a turn wins
@@ -582,17 +642,20 @@ func (w *escalationWatch) note(reason taskclassify.EscalationReason) {
         }
 }
 
-// take returns and clears the pending reason.
-func (w *escalationWatch) take() (taskclassify.EscalationReason, bool) {
+// take returns and clears the pending reason (plus the refused tool,
+// when the evidence was a tool-surface refusal).
+func (w *escalationWatch) take() (taskclassify.EscalationReason, string, bool) {
         w.mu.Lock()
         defer w.mu.Unlock()
 
         r := w.pending
+        tool := w.refusedTool
         ok := w.has
         w.has = false
         w.pending = ""
+        w.refusedTool = ""
 
-        return r, ok
+        return r, tool, ok
 }
 
 // observeToolResult derives escalation evidence from one real tool
@@ -621,9 +684,20 @@ func (w *escalationWatch) observeToolResult(tool, result string, failed bool) {
 }
 
 // observeRefusal records the orchestrator's own tool-surface refusal —
-// the model tried a tool that was not offered this turn.
-func (w *escalationWatch) observeRefusal() {
-        w.note(taskclassify.ReasonMissingToolContext)
+// the model tried a tool that was not offered this turn. The refused
+// tool's name is kept so the escalation can offer exactly what was
+// missing (v1.2.6).
+func (w *escalationWatch) observeRefusal(tool string) {
+        w.mu.Lock()
+        defer w.mu.Unlock()
+
+        if !w.has {
+                w.pending = taskclassify.ReasonMissingToolContext
+                w.has = true
+                w.refusedTool = tool
+        } else if w.refusedTool == "" {
+                w.refusedTool = tool
+        }
 }
 
 // observeVerification records a failed objective verification with a

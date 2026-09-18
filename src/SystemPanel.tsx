@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, type EnvironmentPayload, type HealthPayload } from "./api";
 import { useRuntimeStore } from "./store";
+import { useResource } from "./useResource";
 import { DownloadProgressPanel } from "./DownloadProgress";
 
 // v1.2.0 — the Environment Centre (System Centre): one honest view over
@@ -84,6 +85,7 @@ function DeviceCard({
   // must never throw during render (the historical System-tab crash).
   const device = env.device;
   const gpus = Array.isArray(device.gpus) ? device.gpus : [];
+  const npu = device.npu ?? null;
   const cpu = device.cpu ?? { name: "" };
   const ram = device.ram ?? { totalBytes: 0, availableBytes: 0 };
   const storage = device.storage ?? {};
@@ -92,6 +94,7 @@ function DeviceCard({
     shortName: "",
     platform: "",
   };
+  const deepReady = device.deepReady !== false;
 
   return (
     <div className="settings-card">
@@ -136,7 +139,20 @@ function DeviceCard({
                       `${g.name || g.vendor || "GPU"}${g.vramBytes ? ` (${fmtBytes(g.vramBytes)})` : ""}`,
                   )
                   .join(", ")
-              : "— none detected"}
+                  : deepReady
+                    ? "— none detected"
+                    : "— detecting…"}
+          </strong>
+        </div>
+
+        <div className="session-detail">
+          <span>NPU</span>
+          <strong title={npu ? `${npu.vendor || ""} ${npu.driverVersion || ""} (${npu.detectedBy || ""})`.trim() : undefined}>
+            {npu
+              ? `${npu.name || "Neural accelerator"}${npu.status ? ` · ${npu.status}` : ""}`
+              : deepReady
+                ? "— none detected"
+                : "— detecting…"}
           </strong>
         </div>
 
@@ -481,49 +497,52 @@ function HealthCard() {
 }
 
 const SystemPanel = function SystemPanel() {
-  const [env, setEnv] = useState<EnvironmentPayload | null>(null);
-  // v1.2.5: the environment fetch exposes its real state — loading, ready
-  // (possibly partial) or error with retry. The shell always renders; each
-  // card degrades independently.
-  const [status, setStatus] = useState<"loading" | "ready" | "error">(
-    "loading",
+  // v1.2.6 PROGRESSIVE SYSTEM CENTRE — the environment arrives as a FAST
+  // snapshot (backend hardware probe no longer blocks the response) and
+  // fills in GPU/NPU/driver facts when the background deep probe lands.
+  // The health probe loads AFTER the environment (staggered, independent,
+  // cancellable) so a slow health check can never stall the device card.
+  const envResource = useResource<EnvironmentPayload>(
+    "environment",
+    (signal) => api.environment(signal),
   );
 
-  // v1.2.2: cancellable environment fetch — leaving the tab mid-probe
-  // aborts the request; a late response can never touch unmounted state
-  // (and never races a subsequent mount's fetch).
-  const controllerRef = useRef<AbortController | null>(null);
+  const env = envResource.data;
+  const status: "loading" | "ready" | "error" =
+    envResource.state === "error"
+      ? "error"
+      : envResource.state === "ready" || envResource.state === "stale"
+        ? "ready"
+        : "loading";
 
-  const load = useCallback(() => {
-    controllerRef.current?.abort();
-
-    const controller = new AbortController();
-    controllerRef.current = controller;
-
-    setStatus("loading");
-
-    api
-      .environment(controller.signal)
-      .then((payload) => {
-        if (controller.signal.aborted) return;
-        setEnv(payload);
-        setStatus("ready");
-      })
-      .catch(() => {
-        if (controller.signal.aborted) return;
-        setEnv(null);
-        setStatus("error");
-      });
-  }, []);
+  // deepReady=false → the backend is still probing GPU/NPU/driver facts in
+  // the background; poll the shared resource until it lands (bounded).
+  const deepReady = env?.device?.deepReady ?? false;
 
   useEffect(() => {
-    load();
+    if (status !== "ready" || deepReady) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const timer = window.setInterval(() => {
+      if (cancelled) {
+        return;
+      }
+
+      void envResource.refresh();
+    }, 2000);
 
     return () => {
-      controllerRef.current?.abort();
-      controllerRef.current = null;
+      cancelled = true;
+      window.clearInterval(timer);
     };
-  }, [load]);
+  }, [status, deepReady, envResource]);
+
+  const load = useCallback(() => {
+    envResource.refresh();
+  }, [envResource]);
 
   return (
     <section className="system-panel">

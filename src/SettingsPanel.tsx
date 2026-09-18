@@ -8,13 +8,18 @@ import {
 import {
   api,
   type LLMConfig,
-  type Model,
+  type ModelsResponse,
   type PerfSnapshot,
   type Preset,
   type RuntimeConfig,
   type SysInfo,
   type ToolInfo,
 } from "./api";
+import {
+  ensure as ensureResource,
+  reset as resetResource,
+} from "./resources";
+import { useResource } from "./useResource";
 
 import { FieldLabel } from "./settings-shared";
 import {
@@ -97,22 +102,82 @@ function numberValue(event: ChangeEvent<HTMLInputElement>): number {
 }
 
 function SettingsPanel() {
+  // v1.1.7: active settings section (declared FIRST — the lazy resource
+  // hooks below depend on which tab is visible).
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+
+  // v1.2.6 PROGRESSIVE LOADING — the v1.2.5 panel fetched config + models
+  // + presets + tools + sysinfo with ONE global Promise.all: the entire
+  // view waited for the slowest endpoint (the Windows hardware probe
+  // measured 5.4 s) and one failure failed everything.
+  //
+  //   IMMEDIATE   config (the critical controls render as soon as it lands)
+  //   BACKGROUND  presets, tools (independent, stale-while-revalidate)
+  //   LAZY        models (Models tab), sysinfo (Performance tab)
+  //
+  // Every resource owns its OWN state through the shared resource layer
+  // (dedup + TTL + last-known-good + AbortController) — one slow endpoint
+  // can never block the others, and Settings/System/Performance mounting
+  // together never issue duplicate requests.
+  const configResource = useResource<RuntimeConfig>("config", (signal) =>
+    api.config(signal),
+  );
+  const modelsResource = useResource<ModelsResponse>(
+    "models",
+    (signal) => api.models(signal),
+    { enabled: activeTab === "models" },
+  );
+  const presetsResource = useResource<Preset[]>("presets", (signal) =>
+    api.presets(signal),
+  );
+  const toolsResource = useResource<ToolInfo[]>("tools", (signal) =>
+    api.tools(signal),
+  );
+  const sysinfoResource = useResource<SysInfo>(
+    "sysinfo",
+    (signal) => api.sysinfo(signal),
+    { enabled: activeTab === "performance" },
+  );
+
+  // The config the panel edits: the shared cache's server truth, with
+  // optimistic local edits between load and save (existing call sites
+  // keep their plain setConfig updaters).
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
-  const [models, setModels] = useState<Model[]>([]);
-  const [presets, setPresets] = useState<Preset[]>([]);
+
+  useEffect(() => {
+    if (configResource.data) {
+      setConfig(configResource.data);
+    }
+  }, [configResource.data]);
+
   // v1.1.5Z Phase 6: the backend currently serving generation ("native" |
   // "llama") — reported by /api/models so the local model list can mark the
   // serving model honestly instead of guessing from llamaRunning.
-  const [servingBackend, setServingBackend] = useState<string>("");
-  const [tools, setTools] = useState<ToolInfo[]>([]);
-  const [sysinfo, setSysinfo] = useState<SysInfo | null>(null);
+  const models = modelsResource.data?.local ?? [];
+  const servingBackend = modelsResource.data?.backend ?? "";
+  const presets = presetsResource.data ?? [];
+  const tools = toolsResource.data ?? [];
+  const sysinfo = sysinfoResource.data;
 
   const [saveState, setSaveState] = useState<SaveState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [restartAfterSave, setRestartAfterSave] = useState(true);
 
-  // v1.1.7: active settings section.
-  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  // The save button unlocks the moment the config lands — one slow
+  // background resource (models/tools/sysinfo) can no longer lock the
+  // whole panel (the v1.2.5 symptom: "Settings still feels slow").
+  useEffect(() => {
+    if (configResource.state === "ready" || configResource.state === "stale") {
+      setSaveState((current) => (current === "loading" ? "idle" : current));
+    }
+
+    if (configResource.state === "error") {
+      setError(
+        configResource.error ?? "Unable to load runtime settings.",
+      );
+      setSaveState("error");
+    }
+  }, [configResource.state, configResource.error]);
 
   // v1.1.7: live performance snapshot (polled while the Performance tab is
   // open) and the optional before/after comparison baseline.
@@ -120,44 +185,39 @@ function SettingsPanel() {
   const [baseline, setBaseline] = useState<PerfBaseline | null>(null);
 
   async function load() {
+    // v1.2.6: a manual refresh re-fetches every OWNED resource through
+    // the shared layer (deduplicated; slow ones refresh in background
+    // while the panel keeps showing last-known-good).
     setSaveState("loading");
     setError(null);
 
     try {
-      const [, modelResponse, nextPresets, nextTools, nextSysinfo] =
-        await Promise.all([
-          api.config(),
-          api.models(),
-          api.presets(),
-          api.tools(),
-          api.sysinfo(),
-        ]);
+      await Promise.all([
+        ensureResource("config", (signal) => api.config(signal), {
+          force: true,
+        }),
+        ensureResource("presets", (signal) => api.presets(signal), {
+          force: true,
+        }),
+        ensureResource("tools", (signal) => api.tools(signal), {
+          force: true,
+        }),
+        ...(activeTab === "models"
+          ? [ensureResource("models", (signal) => api.models(signal), { force: true })]
+          : []),
+        ...(activeTab === "performance"
+          ? [ensureResource("sysinfo", (signal) => api.sysinfo(signal), { force: true })]
+          : []),
+      ]);
 
-      // v1.1.2Z hardening: the API contract guarantees arrays, but a stale
-      // backend or an interrupted deploy could still surface null — never
-      // let a null list crash the whole React tree again.
-      setModels(modelResponse.local ?? []);
-      // v1.1.5Z Phase 6: honest engine status — remember which backend
-      // serves generation so the model list can say "currently serving"
-      // truthfully instead of guessing from llamaRunning.
-      setServingBackend(modelResponse.backend ?? "");
-      setPresets(nextPresets ?? []);
-      setTools(nextTools ?? []);
-      setSysinfo(nextSysinfo);
       setSaveState("idle");
-    } catch (loadError) {
-      setError(
-        loadError instanceof Error
-          ? loadError.message
-          : "Unable to load runtime settings.",
-      );
+    } catch {
+      // The resource layer keeps last-known-good data and records the
+      // per-resource error state; the panel shows the failure without
+      // blanking anything already rendered.
       setSaveState("error");
     }
   }
-
-  useEffect(() => {
-    void load();
-  }, []);
 
   // v1.1.7: lightweight live-metrics polling — ONLY while the Performance
   // tab is visible, at a human cadence (3 s), so the app stays quiet
@@ -220,6 +280,10 @@ function SettingsPanel() {
     try {
       const nextConfig = await api.updateConfig(patch);
       setConfig(nextConfig);
+
+      // v1.2.6: the shared config cache must carry the server's post-save
+      // truth (Settings, System and Performance all read it).
+      resetResource("config");
 
       // v1.1.7: the restart condition now covers every engine-affecting
       // option, so speed settings genuinely apply instead of waiting for a

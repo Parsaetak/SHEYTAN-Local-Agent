@@ -22,6 +22,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
@@ -86,6 +87,12 @@ type Server struct {
         // active runs: sessionID → runState
         runsMu sync.Mutex
         runs   map[string]*runState
+
+        // outcomes (v1.2.6) is the bounded authoritative run-state registry:
+        // the last few terminal outcomes per session, replayed on the idle
+        // sentinel so a late-attaching socket can finalise deterministically
+        // instead of staying stuck on a run it never observed.
+        outcomes *runRegistry
 
         // v1.1.2Z: idle WebSocket standby registry — sessionID → connections.
         // Before this, an activity WebSocket with no active run was closed
@@ -263,6 +270,7 @@ func New(cfg *config.Config) (*Server, error) {
                 native:     stack.Native,
                 installer:  installer.New(cfg),
                 runs:       make(map[string]*runState),
+                outcomes:   newRunRegistry(),
                 standby:    make(map[string][]*standbyConn),
                 sys:        sysinfo.Probe(),
                 recall:     stack.Recall,
@@ -294,6 +302,12 @@ func (s *Server) EnsureSetup() error {
         if _, _, err := s.installer.EnsureRun(false); err != nil {
                 return err
         }
+
+        // v1.2.6: warm the deep hardware probe in the background (ONE batched
+        // CIM invocation on Windows — replaced the ~7 sequential PowerShell
+        // spawns that measured 5.4 s). The UI never waits for it: fast facts
+        // render immediately, deep facts land when the probe finishes.
+        hardware.WarmDeep()
 
         // v1.1.3Z — THE acceptance requirement: the application owns the engine
         // lifecycle. A clean launch must reach a healthy model without any
@@ -437,9 +451,11 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSysinfo(w http.ResponseWriter, r *http.Request) {
-        // Re-probe on demand so the UI can refresh.
-        info := sysinfo.Probe()
-        writeJSON(w, info)
+        // v1.2.6: interactive surface — NEVER blocks on the deep probe.
+        // Serves the fast snapshot (+ deep facts when the background probe
+        // already landed). The deep probe warms at startup; a caller that
+        // needs the full facts uses sysinfo.Probe() directly.
+        writeJSON(w, sysinfo.ProbeFast())
 }
 
 func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
@@ -1369,6 +1385,22 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         ctx, cancel := context.WithCancel(runCtx)
         hub := newActivityHub()
 
+        // v1.2.6: one runId across the WHOLE path (UI → POST → registry →
+        // engine gate → orchestrator → persistence → WS delivery). Every
+        // activity frame of this run carries it; the outcome registry and the
+        // logs use it, so a stalled run can be attributed end-to-end.
+        runID := newRunID()
+
+        // v1.2.6: the API-side stage timeline — runAccepted → runRegistered →
+        // engineGateStart/Ready → (orchestrator stages via RunClock) →
+        // assistantPersisted → donePublished. Measured values only; the
+        // summary line is logged once when the run settles.
+        tl := runTimeline{
+                runID:       runID,
+                sessionID:  sess.ID,
+                acceptedAt: receivedAt,
+        }
+
         s.runsMu.Lock()
 
         // There can be only one active run per session. Cancel the previous run
@@ -1385,6 +1417,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
         s.runsMu.Unlock()
 
+        tl.registeredAt = time.Now()
+
         // v1.2.4: mark the run active for the memory policy — coordinated
         // cleanup (cache shedding, GC) is deferred while a generation is live,
         // and runs as soon as the run ends (success, error or abort; the defer
@@ -1396,6 +1430,48 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         // v1.1.2Z: release every activity connection parked in standby for
         // this session so they attach to the new run hub immediately.
         s.wakeStandby(sess.ID)
+
+        // runSettled records the terminal outcome exactly once (the goroutine
+        // below has several exit paths; every one of them settles the run).
+        var settled sync.Once
+
+        outcome := runOutcome{
+                RunID:     runID,
+                StartedAt: tl.registeredAt,
+                Outcome:   "error",
+        }
+
+        settle := func(result string, caption string, persisted bool, replyChars, reasonChars int) {
+                settled.Do(func() {
+                        outcome.EndedAt = time.Now()
+                        outcome.Outcome = result
+                        outcome.Caption = caption
+                        outcome.Persisted = persisted
+                        outcome.ReplyChars = replyChars
+                        outcome.ReasonChars = reasonChars
+
+                        if s.outcomes != nil {
+                                s.outcomes.record(sess.ID, outcome)
+                        }
+
+                        ms := func(a, b time.Time) int64 {
+                                if a.IsZero() || b.IsZero() || b.Before(a) {
+                                        return 0
+                                }
+                                return b.Sub(a).Milliseconds()
+                        }
+
+                        logging.Default().Info(
+                                "run",
+                                "runId=%s session=%s outcome=%s persistMs=%d publishMs=%d totalMs=%d replyChars=%d",
+                                runID, sess.ID, result,
+                                ms(tl.gateReady, tl.persistedAt),
+                                ms(tl.acceptedAt, tl.donePublished),
+                                ms(tl.acceptedAt, outcome.EndedAt),
+                                replyChars,
+                        )
+                })
+        }
 
         go func() {
                 defer func() {
@@ -1427,13 +1503,20 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 // here streams the authoritative engine transitions to the UI
                 // (starting → ready) while the request waits, bounded by the
                 // engine gate timeout.
+                // v1.2.6: the gate stages are MEASURED (engineGateStart/Ready) so
+                // a stalled run reveals WHERE it is stalled.
+                tl.gateStart = time.Now()
+
                 gateCtx, gateCancel := context.WithTimeout(ctx, 3*time.Minute)
 
                 if err := s.stack.EnsureLLMContext(gateCtx); err != nil {
                         gateCancel()
 
+                        settle("error", fmt.Sprintf("Engine unavailable: %v", err), false, 0, 0)
+
                         hub.publish(agent.Activity{
-                                Type: "error",
+                                Type:      "error",
+                                RunID:     runID,
                                 Caption: fmt.Sprintf(
                                         "Engine unavailable: %v",
                                         err,
@@ -1444,7 +1527,32 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         return
                 }
 
+                tl.gateReady = time.Now()
+
                 gateCancel()
+
+                // v1.2.6: every activity of THIS run carries the runId — one
+                // identifier from POST /api/run to the last WS frame.
+                stampRun := func(a agent.Activity) agent.Activity {
+                        a.RunID = runID
+                        return a
+                }
+
+                // terminalCaption captures the orchestrator's own final
+                // `done`/`complete` caption ("Completed", "Aborted by user",
+                // "Run stopped…") — the honest terminal label, reused verbatim
+                // by the outcome record instead of being re-derived.
+                terminalCaption := ""
+
+                captureTerminal := func(a agent.Activity) {
+                        if a.Type == "done" || a.Type == "complete" {
+                                tl.donePublished = time.Now()
+
+                                if a.Caption != "" {
+                                        terminalCaption = a.Caption
+                                }
+                        }
+                }
 
                 // 1.1.6 §4: the run carries the session's own context
                 // policy — the orchestrator plans, gates and sends the
@@ -1453,7 +1561,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         ctx,
                         messages,
                         func(a agent.Activity) {
+                                a = stampRun(a)
                                 hub.publish(a)
+
+                                captureTerminal(a)
 
                                 // Persist milestone events only. Streaming response/reasoning
                                 // deltas are intentionally not persisted individually because
@@ -1490,13 +1601,27 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 )
 
                 if err != nil {
-                        hub.publish(agent.Activity{
+                        settle("error", err.Error(), false, len(res.Text), len(res.Reasoning))
+
+                        hub.publish(stampRun(agent.Activity{
                                 Type:      "error",
                                 Caption:   err.Error(),
                                 Timestamp: time.Now(),
-                        })
+                        }))
 
                         return
+                }
+
+                // v1.2.6: settle the outcome from REAL signals — the run
+                // context's cancellation state (abort) and the orchestrator's
+                // own terminal caption, never a re-derived guess.
+                resultOutcome := "done"
+                if ctx.Err() != nil {
+                        resultOutcome = "aborted"
+                }
+
+                if terminalCaption == "" {
+                        terminalCaption = "Completed"
                 }
 
                 // Append assistant reply.
@@ -1511,19 +1636,25 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         ); err != nil {
                                 // v1.1.4Z: a lost reply is a REAL failure the
                                 // user must see, not a swallowed error.
-                                hub.publish(agent.Activity{
+                                hub.publish(stampRun(agent.Activity{
                                         Type:      "error",
                                         Caption:   "The reply was generated but could not be saved to the session: " + err.Error(),
                                         Timestamp: time.Now(),
-                                })
+                                }))
 
                                 logging.Default().Error(
                                         "api",
                                         "append assistant reply: %v",
                                         err,
                                 )
+
+                                settle("error", "reply persistence failed: "+err.Error(), false, len(res.Text), len(res.Reasoning))
                         }
                 }
+
+                tl.persistedAt = time.Now()
+
+                settle(resultOutcome, terminalCaption, res.Text != "", len(res.Text), len(res.Reasoning))
 
                 // Index completed exchange into persistent recall.
                 if s.recall != nil && res.Text != "" {
@@ -1738,9 +1869,25 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                 }
         }()
 
-        idleSentinel := map[string]any{
-                "type":    "idle",
-                "caption": "No active run",
+        idleSentinel := func() map[string]any {
+                // v1.2.6: the idle sentinel now carries the AUTHORITATIVE last
+                // run outcome (bounded registry). A socket that attaches after
+                // a run finished — the exact case that previously left the UI
+                // stuck with no visible answer — receives the evidence it needs
+                // to finalise: runId, end time, outcome and whether a reply was
+                // persisted. Legacy fields stay identical for old clients.
+                frame := map[string]any{
+                        "type":    "idle",
+                        "caption": "No active run",
+                }
+
+                if s.outcomes != nil {
+                        if last, ok := s.outcomes.latest(sessionID); ok {
+                                frame["lastRun"] = last
+                        }
+                }
+
+                return frame
         }
 
         for {
@@ -1780,7 +1927,7 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                         }
 
                         // Run finished: fall through to standby.
-                        _ = conn.WriteJSON(idleSentinel)
+                        _ = conn.WriteJSON(idleSentinel())
                 }
 
                 // Standby: park the connection until a run starts, an engine
@@ -1788,7 +1935,7 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                 // is due.
                 sc := s.enterStandby(sessionID)
 
-                _ = conn.WriteJSON(idleSentinel)
+                _ = conn.WriteJSON(idleSentinel())
 
                 disconnected := false
 

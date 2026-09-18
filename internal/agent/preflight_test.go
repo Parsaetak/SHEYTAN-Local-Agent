@@ -60,7 +60,10 @@ func TestPreflightImpossibleBudgetNeverCallsEngine(t *testing.T) {
         orch.Register(bigTool{name: "shell", desc: strings.Repeat("huge schema. ", 800)})
 
         _, err := orch.RunDetailed(context.Background(), []llm.Message{
-                {Role: "user", Content: "hello"},
+                // v1.2.6: the task names the shell tool — under the task-selective
+                // surface that is an explicit capability signal, so the huge shell
+                // schema rides the request and the budget stays impossible.
+                {Role: "user", Content: "run the shell tool"},
         }, func(_ Activity) {})
 
         if err == nil {

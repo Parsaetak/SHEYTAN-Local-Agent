@@ -310,6 +310,22 @@ const RECONNECT_BASE_DELAY_MS = 1500;
 const RECONNECT_MAX_DELAY_MS = 15000;
 const RECONNECT_MAX_ATTEMPTS = 20;
 
+// v1.2.6: bounded idle-grace re-check. When an idle sentinel arrives inside
+// the attach-race grace window with no run evidence yet, it may be EITHER the
+// harmless standby marker OR the only signal that the run already finished
+// (fast run + late socket). The v1.2.5 code dropped it and never re-checked
+// — the "no visible answer" bug. The re-check fires once when the grace
+// window expires; if there is STILL no run evidence by then, the run is
+// recovered from the authoritative history.
+let idleGraceRecheckTimer: number | null = null;
+
+function clearIdleGraceRecheck(): void {
+  if (idleGraceRecheckTimer !== null) {
+    window.clearTimeout(idleGraceRecheckTimer);
+    idleGraceRecheckTimer = null;
+  }
+}
+
 function clearReconnectTimer(): void {
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer);
@@ -653,6 +669,10 @@ function clearRunFinalizeTimer(): void {
     window.clearTimeout(runFinalizeTimer);
     runFinalizeTimer = null;
   }
+
+  // v1.2.6: the idle-grace re-check shares the run's lifetime — it must
+  // never outlive the run bookkeeping it guards.
+  clearIdleGraceRecheck();
 }
 
 // releaseIdleOwnedResources drops the activity socket and the engine poll
@@ -813,21 +833,130 @@ function scheduleRunFinalisation(sessionId: string, delayMs: number): void {
 // idle frame arriving within the grace window while this run has seen
 // no events yet is that harmless standby marker, not evidence the run
 // is gone; recovering then would abort a live run.
+//
+// v1.2.6 fixes the hole this guard left:
+//   1. The sentinel now carries the backend's AUTHORITATIVE last-run
+//      outcome (runId, endedAt, result, persisted). When the recorded
+//      run ended at/after this run started, that is PROOF the run is
+//      over — recover immediately, grace window or not.
+//   2. A grace-ignored sentinel now arms a BOUNDED re-check at the end
+//      of the grace window: if no run evidence arrived by then either,
+//      the run finalises — the composer can never stay frozen forever.
 const RUN_IDLE_GRACE_MS = 2500;
 
-function recoverRunFromIdle(): void {
+// readLastRunOutcome extracts the v1.2.6 authoritative last-run block from an
+// idle frame (absent on older backends — treated as no evidence).
+function readLastRunOutcome(
+  event: ActivityEvent,
+): { endedAt: number; outcome: string; runId?: string } | null {
+  const lastRun = (event.data as { lastRun?: unknown }).lastRun;
+
+  if (!lastRun || typeof lastRun !== "object") {
+    return null;
+  }
+
+  const value = lastRun as Record<string, unknown>;
+  const endedAt = value.endedAt;
+  const outcome = value.outcome;
+
+  if (typeof endedAt !== "number" || typeof outcome !== "string") {
+    return null;
+  }
+
+  const runId = typeof value.runId === "string" ? value.runId : undefined;
+
+  return { endedAt, outcome, runId };
+}
+
+function recoverRunFromIdle(event: ActivityEvent): void {
   const state = useRuntimeStore.getState();
 
   const runStartedAt = state.runStartedAt;
   const sawRunEvidence = state.streaming !== null || runEventsReceived;
+
+  // v1.2.6 path 1 — authoritative evidence: the backend's own last-run
+  // record ended at/after this run started, so the run is DEFINITIVELY over.
+  // This is exactly the fast-run-late-socket case that used to strand the
+  // UI: the run finished before the socket attached, the sentinel was the
+  // only signal, and the grace guard dropped it.
+  const lastRun = readLastRunOutcome(event);
+
+  if (
+    lastRun &&
+    runStartedAt !== null &&
+    lastRun.endedAt + 500 >= runStartedAt
+  ) {
+    if (runOutcome === null) {
+      switch (lastRun.outcome) {
+        case "error":
+          runOutcome = "lost";
+          break;
+        case "aborted":
+          runOutcome = "aborted";
+          break;
+        default:
+          runOutcome = "done";
+          break;
+      }
+    }
+
+    flushStreaming();
+
+    useRuntimeStore.setState({ running: false });
+
+    if (state.activeSessionId) {
+      scheduleRunFinalisation(state.activeSessionId, 50);
+    } else {
+      useRuntimeStore.setState({ streaming: null, runPhase: "aborted" });
+      runOutcome = null;
+      runAssistantBaseline = null;
+      releaseIdleOwnedResources();
+    }
+
+    return;
+  }
 
   if (
     runStartedAt !== null &&
     !sawRunEvidence &&
     Date.now() - runStartedAt < RUN_IDLE_GRACE_MS
   ) {
-    // Standby-entry marker during the attach race — ignore; the hub
-    // wakes this socket the moment the run registers.
+    // Standby-entry marker during the attach race — ignore for now, but
+    // arm the BOUNDED re-check: if the run produces no evidence by the end
+    // of the grace window, it is recovered (never frozen forever).
+    if (idleGraceRecheckTimer === null) {
+      const dueAt = runStartedAt + RUN_IDLE_GRACE_MS + 200;
+      const delay = Math.max(0, dueAt - Date.now());
+
+      idleGraceRecheckTimer = window.setTimeout(() => {
+        idleGraceRecheckTimer = null;
+
+        const now = useRuntimeStore.getState();
+
+        if (
+          now.running &&
+          now.runStartedAt === runStartedAt &&
+          !now.streaming &&
+          !runEventsReceived
+        ) {
+          // Still no evidence of the run the UI is waiting for — recover
+          // from the authoritative history.
+          runOutcome = runOutcome ?? "lost";
+
+          useRuntimeStore.setState({ running: false });
+
+          if (now.activeSessionId) {
+            scheduleRunFinalisation(now.activeSessionId, 50);
+          } else {
+            useRuntimeStore.setState({ streaming: null, runPhase: "aborted" });
+            runOutcome = null;
+            runAssistantBaseline = null;
+            releaseIdleOwnedResources();
+          }
+        }
+      }, delay);
+    }
+
     return;
   }
 
@@ -961,7 +1090,7 @@ function handleConversationEvent(event: ActivityEvent): void {
       const state = useRuntimeStore.getState();
 
       if (state.running || isLivePhase(state.runPhase)) {
-        recoverRunFromIdle();
+        recoverRunFromIdle(event);
       }
 
       break;
@@ -1638,6 +1767,14 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     runEventsReceived = false;
     resetPendingStreaming();
 
+    // v1.2.6: make sure the activity socket is (re)attaching to THIS
+    // session BEFORE the run registers on the backend. The old code relied
+    // on a mounted consumer keeping the socket open; a socket sitting in
+    // the reconnect backoff (or bound to a stale session) could miss a
+    // fast run entirely — the runId replay now recovers it, but attaching
+    // up front removes the race instead of papering over it.
+    get().connectActivity();
+
     set({
       running: true,
       error: null,
@@ -1721,6 +1858,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     runAssistantBaseline = null;
     runEventsReceived = false;
     resetPendingStreaming();
+
+    // v1.2.6: same socket-attach guarantee as run().
+    get().connectActivity();
 
     set({
       running: true,
