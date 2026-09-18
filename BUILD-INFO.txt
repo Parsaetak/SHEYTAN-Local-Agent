@@ -1,0 +1,37 @@
+SHEYTAN-Local-Agent (SHEYTAN-LA) — UPDATE PACKAGE BUILD INFO
+============================================================
+
+Product:   SHEYTAN-Local-Agent (SHEYTAN-LA, codename Zeta)
+Version:   1.2.7
+Base:      main @ e7591896ed7d3412ca5c690bb840e0ac3b202ea9 (v1.2.6)
+           This package carries the v1.2.7 update as an uncommitted
+           working-tree state applied over that base commit; no v1.2.7
+           Git commit exists yet, so no v1.2.7 SHA is claimed here.
+           The SHA-256 of the base commit's HEAD is recorded above and
+           every changed file is hashed in REPLACEMENT-SHA256.txt.
+Created:   2026-09-19 (UTC)
+Platform:  Authored and verified on Linux x64 (Go 1.26.0, Node 24,
+           CMake 3.30.5); the tree itself is the cross-platform source
+           state the CI builds (Windows x64, Linux x64).
+Purpose:   Complete v1.2.7 update: run-transport terminal-state repair
+           (authoritative lifecycle gate + outcome-record ordering +
+           terminal-recovery fallthrough, root cause of CI run
+           35367243405), three new transport regression tests, release
+           identity synchronised to 1.2.7 across all surfaces, README /
+           agent.md / UPDATE.md / worklog.md updated.
+
+Verification performed on this exact tree (all green):
+  go build -tags headless ./...
+  go test ./internal/... -tags headless -count=1        (42 pkgs)
+  go test -tags headless ./... -run Test -count=1
+  go vet -tags headless ./...
+  go test ./internal/api -tags headless -race (suite looped 15x clean)
+  npm ci / typecheck / lint / test:units (39/39) / build
+  cmake + ctest native/engine                            (12/12)
+  ./scripts/stress-main stress                           (47/47, 0 hangs)
+  node scripts/release-version.mjs --check               (1.2.7)
+  Compiled binary self-report: "SHEYTAN-Local-Agent v1.2.7"
+
+Not included: .git/, node_modules/, dist/, native/engine/build/,
+transient logs, credentials or private data. Frontend assets under
+web/static/ are the freshly rebuilt, git-tracked embedded UI.

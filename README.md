@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.2.3
+Current release:  v1.2.7
 Codename:         Zeta
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
@@ -70,6 +70,32 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.2.7 — Run Transport Terminal-State Repair, CI/Test Stabilisation, Release Consistency
+
+**v1.2.7 is a stabilization release: one real run-transport lifecycle bug fixed at the root, the run-lifecycle audit closed with three new regression tests, every test surface green, and the release identity + documentation re-synchronized. No architectural rewrite, no queue system, no new runtime.**
+
+| Area | What changed |
+|---|---|
+| **Root cause fixed (run transport terminal state)** | The activity WebSocket attach path treated `s.runs[sessionID]` map membership as "a run is active". But between a run's terminal settlement (`live.settleTerminal`) and its deferred registry cleanup (which first releases the run budget and memory-manager tracking) the entry still exists while the run is ALREADY authoritatively terminal. A socket attaching inside that window received a stale terminal `run_snapshot` and then parked on `clientGone` without any terminal marker — the exact CI failure of run 35367243405 (`TestStaleRunEventsFilteredByServer`: "expected idle, got run_snapshot"; reproduced locally at ~1-in-5, 0/15+ after the fix). The attach path now consults the authoritative `runLive` state: a terminal entry falls through to the standby path whose idle sentinel carries the recorded `lastRun` outcome. `runLive` remains the ONE lifecycle authority — no second one was introduced |
+| **Visibility gap closed (outcome registry ordering)** | `settle()` now records the outcome in the bounded registry BEFORE the authoritative state flips terminal. A socket that observes the run as terminal can therefore never miss the `lastRun` block of its idle sentinel (the happens-before edge runs through `settleTerminal`'s mutex) |
+| **Terminal-recovery fallthrough** | A hub that closed before any post-snapshot event existed (e.g. an abort that settles without publishing a terminal activity) previously parked the socket on `clientGone` forever. It now falls through to the idle sentinel (with the recorded outcome) and the standby loop, which attaches to a replacement run the moment one starts |
+| **Regression tests added** | `internal/api/runtransport_v127_test.go`: terminal-registry-entry gate (attached → idle, never a stale snapshot), closed-hub fallthrough (snapshot → idle, no hang), and end-to-end abort-then-attach recovery (idle + recorded outcome, no stale run_snapshot) |
+| **Frontend transport verified** | Re-audited against the fixed server: `attached` ack, `idle` recovery via the authoritative `lastRun` block, terminal-`run_snapshot` finalisation, `runId`+`seq` duplicate filtering, reconnect replay — all compatible; no frontend changes required. The `idle` dispatch is guarded (only meaningful while the UI believes a run is live), so the extra sentinel after a fallthrough is a no-op |
+| **Version** | `1.2.6` → `1.2.7` through the established identity chain (package.json → `release-version.mjs` → config.go / build/config.yml / SIGNATURE); README Installation section corrected to the actual v1.2.x package layout |
+| **Verification** | Go: `go test ./internal/... -tags headless`, `go test ./... -run Test`, `go vet ./...`, race-detector runs on the transport/scheduler/runtime/continuum/sessions packages — all green; the previously flaky `internal/api` suite looped 15× clean. Frontend: typecheck, lint, 39 unit tests, production build. Native engine: cmake + ctest 12/12. Stress: 47/47 scenarios, 0 hangs, 0 crashes |
+
+## v1.2.6 — Authoritative Run Transport, Deterministic Attach, Measured Timing
+
+The missing-answer race was closed at the transport layer: every run owns a bounded authoritative state (`internal/api/runstate.go`: phase, cumulative response/reasoning snapshots, monotonic sequence, exactly-once terminal settle) folded from ONE publisher; the first frame after WebSocket upgrade is an explicit `attached` ack carrying the server clock; every attachment receives a `run_snapshot` (seq/runId-filtered, gapless + duplicate-free replay) before live events; idle sentinels carry the authoritative `lastRun` outcome (bounded per-session ring + LRU); API-side run stages are measured end-to-end; startup no longer blocks on the deep hardware probe; the accelerator resolution carries explicit evidence fields (available / selected / executionVerified / fallback) instead of assuming GPU capability from a DLL. See `worklog.md` (v1.2.6 entries) for the full log.
+
+## v1.2.5 — Adaptive Context Tiers, Thinking Mode, Per-Request Telemetry
+
+Context became evidence-driven instead of pay-per-turn: measured adaptive tiers (FAST/STANDARD/THINKING) start small and escalate on evidence with visible tier escalations, replacing the fixed ~10K-token prefill every trivial turn previously paid; global and per-request tool control; thinking mode with streamed reasoning panels; per-request timing telemetry with honest stage labels. See `worklog.md` (v1.2.5 entries) for measurements.
+
+## v1.2.4 — Faster Data Processing, Memory Reclamation, Workspace, Usability
+
+Faster data processing paths, coordinated memory reclamation (run-aware cache shedding with `TrackRunStart`/`TrackRunEnd`), a genuinely useful Workspace panel and a whole-app usability pass. Packaged as the first `UPDATE` ZIP with a replacement manifest + SHA-256 sheet. See `worklog.md` (v1.2.4 entry).
 
 ## v1.2.3 — CI Engine-Race Fix, Download Manager, Honest Download Progress
 
@@ -346,16 +372,23 @@ cgo) and the full rationale are documented in
 
 # Installation
 
+Windows and Linux x64 portable ZIPs are produced by CI. The Windows package layout (v1.2.x, package root `SHEYTAN-LA`):
+
 ```text
-SHEYTAN-Local-Agent-Windows-x64-v1.1.5Z.zip
-└── SHEYTAN-Local-Agent/
-    ├── SHEYTAN-Local-Agent.exe   (GUI app + embedded UI + HTTP/WS API)
-    ├── sheytan-local-agent.bat   (portable launcher)
-    ├── AI-CONTEXT.md             (the model's operating manual)
-    └── README / LICENSE / SIGNATURE / worklog
+SHEYTAN-LA-v1.2.7-windows-x64.zip
+└── SHEYTAN-LA/
+    ├── SHEYTAN-LA.exe           (GUI app + embedded UI + HTTP/WS API)
+    ├── SHEYTAN-LA.bat           (portable launcher)
+    ├── AI-CONTEXT.md            (the model's operating manual; generated from agent.md)
+    ├── BUILD-INFO.txt           (version, codename, platform, commit)
+    ├── README.md / LICENSE / SIGNATURE
+    ├── models/                  (empty; drop .gguf files here)
+    └── workspace/               (empty; portable Coding Lab workspaces)
 ```
 
-Unzip anywhere and run `SHEYTAN-Local-Agent.exe`. On first launch the app creates its portable data layout next to the executable:
+The Linux package (`SHEYTAN-Local-Agent-Linux-x64-v1.2.7Z.zip`) mirrors this layout under a `SHEYTAN-Local-Agent/` root with a Linux executable. A Windows NSIS installer (`SHEYTAN-LA-v1.2.7-windows-x64-installer.exe`) is produced alongside the portable ZIP.
+
+Unzip anywhere and run the executable. On first launch the app creates its portable data layout next to it:
 
 ```text
 SHEYTAN-Local-Agent/
@@ -513,10 +546,24 @@ yet; the list below is design intent, not shipped capability:
   structured patch → validation gates (structure, references, forbidden
   deletions, version metadata) with the model never the authority on
   correctness.
+- **Durable request queuing** — a persistent job queue between "request
+  accepted" and "run started". THIS IS EXPLICITLY NOT SHIPPED TODAY: the
+  current contract is one active run per session (a newer `POST /api/run`
+  cancels and replaces the active run; an in-flight request can be
+  rejected when inputs are invalid; a request submitted while another
+  run of the SAME session is active is deliberately aborted-and-replaced
+  by design, and a request lost to a process crash is gone — sessions
+  persist, queued intents do not). The planned queue adds a persistent
+  `jobId`, durable state (ACCEPTED → QUEUED → WAITING_FOR_RESOURCES →
+  RUNNING → COMPLETED / FAILED / CANCELED, incl. retry states), FIFO/fair
+  per-session scheduling with bounded concurrency, retry/backoff, crash
+  recovery, idempotent execution, engine/resource gating and full
+  WebSocket/API replay of queue state. See `ARCHITECTURE.md` (Part II)
+  for the design direction.
 
 # Version
 
-`v1.1.5Z` — see `worklog.md` for the complete remediation history and `agent.md` for the engineering handoff context.
+`v1.2.7` — see `worklog.md` for the complete implementation/remediation history and `agent.md` for the engineering handoff context.
 
 # License
 

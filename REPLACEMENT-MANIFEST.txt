@@ -1,99 +1,82 @@
-SHEYTAN-Local-Agent v1.2.6 — CONTINUATION / HARDENING (authoritative run transport, deterministic attach, measured timing, non-blocking startup, explicit accelerator evidence) — Replacement Manifest
+SHEYTAN-Local-Agent v1.2.7 — Run-Transport Terminal-State Repair + CI/Test Stabilisation + Release Consistency — Replacement Manifest
 ==============================================================================================================
-Base: main @ b0ed628 (v1.2.6) — release identity PRESERVED
-Package: SHEYTAN-Local-Agent-v1.2.6-UPDATE.zip
-Apply over a clean checkout of the base commit.
+Base: main @ e7591896ed7d3412ca5c690bb840e0ac3b202ea9 (v1.2.6)
+Package: SHEYTAN-Local-Agent-v1.2.7-UPDATE.zip
+Apply over a clean checkout of the base commit (or any v1.2.6 tree without
+unrelated local modifications).
 
-Status vocabulary: new | modified | replaced
-The per-file reasons, the verification results and the honest
-limitations live in UPDATE.md (§0-§8).
+Status vocabulary: new | modified
+The per-fix reasons, the verification results and the honest
+limitations live in UPDATE.md (§0–§7).
 
 [PACKAGE METADATA]
   UPDATE.md
-    status:   replaced
+    status:   replaced (rewritten for v1.2.7)
     purpose:  this replacement package's bookkeeping
   REPLACEMENT-MANIFEST.txt
-    status:   replaced
+    status:   replaced (regenerated for v1.2.7)
     purpose:  this replacement package's bookkeeping
   REPLACEMENT-SHA256.txt
-    status:   replaced
-    purpose:  this replacement package's bookkeeping
+    status:   replaced (regenerated for v1.2.7)
+    purpose:  SHA-256 sheet of every file in this package
 
-[NEW FILES]
-  internal/api/runstate.go
-    reason:   the AUTHORITATIVE per-run state (phase/running/cumulative snapshots/sequence/terminal outcome) + WS run_snapshot replay — the live-run reconnect root-cause fix
-  internal/api/runtransport_test.go
-    reason:   the run-transport contract tests (attach ack, mid-run snapshot replay without duplication, monotonic seq, stale filtering, terminal replay, bounds)
-  internal/agent/timingmarks_test.go
-    reason:   the measured transport-ladder tests (request_sent/response_headers/first_byte/first_token distinct + ordered, tool stages two moments, provenance)
-  internal/llm/timingmarks_test.go
-    reason:   the client timing-mark emission tests + --device capability/deterministic-selection tests (real enumeration path via a fake engine)
-  internal/sysinfo/startup_test.go
-    reason:   the startup-never-blocks-on-deep-probe tests (measured), single-flight, deep merge, Windows build→label fixtures
-  internal/sysinfo/osdisplay.go
-    reason:   the pure MEASURED build→label mapping (26200 = Windows 11 25H2) — shared, fixture-tested
-
-[MODIFIED FILES]
-  REPLACEMENT-MANIFEST.txt
-    purpose:  v1.2.6 continuation change (see UPDATE.md)
-  REPLACEMENT-SHA256.txt
-    purpose:  v1.2.6 continuation change (see UPDATE.md)
-  UPDATE.md
-    purpose:  v1.2.6 continuation change (see UPDATE.md)
-  agent.md
-    purpose:  the next-agent handoff notes for the v1.2.6 continuation
-  worklog.md
-    purpose:  the v1.2.6 continuation implementation log
-  internal/accelerator/accelerator.go
-    purpose:  explicit evidence state (selected/available/executionVerified/verification/fallback) + explainable Describe()
-  internal/accelerator/accelerator_test.go
-    purpose:  the evidence-state matrix tests (verified gates vs the unverified DLL fallback)
-  internal/agent/orchestrator.go
-    purpose:  Activity.Seq; transport marks folded from the client; fake requestSent/firstByte marks removed; tool_start/tool_end on every path
-  internal/agent/pertiming.go
-    purpose:  StageResponseHeaders + headersMs/firstByteMs + raw stageTimestamps provenance + LastStageTime
-  internal/api/perf.go
-    purpose:  non-blocking recommendations (ProbeFast instead of the deep probe)
-  internal/api/runregistry_test.go
-    purpose:  the late-attach test updated to the new first-frame contract (attached ack, then idle-with-evidence)
+[RUN TRANSPORT FIX]
   internal/api/server.go
-    purpose:  ONE sequence-stamping publisher; attached ack frame; run_snapshot replay with seq/runId filtering; POST returns runId+state; New() serves ProbeFast (startup never blocks on the deep probe)
-  internal/api/sessioncontext.go
-    purpose:  memory assessment reads ProbeFast LIVE (deep facts merge; no stale zero-VRAM snapshot)
-  internal/llm/capability.go
-    purpose:  EngineCaps.DeviceFlag (help-parse + conservative tag fallback, fail-closed)
-  internal/llm/client.go
-    purpose:  StreamEvent.TimingMark — request_sent/response_headers/first_byte measured at the HTTP transport itself
-  internal/llm/llama.go
-    purpose:  deterministic --device selection from the engine's own enumeration (capability-gated, fail-closed)
-  internal/sysinfo/sysinfo.go
-    purpose:  OSBuild/OSDisplay fields + fastOSIdentity wiring + the deep-probe test seam
-  internal/sysinfo/sysinfo_fast_other.go
-    purpose:  fastOSIdentity stub (honest unknown off Windows)
-  internal/sysinfo/sysinfo_fast_windows.go
-    purpose:  MEASURED Windows identity via RtlGetVersion (in-process, no spawn)
-  src/SystemPanel.tsx
-    purpose:  HealthCard rides the shared "health" resource (no more uncached duplicate fetch)
-  src/api.ts
-    purpose:  RunResponse.state (the authoritative POST-time run state)
-  src/resources.test.ts
-    purpose:  shared-ownership/cancellation tests (unmount never aborts a needed request; unused requests eventually abort)
-  src/resources.ts
-    purpose:  subscriber-counted request ownership + bounded abort grace + timer cleanup
-  src/run-events.test.ts
-    purpose:  attached/run_snapshot are transport control frames, never run evidence
-  src/store.ts
-    purpose:  the deterministic attach contract (await the attached ack before POST); run_snapshot replay handling; runId/seq stale filtering; resets on session switches
-  web/static/.vite/manifest.json
-    purpose:  rebuilt frontend asset (npm run build)
-  web/static/assets/*
-    purpose:  rebuilt frontend assets (npm run build)
-  web/static/index.html
-    purpose:  rebuilt frontend asset (npm run build)
+    status:   modified
+    reason:   AUTHORITATIVE LIFECYCLE GATE on the WS attach fast path —
+              map membership is no longer "run active"; a terminal-but-
+              registered entry (settleTerminal → deferred delete window,
+              widened by MemMgr.TrackRunEnd) falls through to the idle
+              sentinel with the recorded lastRun outcome. Root cause of
+              CI run 35367243405 (TestStaleRunEventsFilteredByServer:
+              "expected idle, got run_snapshot"). Also: settle() records
+              the outcome BEFORE live.settleTerminal() (terminal-visible
+              ⇒ outcome recorded), and the post-drain served==false
+              branch falls through to idle + standby instead of parking
+              on clientGone forever.
 
-[DELETED FILES]
-  Apply procedure deletes these stale hashed frontend assets
-  (replaced by the rebuilt bundle — web/static is go:embedded, so
-  stale files MUST be removed to keep the binary clean):
-  DELETE web/static/assets/index-wqpsY0yO.js
-  DELETE web/static/assets/useResource-DCdLFELl.js
+[REGRESSION TESTS]
+  internal/api/runtransport_v127_test.go
+    status:   new
+    reason:   pins the v1.2.7 contracts: terminal-registry-entry gate
+              (attached → idle, never a stale snapshot), closed-hub
+              fallthrough (snapshot → idle, no hang), end-to-end
+              abort-then-attach recovery (idle + recorded outcome).
+
+[RELEASE IDENTITY]
+  package.json
+    status:   modified
+    reason:   source of truth 1.2.6 → 1.2.7
+  package-lock.json
+    status:   modified
+    reason:   follows npm version bump (1.2.7)
+  internal/config/config.go
+    status:   modified
+    reason:   AppVersion = "1.2.7" (release-version.mjs repair)
+  build/config.yml
+    status:   modified
+    reason:   productVersion: "1.2.7" (release-version.mjs repair)
+  SIGNATURE
+    status:   modified
+    reason:   first line SHEYTAN-Local-Agent v1.2.7 (release-version.mjs repair)
+
+[DOCUMENTATION]
+  README.md
+    status:   modified
+    reason:   Current release block v1.2.7; v1.2.7 release log added plus
+              the missing v1.2.4–v1.2.6 history summaries; Installation
+              corrected to the ACTUAL v1.2.x package layout (SHEYTAN-LA
+              root, SHEYTAN-LA.exe, BUILD-INFO.txt, models/, workspace/);
+              durable request queue documented as PLANNED with the current
+              cancel-and-replace contract stated honestly; # Version
+              section corrected (was stale at v1.1.5Z)
+  agent.md
+    status:   modified
+    reason:   v1.2.7 release line + next-agent notes (lifecycle gate,
+              outcome-record ordering, terminal fallthrough, regression
+              locks, queue honesty)
+  worklog.md
+    status:   modified
+    reason:   Current State → v1.2.7; v1.2.7 implementation log
+              (reproduction, root cause, changes, verification matrix,
+              honest limitations)

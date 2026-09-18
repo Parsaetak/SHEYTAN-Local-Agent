@@ -1,43 +1,21 @@
-72a17a916e98f5b5797d319e151dc73204fdff0e89a97af0f7bc57c7156a8361  REPLACEMENT-MANIFEST.txt
-92ffac22b3107e681c8b0cc808bcd2dce52830b26b29e8b1a6e61c040fb9850b  agent.md
-0feb22aad9564497891f83ff91b1f9b5454131c258011cdc6937d69c14dd76a5  internal/accelerator/accelerator.go
-603d4e66224f1a3f559fa24437261f0bebaf270347b2964e28739b64ca420db0  internal/accelerator/accelerator_test.go
-b1b9ea3bbcbe374ecd8722494952b77611bab38297264db23f00600b110aaae8  internal/agent/orchestrator.go
-6c1978a7a9cba9125d72c3edcaf378090763dbc8a0ec6cbeaabe5ff8c2e96d76  internal/agent/pertiming.go
-ab22c8007fbe063169ee72a3faf4c722b45284f4af6042bfab65b2ccabf51a04  internal/agent/timingmarks_test.go
-8111ce927ae3a44863b3d9a6afe2231af12933a4fa2b4909f93c2824cce715bd  internal/api/perf.go
-d093999723218155c5811bd5e9eb5c3722c4db3e7c024e91105f008a85ae13ea  internal/api/runregistry_test.go
-d169316c33814cfd0e6dbc2c6b19670ada47288dfa462e79651e13b9a891cff0  internal/api/runstate.go
-0586196ec34a491c6c5520f468401c6058447878786f343623524b5ac0515e5f  internal/api/runtransport_test.go
-d461d46c38e95d3a55875206fc8a0cac08ca6091b9fd6e1ca976376b2b655e25  internal/api/server.go
-4c790466260be201db036591b144187fa8637586131a7ede39bbe4132b2335c4  internal/api/sessioncontext.go
-2897f400e58a132c89883fb42e50ed335676ec51e07569d43d5564e0bc80ed44  internal/llm/capability.go
-4b520cec5cb560c2eb1ad249d99f85d7f5ed6e28c75c93fe00bbd228755b4778  internal/llm/client.go
-aad3a94f2e64f81707fb71c3d85f7bc063a715f5190171c2500f205c3812056f  internal/llm/llama.go
-6edd0295ebf1d3f31d028e98ec7b571157807dce1722dd1fc3b9c72a05eae244  internal/llm/timingmarks_test.go
-02c964f68604d4c9ef0d109e4c969ecc1b8539d39db2ca95799a623805e7f1e2  internal/sysinfo/osdisplay.go
-f56a2b73812acb3b3fdef91e81d8efac2c63ecb73735d81f959b8b60f4f069eb  internal/sysinfo/startup_test.go
-e843960417a7f65a3fb82154395ec7932aa92489a349e84b9787774af144d738  internal/sysinfo/sysinfo.go
-8b61c25e22c3e999a17e2ad22d84c0f606e9328f0f41aaf52ee624c460a52376  internal/sysinfo/sysinfo_fast_other.go
-348a95be78e9392e93988dad80c7fe5d3f65b4cac1e869eab3b90395d2c45562  internal/sysinfo/sysinfo_fast_windows.go
-ddae26ce783409a8620d07424c86a76ca66639141daad0882f6edd299f61bed4  src/SystemPanel.tsx
-bbb480c180e1aae5b00f9cb3d46df9e95433c8383c117dc17aca768caeec5e3d  src/api.ts
-6dab6f6c7736cac33147261aa71d7483fdf185ead85e6b1a961ff34ef8fc9803  src/resources.test.ts
-cfaec1ad78bfd061093f66dbb87e6a6c0f2e4cd045f869d1377eaf44b9429d3f  src/resources.ts
-bbf91bb79f8ab42b885ea46a029e8db771842765b7bd3a808bb983ad884c776f  src/run-events.test.ts
-06cddf1755fbfc84baf39670f22059b0a927a3b58c33ea337593623bbed33895  src/store.ts
-fb68034e60255895983ae0823e4e479c5e4f005829b7386054cfc18106e64ce0  web/static/.vite/manifest.json
-47184513fb18a9a5310fef93bd20f0e582033e607c83a378a9b1049c0a162ff4  web/static/assets/AgentBody-s8WfnwZL.js
-ce2ed684baefecdae69102e95f0d7c8ead2fed48be507b2cd5cd2e5c44715f6a  web/static/assets/AgentHeader-B6AlhKcc.js
-5fd8cd56701e462f2a46fcd3a997277670a4778d6fe5b176ae883fc553a9caad  web/static/assets/AgentSidebar-CbtEEXLc.js
-8cc6005497753c61e35e9e8d5ec3b7813dd75612f055c182e844b1cd40318584  web/static/assets/DownloadProgress-CSlZTHkD.js
-396a6101dcb873dbcb661001be678aeecd2332a55fb75552ea3a36d681c931db  web/static/assets/LabPanel-BI385qNA.js
-b8d9285ed41a02e2b2582849e12eabd00d5870565c559edf5e75e5a94b733630  web/static/assets/ResearchPanel-BfOiM21f.js
-c7dc8ed992e958a079facd2b651c96febf8a4729629bd8901ede2aed5cbae4c7  web/static/assets/SettingsPanel-CmCMhghw.js
-d3d5629998f8549b7cf0f0e5d6e81313a75a5066c873188950b4dd9495c32b8a  web/static/assets/SystemPanel-IQFWlS0v.js
-2ea9745a2784462ab33e1b6a1ca6c807004d335fa2b83a49d2b79647d598fc5f  web/static/assets/WorkspacePanel-D1CwnDVZ.js
-741566784e97892a8b4b16ff834226ae85a22f6b121d769c65700a935cd2084e  web/static/assets/index-5oqPjJgJ.css
-9ef833d6b0675da265e2862dfabc6e79f3b933e7aadd302ce03383a118339b5e  web/static/assets/index-bI_GOQqE.js
-21f3a4a60f2fd73c953c493d3be879d91c87dab2a468cb2f34e980a2acc44248  web/static/assets/useResource-Du6nCvvN.js
-e0ecef48887f6784973669fc07a5dcf520d25436377d999837194c339d30d45d  web/static/index.html
-8a20f6a8b1f620c09977e2b975288787f1c04e803dadc11df96b58aa522c0c41  worklog.md
+SHEYTAN-Local-Agent v1.2.7 — Replacement SHA-256 Sheet
+==============================================================================================================
+Base: main @ e7591896ed7d3412ca5c690bb840e0ac3b202ea9 (v1.2.6)
+Package: SHEYTAN-Local-Agent-v1.2.7-UPDATE.zip
+Every file listed in REPLACEMENT-MANIFEST.txt, hashed at package time.
+Verify after extraction with: sha256sum -c REPLACEMENT-SHA256.txt
+(the file hashes itself; a line reading FAILED means the package was
+tampered with or truncated in transit).
+
+9a0ae8a6887e2d80d284091a98fbf826c331a603f0061aef336bf52ddac07b4d  README.md
+533ef4363172350df597a989005fc3949067ae6c1c846010df4829195fcca140  SIGNATURE
+de9a1088a47edadbe9e3e6687cc1ec8ee49746bdac5d7b5ef40e7d4b4590a3a4  UPDATE.md
+30373a8e932ebc61027244af8e338e04c7caaf5332779ad1c0ee2f5dbb12a9b3  agent.md
+f385426d5d9d65dde4719351fde206d73e2634e594bed78b6d17301450f5cffd  build/config.yml
+6a99764f0460322f59bd746368e4d4a4c2af051e8f2c3118ebd406256019e009  internal/api/server.go
+67cfae4423842ff515be2598a4ccd781d3ed7c513bb4830cdd4617123c0b4cee  internal/api/runtransport_v127_test.go
+c5fed4f0189688356e410ce72eb8cd6f76f36542b9282014e6c1eb134ae4d2d0  internal/config/config.go
+51ef53a13d253ca9f3c5f7bc72c1aabb2f83bd213fb9313d97f09952a52b0685  package.json
+27f88b6a70781f5c0608f3586bd80a5f161a13e81ab097d40a9299679c40bb19  package-lock.json
+fffa4461a81f58ea77a97d5783a4e9a596b7e2a5bf1b73af07b4ff57f4c9bd23  worklog.md
+4d45ed8b3c4460c0066caaad871c3721d7b86c1cbb93fc4bc3796164e79b5c2c  REPLACEMENT-MANIFEST.txt

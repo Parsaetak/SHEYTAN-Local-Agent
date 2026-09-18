@@ -2,7 +2,7 @@
 
 ## Current State
 
-Date: 2026-09-18 (v1.2.6: the missing-answer repair, honest context tiers, progressive UI, batched hardware probe, evidence-based accelerator resolution; v1.2.6 log first below)
+Date: 2026-09-19 (v1.2.7: the run-transport terminal-state repair, run-lifecycle audit closure, CI/test stabilisation, release consistency; v1.2.7 log first below)
 
 Repository:
 
@@ -15,21 +15,123 @@ Branch: `main`
 Current release:
 
 ```text
-v1.2.6
+v1.2.7
 ```
 
-v1.2.6 is the **verified-runtime repair** release. The v1.2.5 field
-report — "simple prompts complete but no answer is visible; Settings and
-System feel slow; a 1-word prompt cost 1.1K tokens on FAST and 13K on
-THINKING; the Windows hardware probe measured 5,399 ms; GPU acceleration
-was assumed from a Vulkan DLL" — was root-caused from source evidence and
-fixed at the root. See the v1.2.6 log (first below) for every change,
-measurement and honest limitation. The v1.1.5Z native-engine line remains
-authoritative below (phases 1–6: backend abstraction, native GGUF
-loading, memory-efficient data pipeline, engine primitives, REAL native
-transformer inference, reliability/verification/safe-edits core).
-llama.cpp remains the default generation engine; the native engine serves
-the narrow, honestly-documented llama-architecture path.
+v1.2.7 is the **run-transport terminal-state repair + stabilisation**
+release. The CI failure of run 35367243405
+(`TestStaleRunEventsFilteredByServer`: "expected idle, got
+run_snapshot") was reproduced, root-caused and fixed at the root: the
+activity WebSocket attach path now consults the authoritative `runLive`
+state instead of treating registry map membership as "run active", the
+outcome registry is recorded before the terminal flip, and a hub that
+closes without forwardable events falls through to the idle sentinel
+instead of stranding the socket. Three regression tests pin the
+contracts; the durable request queue remains documented design intent
+(NOT shipped). See the v1.2.7 log (first below) for every change and
+the full verification matrix. The v1.2.6 line below remains
+authoritative for the authoritative run transport, measured timing and
+evidence-based accelerator resolution. The v1.1.5Z native-engine line
+remains authoritative below (phases 1–6). llama.cpp remains the default
+generation engine; the native engine serves the narrow,
+honestly-documented llama-architecture path.
+
+---
+
+# v1.2.7 Implementation Log (2026-09-19)
+
+Baseline: `main @ e7591896ed7d3412ca5c690bb840e0ac3b202ea9` (v1.2.6).
+
+## Failure reproduced (before any edit)
+
+- CI run 35367243405 ("Build Desktop" #73, push of v1.2.6, HEAD
+  e759189) failed with `TestStaleRunEventsFilteredByServer`: "expected
+  idle, got run_snapshot".
+- Locally: the test PASSES in isolation (`go test ./internal/api -run
+  TestStaleRunEventsFilteredByServer -count=1 -v`) and the full package
+  run fails ~1 in 5 (loop of 8 caught it on iteration 8; a second loop
+  of 5 caught it once). A shared-state ordering race, not a broken
+  assertion.
+
+## Root cause (source-audited, not guessed)
+
+- The WS attach fast path (internal/api/server.go, `handleActivityWS`)
+  used `s.runs[sessionID]` map membership as "a run is active".
+- The run goroutine's exit path is: `settle()` (authoritative terminal
+  flip via `live.settleTerminal` + outcome record) → deferred cleanup:
+  `budgetCancel()` → `MemMgr.TrackRunEnd()` (telemetry persistence —
+  the WIDE part of the window) → map delete → `hub.close()` →
+  `cancel()`. Between the terminal flip and the delete, the entry
+  exists while `live.snapshot().Running == false`.
+- A socket attaching inside that window received a stale terminal
+  `run_snapshot`, drained a hub that closes with no forwardable events
+  (`served == false`), and the old code then blocked on `<-clientGone`
+  — no terminal marker, UI stranded. (The abort path settles without
+  publishing a terminal activity, so it hit the same park.)
+- Secondary gap: `s.outcomes.record` ran AFTER `live.settleTerminal`
+  inside `settle()`, so a terminal-visible run could (for a few
+  instructions) have no `lastRun` block ready for its idle sentinel.
+
+## Changes (all inside the existing architecture)
+
+- internal/api/server.go — AUTHORITATIVE LIFECYCLE GATE: after the map
+  lookup, `if ok && rs != nil && rs.live != nil &&
+  !rs.live.snapshot().Running { ok = false }`. Terminal entries fall
+  through to the standby path whose idle sentinel carries the recorded
+  `lastRun` outcome. runLive stays the ONE lifecycle authority.
+- internal/api/server.go — `settle()` now records the outcome BEFORE
+  `live.settleTerminal()` flips the state terminal: terminal-visible ⇒
+  outcome recorded, for every observer (happens-before via
+  settleTerminal's mutex).
+- internal/api/server.go — terminal-recovery fallthrough: the
+  post-drain `served == false` branch no longer parks on
+  `<-clientGone`; the socket falls through to the idle sentinel and the
+  standby loop (which re-checks the runs map and attaches to a
+  replacement run). The write-failure clientGone check is preserved.
+- internal/api/runtransport_v127_test.go (NEW) — three regression
+  tests: terminal-registry-entry gate (attached → idle, never a stale
+  snapshot), closed-hub fallthrough (snapshot → idle, no hang),
+  end-to-end abort-then-attach recovery (idle + recorded outcome).
+- Version 1.2.6 → 1.2.7 via the identity chain (npm version +
+  release-version.mjs repair of internal/config/config.go,
+  build/config.yml, SIGNATURE; package-lock.json follows npm).
+- README.md — Current release block to v1.2.7; the v1.2.7 release log
+  added plus the missing v1.2.4–v1.2.6 history summaries; the
+  Installation section corrected to the ACTUAL v1.2.x package layout
+  (SHEYTAN-LA root, SHEYTAN-LA.exe, BUILD-INFO.txt, models/,
+  workspace/); the durable request queue documented as PLANNED with the
+  current cancel-and-replace contract stated honestly; `# Version`
+  section corrected (was stale at v1.1.5Z).
+- agent.md — v1.2.7 release line + next-agent notes (lifecycle gate,
+  record ordering, fallthrough, regression locks, queue honesty).
+- UPDATE.md — rewritten for the v1.2.7 update package.
+
+## Verification performed (all executed)
+
+- go build -tags headless ./... — OK
+- go test ./internal/... -tags headless -count=1 — PASS (all packages)
+- go test -tags headless ./... -run Test -count=1 — PASS
+- go vet -tags headless ./... — PASS
+- go test ./internal/api -tags headless -race — PASS; the previously
+  flaky suite looped 15× clean after the fix (was failing ~1 in 5)
+- go test -race on scheduler/runtime/continuum/sessions — PASS
+- npm ci (0 vulnerabilities), npm run typecheck, npm run lint (0/0),
+  npm run test:units (39/39), npm run build — PASS
+- cmake -S native/engine -B native/engine/build && cmake --build &&
+  ctest --output-on-failure — 12/12 PASS
+- go run ./scripts/stress-main stress — 47/47 PASS, 0 hangs, 0 crashes
+- node scripts/release-version.mjs --check — PASS (all surfaces 1.2.7)
+
+## Honest limitations (unchanged)
+
+- Implemented and tested on Linux; Windows-only paths compile
+  (GOOS=windows gate) and their parsers are fixture-tested, but
+  real-hardware Windows validation was NOT performed by this agent.
+- The durable request queue is NOT implemented; the current contract
+  (one active run per session, cancel-and-replace) is documented
+  honestly in README/agent.md/UPDATE.md.
+- No GPU/NPU behaviour is claimed beyond what the v1.2.6
+  evidence-based accelerator resolution measures.
 
 ---
 

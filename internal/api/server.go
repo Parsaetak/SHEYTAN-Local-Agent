@@ -1473,14 +1473,24 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         outcome.ReplyChars = len(replyText)
                         outcome.ReasonChars = len(reasonText)
 
+                        // v1.2.7: record the outcome BEFORE the authoritative
+                        // state flips terminal. This closes the last visibility
+                        // gap of the v1.2.6 design: a socket that observes the
+                        // run as terminal (live.snapshot().Running == false,
+                        // set by settleTerminal below) can then never miss the
+                        // lastRun block of its idle sentinel — the outcome is
+                        // already in the bounded registry at that moment.
+                        // The happens-before edge runs through settleTerminal's
+                        // mutex, so every reader of the terminal state also
+                        // observes the recorded outcome.
+                        if s.outcomes != nil {
+                                s.outcomes.record(sess.ID, outcome)
+                        }
+
                         // v1.2.6 continuation: the AUTHORITATIVE terminal
                         // state (with the persisted reply snapshots a
                         // late-attaching socket replays).
                         live.settleTerminal(result, caption, persisted, replyText, reasonText)
-
-                        if s.outcomes != nil {
-                                s.outcomes.record(sess.ID, outcome)
-                        }
 
                         ms := func(a, b time.Time) int64 {
                                 if a.IsZero() || b.IsZero() || b.Before(a) {
@@ -1957,6 +1967,26 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                 rs, ok := s.runs[sessionID]
                 s.runsMu.Unlock()
 
+                // v1.2.7: AUTHORITATIVE LIFECYCLE GATE. Map membership alone
+                // is NOT "a run is active": between a run's terminal
+                // settlement and its registry cleanup the entry still exists
+                // while the run is already authoritatively terminal
+                // (live.snapshot().Running == false — the deferred cleanup
+                // releases the run budget and the memory-manager run tracking
+                // BEFORE it deletes the entry). A socket attaching inside
+                // that window previously received a stale terminal
+                // run_snapshot and then parked on clientGone without any
+                // terminal marker — the exact CI failure of run 35367243405
+                // (TestStaleRunEventsFilteredByServer: "expected idle, got
+                // run_snapshot"). The authoritative runLive state decides:
+                // a terminal entry falls through to the standby path, whose
+                // idle sentinel carries the recorded lastRun outcome.
+                // runLive remains the ONE lifecycle authority — no second
+                // one is introduced here.
+                if ok && rs != nil && rs.live != nil && !rs.live.snapshot().Running {
+                        ok = false
+                }
+
                 if ok {
                         // v1.2.6 continuation: AUTHORITATIVE REPLAY.
                         //
@@ -2033,10 +2063,19 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                                         return
                                 default:
                                 }
-                        } else {
-                                <-clientGone
-                                return
                         }
+
+                        // v1.2.7: a hub that closed before ANY post-snapshot
+                        // event existed means everything the run published is
+                        // already folded into the snapshot this socket holds.
+                        // The previous behavior parked on clientGone here,
+                        // stranding such a socket without a terminal marker
+                        // (the abort path, for one, settles without publishing
+                        // a terminal activity). Fall through to the idle
+                        // sentinel — it carries the recorded lastRun outcome —
+                        // and the standby loop below, which re-checks the runs
+                        // map and attaches to a replacement run the moment one
+                        // starts.
 
                         // Run finished: fall through to standby.
                         _ = conn.WriteJSON(idleSentinel())
