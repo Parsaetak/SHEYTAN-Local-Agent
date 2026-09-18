@@ -60,3 +60,10 @@ func fastDisk(path string) DiskInfo {
 func cimBatch() (cimFacts, error) {
         return cimFacts{}, nil
 }
+
+// fastOSIdentity on non-Windows platforms: no build number is measured
+// (the honest unknown — 0). The display label is the plain GOOS value;
+// nothing is invented.
+func fastOSIdentity() (int, string) {
+        return 0, runtime.GOOS
+}

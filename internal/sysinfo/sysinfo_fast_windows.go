@@ -62,3 +62,44 @@ func fastDisk(path string) DiskInfo {
 
 	return d
 }
+
+// --- v1.2.6 continuation: MEASURED Windows identity -------------------------
+//
+// The brief warns: "Build 26200 is currently associated with Windows 11
+// 25H2, so do not trust a stale manually labelled 'Windows 10' value."
+// There is no manual label anywhere in this codebase — and there never
+// will be: the identity is MEASURED in-process via RtlGetVersion (the
+// documented, lie-proof API — unlike GetVersionEx it is not subject to
+// manifest compatibility shims) and the display label is DERIVED from the
+// measured build by the pure, fixture-tested mapping below.
+
+// osVersionInfo mirrors the RTL_OSVERSIONINFOW layout RtlGetVersion fills.
+type osVersionInfo struct {
+	Size       uint32
+	Major      uint32
+	Minor      uint32
+	Build      uint32
+	PlatformID uint32
+	CSD        [128]uint16
+}
+
+var procRtlGetVersion = windows.NewLazySystemDLL("ntdll.dll").NewProc("RtlGetVersion")
+
+// fastOSIdentity measures the REAL Windows version (build number) in
+// process — no spawn, no registry read, no compatibility manifest lies.
+// The build number is authoritative; the display label derives from it.
+func fastOSIdentity() (int, string) {
+	var info osVersionInfo
+	info.Size = uint32(unsafe.Sizeof(info))
+
+	ret, _, _ := procRtlGetVersion.Call(uintptr(unsafe.Pointer(&info)))
+	if ret != 0 {
+		// RtlGetVersion does not fail in practice; the honest unknown
+		// beats an invented number.
+		return 0, "unknown"
+	}
+
+	build := int(info.Build)
+
+	return build, WindowsDisplayForBuild(build)
+}

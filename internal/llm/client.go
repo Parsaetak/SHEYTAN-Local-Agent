@@ -526,7 +526,30 @@ type StreamEvent struct {
                 CompletionTokens int `json:"completion_tokens"`
                 TotalTokens      int `json:"total_tokens"`
         }
+
+        // TimingMark (v1.2.6 continuation) carries a TRANSPORT-level timing
+        // observation from the HTTP streaming client to its consumer — the
+        // moment itself, measured where it happens, never derived from
+        // content deltas:
+        //
+        //      "request_sent"     — the request was handed to the transport
+        //      "response_headers" — the response headers arrived
+        //      "first_byte"       — the first body byte was READ off the wire
+        //
+        // A TimingMark event carries no content; consumers fold it into their
+        // own clock. Emitted by streamOnce (llm client), consumed by the agent
+        // RunClock (internal/agent/orchestrator.go).
+        TimingMark string `json:"-"`
 }
+
+// Transport timing marks (StreamEvent.TimingMark values). The strings are
+// the agent package's stage names — kept in sync deliberately so the mark
+// maps 1:1 onto RunClock stages.
+const (
+        TimingMarkRequestSent    = "request_sent"
+        TimingMarkResponseHeader = "response_headers"
+        TimingMarkFirstByte      = "first_byte"
+)
 
 // PerfStats is the live speed telemetry of one streaming call (v1.0.4
 // Speed Pack): time-to-first-token and tokens/sec, LM Studio-style — what
@@ -635,8 +658,15 @@ func (c *Client) StreamChatDetailed(ctx context.Context, req *ChatRequest, onEve
                 // per-attempt telemetry
                 tr := newTokenTimer()
                 lastErr = c.streamOnce(ctx, req, body, func(ev StreamEvent) error {
-                        emitted = true
-                        tr.observe(ev)
+                        // v1.2.6 continuation: transport timing marks are
+                        // observations, not content — they never count as
+                        // "emitted" for the retry rule (retrying a stream
+                        // that only produced a request_sent mark is safe:
+                        // no content was seen).
+                        if ev.TimingMark == "" {
+                                emitted = true
+                                tr.observe(ev)
+                        }
                         return onEvent(ev)
                 })
                 perf = tr.stats()
@@ -755,6 +785,17 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
         httpReq.Header.Set("Accept", "text/event-stream")
 
         start := time.Now()
+
+        // v1.2.6 continuation: MEASURED transport timing. request_sent is
+        // the moment the request is handed to the transport — the caller's
+        // clock learns the REAL send time (the previous code marked it
+        // before the request was even built). Emitted through onEvent so
+        // every routing seam (GenerationStream router, native fallback)
+        // observes it without signature churn.
+        if err := onEvent(StreamEvent{TimingMark: TimingMarkRequestSent}); err != nil {
+                return err
+        }
+
         // v1.1.4Z: streaming uses the timeout-free client — the overall
         // bound is the caller's context plus the stall watchdog below.
         resp, err := c.streamHTTP.Do(httpReq)
@@ -764,6 +805,12 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
                 return err
         }
         defer resp.Body.Close()
+
+        // response_headers: the server answered — headers are on the wire.
+        if err := onEvent(StreamEvent{TimingMark: TimingMarkResponseHeader}); err != nil {
+                return err
+        }
+
         if resp.StatusCode != 200 {
                 buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
                 err := fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
@@ -773,6 +820,11 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 
         // Non-SSE fallback: server returned plain JSON despite stream=true.
         if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.Contains(ct, "text/event-stream") {
+                // The body read starts here — the first bytes are on the wire.
+                if err := onEvent(StreamEvent{TimingMark: TimingMarkFirstByte}); err != nil {
+                        return err
+                }
+
                 var out ChatResponse
                 if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
                         c.logCall(req, start, 0, 0, "", err)
@@ -843,6 +895,20 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
         var finishReason string
         var streamErr error
 
+        // firstByteSeen latches the one-time first_byte mark: the first
+        // scanner.Scan() returning a line IS the read of the first body
+        // bytes off the network (a keep-alive comment line counts exactly
+        // as much as a data line — both are network bytes).
+        firstByteSeen := false
+
+        markFirstByte := func() error {
+                if firstByteSeen {
+                        return nil
+                }
+                firstByteSeen = true
+                return onEvent(StreamEvent{TimingMark: TimingMarkFirstByte})
+        }
+
         emit := func(ev StreamEvent) error {
                 contentChars += len(ev.Content)
                 if ev.FinishReason != "" {
@@ -857,6 +923,11 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 
         for scanner.Scan() {
                 atomic.StoreInt64(&lastData, time.Now().UnixNano())
+
+                if err := markFirstByte(); err != nil {
+                        streamErr = err
+                        return err
+                }
 
                 line := scanner.Bytes()
                 if !bytes.HasPrefix(line, sseDataPrefix) {

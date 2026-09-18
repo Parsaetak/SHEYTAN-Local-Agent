@@ -112,6 +112,14 @@ type Server struct {
 type runState struct {
         cancel context.CancelFunc
         hub    *activityHub
+
+        // live (v1.2.6 continuation) is the AUTHORITATIVE per-run state —
+        // phase, running, cumulative response/reasoning snapshots, latest
+        // status, monotonic sequence, terminal outcome. A WebSocket that
+        // attaches at ANY point receives a snapshot frame built from it
+        // before live events continue: a reconnect never has to wait for a
+        // future token to discover the run's state.
+        live *runLive
 }
 
 // activityHub broadcasts activity events to all WebSocket subscribers of a
@@ -272,7 +280,16 @@ func New(cfg *config.Config) (*Server, error) {
                 runs:       make(map[string]*runState),
                 outcomes:   newRunRegistry(),
                 standby:    make(map[string][]*standbyConn),
-                sys:        sysinfo.Probe(),
+                // v1.2.6 continuation: startup must NEVER block on the deep
+                // hardware probe. The previous code called sysinfo.Probe()
+                // here — the DEEP probe (ONE batched PowerShell/CIM
+                // invocation on Windows, seconds) ran synchronously inside
+                // New(), before the listener even bound. The fast snapshot
+                // (in-process, sub-millisecond) serves immediately; the deep
+                // probe warms in the BACKGROUND (hardware.WarmDeep in
+                // EnsureSetup, single-flight) and merges into every
+                // ProbeFast() reader as it lands.
+                sys:        sysinfo.ProbeFast(),
                 recall:     stack.Recall,
                 continuum:  continuum.NewManager(store, cfg.SessionsDir),
                 engineStop: make(chan struct{}),
@@ -1391,6 +1408,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         // logs use it, so a stalled run can be attributed end-to-end.
         runID := newRunID()
 
+        // v1.2.6 continuation: the AUTHORITATIVE live state. Every published
+        // activity of this run is sequence-stamped and folded into it; every
+        // WebSocket attachment replays from it.
+        live := newRunLive(runID, sess.ID, time.Now())
+
         // v1.2.6: the API-side stage timeline — runAccepted → runRegistered →
         // engineGateStart/Ready → (orchestrator stages via RunClock) →
         // assistantPersisted → donePublished. Measured values only; the
@@ -1413,6 +1435,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         s.runs[sess.ID] = &runState{
                 cancel: cancel,
                 hub:    hub,
+                live:   live,
         }
 
         s.runsMu.Unlock()
@@ -1441,14 +1464,19 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 Outcome:   "error",
         }
 
-        settle := func(result string, caption string, persisted bool, replyChars, reasonChars int) {
+        settle := func(result string, caption string, persisted bool, replyText, reasonText string) {
                 settled.Do(func() {
                         outcome.EndedAt = time.Now()
                         outcome.Outcome = result
                         outcome.Caption = caption
                         outcome.Persisted = persisted
-                        outcome.ReplyChars = replyChars
-                        outcome.ReasonChars = reasonChars
+                        outcome.ReplyChars = len(replyText)
+                        outcome.ReasonChars = len(reasonText)
+
+                        // v1.2.6 continuation: the AUTHORITATIVE terminal
+                        // state (with the persisted reply snapshots a
+                        // late-attaching socket replays).
+                        live.settleTerminal(result, caption, persisted, replyText, reasonText)
 
                         if s.outcomes != nil {
                                 s.outcomes.record(sess.ID, outcome)
@@ -1468,7 +1496,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                 ms(tl.gateReady, tl.persistedAt),
                                 ms(tl.acceptedAt, tl.donePublished),
                                 ms(tl.acceptedAt, outcome.EndedAt),
-                                replyChars,
+                                len(replyText),
                         )
                 })
         }
@@ -1509,12 +1537,24 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
                 gateCtx, gateCancel := context.WithTimeout(ctx, 3*time.Minute)
 
+                // v1.2.6 continuation: EVERY activity of this run flows through
+                // ONE publisher — sequence-stamped (monotonic, per-run) and
+                // folded into the authoritative live state BEFORE it reaches
+                // any subscriber. The replay contract (snapshot at seq N +
+                // events with seq > N) depends on this single path.
+                publish := func(a agent.Activity) {
+                        a.RunID = runID
+                        a.Seq = live.nextSeq()
+                        live.observe(a)
+                        hub.publish(a)
+                }
+
                 if err := s.stack.EnsureLLMContext(gateCtx); err != nil {
                         gateCancel()
 
-                        settle("error", fmt.Sprintf("Engine unavailable: %v", err), false, 0, 0)
+                        settle("error", fmt.Sprintf("Engine unavailable: %v", err), false, "", "")
 
-                        hub.publish(agent.Activity{
+                        publish(agent.Activity{
                                 Type:      "error",
                                 RunID:     runID,
                                 Caption: fmt.Sprintf(
@@ -1532,7 +1572,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 gateCancel()
 
                 // v1.2.6: every activity of THIS run carries the runId — one
-                // identifier from POST /api/run to the last WS frame.
+                // identifier from POST /api/run to the last WS frame. The
+                // publish wrapper (above) owns the stamping now; stampRun
+                // remains for the few direct hub publishes below it.
                 stampRun := func(a agent.Activity) agent.Activity {
                         a.RunID = runID
                         return a
@@ -1561,8 +1603,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         ctx,
                         messages,
                         func(a agent.Activity) {
-                                a = stampRun(a)
-                                hub.publish(a)
+                                publish(a)
 
                                 captureTerminal(a)
 
@@ -1601,9 +1642,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 )
 
                 if err != nil {
-                        settle("error", err.Error(), false, len(res.Text), len(res.Reasoning))
+                        settle("error", err.Error(), false, res.Text, res.Reasoning)
 
-                        hub.publish(stampRun(agent.Activity{
+                        publish(stampRun(agent.Activity{
                                 Type:      "error",
                                 Caption:   err.Error(),
                                 Timestamp: time.Now(),
@@ -1636,7 +1677,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         ); err != nil {
                                 // v1.1.4Z: a lost reply is a REAL failure the
                                 // user must see, not a swallowed error.
-                                hub.publish(stampRun(agent.Activity{
+                                publish(stampRun(agent.Activity{
                                         Type:      "error",
                                         Caption:   "The reply was generated but could not be saved to the session: " + err.Error(),
                                         Timestamp: time.Now(),
@@ -1648,13 +1689,13 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                         err,
                                 )
 
-                                settle("error", "reply persistence failed: "+err.Error(), false, len(res.Text), len(res.Reasoning))
+                                settle("error", "reply persistence failed: "+err.Error(), false, res.Text, res.Reasoning)
                         }
                 }
 
                 tl.persistedAt = time.Now()
 
-                settle(resultOutcome, terminalCaption, res.Text != "", len(res.Text), len(res.Reasoning))
+                settle(resultOutcome, terminalCaption, res.Text != "", res.Text, res.Reasoning)
 
                 // Index completed exchange into persistent recall.
                 if s.recall != nil && res.Text != "" {
@@ -1686,7 +1727,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         if fresh, err := s.store.Get(sess.ID); err == nil {
                                 if s.continuum.ShouldRollover(fresh, s.src.Load()) {
                                         if child, _, err := s.continuum.Rollover(fresh, s.src.Load()); err == nil {
-                                                hub.publish(agent.Activity{
+                                                publish(agent.Activity{
                                                         Type:    "session",
                                                         Caption: "Context threshold reached — conversation continued in chapter " + fmt.Sprint(child.Chapter),
                                                         Detail: map[string]any{
@@ -1717,9 +1758,15 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 }
         }()
 
+        // v1.2.6 continuation: POST completion must never imply the live
+        // transport was attached — but it MUST hand back the authoritative
+        // run identity so the client can attribute every subsequent frame
+        // (and discard stale ones from an older run of the same session).
         writeJSON(w, map[string]any{
                 "ok":        true,
                 "sessionId": sess.ID,
+                "runId":     runID,
+                "state":     "registered",
         })
 }
 
@@ -1890,6 +1937,20 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                 return frame
         }
 
+        // v1.2.6 continuation: the DETERMINISTIC ATTACH ACKNOWLEDGEMENT.
+        // The FIRST frame every socket receives after the protocol upgrade
+        // is an explicit `attached` marker — the client waits for THIS frame
+        // before POSTing /api/run, so "POST completed" can never silently
+        // mean "the live transport was already attached" (the socket may
+        // still have been CONNECTING when the POST fired — the v1.2.6 race).
+        // The frame also carries the server clock so clients can interpret
+        // timestamp deltas honestly.
+        _ = conn.WriteJSON(map[string]any{
+                "type":      "attached",
+                "sessionId": sessionID,
+                "serverNow": time.Now().UnixMilli(),
+        })
+
         for {
                 // Fast path: a run is already active — attach to its hub.
                 s.runsMu.Lock()
@@ -1897,11 +1958,62 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                 s.runsMu.Unlock()
 
                 if ok {
+                        // v1.2.6 continuation: AUTHORITATIVE REPLAY.
+                        //
+                        // Subscribe FIRST, then read the run's authoritative
+                        // snapshot. Events published between the subscribe and
+                        // the snapshot read carry seq ≤ snapshot.Sequence
+                        // (they are already folded into the cumulative
+                        // snapshots the frame carries) and are filtered below;
+                        // events published after carry seq > snapshot.Sequence
+                        // and are forwarded. (snapshot at N) + (events > N)
+                        // is therefore gapless AND duplicate-free — the
+                        // response/reasoning captions are cumulative by
+                        // contract, so the fold is idempotent.
                         _, updates, unsubscribe := rs.hub.subscribe()
+
+                        snap := rs.live.snapshot()
+
+                        snapFrame := map[string]any{
+                                "type":     "run_snapshot",
+                                "runId":    snap.RunID,
+                                "sessionId": snap.SessionID,
+                                "phase":    snap.Phase,
+                                "running":  snap.Running,
+                                "sequence": snap.Sequence,
+                                "startedAt": snap.StartedAt,
+                                "latestResponse":  snap.LatestResponse,
+                                "latestReasoning": snap.LatestReasoning,
+                                "latestStatus":    snap.LatestStatus,
+                                "terminalOutcome": snap.TerminalOutcome,
+                                "persisted":       snap.Persisted,
+                                "error":           snap.Error,
+                        }
+
+                        if !snap.EndedAt.IsZero() {
+                                snapFrame["endedAt"] = snap.EndedAt
+                        }
+
+                        if err := conn.WriteJSON(snapFrame); err != nil {
+                                unsubscribe()
+                                return
+                        }
 
                         served := false
 
                         for ev := range updates {
+                                // Replay filter: skip events already folded
+                                // into the snapshot (seq ≤ N) and stale
+                                // events of an older run that drained after
+                                // this socket's run replaced it.
+                                if ev.RunID != "" && ev.RunID != snap.RunID {
+                                        continue
+                                }
+
+                                if ev.Seq > 0 && ev.Seq <= snap.Sequence {
+                                        continue
+                                }
+
                                 if err := conn.WriteJSON(ev); err != nil {
                                         served = true
                                         break

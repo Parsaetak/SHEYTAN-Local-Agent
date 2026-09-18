@@ -1164,6 +1164,21 @@ func (s *LlamaServer) buildArgsWithCaps(
                         "--n-gpu-layers",
                         fmt.Sprintf("%d", gpuLayers),
                 )
+
+                // v1.2.6 continuation: DETERMINISTIC DEVICE SELECTION. When
+                // GPU offload is on, the engine's OWN enumeration named the
+                // devices it can drive — pass the best one explicitly
+                // (e.g. --device Vulkan0) instead of letting the engine
+                // guess a default (the multi-GPU laptop case: an Intel iGPU
+                // and a discrete Arc must not be chosen by accident).
+                // Fail-closed on every condition: no caps, no --device
+                // support, no enumeration, no device → nothing appended
+                // (the pre-v1.2.6 behavior).
+                if caps != nil && caps.DeviceFlag {
+                        if dev, ok := s.deterministicDevice(cfg); ok {
+                                base = append(base, "--device", dev)
+                        }
+                }
         }
 
         if level <= 1 {
@@ -1851,6 +1866,46 @@ func (s *LlamaServer) updateEngineForModel(cfg *config.Config) bool {
 // The v1.2.5 rule — "Vulkan DLL exists + any adapter present" — is gone:
 // a DLL beside the binary proves nothing about the devices the engine can
 // drive, and a WMI adapter is not an engine capability.
+
+// deterministicDevice returns the ENGINE-ENUMERATED device the launcher
+// should pass via --device for deterministic accelerator selection
+// (v1.2.6 continuation). ok=false whenever the selection cannot be made
+// from the engine's OWN enumeration — an inferred hardware name is never
+// substituted (fail-closed: without enumeration evidence the engine keeps
+// its default device choice, exactly like every release before this).
+//
+// Selection rule: the enumerated device with the MOST reported memory
+// (multi-GPU machines: the discrete accelerator beats the integrated one).
+// The device string is the engine's own backend name (e.g. "Vulkan0").
+func (s *LlamaServer) deterministicDevice(cfg *config.Config) (string, bool) {
+        bin := cfg.LlamaBinPath
+        if bin == "" {
+                bin = filepath.Join(cfg.DataDir, "bin", llamaBinaryName())
+        }
+
+        devices, supported, err := EnumerateEngineDevices(bin)
+        if err != nil || !supported || len(devices) == 0 {
+                return "", false
+        }
+
+        best := devices[0]
+        for _, d := range devices[1:] {
+                if d.TotalMB > best.TotalMB {
+                        best = d
+                }
+        }
+
+        if best.Backend == "" {
+                return "", false
+        }
+
+        logging.Default().Info("engine",
+                "deterministic device selection: --device %s (%s, %d MB, %d enumerated)",
+                best.Backend, best.Name, best.TotalMB, len(devices))
+
+        return best.Backend, true
+}
+
 func (s *LlamaServer) autoGPUOffload(cfg *config.Config) bool {
         if !cfg.GPUAutoOffload {
                 return false

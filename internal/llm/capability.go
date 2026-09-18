@@ -99,6 +99,14 @@ type EngineCaps struct {
         UBatchSize   bool `json:"ubatchSize"`
         ThreadsBatch bool `json:"threadsBatch"`
 
+        // DeviceFlag (v1.2.6 continuation): the build accepts `--device
+        // <name>` for deterministic accelerator selection (llama.cpp
+        // Vulkan0/CUDA0/… device names). Fail-closed: an unprobed or
+        // too-old build reports false and the launcher simply does not
+        // pass --device (the engine picks its default device — the
+        // behavior every release before this had).
+        DeviceFlag bool `json:"deviceFlag"`
+
         // Source records how the profile was obtained:
         //   "help-parse"      — parsed from `--help` output of the binary
         //   "tag-fallback"    — conservative heuristic from the release tag
@@ -148,10 +156,17 @@ func defaultCapsForTag(tag string) *EngineCaps {
                 Jinja:            true,
                 UBatchSize:       true,
                 ThreadsBatch:     true,
-                Source:           "tag-fallback",
+                // --device landed in llama.cpp builds around b3000
+                // (mid-2024); older/unknown tags stay fail-closed.
+                DeviceFlag: tagNumber(tag) >= deviceFlagSinceTag,
+                Source:     "tag-fallback",
         }
         return caps
 }
+
+// deviceFlagSinceTag is the first llama.cpp release tag whose llama-server
+// accepts --device (measured from the llama.cpp change log; conservative).
+const deviceFlagSinceTag = 3000
 
 // tagNumber extracts the numeric part of a `b12345` release tag (0 when
 // unparseable — treated as "unknown old release").
@@ -215,6 +230,7 @@ func parseHelpCaps(binPath, tag string) *EngineCaps {
                 CacheReuse:       optionMentioned(text, "--cache-reuse"),
                 NoWebUI:          optionMentioned(text, "--no-webui"),
                 Jinja:            optionMentioned(text, "--jinja"),
+                DeviceFlag:       optionMentioned(text, "--device"),
                 UBatchSize:       optionMentioned(text, "--ubatch-size") || optionMentioned(text, "--ubatch"),
                 ThreadsBatch:     optionMentioned(text, "--threads-batch"),
                 Source:           "help-parse",

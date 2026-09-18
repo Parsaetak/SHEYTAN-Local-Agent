@@ -66,6 +66,19 @@ type SysInfo struct {
         WSL2     bool      `json:"wsl2"`
         Docker   bool      `json:"docker"`
 
+        // OSBuild (v1.2.6 continuation) is the MEASURED OS build number
+        // (Windows: the RtlGetVersion build, e.g. 26200; 0 = not measured).
+        // The build number is the AUTHORITATIVE identity — marketing labels
+        // are derived from it (see OSDisplay), never the reverse. A stale
+        // manually-labelled "Windows 10" must never override build 26200
+        // (a Windows 11 25H2 build).
+        OSBuild int `json:"osBuild,omitempty"`
+
+        // OSDisplay (v1.2.6 continuation) is the honest human-readable OS
+        // label DERIVED from the measured build (e.g. "Windows 11 25H2
+        // (build 26200)"); "unknown" when the build was not measured.
+        OSDisplay string `json:"osDisplay,omitempty"`
+
         Recommended Recommended `json:"recommended"`
 
         // DeepProbedAt (v1.2.6) is when the deep facts (CPU name, GPU, NPU,
@@ -138,6 +151,20 @@ var (
         probeCache *SysInfo
 )
 
+// deepProbeFn is the seam the startup test uses to prove New()/ProbeFast
+// never invoke (or wait for) the deep probe: the test swaps it with a
+// slow stub and resets the sync.Once. Production always runs probeUncached.
+var deepProbeFn = probeUncached
+
+// resetDeepProbeForTest clears the single-flight state (tests only).
+func resetDeepProbeForTest() {
+        probeOnce = sync.Once{}
+        probeCache = nil
+        deepMu.Lock()
+        deepSnapshot = nil
+        deepMu.Unlock()
+}
+
 // fastMu guards the fast-snapshot cache (deep facts are merged in).
 var fastMu sync.Mutex
 
@@ -147,7 +174,7 @@ var fastMu sync.Mutex
 // invocation, not one process per fact.
 func Probe() *SysInfo {
         probeOnce.Do(func() {
-                probeCache = probeUncached()
+                probeCache = deepProbeFn()
         })
         return probeCache
 }
@@ -220,6 +247,15 @@ func fastSnapshot() *SysInfo {
                         LogicalCores:  runtime.NumCPU(),
                 },
         }
+
+        // v1.2.6 continuation: the MEASURED OS identity (in-process, no
+        // spawn): the real build number and the display label derived from
+        // it — the honest replacement for trusting any manually-labelled
+        // version string. fastOSIdentity is per-OS; unmeasured stays 0
+        // ("unknown") — never a guess.
+        build, display := fastOSIdentity()
+        info.OSBuild = build
+        info.OSDisplay = display
 
         info.RAM = fastRAM()
         info.Disk = fastDisk(".")

@@ -292,6 +292,129 @@ let enginePollTimer: number | null = null;
 let enginePollConsumers = 0;
 
 let socket: WebSocket | null = null;
+
+// v1.2.6 continuation: the DETERMINISTIC ATTACH CONTRACT.
+//
+// POST completion must never imply the live transport was attached. The
+// backend sends an explicit `attached` frame as the FIRST message after
+// the protocol upgrade; connectActivity records a deferred that resolves
+// on that frame, and run()/regenerate() AWAIT it before POSTing /api/run.
+// No sleeps, no guessed grace windows — the acknowledgement is the proof.
+let activityAttachResolve: (() => void) | null = null;
+let activityAttachReject: (() => void) | null = null;
+let activityAttachPromise: Promise<void> | null = null;
+
+// beginActivityAttach arms the attach acknowledgement for a new socket.
+function beginActivityAttach(): void {
+  activityAttachPromise?.catch(() => {
+    // A previous deferred's rejection is handled by its own awaiter.
+  });
+
+  activityAttachPromise = new Promise<void>((resolve, reject) => {
+    activityAttachResolve = resolve;
+    activityAttachReject = reject;
+  });
+}
+
+// settleActivityAttach resolves the pending acknowledgement (the
+// `attached` frame arrived — the transport is live and session-bound).
+function settleActivityAttach(): void {
+  if (activityAttachResolve) {
+    activityAttachResolve();
+    activityAttachResolve = null;
+    activityAttachReject = null;
+  }
+}
+
+// failActivityAttach rejects the pending acknowledgement (the socket died
+// before the server acknowledged the attachment).
+function failActivityAttach(): void {
+  if (activityAttachReject) {
+    activityAttachReject();
+    activityAttachResolve = null;
+    activityAttachReject = null;
+  }
+}
+
+// ACTIVITY_ATTACH_COMPAT_MS bounds how long run()/regenerate() wait for
+// the `attached` acknowledgement. The acknowledgement is the PRIMARY
+// mechanism (deterministic, no sleeps); this bound exists ONLY so a
+// backend that predates the `attached` frame (mixed deployment) can never
+// hang the composer — after the bound the POST proceeds and the runId
+// replay + bounded grace re-check own the resync, exactly like v1.2.6.
+const ACTIVITY_ATTACH_COMPAT_MS = 5000;
+
+// waitForActivityAttached resolves when the CURRENT activity socket has
+// been acknowledged by the server (the `attached` frame), or immediately
+// when a socket for the active session is already connected AND
+// acknowledged. It REJECTS when the socket dies first — callers proceed
+// anyway (the runId replay + the bounded grace re-check recover); the
+// await exists to remove the race, not to gate the POST.
+function waitForActivityAttached(): Promise<void> {
+  let base: Promise<void>;
+
+  if (
+    socket &&
+    socket.readyState === WebSocket.OPEN &&
+    activityAttachResolve === null &&
+    activityAttachPromise
+  ) {
+    // Already acknowledged (resolve consumed) — attach is proven.
+    base = activityAttachPromise;
+  } else if (activityAttachPromise) {
+    base = activityAttachPromise;
+  } else {
+    base = Promise.reject(new Error("activity socket not connecting"));
+  }
+
+  // Compatibility bound: first settlement wins (ack, close, or bound).
+  return Promise.race([
+    base,
+    new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ACTIVITY_ATTACH_COMPAT_MS);
+    }),
+  ]);
+}
+
+// v1.2.6 continuation: AUTHORITATIVE RUN REPLAY tracking.
+//
+// activeRunId is the run the UI is currently bound to (from the POST
+// response or an adopted run_snapshot); lastRunSeq is the highest sequence
+// number folded into the visible state. Events from other runs (stale
+// drains of a replaced run's hub) and duplicate/replayed events (seq ≤
+// lastRunSeq — already inside the latest cumulative snapshot) are dropped
+// BEFORE they reach the pipeline.
+let activeRunId: string | null = null;
+let lastRunSeq = 0;
+
+// resetRunReplayTracking resets the run-scoped filters for a fresh run.
+function resetRunReplayTracking(runId: string | null): void {
+  activeRunId = runId;
+  lastRunSeq = 0;
+}
+
+// isStaleRunEvent reports whether one activity frame is stale for the
+// run the UI is bound to: a different (older) run's drain, or a sequence
+// number already folded into the current cumulative state.
+function isStaleRunEvent(payload: Record<string, unknown>): boolean {
+  const frameRunId = typeof payload.runId === "string" ? payload.runId : "";
+
+  if (frameRunId && activeRunId && frameRunId !== activeRunId) {
+    return true;
+  }
+
+  const seq = typeof payload.seq === "number" ? payload.seq : 0;
+
+  if (seq > 0 && seq <= lastRunSeq) {
+    return true;
+  }
+
+  if (seq > 0) {
+    lastRunSeq = seq;
+  }
+
+  return false;
+}
 let activitySequence = 0;
 let activitySessionId: string | null = null;
 
@@ -866,6 +989,131 @@ function readLastRunOutcome(
   const runId = typeof value.runId === "string" ? value.runId : undefined;
 
   return { endedAt, outcome, runId };
+}
+
+// handleRunSnapshot folds the backend's AUTHORITATIVE run snapshot into
+// the UI (v1.2.6 continuation). The server sends this frame on EVERY
+// WebSocket attachment — a reconnect during generation therefore renders
+// the run's current state immediately (cumulative snapshots are
+// replacement-safe by contract) instead of waiting for a future token.
+//
+// Terminal snapshots finalise the run exactly like the done/error paths:
+// the composer unlocks, the reply snapshot is preserved, and the
+// authoritative history reload confirms what was persisted.
+function handleRunSnapshot(payload: Record<string, unknown>): void {
+  const state = useRuntimeStore.getState();
+
+  const runId = typeof payload.runId === "string" ? payload.runId : "";
+  const running = payload.running === true;
+  const sequence = typeof payload.sequence === "number" ? payload.sequence : 0;
+  const phase = typeof payload.phase === "string" ? payload.phase : "";
+  const terminal =
+    typeof payload.terminalOutcome === "string"
+      ? payload.terminalOutcome
+      : "";
+  const latestResponse =
+    typeof payload.latestResponse === "string" ? payload.latestResponse : "";
+  const latestReasoning =
+    typeof payload.latestReasoning === "string" ? payload.latestReasoning : "";
+
+  // Adopt the run identity: a socket that attached without a POST (page
+  // reload mid-run, chapter switch) binds to whatever run is live.
+  if (runId) {
+    activeRunId = runId;
+    lastRunSeq = sequence;
+  }
+
+  // Terminal state: finalise through the same path the done/error events
+  // use (the composer unlocks, the history reload confirms persistence).
+  if (!running || terminal) {
+    const outcome = terminal || "done";
+
+    // Replay whatever the run produced so the partial output is visible.
+    if (latestResponse) {
+      queueStreamingContent(latestResponse);
+    }
+
+    if (latestReasoning) {
+      queueStreamingReasoning(latestReasoning);
+    }
+
+    flushStreaming();
+
+    if (outcome === "error") {
+      transitionPhase("error");
+
+      useRuntimeStore.setState({
+        running: false,
+        runPhase: "error",
+        error:
+          typeof payload.error === "string" && payload.error
+            ? payload.error
+            : "Agent run failed.",
+      });
+    } else {
+      transitionPhase("done");
+
+      runOutcome = outcome === "aborted" ? "aborted" : "done";
+
+      useRuntimeStore.setState({
+        running: false,
+        runNote: null,
+      });
+    }
+
+    const sessionId = useRuntimeStore.getState().activeSessionId;
+
+    if (sessionId) {
+      scheduleRunFinalisation(sessionId, 50);
+    } else {
+      useRuntimeStore.setState({ streaming: null });
+      runOutcome = null;
+      runAssistantBaseline = null;
+      releaseIdleOwnedResources();
+    }
+
+    return;
+  }
+
+  // LIVE run: replay the cumulative snapshots and advance the phase
+  // machine from OBSERVED evidence only. A snapshot for a run the UI is
+  // not tracking (fresh page load) still renders — the run is real and
+  // the backend is authoritative.
+  if (!state.running && !isLivePhase(state.runPhase)) {
+    // The UI was idle (page reload mid-run): open a fresh timeline.
+    useRuntimeStore.setState({
+      running: true,
+      runPhase: "preparing",
+      runStartedAt: Date.now(),
+      runNote: null,
+      liveStatus: null,
+      tierEscalations: [],
+    });
+  }
+
+  runEventsReceived = true;
+
+  if (latestReasoning) {
+    queueStreamingReasoning(latestReasoning);
+    transitionPhase("reasoning_delta");
+  }
+
+  if (latestResponse) {
+    queueStreamingContent(latestResponse);
+    transitionPhase("response_delta");
+  }
+
+  if (phase === "thinking" && !latestResponse) {
+    transitionPhase("thinking_activity");
+  }
+
+  // The backend's own status line, replayed verbatim.
+  const status =
+    typeof payload.latestStatus === "string" ? payload.latestStatus : "";
+
+  if (status) {
+    useRuntimeStore.setState({ liveStatus: status });
+  }
 }
 
 function recoverRunFromIdle(event: ActivityEvent): void {
@@ -1638,6 +1886,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     runOutcome = null;
     runAssistantBaseline = null;
     runEventsReceived = false;
+    resetRunReplayTracking(null);
 
     set((state) => ({
       sessions: [session, ...state.sessions],
@@ -1673,6 +1922,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     runOutcome = null;
     runAssistantBaseline = null;
     runEventsReceived = false;
+    resetRunReplayTracking(null);
 
     set({
       activeSessionId: id,
@@ -1766,14 +2016,25 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     runAssistantBaseline = null;
     runEventsReceived = false;
     resetPendingStreaming();
+    resetRunReplayTracking(null);
 
-    // v1.2.6: make sure the activity socket is (re)attaching to THIS
-    // session BEFORE the run registers on the backend. The old code relied
-    // on a mounted consumer keeping the socket open; a socket sitting in
-    // the reconnect backoff (or bound to a stale session) could miss a
-    // fast run entirely — the runId replay now recovers it, but attaching
-    // up front removes the race instead of papering over it.
+    // v1.2.6 continuation: the DETERMINISTIC ATTACH CONTRACT — the POST
+    // fires only after the server acknowledged this session's socket
+    // (`attached` frame). The v1.2.6 code merely started the connection
+    // (CONNECTING) and POSTed immediately: a fast run could finish before
+    // the socket ever attached, leaving the recovery paths to paper over
+    // the race. Awaiting the acknowledgement REMOVES the race. A rejected
+    // acknowledgement (socket died) proceeds anyway — the runId replay
+    // and the bounded grace re-check remain the safety net for older
+    // backends and hard failures; neither is the primary mechanism here.
     get().connectActivity();
+
+    try {
+      await waitForActivityAttached();
+    } catch {
+      // No acknowledged transport — the run still POSTs; recovery paths
+      // (run_snapshot replay, idle grace re-check) own the resync.
+    }
 
     set({
       running: true,
@@ -1811,7 +2072,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     try {
       const state = get();
 
-      await api.run({
+      const response = await api.run({
         sessionId,
         message: message.trim(),
         ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
@@ -1824,6 +2085,14 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           ? { toolMode: "manual", toolAllow: state.toolAllowlist }
           : {}),
       });
+
+      // v1.2.6 continuation: bind the UI to the authoritative runId the
+      // POST returned — every subsequent frame of THIS run is accepted,
+      // and stale drains of a replaced run are dropped (isStaleRunEvent).
+      if (response.runId) {
+        activeRunId = response.runId;
+        lastRunSeq = 0;
+      }
 
       await get().refreshSessions();
     } catch (error) {
@@ -1858,9 +2127,16 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     runAssistantBaseline = null;
     runEventsReceived = false;
     resetPendingStreaming();
+    resetRunReplayTracking(null);
 
-    // v1.2.6: same socket-attach guarantee as run().
+    // v1.2.6 continuation: same deterministic attach contract as run().
     get().connectActivity();
+
+    try {
+      await waitForActivityAttached();
+    } catch {
+      // Proceed — the replay + grace re-check recover.
+    }
 
     set({
       running: true,
@@ -1876,7 +2152,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     try {
       const state = get();
 
-      await api.run({
+      const response = await api.run({
         sessionId,
         message: "",
         regenerate: true,
@@ -1887,6 +2163,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           ? { toolMode: "manual", toolAllow: state.toolAllowlist }
           : {}),
       });
+
+      if (response.runId) {
+        activeRunId = response.runId;
+        lastRunSeq = 0;
+      }
 
       // Drop the trailing assistant bubble optimistically; the reload on
       // done restores the authoritative history.
@@ -2166,6 +2447,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       connection: "connecting",
     });
 
+    // v1.2.6 continuation: arm the deterministic attach acknowledgement —
+    // resolved by the server's first `attached` frame (see ws.onmessage).
+    beginActivityAttach();
+
     const ws = new WebSocket(activityWebSocketURL(sessionId));
 
     socket = ws;
@@ -2191,6 +2476,29 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       try {
         const payload = JSON.parse(event.data) as APIActivityEvent;
 
+        // v1.2.6 continuation: the attach acknowledgement — the server
+        // confirmed this socket is live and session-bound. Resolves the
+        // deterministic attach contract (never queued as activity).
+        if ((payload as Record<string, unknown>).type === "attached") {
+          settleActivityAttach();
+          return;
+        }
+
+        // v1.2.6 continuation: the AUTHORITATIVE RUN SNAPSHOT — sent on
+        // every attachment (mid-run reconnect included). Replays the
+        // cumulative response/reasoning snapshots and the terminal state
+        // without waiting for a future token.
+        if ((payload as Record<string, unknown>).type === "run_snapshot") {
+          handleRunSnapshot(payload as unknown as Record<string, unknown>);
+          return;
+        }
+
+        // Stale-run filter: drop drains of a replaced run and
+        // duplicate/replayed sequences before they reach the pipeline.
+        if (isStaleRunEvent(payload as Record<string, unknown>)) {
+          return;
+        }
+
         queueActivity(normalizeActivity(payload));
       } catch {
         // Ignore malformed activity frames.
@@ -2208,6 +2516,13 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     };
 
     ws.onclose = () => {
+      // The socket died — release anyone waiting on the deterministic
+      // attach contract FIRST, unconditionally: the deferred belongs to
+      // whichever socket was current, and a new connectActivity() always
+      // arms a fresh one (failActivityAttach is a no-op when already
+      // settled).
+      failActivityAttach();
+
       if (socket !== ws || activitySessionId !== get().activeSessionId) {
         return;
       }
@@ -2249,6 +2564,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
   disconnectActivity: () => {
     activitySessionId = null;
+
+    // v1.2.6 continuation: dropping the socket must also release anyone
+    // waiting on its attach acknowledgement (ws.onclose fires only for a
+    // live transport; an already-null socket leaves the deferred armed).
+    failActivityAttach();
 
     resetPendingActivity();
 

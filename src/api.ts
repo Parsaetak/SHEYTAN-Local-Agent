@@ -493,6 +493,10 @@ export interface RunResponse {
   sessionId: string;
   runId?: string;
   status?: string;
+  // v1.2.6 continuation: the authoritative run state at POST time
+  // ("registered" — the run is in the active-runs map; live transport
+  // attachment is a SEPARATE fact the socket's `attached` frame proves).
+  state?: string;
 }
 
 export interface AbortResponse {

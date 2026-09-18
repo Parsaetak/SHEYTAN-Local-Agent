@@ -1,162 +1,99 @@
-SHEYTAN-Local-Agent v1.2.6 — Verified-Runtime Repair (missing-answer root cause, honest context tiers, progressive UI, batched Windows hardware probe, evidence-based accelerator resolution) — Replacement Manifest
+SHEYTAN-Local-Agent v1.2.6 — CONTINUATION / HARDENING (authoritative run transport, deterministic attach, measured timing, non-blocking startup, explicit accelerator evidence) — Replacement Manifest
 ==============================================================================================================
-Base: main @ fc5b500 (v1.2.5)
+Base: main @ b0ed628 (v1.2.6) — release identity PRESERVED
 Package: SHEYTAN-Local-Agent-v1.2.6-UPDATE.zip
 Apply over a clean checkout of the base commit.
 
-Status vocabulary: new | modified
+Status vocabulary: new | modified | replaced
 The per-file reasons, the verification results and the honest
-limitations live in UPDATE.md (§1-§8).
+limitations live in UPDATE.md (§0-§8).
 
 [PACKAGE METADATA]
   UPDATE.md
     status:   replaced
-    purpose:  This replacement package's bookkeeping
+    purpose:  this replacement package's bookkeeping
   REPLACEMENT-MANIFEST.txt
     status:   replaced
-    purpose:  This replacement package's bookkeeping
+    purpose:  this replacement package's bookkeeping
   REPLACEMENT-SHA256.txt
     status:   replaced
-    purpose:  This replacement package's bookkeeping
+    purpose:  this replacement package's bookkeeping
 
 [NEW FILES]
-  internal/accelerator/accelerator.go
-    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
-  internal/accelerator/accelerator_test.go
-    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
-  internal/accelerator/library_other.go
-    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
-  internal/accelerator/library_windows.go
-    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
-  internal/accelerator/openvino.go
-    reason:   the accelerator abstraction: kinds, requested profiles, AUTO runtime profiles, evidence-gated resolver, OpenVINO load probe
-  internal/agent/v126_measurement_test.go
-    reason:   the measured v1.2.5→v1.2.6 thinking-prompt reduction + zero-tools trivial-chat lock
-  internal/api/perf_accelerator_test.go
-    reason:   the /api/perf accelerator-resolution contract test
-  internal/api/runregistry.go
-    reason:   the bounded run-outcome registry + WS replay (the missing-answer root-cause fix) + regression tests
-  internal/api/runregistry_test.go
-    reason:   the bounded run-outcome registry + WS replay (the missing-answer root-cause fix) + regression tests
-  internal/llm/devices.go
-    reason:   engine --list-devices enumeration (cached per binary) + runtime offload-line evidence
-  internal/llm/devices_test.go
-    reason:   engine --list-devices enumeration (cached per binary) + runtime offload-line evidence
-  internal/sysinfo/cim_parse.go
-    reason:   the ONE batched Windows CIM invocation + the pure fixture-tested parser
-  internal/sysinfo/cim_parse_test.go
-    reason:   the ONE batched Windows CIM invocation + the pure fixture-tested parser
-  internal/sysinfo/cim_windows.go
-    reason:   the ONE batched Windows CIM invocation + the pure fixture-tested parser
-  internal/sysinfo/sysinfo_fast_other.go
-    reason:   the in-process fast snapshot (Win32 APIs on Windows; /proc+statfs elsewhere)
-  internal/sysinfo/sysinfo_fast_windows.go
-    reason:   the in-process fast snapshot (Win32 APIs on Windows; /proc+statfs elsewhere)
-  src/resources.test.ts
-    reason:   the shared frontend resource layer (dedup, TTL, stale-while-revalidate, last-known-good)
-  src/resources.ts
-    reason:   the shared frontend resource layer (dedup, TTL, stale-while-revalidate, last-known-good)
-  src/useResource.ts
-    reason:   the React binding hook for the shared layer
+  internal/api/runstate.go
+    reason:   the AUTHORITATIVE per-run state (phase/running/cumulative snapshots/sequence/terminal outcome) + WS run_snapshot replay — the live-run reconnect root-cause fix
+  internal/api/runtransport_test.go
+    reason:   the run-transport contract tests (attach ack, mid-run snapshot replay without duplication, monotonic seq, stale filtering, terminal replay, bounds)
+  internal/agent/timingmarks_test.go
+    reason:   the measured transport-ladder tests (request_sent/response_headers/first_byte/first_token distinct + ordered, tool stages two moments, provenance)
+  internal/llm/timingmarks_test.go
+    reason:   the client timing-mark emission tests + --device capability/deterministic-selection tests (real enumeration path via a fake engine)
+  internal/sysinfo/startup_test.go
+    reason:   the startup-never-blocks-on-deep-probe tests (measured), single-flight, deep merge, Windows build→label fixtures
+  internal/sysinfo/osdisplay.go
+    reason:   the pure MEASURED build→label mapping (26200 = Windows 11 25H2) — shared, fixture-tested
 
 [MODIFIED FILES]
   REPLACEMENT-MANIFEST.txt
-    purpose:  v1.2.6 change (see UPDATE.md)
+    purpose:  v1.2.6 continuation change (see UPDATE.md)
   REPLACEMENT-SHA256.txt
-    purpose:  v1.2.6 change (see UPDATE.md)
-  SIGNATURE
-    purpose:  version identity chain to 1.2.6
+    purpose:  v1.2.6 continuation change (see UPDATE.md)
   UPDATE.md
-    purpose:  v1.2.6 change (see UPDATE.md)
+    purpose:  v1.2.6 continuation change (see UPDATE.md)
   agent.md
-    purpose:  the next-agent handoff notes for v1.2.6
-  build/config.yml
-    purpose:  version identity chain to 1.2.6
-  internal/agent/orchestrator.go
-    purpose:  Activity.RunID field + reconciled output reserve + refused-tool escalation threading
-  internal/agent/orchestrator_tiers.go
-    purpose:  zero-tool pure chat, refused-tool re-entry on escalation, watch refusal evidence
-  internal/agent/orchestrator_tiers_test.go
-    purpose:  updated tier/escalation expectations under the honest context contract
-  internal/agent/preflight_test.go
-    purpose:  impossible-budget test now signals the tool by name (task-selective surface)
-  internal/api/environment.go
-    purpose:  non-blocking environment/health (hardware.Snapshot + deepReady + NPU on the wire)
-  internal/api/perf.go
-    purpose:  the accelerator resolution block (measured evidence assembly)
-  internal/api/server.go
-    purpose:  runId stamping + run timeline + outcome recording + sysinfo fast path + startup deep warm
-  internal/config/config.go
-    purpose:  version identity chain + the accelerator config field (default auto)
-  internal/contextplan/contextplan.go
-    purpose:  OutputReserveFor — the single clamped reserve shared by tier selection and planning
-  internal/hardware/hardware.go
-    purpose:  Snapshot (non-blocking) + Collect + WarmDeep + NPU passthrough + deepReady
-  internal/llm/llama.go
-    purpose:  evidence-ladder autoGPUOffload (enumeration/log evidence, not DLL presence) + offload capture
-  internal/sysinfo/sysinfo.go
-    purpose:  fast/deep probe split, batched CIM wiring, NPUInfo, per-source measurement
-  internal/taskclassify/taskclassify.go
-    purpose:  thinking no longer adds +20 complexity
-  internal/taskclassify/taskclassify_test.go
-    purpose:  updated depth-control pins (reasoning ≠ context)
-  internal/taskclassify/tiers.go
-    purpose:  thinking no longer floors STANDARD — the tier stays what the task signals justify
-  internal/toolsets/toolsets.go
-    purpose:  zero-signal chat → no tools; tool-name-as-signal; word-boundary matching
-  package-lock.json
-    purpose:  version 1.2.6 + the resources unit test in test:units
-  package.json
-    purpose:  version 1.2.6 + the resources unit test in test:units
-  src/SettingsPanel.tsx
-    purpose:  progressive loading (config immediate; models/sysinfo lazy per tab) through the shared layer
-  src/SystemPanel.tsx
-    purpose:  progressive System Centre + NPU row + deep-fact polling
-  src/api.ts
-    purpose:  AbortSignal support for the shared resource layer + NPU/deepReady types
-  src/store.ts
-    purpose:  authoritative lastRun finalisation + bounded grace re-check + socket-attach guarantee
-  web/static/.vite/manifest.json
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/AgentBody-11pyfdmi.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/AgentHeader-zw6wjeZX.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/AgentSidebar-C-x0egcx.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/DownloadProgress-AF2gtMcs.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/LabPanel-y7cQkYG6.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/ResearchPanel-BpGTNKW-.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/SettingsPanel-ByU84JLg.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/SystemPanel-biLjqRpo.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/WorkspacePanel-jK9TN2-o.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/index-wqpsY0yO.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/assets/useResource-DCdLFELl.js
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
-  web/static/index.html
-    purpose:  rebuilt frontend asset (npm run build — deterministic; byte-identical to the clean-room rebuild)
+    purpose:  the next-agent handoff notes for the v1.2.6 continuation
   worklog.md
-    purpose:  the v1.2.6 implementation log (root causes, changes, measurements, limitations)
+    purpose:  the v1.2.6 continuation implementation log
+  internal/accelerator/accelerator.go
+    purpose:  explicit evidence state (selected/available/executionVerified/verification/fallback) + explainable Describe()
+  internal/accelerator/accelerator_test.go
+    purpose:  the evidence-state matrix tests (verified gates vs the unverified DLL fallback)
+  internal/agent/orchestrator.go
+    purpose:  Activity.Seq; transport marks folded from the client; fake requestSent/firstByte marks removed; tool_start/tool_end on every path
+  internal/agent/pertiming.go
+    purpose:  StageResponseHeaders + headersMs/firstByteMs + raw stageTimestamps provenance + LastStageTime
+  internal/api/perf.go
+    purpose:  non-blocking recommendations (ProbeFast instead of the deep probe)
+  internal/api/runregistry_test.go
+    purpose:  the late-attach test updated to the new first-frame contract (attached ack, then idle-with-evidence)
+  internal/api/server.go
+    purpose:  ONE sequence-stamping publisher; attached ack frame; run_snapshot replay with seq/runId filtering; POST returns runId+state; New() serves ProbeFast (startup never blocks on the deep probe)
+  internal/api/sessioncontext.go
+    purpose:  memory assessment reads ProbeFast LIVE (deep facts merge; no stale zero-VRAM snapshot)
+  internal/llm/capability.go
+    purpose:  EngineCaps.DeviceFlag (help-parse + conservative tag fallback, fail-closed)
+  internal/llm/client.go
+    purpose:  StreamEvent.TimingMark — request_sent/response_headers/first_byte measured at the HTTP transport itself
+  internal/llm/llama.go
+    purpose:  deterministic --device selection from the engine's own enumeration (capability-gated, fail-closed)
+  internal/sysinfo/sysinfo.go
+    purpose:  OSBuild/OSDisplay fields + fastOSIdentity wiring + the deep-probe test seam
+  internal/sysinfo/sysinfo_fast_other.go
+    purpose:  fastOSIdentity stub (honest unknown off Windows)
+  internal/sysinfo/sysinfo_fast_windows.go
+    purpose:  MEASURED Windows identity via RtlGetVersion (in-process, no spawn)
+  src/SystemPanel.tsx
+    purpose:  HealthCard rides the shared "health" resource (no more uncached duplicate fetch)
+  src/api.ts
+    purpose:  RunResponse.state (the authoritative POST-time run state)
+  src/resources.test.ts
+    purpose:  shared-ownership/cancellation tests (unmount never aborts a needed request; unused requests eventually abort)
+  src/resources.ts
+    purpose:  subscriber-counted request ownership + bounded abort grace + timer cleanup
+  src/run-events.test.ts
+    purpose:  attached/run_snapshot are transport control frames, never run evidence
+  src/store.ts
+    purpose:  the deterministic attach contract (await the attached ack before POST); run_snapshot replay handling; runId/seq stale filtering; resets on session switches
+  web/static/.vite/manifest.json
+    purpose:  rebuilt frontend asset (npm run build)
+  web/static/assets/*
+    purpose:  rebuilt frontend assets (npm run build)
+  web/static/index.html
+    purpose:  rebuilt frontend asset (npm run build)
 
 [DELETED FILES]
   Apply procedure deletes these stale hashed frontend assets
   (replaced by the rebuilt bundle — web/static is go:embedded, so
   stale files MUST be removed to keep the binary clean):
-  DELETE web/static/assets/AgentBody-B4ReoJUO.js
-  DELETE web/static/assets/AgentHeader-CKcRxY-U.js
-  DELETE web/static/assets/AgentSidebar-CP-LAb_G.js
-  DELETE web/static/assets/DownloadProgress-CijVeY2v.js
-  DELETE web/static/assets/LabPanel-ClUYA1M7.js
-  DELETE web/static/assets/ResearchPanel-DAr0A1lO.js
-  DELETE web/static/assets/SettingsPanel-CgZjmrVu.js
-  DELETE web/static/assets/SystemPanel-BCvk6sqj.js
-  DELETE web/static/assets/WorkspacePanel-of8Oe_U7.js
-  DELETE web/static/assets/index-D96cavMe.js
-
+  DELETE web/static/assets/index-wqpsY0yO.js
+  DELETE web/static/assets/useResource-DCdLFELl.js

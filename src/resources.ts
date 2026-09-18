@@ -47,7 +47,34 @@ type Entry<T> = {
   error: string | null;
   inFlight: Promise<T> | null;
   listeners: Set<(snapshot: ResourceSnapshot<T>) => void>;
+
+  // v1.2.6 continuation: SHARED REQUEST OWNERSHIP.
+  // consumers counts live interests in the in-flight request: every
+  // subscriber (mounted component) and every ensure() caller whose promise
+  // has not settled yet. An unmount decrements — it never cancels a
+  // request another consumer still needs. When the count reaches zero
+  // with a request in flight, a BOUNDED grace timer arms; if nobody
+  // re-subscribes before it fires, the request is aborted (unused
+  // requests are eventually cancellable; nothing leaks forever).
+  consumers: number;
+  controller: AbortController | null;
+  cancelTimer: number | null;
 };
+
+// UNUSED_REQUEST_GRACE_MS is how long an in-flight fetch with ZERO
+// consumers survives before it is aborted. Long enough that a React
+// re-mount (strict-mode double-mount, tab switch) re-claims it; short
+// enough that an abandoned request cannot run to its full timeout.
+let unusedRequestGraceMs = 10_000;
+
+/**
+ * setUnusedRequestGraceForTest overrides the abort grace window (unit
+ * tests shrink it so the eventual-cancellation contract is observable
+ * without waiting the production 10 s).
+ */
+export function setUnusedRequestGraceForTest(ms: number): void {
+  unusedRequestGraceMs = ms;
+}
 
 // Default TTLs per resource class (ms). Tuned for local-loopback latency:
 // these values trade freshness for near-zero request volume.
@@ -79,12 +106,57 @@ function entry<T>(key: string): Entry<T> {
       error: null,
       inFlight: null,
       listeners: new Set(),
+      consumers: 0,
+      controller: null,
+      cancelTimer: null,
     };
 
     entries.set(key, existing as Entry<unknown>);
   }
 
   return existing;
+}
+
+// acquireConsumer registers one live interest in the entry's request and
+// disarms any pending abort (someone needs the request again).
+function acquireConsumer(key: string): void {
+  const e = entry<unknown>(key);
+
+  e.consumers += 1;
+
+  if (e.cancelTimer !== null) {
+    clearTimeout(e.cancelTimer);
+    e.cancelTimer = null;
+  }
+}
+
+// releaseConsumer drops one live interest. At ZERO consumers with a
+// request still in flight, the bounded abort timer arms — the request is
+// eventually cancellable, but a re-mount within the grace window re-uses
+// it instead of duplicating the fetch.
+function releaseConsumer(key: string): void {
+  const e = entries.get(key) as Entry<unknown> | undefined;
+
+  if (!e || e.consumers <= 0) {
+    return;
+  }
+
+  e.consumers -= 1;
+
+  if (e.consumers === 0 && e.inFlight && e.cancelTimer === null) {
+    const controller = e.controller;
+
+    e.cancelTimer = setTimeout(() => {
+      e.cancelTimer = null;
+
+      if (e.consumers === 0 && e.inFlight && controller) {
+        // Abort the FETCHER; the promise's own settle path keeps the
+        // last-known-good data and records the abort as the entry error
+        // only when nothing was ever fetched.
+        controller.abort();
+      }
+    }, unusedRequestGraceMs) as unknown as number;
+  }
 }
 
 function snapshot<T>(key: string): ResourceSnapshot<T> {
@@ -162,7 +234,17 @@ export function ensure<T>(
   }
 
   const controller = new AbortController();
-  const promise = new Promise<T>((resolve, reject) => {
+
+  e.controller = controller;
+
+  // NOTE (ownership model): ensure() does NOT count as a consumer. Every
+  // production caller (useResource, refresh) fire-and-forgets the promise
+  // — the DISPLAYED interest is the subscriber count (mounted
+  // components). A request with zero subscribers and no settlement is
+  // unused and eventually abortable; the natural settlement path below
+  // clears the state for everyone.
+
+  const promise: Promise<T> = new Promise<T>((resolve, reject) => {
     fetcher(controller.signal).then(resolve, reject);
   }).then(
     (data) => {
@@ -170,6 +252,7 @@ export function ensure<T>(
       e.fetchedAt = Date.now();
       e.error = null;
       e.inFlight = null;
+      e.controller = null;
       notify(key);
       return data;
     },
@@ -179,6 +262,7 @@ export function ensure<T>(
       e.error =
         error instanceof Error ? error.message : "Resource unavailable.";
       e.inFlight = null;
+      e.controller = null;
       notify(key);
 
       if (e.data !== null) {
@@ -217,14 +301,27 @@ export function subscribe<T>(
 
   e.listeners.add(listener);
 
+  // A mounted subscriber is a consumer of any in-flight request.
+  acquireConsumer(key);
+
   try {
     listener(snapshot<T>(key));
   } catch {
     // Initial emission errors are the listener's problem.
   }
 
+  let unsubscribed = false;
+
   return () => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+
     e.listeners.delete(listener);
+
+    // Unmount: drop THIS consumer only — a request another consumer needs
+    // is never cancelled here; a request nobody needs arms the bounded
+    // abort timer (see releaseConsumer).
+    releaseConsumer(key);
   };
 }
 
@@ -245,5 +342,12 @@ export function invalidate(key: string): void {
  * changes the resource's server-side shape).
  */
 export function reset(key: string): void {
+  const e = entries.get(key) as Entry<unknown> | undefined;
+
+  if (e?.cancelTimer !== null && e?.cancelTimer !== undefined) {
+    clearTimeout(e.cancelTimer);
+    e.cancelTimer = null;
+  }
+
   entries.delete(key);
 }

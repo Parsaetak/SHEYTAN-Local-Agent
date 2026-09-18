@@ -382,37 +382,22 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
 }
 
 function HealthCard() {
-  const [health, setHealth] = useState<HealthPayload | null>(null);
+  // v1.2.6 continuation: HealthCard now rides the SHARED resource layer
+  // ("health") instead of its own uncached fetch. The old code issued a
+  // fresh /api/health request on every System Centre mount even when
+  // another surface (or a previous visit seconds ago) already had the
+  // data — the exact duplicate-request pattern the resource layer exists
+  // to remove. Dedup + TTL + last-known-good + eventual cancellation now
+  // apply; the Refresh button force-refreshes through the same layer.
+  const healthResource = useResource<HealthPayload>("health", (signal) =>
+    api.health(signal),
+  );
 
-  // v1.2.2: the health probe is fully cancellable — leaving the System
-  // tab mid-request aborts the fetch instead of letting a late response
-  // (or a 20s timeout error) mutate unmounted state.
-  const abortRef = useRef<AbortController | null>(null);
+  const health = healthResource.data;
 
   const load = useCallback(() => {
-    abortRef.current?.abort();
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    api
-      .health(controller.signal)
-      .then((payload) => {
-        if (!controller.signal.aborted) setHealth(payload);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setHealth(null);
-      });
-  }, []);
-
-  useEffect(() => {
-    load();
-
-    return () => {
-      abortRef.current?.abort();
-      abortRef.current = null;
-    };
-  }, [load]);
+    healthResource.refresh();
+  }, [healthResource]);
 
   // v1.2.2: defensive checks — a malformed/absent checks array renders
   // honestly instead of throwing.

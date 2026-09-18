@@ -94,3 +94,37 @@ test("tool allow-list normalization dedupes and trims", () => {
     ["git"],
   );
 });
+
+// --- v1.2.6 continuation: the transport-control frame kinds ---------------
+//
+// `attached` (the deterministic attach acknowledgement) and `run_snapshot`
+// (the authoritative replay) are TRANSPORT-CONTROL frames, not run
+// evidence: they must never advance the run-phase machine or count as
+// proof a generation is live (that proof is a sequenced activity event).
+
+test("transport-control frames are not run evidence", () => {
+  assert.equal(normalizeEventKind("attached"), "unknown");
+  assert.equal(normalizeEventKind("run_snapshot"), "unknown");
+  assert.equal(isRunEvidence(normalizeEventKind("attached")), false);
+  assert.equal(isRunEvidence(normalizeEventKind("run_snapshot")), false);
+});
+
+test("run evidence kinds remain recognized", () => {
+  for (const kind of [
+    "response",
+    "reasoning",
+    "thinking_start",
+    "tool_start",
+    "tool_end",
+    "done",
+    "complete",
+    "status",
+    "escalation",
+  ]) {
+    assert.equal(
+      isRunEvidence(normalizeEventKind(kind)),
+      true,
+      `${kind} must remain run evidence`,
+    );
+  }
+});

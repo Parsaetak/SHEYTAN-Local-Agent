@@ -8,6 +8,67 @@ Branch: `main`
 
 Current release: `v1.2.6` (verified-runtime repair: the v1.2.5 missing-answer root cause — a fast run finishing before the activity socket attaches left the UI running forever because the idle-sentinel grace guard dropped the only terminal evidence — is fixed by the BOUNDED RUN-OUTCOME REGISTRY (`internal/api/runregistry.go`): every idle sentinel now carries the session's last terminal run outcome (runId/outcome/endedAt/persisted) and the frontend's `recoverRunFromIdle` finalises from it, plus a bounded grace re-check so the composer can never freeze. One runId now stamps every activity of a run; API-side stages (accepted/registered/engineGate/persisted/published) are measured and logged. The thinking control no longer inflates context (+20 complexity and the forced STANDARD floor removed — measured: a one-line question with thinking went from ~12,962 tokens to ~548, tier FAST, 0 tools); zero-signal chat offers ZERO tool schemas and the compact briefing only; naming a tool in the request is a capability signal; a refused tool re-enters the surface on escalation; tier selection and context planning share ONE clamped output reserve (`contextplan.OutputReserveFor`). The Windows hardware probe's ~7 sequential PowerShell spawns (measured 5,399 ms) collapse into ONE batched CIM invocation, and the interactive endpoints serve an instant in-process fast snapshot (`sysinfo.ProbeFast`) while the deep probe (GPU/NPU via Win32_PnPEntity incl. PNPClass ND) warms in the background (`hardware.WarmDeep` at startup; `deepReady` on the wire). Settings/System are PROGRESSIVE through one shared resource layer (`src/resources.ts` + `useResource.ts`: dedup, TTL, stale-while-revalidate, last-known-good, AbortController) — config immediate, models/sysinfo lazy per tab, one slow endpoint can never block another. NEW `internal/accelerator` package: CPU/GPU_VULKAN/GPU_OPENVINO/NPU_OPENVINO kinds, AUTO/GPU/NPU/CPU requests, INTERACTIVE_GPU/LOW_POWER_NPU/CPU_SAFE/VISION_GPU/MAXIMUM auto-profiles; GPU requires ENGINE evidence (llama.cpp `--list-devices` enumeration cached per binary — `llm.EnumerateEngineDevices` — or the runtime "offloaded N/M layers to GPU" log line — `LlamaServer.OffloadEvidence`), the DLL-presence rule survives only as the documented weaker fallback with the verification plan in the reason; NPU requires presence + MEASURED OpenVINO runtime load (`accelerator.DetectOpenVINO`) + arch/quant gates + a measured benchmark beating GPU — presence alone NEVER wins. `/api/perf` carries the full resolution with reasons. Config gains `accelerator` (default auto). HONEST LIMITATION: implemented and tested on Linux; Windows-only paths compile (GOOS=windows gate) and their parsers are fixture-tested, but real-hardware Windows validation (§13 of the v1.2.6 brief) was NOT performed by this agent — see the v1.2.6 log in `worklog.md`. Prior line: `v1.2.5` (adaptive context tiers, runId/run-clock telemetry, thinking/tool controls). Prior line: `v1.2.3` (CI engine race fixed at the ROOT — the load/unload guard now covers the WHOLE in-flight generation window and the unload-guard test synchronizes on the first streamed token instead of polling; a reusable native-Go Download Manager (`internal/downloader`: HTTPS-only, Range resume, .part→verify→atomic rename, SHA-256/size pinning, ordered sources with explicit fallback trust, source cache, bounded backoff, cancel/pause, measured progress) now powers engine bootstrap, engine self-update and app-update staging; app update staging is ASYNC with live progress + `/api/update/cancel`; downloader progress UI (phase chain, %, speed, ETA, source, verification) across Updates/Runtime/System with a header percent pill; model-picker skeletons; two known native warnings cleaned; see the v1.2.3 notes below — all prior notes remain authoritative). Prior line: `v1.2.2` (generation visibility & black-screen repair: error boundaries everywhere, `gpus: null` wire defect fixed, live-run socket lease across tab switches + `idle`-sentinel resync, live generation timeline, cumulative-snapshot streaming fix, partial-output preservation, honest engine-asset errors, log session banners; see the v1.2.2 notes below — all prior notes remain authoritative). Prior line: `v1.2.1` (CI package-root contract fix + installer options + packaging hardening; see the v1.2.1 notes below — all prior notes remain authoritative). (SHEYTAN-LA unified product upgrade: vision readiness state machine, hardware intelligence, evidence-based recommendation engine, chat markdown/composer polish, Environment Centre, verified health, SHEYTAN-LA Windows identity + AUMID, NSIS installer, manifest-verified app updater, release checksums; see the v1.2.0 notes below — all prior notes remain authoritative). Prior line: `v1.1.9` (CI output-name fix + mode-aware navigation + explicit model states on top of v1.1.8; see the v1.1.9 notes below. The v1.1.8 Chat/Agent separation + model picker + CI release-identity fix, the v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
 
+**v1.2.6 continuation notes for the next agent (authoritative run transport, measured timing, explicit accelerator evidence):**
+
+- RUN TRANSPORT — `internal/api/runstate.go` owns the AUTHORITATIVE
+  per-run state (phase/running/cumulative response+reasoning snapshots/
+  latest status/monotonic sequence/terminal outcome/persisted reply;
+  snapshots capped at 256 KiB, recent-events ring at 32). EVERY activity
+  of a run is published through ONE wrapper in `handleRun` that stamps
+  `Activity.Seq` (assigned BEFORE any subscriber sees the event) and
+  folds the event into the live state. The WS attach loop subscribes
+  FIRST, reads the snapshot SECOND, then forwards only events with
+  `seq > snapshot.sequence` and the snapshot's own runId — that ordering
+  is what makes (snapshot at N) + (events > N) gapless and
+  duplicate-free. Do not publish to the hub directly in `handleRun`;
+  route through `publish()`.
+- ATTACH CONTRACT — the FIRST frame after every WS upgrade is
+  `attached` (the deterministic acknowledgement); the frontend's
+  `waitForActivityAttached()` (src/store.ts) awaits it before POSTing
+  /api/run (a 5 s bound exists ONLY for backends that predate the
+  frame). POST /api/run returns `runId` + `state:"registered"`; the
+  store binds `activeRunId` from it and drops frames of other runs and
+  replayed sequences (`isStaleRunEvent`). Never make POST completion
+  imply live transport again.
+- TIMING — the transport ladder (`request_sent`/`response_headers`/
+  `first_byte`) is emitted by the llm client as `StreamEvent.TimingMark`
+  at the moments they happen (llm/client.go streamOnce: before `Do`,
+  after headers, at the first scanner line — a keep-alive comment counts
+  as first byte) and folded into the agent RunClock. `first_token` is
+  the first content/reasoning delta. `tool_start` marks before EVERY
+  tool-call path (execution, refusal, loop guard, cache) and `tool_end`
+  after it; per-tool time accumulates via `AddToolMs`. Raw stage
+  timestamps ride `Timing.stageTimestamps` — durations are checkable.
+  Never re-derive a transport stage from a content delta.
+- STARTUP — `Server.New()` serves `sysinfo.ProbeFast()` (never the deep
+  probe); `/api/perf` recommendations and the session-context memory
+  assessment read `ProbeFast()` LIVE (deep facts merge as they land).
+  `sysinfo.deepProbeFn` + `resetDeepProbeForTest` are the test seam.
+- ACCELERATOR — `Resolution` carries the explicit evidence state:
+  `selected`/`available`/`executionVerified`/`verification`/`fallback`.
+  The Vulkan-DLL fallback selects GPU_VULKAN with `executionVerified:
+  false` and the pending-log verification plan — never present it as
+  verified. The launcher passes `--device <backend-name>` (e.g.
+  `Vulkan0`) ONLY when the engine's own `--list-devices` enumerated it
+  AND the capability profile proves the build accepts the flag
+  (`EngineCaps.DeviceFlag`, help-parse or tag ≥ b3000, fail-closed).
+- WINDOWS IDENTITY — `fastOSIdentity()` measures the build via
+  `RtlGetVersion` (in-process, lie-proof); `WindowsDisplayForBuild`
+  (osdisplay.go, pure + fixture-tested) derives the label (26200 =
+  "Windows 11 25H2"). The raw build rides `SysInfo.OSBuild`. There is
+  NO manual OS label anywhere — keep it that way.
+- RESOURCE OWNERSHIP — subscribers (mounted components) own shared
+  requests; an unmount never aborts a request another subscriber needs;
+  a request with ZERO subscribers is aborted after a bounded grace
+  (10 s). `ensure()` callers are NOT owners (every production caller
+  fire-and-forgets). HealthCard uses the shared "health" resource.
+- HONEST LIMITS — this continuation was implemented and verified on
+  Linux. Windows-only paths compile + are fixture-tested; real Arc/NPU
+  hardware validation was NOT available (see the v1.2.6 continuation
+  log in worklog.md). `test_host` (native) fails on 2-core agent
+  machines at BASELINE too — it is environmental, not a regression
+  (zero native/ files changed).
+
 **v1.2.6 notes for the next agent:**
 
 - RUN VISIBILITY — `internal/api/runregistry.go` owns the bounded

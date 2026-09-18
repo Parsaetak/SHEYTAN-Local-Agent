@@ -53,6 +53,14 @@ type Activity struct {
         // exactly one run. Empty for orchestrator-internal callers that have
         // no run identity (tests, CLI).
         RunID string `json:"runId,omitempty"`
+
+        // Seq (v1.2.6 continuation) is the monotonic per-run sequence
+        // number the API layer stamps on every PUBLISHED event, assigned
+        // BEFORE the event reaches any subscriber. The replay contract:
+        // a run snapshot at sequence N plus every event with seq > N is
+        // the complete, duplicate-free state. Zero on orchestrator-
+        // internal events that never pass through the API publisher.
+        Seq int64 `json:"seq,omitempty"`
 }
 
 // RunResult carries everything a completed turn produced (v1.0.2). Run()
@@ -1162,7 +1170,15 @@ func (o *Orchestrator) RunDetailed(
                 )
 
                 clock.Mark(StageSerialized)
-                clock.Mark(StageRequestSent)
+                // NOTE (v1.2.6 continuation): StageRequestSent is NO LONGER
+                // marked here — the previous code marked it immediately
+                // after building the request struct, BEFORE any HTTP call,
+                // so "request_sent → first_token" carried serialization and
+                // connect time it never measured. The REAL mark is emitted by
+                // the HTTP streaming client the moment the request is handed
+                // to the transport (llm.TimingMarkRequestSent), together with
+                // response_headers and first_byte — folded into the clock in
+                // the streamChat callback below.
 
                 if u := continuum.EstimateUsage(
                         messages,
@@ -1254,15 +1270,32 @@ func (o *Orchestrator) RunDetailed(
                         ctx,
                         req,
                         func(ev llm.StreamEvent) error {
+                                // v1.2.6 continuation: transport-level timing
+                                // observations from the HTTP client — request
+                                // handed to the transport, response headers,
+                                // first body byte READ. first_byte is NO
+                                // LONGER derived from the first content delta
+                                // (that is first_token semantics and was
+                                // mislabelled for every v1.2.5 consumer).
+                                if ev.TimingMark != "" {
+                                        switch ev.TimingMark {
+                                        case llm.TimingMarkRequestSent:
+                                                clock.Mark(StageRequestSent)
+                                        case llm.TimingMarkResponseHeader:
+                                                clock.Mark(StageResponseHeaders)
+                                        case llm.TimingMarkFirstByte:
+                                                clock.Mark(StageFirstByte)
+                                        }
+                                        return nil
+                                }
+
                                 if ev.Content != "" {
-                                        clock.Mark(StageFirstByte)
                                         firstResponseSeen = true
                                         raw.WriteString(ev.Content)
                                         emitProgress(false)
                                 }
 
                                 if ev.Reasoning != "" {
-                                        clock.Mark(StageFirstByte)
                                         firstResponseSeen = true
                                         native.WriteString(ev.Reasoning)
                                         emitProgress(false)
@@ -1435,6 +1468,14 @@ func (o *Orchestrator) RunDetailed(
                                 Timestamp: time.Now(),
                         })
 
+                        // v1.2.6 continuation: toolStart = immediately before
+                        // this tool call is processed (execution, cache lookup
+                        // or refusal — every path gets BOTH marks, and the
+                        // per-path duration stays honest). The previous code
+                        // marked tool_start AFTER tool.Run returned and never
+                        // marked tool_end at all.
+                        clock.Mark(StageToolStart)
+
                         tool, ok := o.tool(tc.Function.Name)
 
                         var result2 string
@@ -1519,6 +1560,10 @@ func (o *Orchestrator) RunDetailed(
                                         Timestamp: time.Now(),
                                 })
 
+                                // Refused/unknown-tool path settled: tool_end
+                                // fires for EVERY path (v1.2.6 continuation).
+                                clock.Mark(StageToolEnd)
+
                                 messages = append(
                                         messages,
                                         llm.Message{
@@ -1553,6 +1598,10 @@ func (o *Orchestrator) RunDetailed(
                                         Detail:    obs.Block,
                                         Timestamp: time.Now(),
                                 })
+
+                                // Loop-guard refusal settled: both marks fired
+                                // (v1.2.6 continuation).
+                                clock.Mark(StageToolEnd)
 
                                 messages = append(
                                         messages,
@@ -1610,6 +1659,11 @@ func (o *Orchestrator) RunDetailed(
                                                 result2 += "\n\n" + obs2.Warn
                                         }
 
+                                        // Cache-served path settled: tool_end
+                                        // fires for the cache path too
+                                        // (v1.2.6 continuation).
+                                        clock.Mark(StageToolEnd)
+
                                         messages = append(
                                                 messages,
                                                 llm.Message{
@@ -1662,8 +1716,12 @@ func (o *Orchestrator) RunDetailed(
 
                         dur := time.Since(start)
 
+                        // Measured execution time accumulates; tool_end fires
+                        // immediately after the REAL execution (including its
+                        // single transient retry) — never reusing another
+                        // stage's timestamp (v1.2.6 continuation).
                         clock.AddToolMs(dur.Milliseconds())
-                        clock.Mark(StageToolStart)
+                        clock.Mark(StageToolEnd)
 
                         // v1.0.6 VISION: tools that produce images (screenshot,
                         // future chart renderers) tag them with [[IMG:path]]

@@ -183,7 +183,49 @@ type Resolution struct {
         KVCache     string      `json:"kvCache,omitempty"`
         Reason      string      `json:"reason"`                // ALWAYS set — the why
         Fallbacks   []string    `json:"fallbacks,omitempty"`  // failed gates, in order
+
+        // --- v1.2.6 continuation: EXPLICIT EVIDENCE STATE ------------------
+        // The explainable block. "Vulkan DLL exists" and "GPU execution
+        // verified" are DIFFERENT claims and must never be conflated:
+        // ExecutionVerified is true ONLY when runtime execution evidence
+        // exists (engine enumeration OR measured offload); the weaker
+        // DLL-presence fallback selects GPU_VULKAN with ExecutionVerified
+        // FALSE and the verification plan stated in Verification.
+
+        // Selected is the selected backend (mirror of Backend, spelled out
+        // for the explainable contract).
+        Selected Kind `json:"selected"`
+
+        // Available lists every backend the evidence shows is AVAILABLE on
+        // this machine (selected included; CPU always — it is definitionally
+        // available). Presence in this list ≠ selected and ≠ verified.
+        Available []Kind `json:"available"`
+
+        // ExecutionVerified reports whether SELECTED has RUNTIME execution
+        // evidence (engine-enumerated device or a measured offload line —
+        // or, for CPU, execution by definition). FALSE means the selection
+        // is a documented fallback pending verification.
+        ExecutionVerified bool `json:"executionVerified"`
+
+        // Verification states HOW the selection was verified, or the
+        // verification plan when it was not ("pending — offload to be
+        // verified from the runtime log").
+        Verification string `json:"verification,omitempty"`
+
+        // Fallback is the safe posture if the selected-but-unverified
+        // backend fails to execute: "none" when the selection is verified,
+        // "safe" when the CPU path is the guaranteed fallback.
+        Fallback string `json:"fallback"`
 }
+
+// Verification evidence strings (the measured how).
+const (
+        VerificationEngineEnum   = "engine enumerated the device via --list-devices"
+        VerificationOffloadLog   = "runtime engine log measured real GPU offload"
+        VerificationPendingLog   = "pending — device enumeration unsupported by this engine build; offload to be verified from the runtime log"
+        VerificationCPUExecution = "CPU execution is the definitionally available fallback"
+        VerificationNPUBench     = "measured NPU benchmark with OpenVINO runtime"
+)
 
 // NPU model-architecture support gate (extend ONLY with measured evidence
 // that the runtime actually executes the arch).
@@ -206,6 +248,9 @@ func Resolve(requested Requested, ev Evidence) Resolution {
         res := Resolution{
                 Requested: NormalizeRequested(string(requested)),
                 Backend:   KindCPU,
+                Selected:  KindCPU,
+                Available: availableBackends(ev),
+                Fallback:  "none",
         }
 
         gpuDevice := bestGPUDevice(ev)
@@ -214,6 +259,8 @@ func Resolve(requested Requested, ev Evidence) Resolution {
         if res.Requested == RequestCPU {
                 res.AutoProfile = ProfileCPUSafe
                 res.Reason = "requested CPU"
+                res.ExecutionVerified = true
+                res.Verification = VerificationCPUExecution
                 return res
         }
 
@@ -222,9 +269,15 @@ func Resolve(requested Requested, ev Evidence) Resolution {
                 if backend, device, reason, ok := resolveNPU(ev); ok {
                         if res.Requested == RequestNPU || npuBeatsGPU(ev) {
                                 res.Backend = backend
+                                res.Selected = backend
                                 res.Device = device
                                 res.AutoProfile = ProfileLowPowerNPU
                                 res.Reason = reason
+                                // NPU selection requires the FULL gate chain
+                                // INCLUDING a measured benchmark — the only
+                                // path here that can be verified-selected.
+                                res.ExecutionVerified = true
+                                res.Verification = VerificationNPUBench
                                 return res
                         }
                         res.Fallbacks = append(res.Fallbacks, "NPU usable but measured GPU throughput is higher")
@@ -235,14 +288,32 @@ func Resolve(requested Requested, ev Evidence) Resolution {
 
         // --- the GPU gate chain ------------------------------------------------
         if res.Requested == RequestGPU || res.Requested == RequestAuto {
-                gpuDevice, gpuReason, gpuOK := resolveGPU(ev, gpuDevice)
+                gpuDevice, gpuReason, gpuOK, verified := resolveGPU(ev, gpuDevice)
 
                 if gpuOK {
                         res.Backend = KindGPUVulkan
+                        res.Selected = KindGPUVulkan
                         res.Device = gpuDevice.Name
                         res.GPULayers = -1 // all layers (llama.cpp 99 semantics)
                         res.AutoProfile = autoProfileFor(ev.Workload)
                         res.Reason = gpuReason
+                        res.ExecutionVerified = verified
+
+                        if verified {
+                                if strings.TrimSpace(ev.RuntimeOffloadEvidence) != "" &&
+                                        gpuDevice.Source != "engine-enumeration" {
+                                        res.Verification = VerificationOffloadLog
+                                } else {
+                                        res.Verification = VerificationEngineEnum
+                                }
+                                res.Fallback = "none"
+                        } else {
+                                // The documented weaker fallback: Vulkan
+                                // present, no execution evidence yet.
+                                res.Verification = VerificationPendingLog
+                                res.Fallback = "safe" // CPU is the guaranteed path
+                        }
+
                         applyWorkloadTuning(&res, ev)
                         return res
                 }
@@ -252,8 +323,32 @@ func Resolve(requested Requested, ev Evidence) Resolution {
 
         // --- fall back to CPU ---------------------------------------------------
         res.AutoProfile = ProfileCPUSafe
+        res.Selected = KindCPU
         res.Reason = "no accelerator proven usable by measured evidence — CPU"
+        res.ExecutionVerified = true
+        res.Verification = VerificationCPUExecution
+        res.Fallback = "none"
         return res
+}
+
+// availableBackends lists the backends the evidence shows are AVAILABLE
+// (never claiming verified execution for any of them — availability and
+// verification are different claims).
+func availableBackends(ev Evidence) []Kind {
+        out := []Kind{KindCPU}
+
+        gpu := bestGPUDevice(ev)
+        if (gpu != nil && gpu.Source == "engine-enumeration") ||
+                strings.TrimSpace(ev.RuntimeOffloadEvidence) != "" ||
+                (!ev.EnumerationSupported && ev.VulkanBackendPresent) {
+                out = append(out, KindGPUVulkan)
+        }
+
+        if ev.NPUPresent {
+                out = append(out, KindNPUOpenVINO)
+        }
+
+        return out
 }
 
 // bestGPUDevice picks the engine-enumerated GPU with the most memory.
@@ -270,14 +365,17 @@ func bestGPUDevice(ev Evidence) *Device {
         return best
 }
 
-// resolveGPU applies the GPU evidence gates, strongest first.
-func resolveGPU(ev Evidence, device *Device) (dev Device, reason string, ok bool) {
+// resolveGPU applies the GPU evidence gates, strongest first. The fourth
+// return is the EXECUTION-VERIFIED verdict: gates 1 and 2 have runtime
+// execution evidence; gate 3 (Vulkan DLL present, enumeration unsupported)
+// is the documented weaker fallback — selected but NOT verified.
+func resolveGPU(ev Evidence, device *Device) (dev Device, reason string, ok bool, verified bool) {
         // Gate 1 (strongest): the engine itself enumerated a device.
         if device != nil && device.Source == "engine-enumeration" {
                 return *device, fmt.Sprintf(
                         "engine enumerated %s device %q (%d MB) via --list-devices",
                         device.Backend, device.Name, device.TotalMB,
-                ), true
+                ), true, true
         }
 
         // Gate 2: the engine LOG measured real offload at runtime.
@@ -286,18 +384,19 @@ func resolveGPU(ev Evidence, device *Device) (dev Device, reason string, ok bool
                 if device != nil {
                         d = *device
                 }
-                return d, "runtime engine log measured real GPU offload: " + ev.RuntimeOffloadEvidence, true
+                return d, "runtime engine log measured real GPU offload: " + ev.RuntimeOffloadEvidence, true, true
         }
 
         // Gate 3 (documented fallback — WEAKER): the engine build does not
         // support enumeration AND no log evidence exists yet, but a Vulkan
         // backend is installed. The offload-line parsing feeds Gate 2 for every
         // subsequent boot, so the claim is verified after the first launch.
+        // Until then the selection is explicitly UNVERIFIED.
         if !ev.EnumerationSupported && ev.VulkanBackendPresent {
-                return Device{}, "device enumeration unsupported by this engine build; Vulkan backend present — offload to be verified from the runtime log", true
+                return Device{}, "device enumeration unsupported by this engine build; Vulkan backend present — offload to be verified from the runtime log", true, false
         }
 
-        return Device{}, "no enumerated GPU device and no runtime offload evidence", false
+        return Device{}, "no enumerated GPU device and no runtime offload evidence", false, false
 }
 
 // resolveNPU applies the FULL NPU gate chain. Every gate must pass.
@@ -377,8 +476,11 @@ func applyWorkloadTuning(res *Resolution, ev Evidence) {
 }
 
 // Describe renders the one-line resolution summary for logs and the UI.
+// The explainable form carries the evidence state explicitly:
+// selected/executionVerified/reason/fallback — never a bare backend name.
 func (r Resolution) Describe() string {
-        s := fmt.Sprintf("requested=%s resolved=%s", r.Requested, r.Backend)
+        s := fmt.Sprintf("requested=%s selected=%s executionVerified=%t",
+                r.Requested, r.Backend, r.ExecutionVerified)
 
         if r.Device != "" {
                 s += " device=" + r.Device
@@ -389,6 +491,8 @@ func (r Resolution) Describe() string {
         }
 
         s += " reason=" + r.Reason
+
+        s += " fallback=" + r.Fallback
 
         return s
 }

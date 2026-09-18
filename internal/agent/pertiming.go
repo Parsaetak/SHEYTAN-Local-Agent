@@ -3,9 +3,9 @@
 // One RunClock per agent turn records the REAL timestamps of every stage
 // on the first-response critical path:
 //
-//	received → classified → context_start/end → prompt_start/end →
-//	serialized → request_sent → first_byte → first_token →
-//	generation_end → tool_start/end → verification_start/end → done
+//      received → classified → context_start/end → prompt_start/end →
+//      serialized → request_sent → first_byte → first_token →
+//      generation_end → tool_start/end → verification_start/end → done
 //
 // and derives the stage durations the diagnostics surface shows:
 // classify_ms, context_ms, prompt_ms, serialization_ms, TTFT,
@@ -22,6 +22,18 @@ import (
 )
 
 // Stage names, stable for the diagnostics contract.
+//
+// v1.2.6 continuation semantics (the transport ladder is MEASURED by the
+// HTTP streaming client itself, never derived from content deltas):
+//
+//      request_sent      — the HTTP request was handed to the transport
+//      response_headers  — the server's response headers arrived
+//      first_byte        — the FIRST network byte of the body was READ
+//      first_token       — the first generated content/reasoning token
+//
+// The client emits these as llm.StreamEvent timing marks at the exact
+// moment each happens (llm client.go); the orchestrator folds them into
+// the clock. A stage that never fired reports 0 — never an invented value.
 const (
         StageReceived          = "received"
         StageClassified        = "classified"
@@ -31,6 +43,7 @@ const (
         StagePromptEnd         = "prompt_end"
         StageSerialized        = "serialized"
         StageRequestSent       = "request_sent"
+        StageResponseHeaders   = "response_headers"
         StageFirstByte         = "first_byte"
         StageFirstToken        = "first_token"
         StageGenerationEnd     = "generation_end"
@@ -124,6 +137,20 @@ func (c *RunClock) AddToolMs(ms int64) {
         c.mu.Unlock()
 }
 
+// LastStageTime returns the measured timestamp of one stage (ok=false when
+// the stage never fired — an honest unknown).
+func (c *RunClock) LastStageTime(stage string) (time.Time, bool) {
+        if c == nil {
+                return time.Time{}, false
+        }
+
+        c.mu.Lock()
+        defer c.mu.Unlock()
+
+        t, ok := c.stages[stage]
+        return t, ok
+}
+
 // AddVerificationMs accumulates measured verification time.
 func (c *RunClock) AddVerificationMs(ms int64) {
         if c == nil {
@@ -142,11 +169,19 @@ type Timing struct {
         PromptMs          int64 `json:"promptMs,omitempty"`
         SerializationMs   int64 `json:"serializationMs,omitempty"`
         TTFTMs            int64 `json:"ttftMs,omitempty"` // request_sent → first_token
+        HeadersMs         int64 `json:"headersMs,omitempty"` // request_sent → response_headers
+        FirstByteMs       int64 `json:"firstByteMs,omitempty"` // response_headers → first_byte
         GenerationMs      int64 `json:"generationMs,omitempty"`
         ToolMs            int64 `json:"toolMs,omitempty"`
         VerificationMs    int64 `json:"verificationMs,omitempty"`
         TotalMs           int64 `json:"totalMs,omitempty"`
         FirstPromptTokens int   `json:"firstPromptTokens,omitempty"`
+
+        // Stages (v1.2.6 continuation) carries the RAW unix-milli timestamp
+        // of every marked stage — duration provenance for diagnostics, so a
+        // consumer can verify that no duration was derived, reused or
+        // invented. Stages that never fired are absent.
+        Stages map[string]int64 `json:"stageTimestamps,omitempty"`
 }
 
 // Snapshot computes the derived durations. Unmarked stages report 0.
@@ -184,9 +219,21 @@ func (c *RunClock) Snapshot() Timing {
                 PromptMs:        ms(StagePromptStart, StagePromptEnd),
                 SerializationMs: ms(StagePromptEnd, StageSerialized),
                 TTFTMs:          ms(StageRequestSent, StageFirstToken),
+                HeadersMs:       ms(StageRequestSent, StageResponseHeaders),
+                FirstByteMs:     ms(StageResponseHeaders, StageFirstByte),
                 GenerationMs:    ms(StageRequestSent, StageGenerationEnd),
                 ToolMs:          c.toolMs,
                 VerificationMs:  c.verificationMs,
+                Stages:          map[string]int64{},
+        }
+
+        // Raw timestamp provenance: every stage that actually fired.
+        for stage, ts := range c.stages {
+                t.Stages[stage] = ts.UnixMilli()
+        }
+
+        if len(t.Stages) == 0 {
+                t.Stages = nil
         }
 
         if done, ok := at(StageDone); ok {

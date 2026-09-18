@@ -2513,3 +2513,121 @@ clean; Windows cross-build (GOOS=windows, all internal packages) green;
 frontend typecheck + lint (0/0) + 8/8 unit tests + production build green;
 native engine rebuilt, CTest 12/12. Identity chain at 1.2.5 (release
 version check green).
+
+## v1.2.6 Continuation — 2026-09-18: Authoritative Run Transport, Deterministic Attach, Measured Timing, Non-Blocking Startup, Explicit Accelerator Evidence
+
+Base: `main @ b0ed628` (v1.2.6). Identity chain UNCHANGED (1.2.6 preserved
+per the brief). Baseline captured before any edit: full go test green,
+typecheck 0, lint 0, units 34/34.
+
+### Root causes confirmed from source (before any edit)
+
+1. activityHub had NO live-run replay (subscribe = future events only);
+   no server-side phase/sequence/snapshots. server.go hub loop.
+2. store.ts run() called connectActivity() (void, CONNECTING) then POSTed
+   immediately; POST returned {ok,sessionId} only. The race the v1.2.6
+   notes claimed removed was still structurally present.
+3. orchestrator.go:1164-1165 marked StageRequestSent immediately after
+   request BUILD (pre-send); StageFirstByte == first content delta
+   (lines 1258/1265 — first-token semantics mislabelled); no
+   response_headers stage; tool timing: StageToolStart marked AFTER
+   tool.Run returned (line 1666) and StageToolEnd NEVER marked; cached/
+   refused/loop-guard paths unmarked.
+4. server.go:275 New() called sysinfo.Probe() — the DEEP probe (batched
+   CIM on Windows, seconds) — synchronously before the listener bound.
+   perf.go:502 buildRecommended + sessioncontext.go systemMemory also
+   used the blocking/stale probe.
+5. SystemPanel.tsx HealthCard used its own uncached api.health() fetch
+   (bypassing the shared layer); resources.ts created an
+   AbortController that nothing ever aborted.
+6. accelerator.Resolution had no available/selected/executionVerified/
+   fallback; the Vulkan-DLL fallback resolved GPU_VULKAN with no
+   unverified marker; launcher never passed --device.
+7. OS identity was bare runtime.GOOS — no measured build, no derivable
+   label (the brief's "stale Windows 10 label" risk).
+
+### Changes (all inside the existing architecture)
+
+- internal/api/runstate.go (NEW): bounded authoritative per-run state
+  (256 KiB snapshot cap, 32-event ring) + monotonic Seq + terminal
+  settle (exactly-once, persisted-reply replay).
+- internal/api/server.go: ONE publish() wrapper stamps RunID+Seq and
+  folds every event into the live state; `attached` ack frame first
+  after upgrade; run_snapshot frame on every attachment with
+  seq/runId-filtered forwarding (subscribe → snapshot → filter);
+  POST /api/run returns runId+state; New() → ProbeFast().
+- internal/agent/orchestrator.go: Activity.Seq; transport marks folded
+  from the client; fake requestSent/firstByte marks removed; tool_start
+  before every path, tool_end after every path.
+- internal/agent/pertiming.go: StageResponseHeaders; Timing +=
+  headersMs/firstByteMs/stageTimestamps (raw provenance); LastStageTime.
+- internal/llm/client.go: StreamEvent.TimingMark + request_sent /
+  response_headers / first_byte emitted at the transport moments
+  (keep-alive comment = first byte; non-SSE path marked before decode);
+  retry rule ignores timing marks (no content seen).
+- internal/llm/capability.go + llama.go: EngineCaps.DeviceFlag
+  (help-parse / tag≥b3000, fail-closed) + deterministicDevice() +
+  --device appended under (caps ∧ GPU layers ∧ enumeration).
+- internal/accelerator/accelerator.go: Selected/Available/
+  ExecutionVerified/Verification/Fallback + the verification-evidence
+  constants; Describe() carries the explainable line.
+- internal/sysinfo: OSBuild/OSDisplay fields; fastOSIdentity()
+  (RtlGetVersion on Windows, GOOS elsewhere); osdisplay.go (pure
+  build→label mapping, 26200→"Windows 11 25H2"); deepProbeFn test seam.
+- internal/api/perf.go + sessioncontext.go: ProbeFast() (non-blocking,
+  deep-merging).
+- src/store.ts: attach deferred (begin/settle/fail), bounded compat
+  race, run()/regenerate() await the ack; activeRunId/lastRunSeq stale
+  filters; handleRunSnapshot (live replay + terminal finalisation);
+  resets on session create/switch.
+- src/api.ts: RunResponse.state.
+- src/SystemPanel.tsx: HealthCard → useResource("health").
+- src/resources.ts: subscriber-counted ownership + bounded abort grace
+  (10 s) + reset clears timers; setUnusedRequestGraceForTest seam.
+
+### Verification (executed, measured)
+
+- go test -tags headless ./... -count=1: 42 packages ok, 0 FAIL.
+- go test -race on api/agent/llm/accelerator/sysinfo: ok (after fixing
+  a leaked test goroutine — the race detector caught my own test rig).
+- go vet -tags headless ./...: clean. GOOS=windows build: OK.
+- stress-main: 47 pass / 0 fail, 0 hangs, 0 crashes.
+- typecheck 0 / lint 0 / units 39/39 (5 new) / npm build clean.
+- release-version --check: consistent at 1.2.6.
+- NEW tests: runtransport_test.go (7: incl. THE mid-run reconnect —
+  final text EXACTLY equals the full stream, no duplication), agent
+  timingmarks_test.go (5: transport ladder measured on a
+  delayed-headers server, TTFT ≥ headersMs), llm timingmarks_test.go
+  (5: marks/keep-alive/caps/--device/deterministic selection through a
+  fake enumerating engine), sysinfo startup_test.go (6: ProbeFast never
+  blocks behind a slow probe — measured; single-flight 8→1; build
+  mapping), accelerator evidence matrix (6), resources ownership (3),
+  run-events transport frames (2).
+- Repetition: api suite 3× stable; transport set -count=3 stable.
+- v1.2.5/v1.2.6 regressions re-run by name: engine lifecycle 12,
+  scheduler, runtime seams, context resolution 7, V125/V126 measurement
+  (thinking one-liner still ~548 tokens tier FAST 0 tools), modelMax —
+  all pass.
+- Native: host+libs build; 11/12 test binaries PASS. test_host FAILS on
+  this 2-core agent machine AT BASELINE TOO — verified DIRECTLY: the
+  untouched b0ed628 checkout's test_host (compiled from the identical
+  sources; git diff --name-only b0ed628..HEAD -- native/ is empty)
+  fails with the identical signature ("protocol violation: frame
+  exceeds cap" + test_host.cpp:817/820/821/822/846/847). Environmental,
+  not introduced. Recorded honestly.
+
+### Not performed (explicit)
+
+- Real Windows validation (target laptop unavailable in this
+  environment): NOT performed, NOT claimed. Arc/NPU runtime evidence
+  NOT measured: no such hardware here. No GPU/NPU throughput numbers
+  anywhere in this package.
+- GitHub Actions state could not be read (API rate-limited from this
+  network); the workflow file and release identity chain were verified
+  locally instead.
+
+### Clean-room proof
+
+Fresh clone of b0ed628 → continuation commit applied → npm ci + build +
+go build (linux+windows) + focused test set: ALL green (executed in
+/home/z/my-project/cleanroom-patched before packaging).

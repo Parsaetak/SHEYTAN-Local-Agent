@@ -499,7 +499,16 @@ func (s *Server) buildMemoryStats() *memoryStatsAPI {
 // verified engine capability profile. Nothing here mutates configuration —
 // the UI applies values explicitly.
 func (s *Server) buildRecommended(loadedModelPath string) *recommendedSettings {
-        si := sysinfo.Probe()
+        // v1.2.6 continuation: /api/perf is an INTERACTIVE surface — it must
+        // never block on the deep hardware probe. The previous code called
+        // sysinfo.Probe() (deep, single-flight): the FIRST perf request of a
+        // cold start could wait seconds behind the CIM probe. ProbeFast
+        // serves the fast facts instantly and merges the measured deep facts
+        // once the background probe lands (WarmDeep runs at startup).
+        si := sysinfo.ProbeFast()
+        if si == nil {
+                si = sysinfo.Probe()
+        }
         if si == nil {
                 return nil
         }
