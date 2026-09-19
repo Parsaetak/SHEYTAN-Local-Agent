@@ -4,12 +4,12 @@
 // (response / reasoning / done / tool_start / tool_end / verification /
 // error / context / perf / failure / session) and the v1.2.5 additions:
 //
-//	thinking_start / thinking_delta / thinking_end
-//	assistant_delta
-//	complete
-//	status            (live status chip telemetry: phase · tier · tokens)
-//	escalation        (tier move with reason, e.g.
-//	                   "FAST 3.8K → STANDARD 7.2K reason=MissingFileContext")
+//      thinking_start / thinking_delta / thinking_end
+//      assistant_delta
+//      complete
+//      status            (live status chip telemetry: phase · tier · tokens)
+//      escalation        (tier move with reason, e.g.
+//                         "FAST 3.8K → STANDARD 7.2K reason=MissingFileContext")
 //
 // normalizeEventKind maps every wire name onto the canonical kinds the
 // store consumes. Legacy names keep their meaning; the new names are
@@ -35,6 +35,8 @@ export type CanonicalEventKind =
   | "failure"
   | "plan"
   | "session"
+  | "task" // v1.2.8: bounded agent task-state snapshot (goal/step/files/tests/…)
+  | "handoff" // v1.2.8: agent.md handoff written at settlement
   | "idle" // socket has no run attached (recovery signal)
   | "done" // run finished (legacy name)
   | "complete" // run finished (v1.2.5 name)
@@ -71,6 +73,8 @@ const KIND_MAP: Record<string, CanonicalEventKind> = {
   failure: "failure",
   plan: "plan",
   session: "session",
+  task: "task",
+  handoff: "handoff",
   idle: "idle",
 
   error: "error",
@@ -94,7 +98,8 @@ export function isRunEvidence(kind: CanonicalEventKind): boolean {
     kind === "done" ||
     kind === "complete" ||
     kind === "status" ||
-    kind === "escalation"
+    kind === "escalation" ||
+    kind === "task"
   );
 }
 

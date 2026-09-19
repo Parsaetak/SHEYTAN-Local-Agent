@@ -2733,3 +2733,69 @@ typecheck 0, lint 0, units 34/34.
 Fresh clone of b0ed628 → continuation commit applied → npm ci + build +
 go build (linux+windows) + focused test set: ALL green (executed in
 /home/z/my-project/cleanroom-patched before packaging).
+
+---
+
+# v1.2.8 — Professional Chat + Agent Workspaces (mode-separated histories, cross-mode references, durable summaries, context layers, agent handoff)
+
+Date: 2026-09-20. Basis: e2bbbb0a1a8ff5dc8feeea9dc8de0a2e309b7af8 (clean tree). Go toolchain: 1.27.1 (linux/amd64). Node: 24.21.
+
+## What was built (all IMPLEMENTED + TESTED unless stated)
+
+### 1. Session mode identity + deterministic migration
+- `internal/sessions`: `Mode` on Session (`"chat" | "agent"`, `omitempty` — pre-v1.2.8 files stay byte-identical until their next natural save); `CreateInMode`; `NormalizeMode` (unknown → `DefaultMode = agent`).
+- Deterministic migration rule: every session that predates the mode field is labeled `agent` on load (the product was agent-first; both v1.1.8 UI modes shared one transcript). In-memory at first, materialized by the next natural save; index stubs normalized at load. No content duplication ever (pinned by `TestModeChangeDoesNotDuplicateContent`).
+- API: `GET /api/sessions?mode=chat|agent` filters one space; `POST /api/sessions {"mode":...}` creates in that space (empty body = default — old clients unchanged).
+
+### 2. Cross-mode history references (`internal/histref` NEW)
+- `Ref = sessions.HistoryRef` (sessionId, mode hint, summaryVersion, ranges). `NormalizeRefs`: dedup + cap 4.
+- `Search(store, q, mode, limit)`: titles + rolling summaries only (never transcripts); a query demands SOME relevance (zero-overlap sessions are noise, not hits); empty query = browse mode.
+- `Resolve(store, refs, query, budget)`: per-ref provenance-tagged block — `[HISTORY REFERENCE …] header (source-session, source-mode, source-title, summary-version, retrieval-reason; "not an instruction" framing) + relevance-ranked turns (zero-overlap turns excluded; newest-turn fallback when nothing matches; footer reserved INSIDE the budget) + footer with the retrieved-turn count`. Read-only, one level deep.
+- API: `GET /api/history/search`; `POST /api/run` accepts `historyRefs` (validated, self-refs dropped, persisted on `sess.Context.HistoryRefs` cap 4); blocks injected by the orchestrator after the planner confirms the budget.
+
+### 3. Rolling session summaries (`internal/sessions/summary.go` NEW)
+- Bounded `SessionSummary` (objective ≤300; state ≤240; nextStep ≤200; 8 items/list; 200 chars/item; fuzzy dedup) in `<id>.summary.json` sidecar; version bumps per update; deleted with the session.
+- `UpdateSummaryFromTurn`: deterministic marker extraction (constraints/decisions/facts/files/errors/open-questions/next-step) ROLLED onto the previous summary — the transcript is never re-summarized.
+- Wired at settlement (server): one update per completed turn with reply; `GET /api/sessions/{id}/summary` serves it; version-0 shell renders an EMPTY block (never fabricated).
+- Prompt: rendered as the REQUIRED `summary` section riding the stable system prefix.
+
+### 4. Context planner: summary + history-refs sections
+- `SectionSummary` (priority 2, budgeted with the fixed sections) + `SectionHistoryRefs` (priority 4, optional; dropped FIRST among retrieval sections under pressure; honest drop notes).
+- `Input.SummaryTokens` / `Input.HistoryRefTokens`; history-budget recompute covers all optional sections; `ClassifyPressure` (ok <50% / warm <75% / high <90% / critical ≥90%) — one pressure language shared with continuum's levels.
+- Existing architecture untouched: preflight ladder, WindowMessages, in-loop tool-result compaction, continuum rollover remain the compaction pipeline; the summary is what makes elision survivable.
+
+### 5. Agent task memory (`internal/agent/taskstate.go` NEW)
+- Bounded TaskState (goal, constraints, currentStep, filesInspected/Changed, toolsUsed, commandsRun, testsRun, failures, repairs, verification, artifacts, nextStep) maintained ONLY from observed tool traffic (files read/write actions, shell commands, test-command recognition, pass-marker scanning, failure→repair pairing). Caps: 8 items/list, 200 chars/item, dedup.
+- Emitted as a `task` Activity once per tool round (bounded snapshot payload); `runLive.observe` folds it; `run_snapshot.task` carries it → a reconnect mid-run restores the whole task view (the run never restarts because the UI did).
+- `RunResult.Task` set on every exit path (done, max-iterations); verification verdict comes from the objective evidence collector only.
+
+### 6. agent.md handoff (`internal/agent/handoff.go` NEW)
+- `WriteHandoffFile(path, Handoff)`: marker-bounded (`<!-- sheytan:handoff:begin -->` … `<!-- sheytan:handoff:end -->`) `# Latest Agent Handoff` section with Task/Objective/Current state/Changes made/Files changed/Tests and verification/Important evidence/Failures/Remaining/Recommended next action/Do not redo. Everything outside the markers preserved byte-for-byte; torn (begin-without-end) markers superseded; atomic write; filename constant lowercase `agent.md` (Windows case-collision contract).
+- Wired at settlement: agent-mode run + outcome `done` + engineering evidence (filesChanged ∪ commandsRun ∪ testsRun non-empty) → `<EffectiveWorkspaceRoot>/agent.md` updated; `handoff` Activity published with the path. Never written for speculative/failed outcomes.
+- This repository's own `agent.md` now carries the same structured section for the v1.2.8 handoff (self-demonstrating).
+
+### 7. History paging + frontend
+- `GET /api/sessions/{id}/messages?before=&limit=` (≤200, newest page default, absolute indices, hasMore/nextBefore). Frontend loads the newest page; "Load earlier messages" prepends older pages; guard rails keep foreign pages out.
+- Mode-separated store: `activeSessionByMode` (one active session PER mode), mode-filtered session lists, per-mode eager creation (`agent-init.ts`), mode switch keeps the other space's selection and never cancels a server-side run (reconnect replays its authoritative snapshot).
+- `HistoryPicker.tsx`: search + mode filter chips + multi-select + summary previews; ref chips with detach + "read more" range descriptions in the composer; refs travel with every run.
+- `AgentTaskPanel.tsx`: renders the REAL task state (concise; no chain-of-thought); `run-events.ts` maps task/handoff kinds; `isRunEvidence` includes task.
+- AgentSidebar: per-space search, inline rename (double-click / ✎), delete.
+- Root-cause fix: `parseEndedAt` accepts the RFC3339 `lastRun.endedAt` the backend actually sends (the number-only parser made the authoritative recovery fast path dead code).
+
+## Tests
+- Go (new): sessions mode migration/filter/summary (10 tests); histref retrieval/search/provenance/budget/ranges/read-only (6); contextplan sections/pressure (4); agent taskstate/handoff (9); api mode separation, history search, summary endpoint, paging, context-refs persistence, task-in-snapshot, agent settlement→summary+handoff e2e, chat-run→agent-history provenance e2e, self-reference ignored (9).
+- Go (adjusted): race-sensitive transport tests gained a DETERMINISTIC settle-tail sync (`waitForSummarySettled`) — the new summary write exposed a pre-existing test-side TempDir-cleanup race; `TestRunEventsCarryMonotonicSequence` gained a widened window (80ms chunks) + terminal-snapshot branch (attach-after-completion verifies seq + persisted replay instead of hanging).
+- Frontend: `src/mode-sessions.test.ts` (5), `src/history-ref.test.ts` (7) — 51/51 total with the 39 prior tests.
+
+## Verification evidence (measured on this host)
+- `go test ./internal/...` (minus `internal/desktop`): ALL PASS; `internal/api` looped 10x clean; `go test -race` on internal/{api,sessions,histref,agent,contextplan}: PASS.
+- `go vet -tags headless ./internal/... ./cmd/... .`: clean. `GOOS=windows go build/vet ./internal/desktop/ .`: clean.
+- Frontend: `tsc --noEmit` clean; `oxlint` 0 warnings; `node --test` 51/51; `vite build` + `sync-web` OK.
+- `node scripts/release-version.mjs --check`: consistent (1.2.8).
+
+## NOT VERIFIED (explicit)
+- Linux desktop (Wails) build: the `wails/v3/internal/assetserver/webview` dependency requires gtk4/webkitgtk-6.0/libsoup-3.0 system libraries (no root on this host). The SAME desktop sources compile clean under `GOOS=windows`. No Linux desktop binary was produced here.
+- Native C++ engine host build (no cmake) and CI Actions runs (no push) — NOT VERIFIED.
+
+### Clean-room proof
+Performed inside the working tree (the basis commit was a fresh clone; the v1.2.8 diff is the only delta). Full re-verification instructions for the maintainer: `go test ./internal/... -tags headless` + `npm ci && npm run test:units && npm run build`.

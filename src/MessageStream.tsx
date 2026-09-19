@@ -579,6 +579,12 @@ function MessageStream() {
   const runPhase = useRuntimeStore((state) => state.runPhase);
   const activity = useRuntimeStore((state) => state.activity);
 
+  // v1.2.8: lazy history paging — "Load earlier" fetches the next older
+  // page on demand; the browser never needs the whole transcript.
+  const olderHasMore = useRuntimeStore((state) => state.olderHasMore);
+  const olderLoading = useRuntimeStore((state) => state.olderLoading);
+  const loadOlderMessages = useRuntimeStore((state) => state.loadOlderMessages);
+
   const streamRef = useRef<HTMLDivElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
@@ -680,6 +686,19 @@ function MessageStream() {
         ref={streamRef}
         onScroll={handleStreamScroll}
       >
+        {olderHasMore ? (
+          <div className="history-pager">
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => void loadOlderMessages()}
+              disabled={olderLoading}
+            >
+              {olderLoading ? "Loading…" : "Load earlier messages"}
+            </button>
+          </div>
+        ) : null}
+
         {visibleMessages.length === 0 &&
         !streaming &&
         !isLivePhase(runPhase) ? (

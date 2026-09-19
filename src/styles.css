@@ -4699,3 +4699,385 @@ body::before {
   color: var(--accent, #b48cff);
   font-weight: 600;
 }
+
+/* ==========================================================================
+   v1.2.8 — mode-separated histories, cross-mode picker, task panel,
+   lazy history paging, session rename/search.
+   ========================================================================== */
+
+/* --- sidebar: search + session item actions + rename --------------------- */
+.sidebar-search {
+  padding: 0 12px 8px;
+}
+
+.sidebar-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  background: var(--panel, rgba(255, 255, 255, 0.04));
+  color: inherit;
+  font-size: 12px;
+}
+
+.session-item-wrap {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.session-item-wrap .session-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-item-wrap.active .session-item {
+  font-weight: 600;
+}
+
+.session-item-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+}
+
+.session-item-wrap:hover .session-item-actions,
+.session-item-wrap:focus-within .session-item-actions {
+  display: inline-flex;
+}
+
+.session-action {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.session-action:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.session-action.danger:hover {
+  background: rgba(220, 70, 70, 0.22);
+}
+
+.session-rename-input {
+  flex: 1;
+  min-width: 0;
+  margin: 2px 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--accent, #7c6cff);
+  background: var(--panel, rgba(255, 255, 255, 0.06));
+  color: inherit;
+  font-size: 12px;
+}
+
+/* --- composer: history reference chips ----------------------------------- */
+.composer-history-refs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 0;
+}
+
+.history-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--border, rgba(255, 255, 255, 0.2));
+  background: rgba(124, 108, 255, 0.1);
+  font-size: 11px;
+}
+
+.history-ref-icon {
+  opacity: 0.7;
+}
+
+.history-ref-remove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.6;
+}
+
+.history-ref-remove:hover {
+  opacity: 1;
+}
+
+/* --- message stream: lazy history pager ---------------------------------- */
+.history-pager {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 2px;
+}
+
+/* --- agent task panel ------------------------------------------------------ */
+.agent-task-panel {
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  padding: 10px 14px;
+}
+
+.agent-task-panel .task-step {
+  font-size: 11px;
+  opacity: 0.75;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-task-panel .task-goal {
+  margin: 6px 0 8px;
+  font-size: 12px;
+  opacity: 0.85;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.task-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 11.5px;
+}
+
+.task-row-label {
+  flex: 0 0 82px;
+  opacity: 0.55;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.task-row-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-item {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 1px 6px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-verification {
+  font-weight: 600;
+}
+
+.task-verification.value-good {
+  color: #55d187;
+}
+
+.task-verification.value-bad {
+  color: #ff6b6b;
+}
+
+.task-verification.value-neutral {
+  opacity: 0.8;
+}
+
+.task-next {
+  opacity: 0.85;
+}
+
+/* --- history picker -------------------------------------------------------- */
+.history-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 8, 14, 0.6);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+}
+
+.history-picker {
+  width: min(620px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #14141d);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.history-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+}
+
+.history-picker-search {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 10px;
+}
+
+.history-picker-search input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+}
+
+.history-picker-filters {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 10px;
+}
+
+.filter-chip {
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.filter-chip.active {
+  background: rgba(124, 108, 255, 0.22);
+  border-color: rgba(124, 108, 255, 0.55);
+}
+
+.history-picker-results {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 10px;
+  min-height: 120px;
+}
+
+.history-hit {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 8px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.history-hit:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.history-hit.selected {
+  background: rgba(124, 108, 255, 0.16);
+}
+
+.history-hit-select {
+  flex: 0 0 16px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.history-hit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.history-hit-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.history-hit-title {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-hit-mode {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.18));
+  opacity: 0.85;
+}
+
+.history-hit-mode.mode-chat {
+  color: #6fc3ff;
+}
+
+.history-hit-mode.mode-agent {
+  color: #b39dff;
+}
+
+.history-hit-date,
+.history-hit-count {
+  flex: none;
+  font-size: 10.5px;
+  opacity: 0.55;
+}
+
+.history-hit-preview {
+  font-size: 11.5px;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-hit-empty {
+  padding: 26px 12px;
+  text-align: center;
+  opacity: 0.6;
+  font-size: 12.5px;
+}
+
+.history-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.history-picker-hint {
+  font-size: 11px;
+  opacity: 0.6;
+  max-width: 65%;
+}

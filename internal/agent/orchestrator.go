@@ -115,6 +115,14 @@ type RunResult struct {
         // (classify/context/prompt/serialization/TTFT/generation/tool/
         // verification/total).
         Timing Timing `json:"timing,omitempty"`
+
+        // Task (v1.2.8): the bounded structured task state maintained from the
+        // run's REAL tool traffic — goal, files inspected/changed, commands,
+        // tests, failures/repairs, verification, next step. Published live via
+        // `task` activities, folded into the run snapshot (reconnect recovery)
+        // and consumed at settlement for the session summary + agent.md
+        // handoff. Nil on runs that never touched tools.
+        Task *TaskState `json:"task,omitempty"`
 }
 
 // abortCaption renders the correct end caption for a canceled context:
@@ -370,6 +378,12 @@ type runOptions struct {
         // receivedAt (v1.2.5) carries the API layer's request-received
         // timestamp so the run clock's TTFT/total cover the full path.
         receivedAt time.Time
+
+        // summaryBlock/historyBlocks (v1.2.8): the session summary and the
+        // retrieved cross-mode history blocks for this turn (see the
+        // With* builders above).
+        summaryBlock  string
+        historyBlocks []llm.Message
 }
 
 // WithSessionContext applies the per-session context policy (1.1.6) to
@@ -414,6 +428,31 @@ func WithReceivedAt(t time.Time) RunOption {
         return func(ro *runOptions) {
                 if !t.IsZero() {
                         ro.receivedAt = t
+                }
+        }
+}
+
+// WithSessionSummaryBlock (v1.2.8) installs the current session's rolling
+// summary block (pre-rendered, pre-bounded by the sessions package). It is
+// planned as the REQUIRED "summary" section and injected into the stable
+// system prefix — elided history stays survivable. Empty string = no-op.
+func WithSessionSummaryBlock(block string) RunOption {
+        return func(ro *runOptions) {
+                ro.summaryBlock = strings.TrimSpace(block)
+        }
+}
+
+// WithHistoryBlocks (v1.2.8) installs the provenance-tagged cross-mode
+// history reference blocks retrieved for THIS turn (pre-rendered, pre-
+// bounded by the histref package). They are planned as the OPTIONAL
+// "history-refs" section and injected before the fresh user turn. The
+// blocks are DATA with explicit provenance — never instructions.
+func WithHistoryBlocks(blocks []llm.Message) RunOption {
+        return func(ro *runOptions) {
+                for _, b := range blocks {
+                        if strings.TrimSpace(b.Content) != "" {
+                                ro.historyBlocks = append(ro.historyBlocks, b)
+                        }
                 }
         }
 }
@@ -482,6 +521,13 @@ func (o *Orchestrator) RunDetailed(
         // =====================================================================
 
         task := lastUserQuery(messages)
+
+        // v1.2.8: one bounded task state per run, maintained from REAL tool
+        // traffic (never model claims). Published as a `task` activity per
+        // tool round, folded into the run snapshot for reconnect recovery, and
+        // consumed at settlement (session summary + agent.md handoff).
+        runTask := NewTaskState(task)
+        runTask.Constraints = extractConstraints(task)
 
         hasImages, _, attachmentBlockCount := requestFacts(messages)
         _, stagedTokensProbe := countStagedBlocks(messages)
@@ -662,11 +708,13 @@ func (o *Orchestrator) RunDetailed(
 
         clock.Mark(StagePromptStart)
 
-        composePlan := func(sysTok, toolTok, optionalTok int) contextplan.Plan {
+        composePlan := func(sysTok, toolTok, optionalTok, summaryTok, histRefTok int) contextplan.Plan {
                 p := contextplan.Assemble(contextplan.Input{
                         SystemTokens:       sysTok,
                         ToolTokens:         toolTok,
                         RecallTokens:       optionalTok,
+                        SummaryTokens:      summaryTok,
+                        HistoryRefTokens:   histRefTok,
                         NumCtx:             effCtx.Effective,
                         MaxOutputTokens:    cfg.LLM.MaxTokens,
                         SafetyMarginTokens: safety,
@@ -679,9 +727,24 @@ func (o *Orchestrator) RunDetailed(
                 return p
         }
 
+        // v1.2.8 measured costs of the summary + history-ref sections. The
+        // blocks arrive pre-bounded from the API layer; under pressure the
+        // planner (not the caller) decides what travels — history-refs are
+        // dropped first among the retrieval sections, the summary is required.
+        summaryBlock := ro.summaryBlock
+        summaryTokens := 0
+        if summaryBlock != "" {
+                summaryTokens = chunking.EstimateTokens(summaryBlock)
+        }
+        histRefMsgs := ro.historyBlocks
+        histRefTokens := 0
+        for _, blk := range histRefMsgs {
+                histRefTokens += chunking.EstimateTokens(blk.Content)
+        }
+
         optionalTokens := composer.OptionalTokens(stagedTokens)
 
-        plan := composePlan(sysTokens, composer.toolTok, optionalTokens)
+        plan := composePlan(sysTokens, composer.toolTok, optionalTokens, summaryTokens, histRefTokens)
 
         // Degradation ladder — compress/elide lower-priority components
         // BEFORE dropping what the task cannot live without. Each step is
@@ -694,7 +757,7 @@ func (o *Orchestrator) RunDetailed(
                 if selected := toolsets.SelectForTask(composer.allNames, task, 0); len(selected) > 0 && len(selected) < len(composer.allNames) {
                         before := len(composer.allNames)
                         composer.setTools(selected, task)
-                        plan = composePlan(sysTokens, composer.toolTok, optionalTokens)
+                        plan = composePlan(sysTokens, composer.toolTok, optionalTokens, summaryTokens, histRefTokens)
                         plan.AddAdjustment(fmt.Sprintf(
                                 "dynamic toolset: reduced tool surface %d → %d for this task",
                                 before, len(composer.allNames)))
@@ -722,7 +785,7 @@ func (o *Orchestrator) RunDetailed(
 
                         composer.usedCompact = true
                         sysTokens, _, _ = classifyMessages(messages)
-                        plan = composePlan(sysTokens, composer.toolTok, optionalTokens)
+                        plan = composePlan(sysTokens, composer.toolTok, optionalTokens, summaryTokens, histRefTokens)
                         plan.AddAdjustment(
                                 "compact system briefing (context-pressure mode)")
                 }
@@ -737,7 +800,7 @@ func (o *Orchestrator) RunDetailed(
                         composer.dropOptional()
                         stagedBlocksMsgs = nil
                         stagedTokens = 0
-                        plan = composePlan(sysTokens, composer.toolTok, 0)
+                        plan = composePlan(sysTokens, composer.toolTok, 0, summaryTokens, histRefTokens)
                         plan.AddAdjustment(
                                 "dropped recall/project-intelligence/skills/attachment blocks under context pressure")
                         // Staged attachment content the tier could not carry
@@ -827,6 +890,28 @@ func (o *Orchestrator) RunDetailed(
         }
 
         plan.Attachments = len(stagedBlocksMsgs)
+
+        // v1.2.8: the rolling session summary travels with the STABLE system
+        // prefix (cache-friendly, survives history windowing); the retrieved
+        // cross-mode history blocks ride before the fresh turn like the
+        // other retrieval blocks. Both were BUDGETED above — injection only
+        // happens for what the plan actually kept (history-refs are the
+        // first retrieval section dropped under pressure, by priority).
+        if summaryBlock != "" && planSectionIncluded(plan, contextplan.SectionSummary) {
+                messages = insertAfterSystemPrefix(
+                        messages,
+                        llm.Message{Role: "system", Content: summaryBlock},
+                )
+                plan.SetSectionTokens(contextplan.SectionSummary, summaryTokens)
+        }
+
+        if len(histRefMsgs) > 0 && planSectionIncluded(plan, contextplan.SectionHistoryRefs) {
+                for _, blk := range histRefMsgs {
+                        messages = insertBeforeLastUser(messages, blk)
+                        injectedNow += chunking.EstimateTokens(blk.Content)
+                }
+                plan.SetSectionTokens(contextplan.SectionHistoryRefs, histRefTokens)
+        }
 
         // History window: compact older messages so the prompt stays inside
         // the plan allocation (leading system messages survive).
@@ -1393,6 +1478,13 @@ func (o *Orchestrator) RunDetailed(
                         result.LoopStats = guard.CallStats()
                         result.FailureTally = failTally
 
+                        // v1.2.8: the task state's verification verdict comes
+                        // from the same objective evidence collector — never
+                        // from the model's own completion claims.
+                        runTask.SetVerification(string(result.Verification.Outcome), result.Verification.Summary())
+                        taskSnap := runTask.snapshot()
+                        result.Task = &taskSnap
+
                         onActivity(Activity{
                                 Type:      "verification",
                                 Caption:   result.Verification.Summary(),
@@ -1467,6 +1559,10 @@ func (o *Orchestrator) RunDetailed(
                                 Detail:    tc,
                                 Timestamp: time.Now(),
                         })
+
+                        // v1.2.8: task memory observes the attempt (INSPECT /
+                        // ACT / TEST classification of the current step).
+                        runTask.ObserveToolStart(tc.Function.Name, tc.Function.Arguments)
 
                         // v1.2.6 continuation: toolStart = immediately before
                         // this tool call is processed (execution, cache lookup
@@ -1546,6 +1642,12 @@ func (o *Orchestrator) RunDetailed(
                         }
 
                         if result2 != "" {
+                                // v1.2.8: a refusal IS a settled outcome — the
+                                // task state records it as a failure of this
+                                // call (the model must re-plan, and the UI
+                                // should show why).
+                                runTask.ObserveToolEnd(tc.Function.Name, tc.Function.Arguments, result2, true)
+
                                 onActivity(Activity{
                                         Type: "tool_end",
                                         Caption: fmt.Sprintf(
@@ -1589,6 +1691,8 @@ func (o *Orchestrator) RunDetailed(
                         )
 
                         if obs.Block != "" {
+                                runTask.ObserveToolEnd(tc.Function.Name, tc.Function.Arguments, obs.Block, true)
+
                                 onActivity(Activity{
                                         Type: "tool_end",
                                         Caption: fmt.Sprintf(
@@ -1626,6 +1730,8 @@ func (o *Orchestrator) RunDetailed(
                         if cacheableCall(tc.Function.Name, tc.Function.Arguments) {
                                 if cached, hit := globalResultCache.Get(cacheKey); hit {
                                         result2, err = cached, error(nil)
+
+                                        runTask.ObserveToolEnd(tc.Function.Name, tc.Function.Arguments, cached, false)
 
                                         onActivity(Activity{
                                                 Type: "tool_end",
@@ -1781,6 +1887,12 @@ func (o *Orchestrator) RunDetailed(
                                 err != nil,
                         )
 
+                        // v1.2.8: task memory folds the settled outcome —
+                        // files changed, commands/tests run, failures and
+                        // repairs. rawOutput is the pre-decoration result so
+                        // the state records what actually happened.
+                        runTask.ObserveToolEnd(tc.Function.Name, tc.Function.Arguments, rawOutput, err != nil)
+
                         // Phase 7 telemetry counters.
                         toolCallCount++
                         if err == nil {
@@ -1886,6 +1998,19 @@ func (o *Orchestrator) RunDetailed(
                         }
                 }
 
+                // v1.2.8: publish the bounded task state ONCE per tool round.
+                // The UI's agent pipeline view renders the REAL runtime state
+                // (not a decorative stage strip), and runLive folds this into
+                // the authoritative snapshot so a reconnect mid-run restores
+                // the task view — the run never restarts because the UI did.
+                taskSnap := runTask.snapshot()
+                onActivity(Activity{
+                        Type:      "task",
+                        Caption:   taskStepCaption(taskSnap),
+                        Detail:    taskSnap,
+                        Timestamp: time.Now(),
+                })
+
                 // --------------------------------------------------------------
                 // v1.2.5 CONTEXT ESCALATION: after each tool round, apply the
                 // recorded evidence. The upgrade enriches the LIVE
@@ -1905,7 +2030,7 @@ func (o *Orchestrator) RunDetailed(
                                 // blocks ride the FINAL list, never the tail
                                 // boundary.
                                 sysTokens, _, _ = classifyMessages(messages)
-                                plan = composePlan(sysTokens, composer.toolTok, composer.OptionalTokens(stagedTokens))
+                                plan = composePlan(sysTokens, composer.toolTok, composer.OptionalTokens(stagedTokens), summaryTokens, histRefTokens)
 
                                 tail := messages[min(prefixLen+windowedLen, len(messages)):]
                                 newBody := append(append([]llm.Message{}, preWindowBody...), tail...)
@@ -1995,6 +2120,13 @@ func (o *Orchestrator) RunDetailed(
         clock.AddVerificationMs(clock.sinceStages(StageVerificationStart, StageVerificationEnd))
         result.LoopStats = guard.CallStats()
         result.FailureTally = failTally
+
+        // v1.2.8: the max-iterations exit is a REAL outcome — the task state
+        // records the verdict and travels with the result like every other
+        // exit path.
+        runTask.SetVerification(string(result.Verification.Outcome), result.Verification.Summary())
+        taskSnap := runTask.snapshot()
+        result.Task = &taskSnap
 
         onActivity(Activity{
                 Type:      "verification",
@@ -2661,4 +2793,46 @@ func contextPlanStatus(tokensCompressed, elided, recalled, adjustments, sessionP
         default:
                 return "raw"
         }
+}
+
+// insertAfterSystemPrefix splices msg into the list right after the last
+// LEADING system message (v1.2.8 summary position): the block joins the
+// stable system prefix, so it survives history windowing and keeps the
+// engine's prompt cache warm.
+func insertAfterSystemPrefix(
+	messages []llm.Message,
+	msg llm.Message,
+) []llm.Message {
+	prefixLen := 0
+	for prefixLen < len(messages) && messages[prefixLen].Role == "system" {
+		prefixLen++
+	}
+
+	out := make([]llm.Message, 0, len(messages)+1)
+	out = append(out, messages[:prefixLen]...)
+	out = append(out, msg)
+	out = append(out, messages[prefixLen:]...)
+	return out
+}
+
+// planSectionIncluded reports whether Assemble kept the named section
+// (Included flag — Tokens alone are also set for refused sections).
+func planSectionIncluded(p contextplan.Plan, name string) bool {
+	for i := range p.Sections {
+		if p.Sections[i].Name == name {
+			return p.Sections[i].Included
+		}
+	}
+	return false
+}
+
+// taskStepCaption renders the one-line caption for a `task` activity.
+func taskStepCaption(t TaskState) string {
+	if t.CurrentStep != "" {
+		return t.CurrentStep
+	}
+	if t.Verification != "" {
+		return "Verified: " + t.Verification
+	}
+	return "Working — task state updated"
 }

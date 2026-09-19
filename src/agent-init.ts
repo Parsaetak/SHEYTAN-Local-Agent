@@ -1,5 +1,10 @@
 import { api, type Session } from "./api";
 import { useRuntimeStore } from "./store";
+import {
+  resolveActiveForMode,
+  sessionMode,
+  type WorkspaceMode,
+} from "./mode-sessions";
 
 const INITIALIZATION_TTL_MS = 30_000;
 
@@ -7,15 +12,19 @@ let initializationPromise: Promise<void> | null = null;
 
 let initializedAt = 0;
 
-function resolveActiveSessionID(
+/**
+ * v1.2.8: resolve the active session WITHIN one conversation space. The
+ * remembered selection only survives when it still exists in THAT space —
+ * Chat and Agent histories are independent and never cross-select.
+ */
+function resolveActiveInSpace(
   sessions: Session[],
+  mode: WorkspaceMode,
   currentID: string | null,
 ): string | null {
-  if (currentID && sessions.some((session) => session.id === currentID)) {
-    return currentID;
-  }
+  const inSpace = sessions.filter((session) => sessionMode(session) === mode);
 
-  return sessions[0]?.id ?? null;
+  return resolveActiveForMode(inSpace, mode, currentID);
 }
 
 async function initializeAgentOnce(): Promise<void> {
@@ -25,26 +34,38 @@ async function initializeAgentOnce(): Promise<void> {
   });
 
   try {
-    let [app, sessions] = await Promise.all([api.state(), api.sessions()]);
+    const mode = useRuntimeStore.getState().mode;
+
+    let [app, sessions] = await Promise.all([
+      api.state(),
+      api.sessions(mode),
+    ]);
 
     // AAA polish (v1.1.2Z): a fresh install starts with zero sessions, which
     // left the runtime status on "Offline" and the composer inert — the app
     // LOOKED broken on first launch. Create the initial session eagerly so
-    // the Agent workspace is immediately live: WebSocket connects, activity
+    // the workspace is immediately live: WebSocket connects, activity
     // streams, and the composer is usable from the first paint.
+    //
+    // v1.2.8: the eager session is created in the CURRENT conversation
+    // space (mode-separated histories).
     if (sessions.length === 0) {
-      const session = await api.createSession();
+      const session = await api.createSession(mode);
       sessions = [session];
     }
 
     const current = useRuntimeStore.getState().activeSessionId;
 
-    const activeSessionId = resolveActiveSessionID(sessions, current);
+    const activeSessionId = resolveActiveInSpace(sessions, mode, current);
 
     useRuntimeStore.setState({
       app,
       sessions,
       activeSessionId,
+      activeSessionByMode: {
+        ...useRuntimeStore.getState().activeSessionByMode,
+        [mode]: activeSessionId,
+      },
       loading: false,
     });
 

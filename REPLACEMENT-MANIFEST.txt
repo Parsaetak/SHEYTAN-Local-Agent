@@ -1,82 +1,156 @@
-SHEYTAN-Local-Agent v1.2.7 — Run-Transport Terminal-State Repair + CI/Test Stabilisation + Release Consistency — Replacement Manifest
+SHEYTAN-Local-Agent v1.2.8 — Professional Chat + Agent Workspaces + Mode-Separated Histories + Cross-Mode References + Durable Summaries + Context Layers + Agent Handoff — Replacement Manifest
 ==============================================================================================================
-Base: main @ e7591896ed7d3412ca5c690bb840e0ac3b202ea9 (v1.2.6)
-Package: SHEYTAN-Local-Agent-v1.2.7-UPDATE.zip
-Apply over a clean checkout of the base commit (or any v1.2.6 tree without
+Base: main @ e2bbbb0a1a8ff5dc8feeea9dc8de0a2e309b7af8 (v1.2.7 line, HEAD)
+Package: SHEYTAN-Local-Agent-v1.2.8-UPDATE.zip
+Apply over a clean checkout of the base commit (or any v1.2.7 tree without
 unrelated local modifications).
 
 Status vocabulary: new | modified
 The per-fix reasons, the verification results and the honest
-limitations live in UPDATE.md (§0–§7).
+limitations live in UPDATE.md (§0–§12).
 
 [PACKAGE METADATA]
   UPDATE.md
-    status:   replaced (rewritten for v1.2.7)
+    status:   replaced (rewritten for v1.2.8)
     purpose:  this replacement package's bookkeeping
-  REPLACEMENT-MANIFEST.txt
-    status:   replaced (regenerated for v1.2.7)
-    purpose:  this replacement package's bookkeeping
-  REPLACEMENT-SHA256.txt
-    status:   replaced (regenerated for v1.2.7)
-    purpose:  SHA-256 sheet of every file in this package
 
-[RUN TRANSPORT FIX]
-  internal/api/server.go
-    status:   modified
-    reason:   AUTHORITATIVE LIFECYCLE GATE on the WS attach fast path —
-              map membership is no longer "run active"; a terminal-but-
-              registered entry (settleTerminal → deferred delete window,
-              widened by MemMgr.TrackRunEnd) falls through to the idle
-              sentinel with the recorded lastRun outcome. Root cause of
-              CI run 35367243405 (TestStaleRunEventsFilteredByServer:
-              "expected idle, got run_snapshot"). Also: settle() records
-              the outcome BEFORE live.settleTerminal() (terminal-visible
-              ⇒ outcome recorded), and the post-drain served==false
-              branch falls through to idle + standby instead of parking
-              on clientGone forever.
-
-[REGRESSION TESTS]
-  internal/api/runtransport_v127_test.go
-    status:   new
-    reason:   pins the v1.2.7 contracts: terminal-registry-entry gate
-              (attached → idle, never a stale snapshot), closed-hub
-              fallthrough (snapshot → idle, no hang), end-to-end
-              abort-then-attach recovery (idle + recorded outcome).
-
-[RELEASE IDENTITY]
+[RELEASE IDENTITY] (release-version.mjs owned; --check enforces)
   package.json
     status:   modified
-    reason:   source of truth 1.2.6 → 1.2.7
-  package-lock.json
-    status:   modified
-    reason:   follows npm version bump (1.2.7)
+    purpose:  version 1.2.8 (canonical source) + test:units includes the three new pure-module test files
   internal/config/config.go
     status:   modified
-    reason:   AppVersion = "1.2.7" (release-version.mjs repair)
+    purpose:  AppVersion = 1.2.8 (release-version.mjs owned)
   build/config.yml
     status:   modified
-    reason:   productVersion: "1.2.7" (release-version.mjs repair)
+    purpose:  productVersion 1.2.8-zeta (release-version.mjs owned)
   SIGNATURE
     status:   modified
-    reason:   first line SHEYTAN-Local-Agent v1.2.7 (release-version.mjs repair)
+    purpose:  SHEYTAN-Local-Agent v1.2.8 (release-version.mjs owned)
 
-[DOCUMENTATION]
-  README.md
+[RUNTIME — Go]
+  internal/sessions/sessions.go
     status:   modified
-    reason:   Current release block v1.2.7; v1.2.7 release log added plus
-              the missing v1.2.4–v1.2.6 history summaries; Installation
-              corrected to the ACTUAL v1.2.x package layout (SHEYTAN-LA
-              root, SHEYTAN-LA.exe, BUILD-INFO.txt, models/, workspace/);
-              durable request queue documented as PLANNED with the current
-              cancel-and-replace contract stated honestly; # Version
-              section corrected (was stale at v1.1.5Z)
+    purpose:  session mode identity + deterministic legacy migration + HistoryRef context + summary sidecar cleanup
+  internal/sessions/summary.go
+    status:   new
+    purpose:  NEW — bounded rolling SessionSummary (sidecar, deterministic marker extraction, prompt rendering)
+  internal/histref/histref.go
+    status:   modified
+    purpose:  NEW — cross-mode history references (search + relevance-ranked budget-bounded retrieval with provenance)
+  internal/contextplan/contextplan.go
+    status:   modified
+    purpose:  summary + history-refs sections, Input tokens, ClassifyPressure
+  internal/agent/orchestrator.go
+    status:   modified
+    purpose:  RunResult.Task, summary/history-refs options + injection, task-state hooks, task activity per tool round
+  internal/agent/taskstate.go
+    status:   new
+    purpose:  NEW — bounded agent task memory from observed tool traffic
+  internal/agent/handoff.go
+    status:   new
+    purpose:  NEW — marker-bounded agent.md handoff writer
+  internal/api/server.go
+    status:   modified
+    purpose:  mode-filtered session list/create, run historyRefs wiring, settle-tail summary + handoff, /api/history/search route, summary/messages subresources
+  internal/api/runstate.go
+    status:   modified
+    purpose:  runLive folds task activities; run_snapshot.task (reconnect-safe task view)
+  internal/api/history.go
+    status:   new
+    purpose:  NEW — history search / session summary / messages paging handlers + settlement helpers
+
+[FRONTEND — src/]
+  src/store.ts
+    status:   modified
+    purpose:  mode-separated active sessions, history refs + picker + search, paging, task state, recovery fast path rewiring, rename
+  src/run-recovery.ts
+    status:   new
+    purpose:  pure parseEndedAt wire-contract helper (RFC3339 + epoch-ms) — the recovery fast-path root-cause fix
+  src/api.ts
+    status:   modified
+    purpose:  Session.mode, HistoryRef/Hit/SummaryView/MessagesPage types, mode-aware create/list, historySearch/sessionSummary/sessionMessagesPage
+  src/run-events.ts
+    status:   modified
+    purpose:  task + handoff event kinds; isRunEvidence includes task
+  src/agent-init.ts
+    status:   modified
+    purpose:  per-mode eager initialization
+  src/mode-sessions.ts
+    status:   new
+    purpose:  NEW — pure mode/session helpers
+  src/history-ref.ts
+    status:   new
+    purpose:  NEW — pure history-ref helpers
+  src/HistoryPicker.tsx
+    status:   new
+    purpose:  NEW — cross-mode history picker dialog
+  src/AgentTaskPanel.tsx
+    status:   new
+    purpose:  NEW — evidence-driven agent pipeline panel
+  src/AgentSidebar.tsx
+    status:   modified
+    purpose:  per-space search, inline rename, delete
+  src/AgentBody.tsx
+    status:   modified
+    purpose:  history ref chips + picker mount + task panel
+  src/MessageStream.tsx
+    status:   modified
+    purpose:  load-earlier pager
+  src/styles.css
+    status:   modified
+    purpose:  v1.2.8 styles (picker, chips, task panel, pager, rename/search)
+
+[DOCS]
   agent.md
     status:   modified
-    reason:   v1.2.7 release line + next-agent notes (lifecycle gate,
-              outcome-record ordering, terminal fallthrough, regression
-              locks, queue honesty)
+    purpose:  canonical next-agent handoff — v1.2.8 structured `Latest Agent Handoff` section + release narrative
+  ARCHITECTURE.md
+    status:   modified
+    purpose:  §I.8e: the four durable layers (transcript/summary/handoff/artifacts) + v1.2.8 truth table
+  README.md
+    status:   modified
+    purpose:  v1.2.8 release table (truthful labels)
   worklog.md
     status:   modified
-    reason:   Current State → v1.2.7; v1.2.7 implementation log
-              (reproduction, root cause, changes, verification matrix,
-              honest limitations)
+    purpose:  v1.2.8 entry appended (evidence, measurements, NOT VERIFIED list)
+
+[GENERATED — committed build output]
+  web/static/* (rebuilt Vite bundle: assets/, index.html, .vite/manifest.json)
+    status:   modified
+    purpose:  the embedded frontend rebuilt from the v1.2.8 sources (npm run build / sync-web)
+
+[EVERY OTHER FILE IN THE TREE] — unmodified from the base commit.
+
+[TESTS ADDED]
+  internal/sessions/mode_test.go
+    status:   new
+  internal/sessions/summary_test.go
+    status:   new
+  internal/histref/histref_test.go
+    status:   modified
+  internal/contextplan/sections_test.go
+    status:   new
+  internal/agent/taskstate_test.go
+    status:   new
+  internal/agent/handoff_test.go
+    status:   new
+  internal/api/history_api_test.go
+    status:   new
+  internal/api/run_task_test.go
+    status:   new
+  internal/api/run_settlement_test.go
+    status:   new
+  internal/api/run_crossmode_test.go
+    status:   new
+  internal/api/runtransport_test.go
+    status:   modified
+  internal/api/runregistry_test.go
+    status:   modified
+  src/mode-sessions.test.ts
+    status:   new
+  src/history-ref.test.ts
+    status:   new
+  src/parse-ended-at.test.ts
+    status:   new
+

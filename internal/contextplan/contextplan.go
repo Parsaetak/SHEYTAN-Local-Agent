@@ -23,7 +23,9 @@ import (
 const (
         SectionSystem      = "system"
         SectionTools       = "tools"
+        SectionSummary     = "summary"
         SectionRecall      = "recall"
+        SectionHistoryRefs = "history-refs"
         SectionAttachments = "attachments"
         SectionHistory     = "history"
         SectionReserve     = "output-reserve"
@@ -34,8 +36,10 @@ const (
         PriorityReserve     = 0 // output space is never spent on prompt
         PrioritySystem      = 1 // the agent briefing is indispensable
         PriorityTools       = 2 // tool schemas enable the tool loop
+        PrioritySummary     = 2 // (v1.2.8) the rolling session summary
         PriorityHistory     = 3 // the current turn lives here
         PriorityRecall      = 4 // past-exchange digests
+        PriorityHistoryRefs = 4 // (v1.2.8) retrieved cross-mode history blocks
         PriorityAttachments = 5 // retrieved attachment chunks
 )
 
@@ -60,6 +64,33 @@ func PriorityClass(priority int) string {
                 return ClassP2
         default:
                 return ClassP3
+        }
+}
+
+// Pressure levels for the v1.2.8 context-cleaning triggers. The labels
+// mirror the continuum usage levels (ok/warm/high/critical) so the UI
+// speaks ONE pressure language everywhere. The orchestrator uses the
+// classification to decide when to proactively compact BEFORE the final
+// model call fails from overflow — never silently exhaust the window.
+const (
+        PressureOK       = "ok"       // < 50%
+        PressureWarm     = "warm"     // < 75%
+        PressureHigh     = "high"     // < 90%
+        PressureCritical = "critical" // >= 90% — cleanup triggers now
+)
+
+// ClassifyPressure maps a used/usable ratio (plan.Pressure()) onto the
+// shared pressure vocabulary.
+func ClassifyPressure(p float64) string {
+        switch {
+        case p >= 0.90:
+                return PressureCritical
+        case p >= 0.75:
+                return PressureHigh
+        case p >= 0.50:
+                return PressureWarm
+        default:
+                return PressureOK
         }
 }
 
@@ -283,6 +314,18 @@ type Input struct {
         MaxOutputTokens  int
         MinHistoryTokens int // floor so a huge current turn still gets room
 
+        // SummaryTokens (v1.2.8) is the measured cost of the rolling session
+        // summary block. It is a REQUIRED section (priority 2): the summary
+        // is what makes elided history survivable, so it is budgeted with the
+        // fixed sections, not with the optional ones.
+        SummaryTokens int
+
+        // HistoryRefTokens (v1.2.8) is the measured cost of the retrieved
+        // cross-mode history blocks attached to this turn. OPTIONAL (priority
+        // 4, with recall): under pressure they are dropped first — the user
+        // can re-attach them, while the current turn cannot be re-derived.
+        HistoryRefTokens int
+
         // SafetyMarginTokens is Phase 7 headroom held back from the prompt
         // on top of the output reserve (estimator error, chat-template
         // expansion). 0 keeps the v1.1.3 behavior.
@@ -363,6 +406,29 @@ func Assemble(in Input) Plan {
                 Included: true,
         })
 
+        // 3.5 (v1.2.8) the rolling session summary — a REQUIRED section:
+        // it is what makes history elision survivable, so it is budgeted
+        // with the fixed sections rather than the optional ones. Only a
+        // pathological summary (larger than half the window — impossible
+        // under the sidecar caps) is refused.
+        summaryOK := true
+        summaryNote := ""
+        if in.SummaryTokens > usable/2 {
+                summaryOK = false
+                summaryNote = "session summary exceeds half the window — omitted this turn"
+        } else {
+                used += in.SummaryTokens
+        }
+
+        sections = append(sections, Section{
+                Name:     SectionSummary,
+                Priority: PrioritySummary,
+                Tokens:   in.SummaryTokens,
+                Budget:   usable,
+                Included: summaryOK,
+                Note:     summaryNote,
+        })
+
         // 4. history: whatever remains after fixed sections, bounded below by
         // the floor and (v1.2.5) above by the tier's share of the usable
         // window. Optional blocks (recall, attachments) do NOT inflate this
@@ -410,7 +476,36 @@ func Assemble(in Input) Plan {
                 Note:     recallNote,
         })
 
-        // 6. attachments — same treatment as recall.
+        // 6. (v1.2.8) retrieved cross-mode history blocks — optional,
+        // same treatment as recall: under pressure they are dropped FIRST
+        // among the retrieval sections (the user can re-attach them; the
+        // current turn cannot be re-derived).
+        histRefOK := false
+        histRefNote := ""
+
+        if in.HistoryRefTokens > 0 {
+                avail := historyBudget - minHistory
+                if recallOK {
+                        avail -= in.RecallTokens
+                }
+
+                if in.HistoryRefTokens <= avail {
+                        histRefOK = true
+                } else {
+                        histRefNote = "dropped under context pressure — re-attach the history reference"
+                }
+        }
+
+        sections = append(sections, Section{
+                Name:     SectionHistoryRefs,
+                Priority: PriorityHistoryRefs,
+                Tokens:   in.HistoryRefTokens,
+                Budget:   historyBudget,
+                Included: histRefOK,
+                Note:     histRefNote,
+        })
+
+        // 7. attachments — same treatment as recall.
         attOK := false
         attNote := ""
 
@@ -418,6 +513,9 @@ func Assemble(in Input) Plan {
                 avail := historyBudget - minHistory
                 if recallOK {
                         avail -= in.RecallTokens
+                }
+                if histRefOK {
+                        avail -= in.HistoryRefTokens
                 }
 
                 if in.AttachmentTokens <= avail {
@@ -443,12 +541,18 @@ func Assemble(in Input) Plan {
                 SafetyMargin:  safety,
         }
 
-        if recallOK || attOK {
+        if recallOK || attOK || histRefOK {
                 // Fixed sections + injected blocks must leave the floor for history;
                 // the windower works within what actually remains.
                 remaining := usable - in.SystemTokens - in.ToolTokens
+                if summaryOK {
+                        remaining -= in.SummaryTokens
+                }
                 if recallOK {
                         remaining -= in.RecallTokens
+                }
+                if histRefOK {
+                        remaining -= in.HistoryRefTokens
                 }
                 if attOK {
                         remaining -= in.AttachmentTokens

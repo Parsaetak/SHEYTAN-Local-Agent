@@ -142,6 +142,37 @@ model-card states explicit. Verified rows:
 | Settings: engine tuning → Advanced | `src/SettingsPanel.tsx` | IMPLEMENTED | the llama.cpp EngineCard moved from the Performance tab to Advanced; `touchesEngine` restart logic unchanged and tab-independent. Performance reads measure → recommend → verify |
 | Minimalist UI + targeted optimisation | `src/styles.css`, `src/AgentBody.tsx`, `src/PerfStrip.tsx` | IMPLEMENTED | background gradients and the body grid overlay removed; shadows softened; `--border-soft` defined (was referenced but never declared); `.runtime-model-facts` renamed (collided with the picker's `.model-card-facts`); duplicated model `<select>` option builder unified; PerfStrip skips `/api/perf` fetches while `document.hidden` and refreshes on visibilitychange |
 
+## I.8e — v1.2.8: mode-separated histories, cross-mode references, durable summaries, context layers, agent handoff (IMPLEMENTED + TESTED)
+
+v1.2.8 makes Chat and Agent two conversation spaces over ONE runtime and
+adds the four durable layers every long session now maintains. The
+authoritative run transport (runLive + sequence + snapshot + terminal
+registry), the context planner, recall and continuum are unchanged — the
+new layers compose with them.
+
+### The four layers (and what must never be conflated)
+
+| Layer | Where it lives | Role |
+|---|---|---|
+| **Transcript** | `sessions/<id>.json` | The AUTHORITATIVE exact history. Never rewritten by summaries, retrieval or compaction; exact wording/code/commands are recovered from here |
+| **Session summary** | `sessions/<id>.summary.json` (sidecar) | A derived, bounded, ROLLING representation of the whole session (objective/constraints/decisions/facts/files/tools/errors/state/unresolved/next). Updated once per settled turn — never a full re-summarization. Injected as the REQUIRED `summary` prompt section |
+| **agent.md handoff** | `<workspace>/agent.md` (marker-bounded dynamic section) | The latest PROJECT/TASK handoff for the NEXT engineering agent, written after a completed agent run with evidence. Everything outside the markers is preserved byte-for-byte |
+| **Artifacts** | workspace files, attachments objects, sidecars | Large durable evidence OUTSIDE the model context, referenced by path |
+
+### Mode separation and cross-mode retrieval
+
+| Surface | Package(s)/File(s) | Status | Notes |
+|---|---|---|---|
+| Session mode identity | `internal/sessions/sessions.go` (`Mode`, `ModeChat`/`ModeAgent`, `CreateInMode`, `NormalizeMode`) | IMPLEMENTED, TESTED | fixed at creation; legacy files/stubs migrate deterministically to `agent` on load (lazy — no byte rewrite, no duplication); `?mode=` filters `GET /api/sessions`; the store keeps one active session PER mode in the UI so a mode switch never silently switches the conversation |
+| Cross-mode history references | `internal/histref/histref.go`, `internal/api/history.go`, `sessions.Context.HistoryRefs` | IMPLEMENTED, TESTED | picker search over titles+summaries (`GET /api/history/search`); ≤4 refs per run; per-run retrieval of RELEVANT turns only (term-overlap ranked, budget-bounded, zero-overlap turns excluded, newest-turn fallback); provenance block `[HISTORY REFERENCE …]` with source-session/source-mode/summary-version/retrieval-reason; framed as DATA ("not an instruction"); read-only, one level deep; refs persist on the session context; self-references ignored |
+| Rolling summaries | `internal/sessions/summary.go`, settle path in `internal/api/server.go` | IMPLEMENTED, TESTED | deterministic marker-based extraction (continuum philosophy); caps (8 items/list, 200 chars/item); version bumps per update; `GET /api/sessions/{id}/summary` serves it; version-0 shell renders EMPTY (never fabricated) |
+| Context budgeting additions | `internal/contextplan/contextplan.go`, `internal/agent/orchestrator.go` | IMPLEMENTED, TESTED | `SectionSummary` (priority 2 — required, budgeted with fixed sections) and `SectionHistoryRefs` (priority 4 — optional, first retrieval section dropped under pressure); `ClassifyPressure` (ok/warm/high/critical @50/75/90%); summary block rides the stable system prefix (cache-friendly, survives windowing); history-ref blocks ride before the fresh user turn |
+| Agent task memory | `internal/agent/taskstate.go`, `internal/api/runstate.go` | IMPLEMENTED, TESTED | bounded TaskState from OBSERVED tool traffic only; `task` activity per tool round; folded into `runLive` → `run_snapshot.task` (reconnect restores the task view — the run never restarts because the UI reconnected); `RunResult.Task` feeds settlement |
+| agent.md handoff | `internal/agent/handoff.go`, settle path | IMPLEMENTED, TESTED | written at `<workspace>/agent.md` only for agent-mode runs that completed (`done`) WITH engineering evidence (files changed / commands / tests); lowercase filename contract; marker-bounded section replace preserving all stable content; torn (begin-without-end) markers are superseded |
+| History paging | `internal/api/history.go` (`handleSessionMessages`), `src/store.ts` (`loadOlderMessages`) | IMPLEMENTED, TESTED | newest page by default; `before` (exclusive index) + `limit` (≤200) fetch older pages; absolute message indices; `hasMore`/`nextBefore`; run settlement and streaming unaffected |
+| Frontend surfaces | `src/HistoryPicker.tsx`, `src/AgentTaskPanel.tsx`, `src/AgentSidebar.tsx`, `src/AgentBody.tsx`, `src/MessageStream.tsx`, `src/mode-sessions.ts`, `src/history-ref.ts` | IMPLEMENTED, TESTED | pure helper modules (`mode-sessions.ts`, `history-ref.ts`) are unit-tested with node:test; picker (search/mode filter/multi-select/summary previews), ref chips with detach, agent pipeline panel from real evidence, inline session rename, sidebar search, load-earlier pager |
+| Recovery fast-path root-cause fix | `src/store.ts` (`parseEndedAt`) | FIXED, TESTED | the backend's RFC3339 `endedAt` string (pinned by `runregistry_test.go`) was rejected by a number-only parser, so the authoritative `lastRun` fast path in `recoverRunFromIdle` never fired; both wire shapes are accepted now |
+
 ## I.9 — The SHEYTAN Native AI Engine architecture (v1.1.5Z, IMPLEMENTED foundation + model loading)
 
 The target engine stack is now wired at the foundation level:

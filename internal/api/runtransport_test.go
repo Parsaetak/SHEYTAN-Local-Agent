@@ -128,6 +128,12 @@ func TestAttachAckIsFirstFrameAndPostReturnsRunId(t *testing.T) {
                 t.Fatal("the fired run never settled — cleanup safety violated")
         }
 
+        // v1.2.8: the settle tail also writes the rolling summary sidecar —
+        // wait for it deterministically before the TempDir cleanup.
+        if !waitForSummarySettled(t, server, sessionID) {
+                t.Fatal("the settle tail (summary sidecar) never completed")
+        }
+
         time.Sleep(150 * time.Millisecond)
 }
 
@@ -225,12 +231,27 @@ func TestMidRunAttachReceivesSnapshotAndContinues(t *testing.T) {
         if finalText != expected {
                 t.Fatalf("final text after reconnect = %q, want exactly %q (no duplication, no loss)", finalText, expected)
         }
+
+        // v1.2.8: wait for the full settle tail (reply + summary sidecar)
+        // before cleanup — a run goroutine still writing durable state
+        // must never race t.TempDir's RemoveAll.
+        if !waitForReplyPersisted(t, server, sessionID) {
+                t.Fatal("the run never persisted its reply")
+        }
+
+        if !waitForSummarySettled(t, server, sessionID) {
+                t.Fatal("the settle tail (summary sidecar) never completed")
+        }
 }
 
 // TestRunEventsCarryMonotonicSequence pins the event contract: every
 // activity of the run carries runId + a strictly increasing seq.
 func TestRunEventsCarryMonotonicSequence(t *testing.T) {
-        engine := slowStreamEngine(t, []string{"a", "b", "c"}, 30*time.Millisecond)
+        // 80ms per chunk: a ~240ms generation window that reliably covers
+        // the attach even when the full suite loads the machine (attaching
+        // AFTER completion is a different contract — see the terminal
+        // branch below).
+        engine := slowStreamEngine(t, []string{"a", "b", "c"}, 80*time.Millisecond)
         server := newRemoteServer(t, engine.URL)
         sessionID := createSessionForRun(t, server)
 
@@ -259,6 +280,22 @@ func TestRunEventsCarryMonotonicSequence(t *testing.T) {
         snap := readFrameWithDeadline(t, conn)
         if snap["type"] != "run_snapshot" {
                 t.Fatalf("expected run_snapshot, got %v", snap["type"])
+        }
+
+        // A machine stall can push the attach past the (short) generation:
+        // the terminal snapshot IS the contract then (monotonic sequence
+        // reached, persisted reply replayed) — the event loop below would
+        // never see live frames. Verify and return instead of hanging.
+        if running, _ := snap["running"].(bool); !running {
+                if seq, _ := snap["sequence"].(float64); int64(seq) <= 0 {
+                        t.Fatalf("terminal snapshot carries no sequence: %v", snap)
+                }
+
+                if reply, _ := snap["latestResponse"].(string); reply == "" {
+                        t.Fatalf("terminal snapshot replays no persisted reply: %v", snap)
+                }
+
+                return
         }
 
         lastSeq := int64(0)
@@ -296,6 +333,17 @@ func TestRunEventsCarryMonotonicSequence(t *testing.T) {
 
         if lastSeq == 0 {
                 t.Fatal("no sequenced events observed")
+        }
+
+        // v1.2.8: the run goroutine's durable settle tail (reply persist,
+        // summary sidecar) must complete before t.TempDir cleanup — a raw
+        // RemoveAll race here is a TEST bug, not a runtime bug.
+        if !waitForReplyPersisted(t, server, sessionID) {
+                t.Fatal("the run never persisted its reply")
+        }
+
+        if !waitForSummarySettled(t, server, sessionID) {
+                t.Fatal("the settle tail (summary sidecar) never completed")
         }
 }
 

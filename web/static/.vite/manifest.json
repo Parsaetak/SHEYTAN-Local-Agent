@@ -1,13 +1,13 @@
 {
-  "_DownloadProgress-CSlZTHkD.js": {
-    "file": "assets/DownloadProgress-CSlZTHkD.js",
+  "_DownloadProgress-Dn2k_Tvo.js": {
+    "file": "assets/DownloadProgress-Dn2k_Tvo.js",
     "name": "DownloadProgress",
     "imports": [
       "index.html"
     ]
   },
-  "_useResource-Du6nCvvN.js": {
-    "file": "assets/useResource-Du6nCvvN.js",
+  "_useResource-CsDo-HQV.js": {
+    "file": "assets/useResource-CsDo-HQV.js",
     "name": "useResource",
     "imports": [
       "index.html"
@@ -18,7 +18,7 @@
     "name": "vision"
   },
   "index.html": {
-    "file": "assets/index-bI_GOQqE.js",
+    "file": "assets/index-CZy0bEJc.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -33,22 +33,22 @@
       "src/WorkspacePanel.tsx"
     ],
     "css": [
-      "assets/index-5oqPjJgJ.css"
+      "assets/index-BbMhdvrK.css"
     ]
   },
   "src/AgentBody.tsx": {
-    "file": "assets/AgentBody-s8WfnwZL.js",
+    "file": "assets/AgentBody-jORUHAyC.js",
     "name": "AgentBody",
     "src": "src/AgentBody.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DownloadProgress-CSlZTHkD.js",
+      "_DownloadProgress-Dn2k_Tvo.js",
       "_vision-Dw0T2tjy.js"
     ]
   },
   "src/AgentHeader.tsx": {
-    "file": "assets/AgentHeader-B6AlhKcc.js",
+    "file": "assets/AgentHeader-CRexn8H7.js",
     "name": "AgentHeader",
     "src": "src/AgentHeader.tsx",
     "isDynamicEntry": true,
@@ -57,7 +57,7 @@
     ]
   },
   "src/AgentSidebar.tsx": {
-    "file": "assets/AgentSidebar-CbtEEXLc.js",
+    "file": "assets/AgentSidebar-CYgcB8Ie.js",
     "name": "AgentSidebar",
     "src": "src/AgentSidebar.tsx",
     "isDynamicEntry": true,
@@ -66,7 +66,7 @@
     ]
   },
   "src/LabPanel.tsx": {
-    "file": "assets/LabPanel-BI385qNA.js",
+    "file": "assets/LabPanel-tHmfasaw.js",
     "name": "LabPanel",
     "src": "src/LabPanel.tsx",
     "isDynamicEntry": true,
@@ -75,7 +75,7 @@
     ]
   },
   "src/ResearchPanel.tsx": {
-    "file": "assets/ResearchPanel-BfOiM21f.js",
+    "file": "assets/ResearchPanel-CxRoYRP4.js",
     "name": "ResearchPanel",
     "src": "src/ResearchPanel.tsx",
     "isDynamicEntry": true,
@@ -84,30 +84,30 @@
     ]
   },
   "src/SettingsPanel.tsx": {
-    "file": "assets/SettingsPanel-CmCMhghw.js",
+    "file": "assets/SettingsPanel-CpMRi1lA.js",
     "name": "SettingsPanel",
     "src": "src/SettingsPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DownloadProgress-CSlZTHkD.js",
+      "_DownloadProgress-Dn2k_Tvo.js",
       "_vision-Dw0T2tjy.js",
-      "_useResource-Du6nCvvN.js"
+      "_useResource-CsDo-HQV.js"
     ]
   },
   "src/SystemPanel.tsx": {
-    "file": "assets/SystemPanel-IQFWlS0v.js",
+    "file": "assets/SystemPanel-geCZSKax.js",
     "name": "SystemPanel",
     "src": "src/SystemPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DownloadProgress-CSlZTHkD.js",
-      "_useResource-Du6nCvvN.js"
+      "_DownloadProgress-Dn2k_Tvo.js",
+      "_useResource-CsDo-HQV.js"
     ]
   },
   "src/WorkspacePanel.tsx": {
-    "file": "assets/WorkspacePanel-D1CwnDVZ.js",
+    "file": "assets/WorkspacePanel-zoftdgXv.js",
     "name": "WorkspacePanel",
     "src": "src/WorkspacePanel.tsx",
     "isDynamicEntry": true,

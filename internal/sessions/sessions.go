@@ -53,6 +53,35 @@ type Context struct {
         // real capability — llm.ResolveSessionContext clamps it to the model
         // maximum, the engine's verified window, and the resource-safe value.
         ContextTokens int `json:"contextTokens,omitempty"`
+
+        // HistoryRefs (v1.2.8) pins the cross-mode history sessions the user
+        // explicitly attached to this conversation. A reference is DATA, not
+        // a copy: the source sessions are retrieved per turn (relevant
+        // portions only, provenance-labeled) and are never merged into this
+        // transcript. The list is bounded (MaxHistoryRefs) and travels with
+        // the session like the staged attachment ids.
+        HistoryRefs []HistoryRef `json:"historyRefs,omitempty"`
+}
+
+// MaxHistoryRefs bounds the per-session attached history references.
+const MaxHistoryRefs = 4
+
+// HistoryRef is one attached cross-mode history reference (stable
+// reference to ANOTHER session — never a transcript copy).
+type HistoryRef struct {
+        SessionID string `json:"sessionId"`
+        Mode      string `json:"mode,omitempty"` // metadata hint; the store's own mode is authoritative
+        // SummaryVersion pins which summary revision the picker previewed.
+        SummaryVersion int `json:"summaryVersion,omitempty"`
+        // Ranges optionally restricts retrieval to explicit message index
+        // ranges [from,to) — the explicit "read more" control.
+        Ranges []HistoryRefRange `json:"ranges,omitempty"`
+}
+
+// HistoryRefRange is one half-open message index range [From, To).
+type HistoryRefRange struct {
+        From int `json:"from"`
+        To   int `json:"to"`
 }
 
 // ActivityEntry is one event in a session's persisted activity feed
@@ -72,6 +101,36 @@ const (
         maxActivityKB = 256 // sidecar rotation threshold
 )
 
+// v1.2.8 session mode identity. A session belongs to exactly ONE
+// conversation space: Chat and Agent are two independent histories backed
+// by the same runtime, engine and tools — not two views of one transcript.
+// The mode is FIXED at creation and never mutated by a UI mode switch
+// (switching modes switches the visible session space, it never re-labels
+// or merges conversations).
+const (
+        ModeChat  = "chat"
+        ModeAgent = "agent"
+)
+
+// DefaultMode is the deterministic mode for sessions that predate the
+// mode field (every pre-v1.2.8 session was created through the unified
+// agent workspace) and for creates that carry no explicit mode.
+const DefaultMode = ModeAgent
+
+// NormalizeMode maps a requested mode onto the two known modes. Empty
+// strings resolve to DefaultMode; unknown values ALSO resolve to
+// DefaultMode rather than inventing a third space.
+func NormalizeMode(mode string) string {
+        switch mode {
+        case ModeChat:
+                return ModeChat
+        case ModeAgent:
+                return ModeAgent
+        default:
+                return DefaultMode
+        }
+}
+
 // activitiesSidecar is the append-only activity log for one session:
 // <sessions dir>/<id>.activities.jsonl. v1.0.10 moved the feed OUT of the
 // session JSON — the API layer appends an entry per milestone tool event,
@@ -81,12 +140,20 @@ const (
 
 // Session is one persisted conversation.
 type Session struct {
-        ID         string          `json:"id"`
-        Title      string          `json:"title,omitempty"`
-        Model      string          `json:"model,omitempty"`
-        Preset     string          `json:"preset,omitempty"`
-        CreatedAt  time.Time       `json:"createdAt,omitempty"`
-        UpdatedAt  time.Time       `json:"updatedAt,omitempty"`
+        ID        string    `json:"id"`
+        Title     string    `json:"title,omitempty"`
+        Model     string    `json:"model,omitempty"`
+        Preset    string    `json:"preset,omitempty"`
+        CreatedAt time.Time `json:"createdAt,omitempty"`
+        UpdatedAt time.Time `json:"updatedAt,omitempty"`
+
+        // Mode (v1.2.8) is the session's conversation space: "chat" or
+        // "agent". Fixed at creation. Legacy files (mode omitted) migrate
+        // deterministically to DefaultMode on load — never duplicated, only
+        // labeled. omitempty keeps every pre-v1.2.8 byte-identical until its
+        // next natural save.
+        Mode string `json:"mode,omitempty"`
+
         ThreadID   string          `json:"threadId,omitempty"` // stable across chapter rollovers
         ParentID   string          `json:"parentId,omitempty"` // previous chapter
         Chapter    int             `json:"chapter,omitempty"`  // 0 = original session
@@ -120,6 +187,7 @@ func stubOf(sess *Session) *Session {
                 Preset:    sess.Preset,
                 CreatedAt: sess.CreatedAt,
                 UpdatedAt: sess.UpdatedAt,
+                Mode:      sess.Mode,
                 ThreadID:  sess.ThreadID,
                 ParentID:  sess.ParentID,
                 Chapter:   sess.Chapter,
@@ -133,6 +201,7 @@ func sameStub(a, b *Session) bool {
         return a.ID == b.ID && a.Title == b.Title && a.Model == b.Model &&
                 a.Preset == b.Preset && a.ThreadID == b.ThreadID &&
                 a.ParentID == b.ParentID && a.Chapter == b.Chapter &&
+                a.Mode == b.Mode &&
                 a.MsgCount == b.MsgCount && a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
@@ -254,12 +323,23 @@ func newSessionID() string {
         return fmt.Sprintf("s%d%s", time.Now().UnixMilli(), hex.EncodeToString(b[:]))
 }
 
-// Create returns a fresh in-memory session. It is persisted by the first
-// Save/Append*/Update* call (so "New chat" costs nothing until the user
-// actually types).
+// Create returns a fresh in-memory session in the DEFAULT mode. It is
+// persisted by the first Save/Append*/Update* call (so "New chat" costs
+// nothing until the user actually types).
 func (s *Store) Create() *Session {
+        return s.CreateInMode(DefaultMode)
+}
+
+// CreateInMode returns a fresh in-memory session fixed to the given
+// conversation space (v1.2.8). Empty/unknown modes resolve to DefaultMode.
+func (s *Store) CreateInMode(mode string) *Session {
         now := time.Now().UTC()
-        sess := &Session{ID: newSessionID(), CreatedAt: now, UpdatedAt: now}
+        sess := &Session{
+                ID:        newSessionID(),
+                Mode:      NormalizeMode(mode),
+                CreatedAt: now,
+                UpdatedAt: now,
+        }
         s.mu.Lock()
         s.pending[sess.ID] = sess
         s.mu.Unlock()
@@ -292,6 +372,13 @@ func (s *Store) loadIndexLocked() {
                 var stubs []*Session
                 if json.Unmarshal(data, &stubs) == nil {
                         s.index = stubs
+                }
+        }
+        // v1.2.8: legacy index stubs predate the mode field — label them
+        // DefaultMode so mode filtering works before the first re-save.
+        for _, st := range s.index {
+                if st != nil && st.Mode == "" {
+                        st.Mode = DefaultMode
                 }
         }
         s.reconcileLocked()
@@ -353,6 +440,14 @@ func (s *Store) readLocked(id string) (*Session, error) {
         }
         if sess.ID == "" {
                 sess.ID = id
+        }
+        // v1.2.8 mode migration: a session file that predates the mode
+        // field is labeled DefaultMode ("agent") IN MEMORY. The on-disk
+        // bytes stay untouched until the session's next natural save —
+        // migration is deterministic, lossless and never duplicates
+        // conversation content.
+        if sess.Mode == "" {
+                sess.Mode = DefaultMode
         }
         // v1.0.10 migration: activities now live in the sidecar. Old files
         // carry them inline — move them out exactly once, then the session
@@ -650,6 +745,7 @@ func (s *Store) Delete(id string) error {
                 return err
         }
         _ = os.Remove(s.activityPath(id))
+        _ = os.Remove(s.summaryPath(id))
         delete(s.hot, id)
         if !found {
                 return fmt.Errorf("session %s not found", id)

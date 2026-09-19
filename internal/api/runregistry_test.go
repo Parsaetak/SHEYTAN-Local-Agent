@@ -190,6 +190,36 @@ func waitForReplyPersisted(t *testing.T, server *httptest.Server, sessionID stri
         return false
 }
 
+// waitForSummarySettled waits for the v1.2.8 settle-tail to finish: the
+// rolling summary sidecar (written AFTER the reply persists) reaches
+// version >= 1. This is the deterministic synchronization point that keeps
+// t.TempDir cleanup from racing the run goroutine's durable writes.
+func waitForSummarySettled(t *testing.T, server *httptest.Server, sessionID string) bool {
+        t.Helper()
+
+        deadline := time.Now().Add(30 * time.Second)
+
+        for time.Now().Before(deadline) {
+                resp, err := http.Get(server.URL + "/api/sessions/" + sessionID + "/summary")
+                if err == nil {
+                        var got struct {
+                                Version int `json:"version"`
+                        }
+
+                        err = json.NewDecoder(resp.Body).Decode(&got)
+                        resp.Body.Close()
+
+                        if err == nil && got.Version >= 1 {
+                                return true
+                        }
+                }
+
+                time.Sleep(50 * time.Millisecond)
+        }
+
+        return false
+}
+
 // TestLateAttachSocketReceivesRunOutcome is THE v1.2.6 regression: the run
 // completes before the socket attaches, and the first frame the socket
 // receives must carry the authoritative outcome the frontend needs to
@@ -212,6 +242,12 @@ func TestLateAttachSocketReceivesRunOutcome(t *testing.T) {
 
         if !waitForReplyPersisted(t, server, sessionID) {
                 t.Fatal("the fake-engine run never persisted a reply — test precondition broken")
+        }
+
+        // v1.2.8: wait for the settle tail (summary sidecar) before the
+        // registry assertions — deterministic, not a guessed beat.
+        if !waitForSummarySettled(t, server, sessionID) {
+                t.Fatal("the settle tail (summary sidecar) never completed")
         }
 
         // Give the run goroutine's deferred cleanup a beat to close the hub and
@@ -326,6 +362,16 @@ func TestActivitiesCarryRunIdAndDoneAttachesMidRun(t *testing.T) {
 
         if frames == 0 {
                 t.Fatal("no frames arrived on the activity socket")
+        }
+
+        // v1.2.8: wait for the run goroutine's durable settle tail (reply
+        // persist + summary sidecar) before t.TempDir cleanup.
+        if !waitForReplyPersisted(t, server, sessionID) {
+                t.Fatal("the run never persisted its reply")
+        }
+
+        if !waitForSummarySettled(t, server, sessionID) {
+                t.Fatal("the settle tail (summary sidecar) never completed")
         }
 
         // Either we observed the run's frames (stamped with one runId + done),

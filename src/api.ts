@@ -466,11 +466,72 @@ export interface Session {
   preset?: string;
   createdAt: string;
   updatedAt: string;
+  // v1.2.8: the session's conversation space ("chat" | "agent"). Legacy
+  // sessions without the field are "agent" (deterministic migration).
+  mode?: string;
   threadId?: string;
   parentId?: string;
   chapter?: number;
   msgCount?: number;
 }
+
+// v1.2.8: cross-mode history reference wire types (mirrors the backend
+// sessions.HistoryRef / histref.Hit shapes).
+export type HistoryRefRange = {
+  from: number;
+  to: number;
+};
+
+export type HistoryRef = {
+  sessionId: string;
+  mode?: string;
+  summaryVersion?: number;
+  ranges?: HistoryRefRange[];
+};
+
+export type HistoryHit = {
+  sessionId: string;
+  mode: string;
+  title: string;
+  updatedAt: string;
+  msgCount: number;
+  score: number;
+  summaryVersion: number;
+  objective?: string;
+  snippet?: string;
+  currentState?: string;
+};
+
+export type SessionSummaryView = {
+  sessionId: string;
+  mode?: string;
+  version: number;
+  updatedAt?: string;
+  objective?: string;
+  importantUserConstraints?: string[];
+  keyDecisions?: string[];
+  importantFacts?: string[];
+  filesAndArtifacts?: string[];
+  toolsAndResearch?: string[];
+  errorsAndRepairs?: string[];
+  currentState?: string;
+  unresolvedItems?: string[];
+  nextStep?: string;
+};
+
+export type IndexedMessage = {
+  index: number;
+  message: ChatMessage;
+};
+
+export type MessagesPage = {
+  sessionId: string;
+  total: number;
+  hasMore: boolean;
+  nextBefore: number;
+  page: number;
+  messages: IndexedMessage[];
+};
 
 export interface RunRequest {
   sessionId: string;
@@ -486,6 +547,11 @@ export interface RunRequest {
   toolMode?: string;
   /** manual-mode allow-list (tool names); ignored in auto mode */
   toolAllow?: string[];
+
+  // v1.2.8: explicitly attached cross-mode history sessions. DATA, never
+  // authority — only the relevant portions are retrieved per request and
+  // injected with provenance labels.
+  historyRefs?: HistoryRef[];
 }
 
 export interface RunResponse {
@@ -769,6 +835,9 @@ export interface SessionDetail extends Session {
     // v1.1.6: per-session context-window policy in tokens
     // (0/absent = inherit the global configured context).
     contextTokens?: number;
+    // v1.2.8: the attached cross-mode history references (stable ids —
+    // the sessions are retrieved per run, never merged).
+    historyRefs?: HistoryRef[];
   };
 }
 
@@ -1139,17 +1208,24 @@ export const api = {
     }, action === "cancel-download" ? 15_000 : LONG_OPERATION_TIMEOUT_MS);
   },
 
-  sessions(): Promise<Session[]> {
-    return request<Session[]>("/sessions");
+  sessions(mode?: string): Promise<Session[]> {
+    // v1.2.8: `mode` filters ONE conversation space; without it the full
+    // list is served (compat).
+    const suffix = mode === "chat" || mode === "agent" ? `?mode=${mode}` : "";
+    return request<Session[]>(`/sessions${suffix}`);
   },
 
   session(id: string): Promise<Session> {
     return request<Session>(`/sessions/${encodeURIComponent(id)}`);
   },
 
-  createSession(): Promise<Session> {
+  createSession(mode?: string): Promise<Session> {
+    // v1.2.8: the created session is FIXED to one conversation space. An
+    // empty body keeps the backend default (agent) for old clients.
     return request<Session>("/sessions", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mode ? { mode } : {}),
     });
   },
 
@@ -1157,6 +1233,49 @@ export const api = {
     return request<void>(`/sessions/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+  },
+
+  // v1.2.8: picker search over titles + rolling summaries. mode "chat" |
+  // "agent" browses ONE space; undefined browses all (cross-mode picker).
+  historySearch(
+    q: string,
+    mode?: string,
+    limit = 8,
+  ): Promise<HistoryHit[]> {
+    const params = new URLSearchParams();
+    if (q.trim() !== "") {
+      params.set("q", q);
+    }
+    if (mode === "chat" || mode === "agent") {
+      params.set("mode", mode);
+    }
+    params.set("limit", String(limit));
+    return request<HistoryHit[]>(`/history/search?${params.toString()}`);
+  },
+
+  // v1.2.8: the session's durable rolling summary (version-0 shell when
+  // no turn has settled yet — never fabricated content).
+  sessionSummary(id: string): Promise<SessionSummaryView> {
+    return request<SessionSummaryView>(
+      `/sessions/${encodeURIComponent(id)}/summary`,
+    );
+  },
+
+  // v1.2.8: lazy history paging — the newest page by default; `before`
+  // (exclusive message index) fetches older pages.
+  sessionMessagesPage(
+    id: string,
+    before?: number,
+    limit = 60,
+  ): Promise<MessagesPage> {
+    const params = new URLSearchParams();
+    if (typeof before === "number" && before >= 0) {
+      params.set("before", String(before));
+    }
+    params.set("limit", String(limit));
+    return request<MessagesPage>(
+      `/sessions/${encodeURIComponent(id)}/messages?${params.toString()}`,
+    );
   },
 
   run(payload: RunRequest): Promise<RunResponse> {
@@ -1306,6 +1425,8 @@ export const api = {
         attachedFiles?: string[];
         maxIterations?: number;
         contextTokens?: number;
+        // v1.2.8: attached cross-mode history references.
+        historyRefs?: HistoryRef[];
       };
     },
   ): Promise<Session> {

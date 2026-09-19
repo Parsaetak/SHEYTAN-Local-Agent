@@ -1,21 +1,56 @@
-SHEYTAN-Local-Agent v1.2.7 — Replacement SHA-256 Sheet
+SHEYTAN-Local-Agent v1.2.8 — Replacement SHA-256 Sheet
 ==============================================================================================================
-Base: main @ e7591896ed7d3412ca5c690bb840e0ac3b202ea9 (v1.2.6)
-Package: SHEYTAN-Local-Agent-v1.2.7-UPDATE.zip
+Base: main @ e2bbbb0a1a8ff5dc8feeea9dc8de0a2e309b7af8 (v1.2.7 line, HEAD)
+Package: SHEYTAN-Local-Agent-v1.2.8-UPDATE.zip
 Every file listed in REPLACEMENT-MANIFEST.txt, hashed at package time.
 Verify after extraction with: sha256sum -c REPLACEMENT-SHA256.txt
-(the file hashes itself; a line reading FAILED means the package was
-tampered with or truncated in transit).
+(REPLACEMENT-SHA256.txt itself is excluded from its own list; a line
+reading FAILED means the package was tampered with or truncated).
 
-9a0ae8a6887e2d80d284091a98fbf826c331a603f0061aef336bf52ddac07b4d  README.md
-533ef4363172350df597a989005fc3949067ae6c1c846010df4829195fcca140  SIGNATURE
-de9a1088a47edadbe9e3e6687cc1ec8ee49746bdac5d7b5ef40e7d4b4590a3a4  UPDATE.md
-30373a8e932ebc61027244af8e338e04c7caaf5332779ad1c0ee2f5dbb12a9b3  agent.md
-f385426d5d9d65dde4719351fde206d73e2634e594bed78b6d17301450f5cffd  build/config.yml
-6a99764f0460322f59bd746368e4d4a4c2af051e8f2c3118ebd406256019e009  internal/api/server.go
-67cfae4423842ff515be2598a4ccd781d3ed7c513bb4830cdd4617123c0b4cee  internal/api/runtransport_v127_test.go
-c5fed4f0189688356e410ce72eb8cd6f76f36542b9282014e6c1eb134ae4d2d0  internal/config/config.go
-51ef53a13d253ca9f3c5f7bc72c1aabb2f83bd213fb9313d97f09952a52b0685  package.json
-27f88b6a70781f5c0608f3586bd80a5f161a13e81ab097d40a9299679c40bb19  package-lock.json
-fffa4461a81f58ea77a97d5783a4e9a596b7e2a5bf1b73af07b4ff57f4c9bd23  worklog.md
-4d45ed8b3c4460c0066caaad871c3721d7b86c1cbb93fc4bc3796164e79b5c2c  REPLACEMENT-MANIFEST.txt
+0691b8cf931ae9b465c642b1751b0fa57b60dca0d348a2921e3c176134cc81ee  ARCHITECTURE.md
+f47b0848f964c126f3c8599cf63b1657daccd8a8a8a80a4b1f4e2e8fd011f769  README.md
+c9bcc20ede77eef6a10d5e00054ef3c9ed9a34a1146fb85d044fbcf0dbc36384  SIGNATURE
+bcd3a73a0fc770a90da1ce16bdbd347caff3fa48332d2bbc3ec600c9a536f1b1  UPDATE.md
+a9e9b0795caa1dfb172b27974aa5176d34aa644330987f029452869653838656  agent.md
+4aa7e63177d49d073c1f2f33eeec1da8856912bc82fc0feba544254f4d545cb6  build/config.yml
+095ae9419829f1187413ecb8a62215d8395eb267f1bd887d9cc75240d64ef9ad  internal/agent/handoff.go
+b29a2a904abde025c9f1a697a08baf31b09590c3a15e8b69d4cf49d8c5e93c22  internal/agent/handoff_test.go
+ac8705c9ba38c217384e602bdfa7e59da4594440532f154f4d38eee9cec055fb  internal/agent/orchestrator.go
+d83f15c4c88bf0fb3a9b6fb01782075e51ced5fdd18878172ff71dda48099089  internal/agent/taskstate.go
+165346f4728ee08cc73280bfc4263214ea8d4ff1b1eb04d9dc285c8f04c8dd7b  internal/agent/taskstate_test.go
+2710e9f64a005368c07d1266d85fa0919efa3f5307c5426c9e829f7bcf8155d2  internal/api/history.go
+86ee378260bf30256bceb0f0f4965f8c096d75ae3873e8a4eceb226fec6ab933  internal/api/history_api_test.go
+502edd4bd1ffe326f3d1efc5964773138cc434123f295ea8da231bad4bc3da55  internal/api/run_crossmode_test.go
+49dbd2b02276f57828e349d20cb96ffc24461e51e758f6eb7f3be48bec9702b0  internal/api/run_settlement_test.go
+5a954622baa2a2712e0a7209cf64e9060c5e5e91327a05f5e31ca75ff07127cd  internal/api/run_task_test.go
+325db07dea62fda005a4253b859c130327bfd2dc32cb1ca0b84e1eecaa6e5983  internal/api/runregistry_test.go
+000b9b1c5053cb4cb6c56a3f2c684c6a80ab49117f0088a7f1bf8efcd4e33528  internal/api/runstate.go
+b5ed84fb904c5fe38cf44803428831440de41a8cad7d5c01a5292f7e2c884413  internal/api/runtransport_test.go
+cbd5c2ba3510edeb4a4a3cc5be7980a60177b9475000c17c89121681ade2f55c  internal/api/server.go
+c2ea9b4d517fee02513c5ee285c17939389dd15e79e42db1d394640b618f17b5  internal/config/config.go
+d5f1ef13a6379c1b30afbbde2d234ea4f48319b114df2e2bb607bccc4b0ca741  internal/contextplan/contextplan.go
+f04bbe77b96cd7f65495bd6256aa2283e2dae6f27d77f2b98e451f3ab2f803a0  internal/contextplan/sections_test.go
+ac578ed7edcb015c698cc78489bd350d2d80982896219572e23cfa9e32955e56  internal/histref/histref.go
+de8252b64b548a1df80840475b141b1cceb9eaad5eed03768274c2b0f83778d2  internal/histref/histref_test.go
+eca228113a7bcd7556d9ed758198b32220e42873a2c361deab8480ab3ad8893f  internal/sessions/mode_test.go
+1a502de880bb870c472957bab92809fb5d1c367c474d51275d3ab917ff1b83e4  internal/sessions/sessions.go
+c74eb3418c6a687be647710dc2ac113e59dc4e6a553f4b779a25783dc6b37221  internal/sessions/summary.go
+f146d7adfbdb32d52e39bd4bcd7439fc784ebd67258ee896c90791ab5f1a113a  internal/sessions/summary_test.go
+c5d241be7445959ad16d16337c8f165a4086db43bab698eec28720f0e7dce3ac  package.json
+9a029e187555f5618ddb2b7e7817d8451154292b8cba17624d4aef8aadde961e  src/AgentBody.tsx
+df1589fe8a9bd00b04fb1c609dd681bc82cbc3006fec7ddba7d16711f2b1fc68  src/AgentSidebar.tsx
+061e1805c8494e5d6fb7bee1aa9c6160c177073b3ac67df8d54a59275a5cec91  src/AgentTaskPanel.tsx
+c6178c09764aac98903800ac49efacfda24966e284430eaab074f223545ba8d2  src/HistoryPicker.tsx
+cbc00cc28adce6bcc3ddbbe110677260f4328c47ea61853d82fadb8496833662  src/MessageStream.tsx
+04169db8208eaf854ff12bf3dffd9a4977ae94d053d26706dee2453cd12c4bc3  src/agent-init.ts
+c702945f394575c23ec0ab2ffcf0b070797d64e675302cfdb86178a04e4e2faa  src/api.ts
+e5432e34c5975f944e2c913058cab087a2abbdbc2aa23e6a652dd574f6a89a38  src/history-ref.test.ts
+009a77ebfe1f54d36837b6228b261941b9cb7ea8c1a6b361668a978551bd9701  src/history-ref.ts
+890ac6dcd3dbae9d24b5eb2d127bbda593fd113477c1ad87814e03c3eadf5e3c  src/mode-sessions.test.ts
+c7a2a9a32d5bdc154d3e447930d68720f66e504139c803717e0a43c40c2f483f  src/mode-sessions.ts
+27d01d4d5013414274da8eedfe8dd725c8294ed9eea12b263b8b6bde56ef15f6  src/parse-ended-at.test.ts
+79522ceac0a8c052aa0a8c79c417744f413c1704078b924f71940cc3f1d26a2d  src/run-events.ts
+6705e529f651951313476d6ae20d027834955fb4273b3758e23cb111417d6879  src/run-recovery.ts
+61977c7cf36f4c929a7615b0ba53e0e3ebff4e51a9e611a14a538c5bf760bd77  src/store.ts
+3e5a015d5884c664940cf386348a591d9928127cb2135fecce68ebab4302661b  src/styles.css
+902617c0e72a018aba7031a2cb887d5b26e8c8e344733894cb3e957fd83f380d  worklog.md

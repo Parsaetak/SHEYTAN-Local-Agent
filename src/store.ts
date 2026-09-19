@@ -7,6 +7,8 @@ import {
   type Attachment,
   type ChatMessage,
   type EngineSnapshot,
+  type HistoryHit,
+  type HistoryRef,
   type LabListResponse,
   type LabTaskSessionSnapshot,
   type ModelsResponse,
@@ -18,6 +20,16 @@ import {
   type ToolInfo,
   type SessionContextStatus,
 } from "./api";
+import {
+  mergeHistoryRefs,
+  normalizeHistoryRefs,
+  removeHistoryRef as removeHistoryRefById,
+} from "./history-ref";
+import { parseEndedAt } from "./run-recovery";
+import {
+  resolveActiveForMode,
+  sessionMode,
+} from "./mode-sessions";
 import { activityWebSocketURL } from "./config";
 import {
   isLivePhase,
@@ -282,6 +294,41 @@ type RuntimeState = {
   // v1.1.8: Chat / Agent mode switch (persisted per device).
   mode: WorkspaceMode;
   setMode: (mode: WorkspaceMode) => void;
+
+  // v1.2.8: MODE-SEPARATED HISTORIES. One active session PER mode —
+  // switching mode switches the conversation space, it never silently
+  // switches (or merges) the active conversation.
+  activeSessionByMode: Record<WorkspaceMode, string | null>;
+
+  // v1.2.8: cross-mode history references attached to the ACTIVE session.
+  // DATA, never authority — the backend retrieves only the relevant
+  // portions per run and labels provenance.
+  historyRefs: HistoryRef[];
+  attachHistoryRefs: (refs: HistoryRef[]) => Promise<void>;
+  detachHistoryRef: (sessionId: string) => Promise<void>;
+
+  // v1.2.8: history picker state (search + mode filter + results).
+  historyPickerOpen: boolean;
+  setHistoryPickerOpen: (open: boolean) => void;
+  historyHits: HistoryHit[];
+  historySearchLoading: boolean;
+  historySearchMode: WorkspaceMode | "all";
+  setHistorySearchMode: (mode: WorkspaceMode | "all") => void;
+  searchHistory: (q: string) => Promise<void>;
+
+  // v1.2.8: bounded agent task state (rendered by the agent pipeline
+  // panel; restored from run snapshots on reconnect).
+  agentTask: Record<string, unknown> | null;
+
+  // v1.2.8: lazy history paging — the newest page loads first, older
+  // messages are fetched on demand ("Load earlier").
+  olderHasMore: boolean;
+  olderLoading: boolean;
+  olderNextBefore: number | null;
+  loadOlderMessages: () => Promise<void>;
+
+  // v1.2.8: session rename (the backend PUT existed; the UI now uses it).
+  renameSession: (id: string, title: string) => Promise<void>;
 };
 
 const MAX_ACTIVITY_EVENTS = 500;
@@ -626,17 +673,6 @@ function normalizeActivity(payload: unknown): ActivityEvent {
   };
 }
 
-function resolveActiveSessionID(
-  sessions: Session[],
-  currentID: string | null,
-): string | null {
-  if (currentID && sessions.some((session) => session.id === currentID)) {
-    return currentID;
-  }
-
-  return sessions[0]?.id ?? null;
-}
-
 function resetPendingActivity(): void {
   if (activityFlushFrame !== null) {
     cancelAnimationFrame(activityFlushFrame);
@@ -979,10 +1015,17 @@ function readLastRunOutcome(
   }
 
   const value = lastRun as Record<string, unknown>;
-  const endedAt = value.endedAt;
+  const endedAt = parseEndedAt(value.endedAt);
   const outcome = value.outcome;
 
-  if (typeof endedAt !== "number" || typeof outcome !== "string") {
+  // v1.2.8 ROOT-CAUSE FIX: the backend marshals runOutcome.EndedAt
+  // (time.Time) as an RFC3339 STRING on the wire (pinned by the Go
+  // contract test), while this parser previously accepted ONLY an
+  // epoch-ms number — the authoritative fast-path recovery in
+  // recoverRunFromIdle could therefore never fire and every recovery
+  // silently fell through to the grace re-check. Both wire shapes are
+  // now accepted; no backend contract is broken.
+  if (endedAt === null || typeof outcome !== "string") {
     return null;
   }
 
@@ -1021,6 +1064,15 @@ function handleRunSnapshot(payload: Record<string, unknown>): void {
   if (runId) {
     activeRunId = runId;
     lastRunSeq = sequence;
+  }
+
+  // v1.2.8: restore the bounded task-state view from the snapshot — a
+  // reconnect mid-run recovers the whole working state (goal, step,
+  // files, commands, tests, verification), not just the streamed text.
+  if (payload.task && typeof payload.task === "object") {
+    useRuntimeStore.setState({
+      agentTask: payload.task as Record<string, unknown>,
+    });
   }
 
   // Terminal state: finalise through the same path the done/error events
@@ -1317,6 +1369,27 @@ function handleConversationEvent(event: ActivityEvent): void {
       break;
     }
 
+    case "task": {
+      // v1.2.8: the bounded agent task-state snapshot — the agent pipeline
+      // panel renders the REAL runtime state (goal, current step, files,
+      // commands, tests, verification). Detail carries the bounded state.
+      if (event.data.detail && typeof event.data.detail === "object") {
+        useRuntimeStore.setState({
+          agentTask: event.data.detail as Record<string, unknown>,
+        });
+      }
+
+      transitionPhase("thinking_activity");
+      break;
+    }
+
+    case "handoff": {
+      // v1.2.8: agent.md handoff written at settlement — a timeline
+      // event only; the durable state lives in the workspace file.
+      transitionPhase("thinking_activity");
+      break;
+    }
+
     case "tool_start":
     case "tool_end":
     case "context":
@@ -1587,16 +1660,28 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
   refreshSessions: async () => {
     try {
-      const sessions = await api.sessions();
+      // v1.2.8: the sidebar shows ONE conversation space. The full list is
+      // still reachable through the history picker (cross-mode search).
+      const sessions = await api.sessions(get().mode);
 
       const current = get().activeSessionId;
 
-      const activeSessionId = resolveActiveSessionID(sessions, current);
+      // The remembered selection only survives when it still exists IN
+      // THIS mode's space (never silently switched to another space).
+      const activeSessionId = resolveActiveForMode(
+        sessions,
+        get().mode,
+        current,
+      );
 
-      set({
+      set((state) => ({
         sessions,
         activeSessionId,
-      });
+        activeSessionByMode: {
+          ...state.activeSessionByMode,
+          [state.mode]: activeSessionId,
+        },
+      }));
     } catch (error) {
       set({
         error:
@@ -1782,7 +1867,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
   loadSession: async (id) => {
     try {
-      const detail = await api.sessionDetail(id);
+      // v1.2.8: LAZY HISTORY PAGING — load the newest page instead of the
+      // whole transcript. Older pages fetch on demand (loadOlderMessages);
+      // the authoritative full session remains on the backend.
+      const page = await api.sessionMessagesPage(id);
 
       // Only apply if the session is still the active one.
       if (useRuntimeStore.getState().activeSessionId !== id) {
@@ -1790,14 +1878,33 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       }
 
       set({
-        messages: detail.messages ?? [],
+        messages: page.messages.map((entry) => entry.message),
+        olderHasMore: page.hasMore,
+        olderNextBefore: page.hasMore ? page.nextBefore : null,
       });
     } catch {
       // Session detail unavailable (fresh session not yet persisted) —
       // an empty conversation is the correct view.
       if (useRuntimeStore.getState().activeSessionId === id) {
-        set({ messages: [] });
+        set({ messages: [], olderHasMore: false, olderNextBefore: null });
       }
+    }
+
+    // v1.2.8: restore the attached cross-mode history references with
+    // the session (best-effort — a session without refs stays empty).
+    try {
+      const detail = await api.sessionDetail(id);
+
+      if (useRuntimeStore.getState().activeSessionId === id) {
+        set({
+          historyRefs: normalizeHistoryRefs(
+            detail.context?.historyRefs,
+            id,
+          ),
+        });
+      }
+    } catch {
+      // Refs are optional metadata; silence is correct here.
     }
   },
 
@@ -1869,7 +1976,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   },
 
   createSession: async () => {
-    const session = await api.createSession();
+    // v1.2.8: the new session is created in the CURRENT conversation
+    // space and becomes that space's active session.
+    const session = await api.createSession(get().mode);
 
     // v1.1.4Z: createSession previously only prepended the session and
     // switched the id — the socket stayed bound to the OLD session (the
@@ -1891,6 +2000,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     set((state) => ({
       sessions: [session, ...state.sessions],
       activeSessionId: session.id,
+      activeSessionByMode: {
+        ...state.activeSessionByMode,
+        [state.mode]: session.id,
+      },
       error: null,
       activity: [],
       messages: [],
@@ -1900,6 +2013,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       runStartedAt: null,
       runNote: null,
       pendingAttachments: [],
+      historyRefs: [],
+      agentTask: null,
+      olderHasMore: false,
+      olderNextBefore: null,
     }));
 
     // v1.2.2: only a mounted consumer keeps the new session's socket.
@@ -1924,8 +2041,14 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     runEventsReceived = false;
     resetRunReplayTracking(null);
 
-    set({
+    set((state) => ({
       activeSessionId: id,
+      // v1.2.8: remember the selection PER MODE so switching modes never
+      // silently switches the active conversation of either space.
+      activeSessionByMode: {
+        ...state.activeSessionByMode,
+        [state.mode]: id,
+      },
       error: null,
       activity: [],
       messages: [],
@@ -1935,7 +2058,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       runStartedAt: null,
       runNote: null,
       pendingAttachments: [],
-    });
+      historyRefs: [],
+      agentTask: null,
+      olderHasMore: false,
+      olderNextBefore: null,
+    }));
 
     // Phase 4: drop any pending streaming chunks for the OLD session.
     resetPendingStreaming();
@@ -1965,14 +2092,21 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     set((state) => {
       const sessions = state.sessions.filter((session) => session.id !== id);
 
-      const activeSessionId = resolveActiveSessionID(
+      // v1.2.8: the replacement selection stays INSIDE the current mode's
+      // space (the list is already mode-filtered; this re-resolves).
+      const activeSessionId = resolveActiveForMode(
         sessions,
+        state.mode,
         state.activeSessionId === id ? null : state.activeSessionId,
       );
 
       return {
         sessions,
         activeSessionId,
+        activeSessionByMode: {
+          ...state.activeSessionByMode,
+          [state.mode]: activeSessionId,
+        },
         // v1.1.4Z: the deleted session's conversation previously stayed
         // on screen (and kept streaming state) until the next manual switch.
         messages: state.activeSessionId === id ? [] : state.messages,
@@ -2045,6 +2179,8 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       // v1.2.5: fresh run — fresh status line and escalation trail.
       liveStatus: null,
       tierEscalations: [],
+      // v1.2.8: fresh run — fresh task-state view.
+      agentTask: null,
     });
 
     // v1.1.3Z: optimistic user bubble — the conversation shows the sent
@@ -2083,6 +2219,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           : {}),
         ...(state.toolPolicyMode === "manual"
           ? { toolMode: "manual", toolAllow: state.toolAllowlist }
+          : {}),
+        // v1.2.8: the attached cross-mode history references travel with
+        // every request — the backend retrieves only the relevant portions
+        // and labels provenance (the source sessions are never modified).
+        ...(state.historyRefs.length > 0
+          ? { historyRefs: state.historyRefs }
           : {}),
       });
 
@@ -2593,13 +2735,266 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     });
   },
 
-  // v1.1.8: mode switch — a UI-only concern, so it lives at the end of
-  // the store with its localStorage persistence. Sessions, model state,
-  // and the engine are untouched: Chat and Agent share one runtime.
+  // v1.2.8: MODE-SEPARATED history switching. The old setMode flipped a
+  // display flag over ONE shared transcript; two spaces that share one
+  // active conversation are NOT two histories. Now:
+  //   - the current mode's active session is remembered in
+  //     activeSessionByMode (never lost);
+  //   - the OTHER mode's remembered session becomes active (or its newest,
+  //     or none — a fresh one is created lazily on first message);
+  //   - the run timeline resets for the newly active session: the backend
+  //     run of the previous session (if any) KEEPS RUNNING server-side and
+  //     reconnecting to it later replays its authoritative snapshot —
+  //     switching the visible space never restarts or cancels a run.
   mode: initialWorkspaceMode(),
+  activeSessionByMode: { chat: null, agent: null },
+  historyRefs: [],
+  historyPickerOpen: false,
+  historyHits: [],
+  historySearchLoading: false,
+  historySearchMode: "all",
+  agentTask: null,
+  olderHasMore: false,
+  olderLoading: false,
+  olderNextBefore: null,
   setMode: (mode) => {
+    const state = get();
+
+    if (state.mode === mode) {
+      persistWorkspaceMode(mode);
+      return;
+    }
+
+    // Remember where the CURRENT space was (so returning restores it).
+    const remembered: Record<WorkspaceMode, string | null> = {
+      ...state.activeSessionByMode,
+      [state.mode]: state.activeSessionId,
+    };
+
+    // A run live in the current session keeps running on the backend;
+    // this UI switch only changes the visible space.
+    get().disconnectActivity();
+    clearRunFinalizeTimer();
+    runOutcome = null;
+    runAssistantBaseline = null;
+    runEventsReceived = false;
+    resetRunReplayTracking(null);
+    resetPendingStreaming();
+
     persistWorkspaceMode(mode);
-    set({ mode });
+
+    const nextActive = resolveActiveForMode(
+      state.sessions.filter((s) => sessionMode(s) === mode),
+      mode,
+      remembered[mode],
+    );
+
+    set({
+      mode,
+      activeSessionId: nextActive,
+      activeSessionByMode: { ...remembered, [mode]: nextActive },
+      error: null,
+      activity: [],
+      messages: [],
+      streaming: null,
+      running: false,
+      runPhase: "idle",
+      runStartedAt: null,
+      runNote: null,
+      liveStatus: null,
+      tierEscalations: [],
+      pendingAttachments: [],
+      historyRefs: [],
+      agentTask: null,
+      olderHasMore: false,
+      olderNextBefore: null,
+      sessionContext: null,
+      sessionContextError: null,
+    });
+
+    // Load the target space's list and the remembered conversation.
+    void get().refreshSessions();
+
+    if (nextActive) {
+      if (activityConsumers > 0) {
+        get().connectActivity();
+      }
+
+      void get().loadSession(nextActive);
+      void get().refreshSessionContext();
+    }
+  },
+
+  attachHistoryRefs: async (refs) => {
+    const state = get();
+
+    const sessionId = state.activeSessionId;
+    if (!sessionId) {
+      return;
+    }
+
+    const merged = mergeHistoryRefs(state.historyRefs, refs, sessionId);
+
+    set({ historyRefs: merged, historyPickerOpen: false });
+
+    // Persist on the session context (mirrors the staged attachment ids):
+    // the references survive reloads and travel with later turns. The PUT
+    // replaces the WHOLE context, so the fresh context is read first — a
+    // partial write would wipe the other fields.
+    try {
+      const detail = await api.sessionDetail(sessionId);
+
+      await api.updateSession(sessionId, {
+        context: {
+          ...detail.context,
+          historyRefs: merged,
+        },
+      });
+    } catch (error) {
+      set({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to persist the attached history references.",
+      });
+    }
+  },
+
+  detachHistoryRef: async (refSessionId) => {
+    const state = get();
+
+    const sessionId = state.activeSessionId;
+    if (!sessionId) {
+      return;
+    }
+
+    const next = removeHistoryRefById(state.historyRefs, refSessionId);
+
+    set({ historyRefs: next });
+
+    // Read-modify-write of the FULL context (see attachHistoryRefs).
+    try {
+      const detail = await api.sessionDetail(sessionId);
+
+      await api.updateSession(sessionId, {
+        context: {
+          ...detail.context,
+          historyRefs: next,
+        },
+      });
+    } catch (error) {
+      set({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to update the attached history references.",
+      });
+    }
+  },
+
+  setHistoryPickerOpen: (open) => {
+    set({ historyPickerOpen: open });
+
+    if (open) {
+      // Seed the picker with the newest sessions across BOTH spaces.
+      void get().searchHistory("");
+    }
+  },
+
+  setHistorySearchMode: (filter) => {
+    set({ historySearchMode: filter });
+
+    void get().searchHistory("");
+  },
+
+  searchHistory: async (q) => {
+    const mode = get().historySearchMode;
+
+    set({ historySearchLoading: true });
+
+    try {
+      const hits = await api.historySearch(
+        q,
+        mode === "all" ? undefined : mode,
+        12,
+      );
+
+      set({ historyHits: hits, historySearchLoading: false });
+    } catch (error) {
+      set({
+        historySearchLoading: false,
+        historyHits: [],
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to search history.",
+      });
+    }
+  },
+
+  loadOlderMessages: async () => {
+    const state = get();
+
+    const sessionId = state.activeSessionId;
+
+    if (!sessionId || !state.olderHasMore || state.olderLoading) {
+      return;
+    }
+
+    const before = state.olderNextBefore;
+    if (before === null || before <= 0) {
+      set({ olderHasMore: false, olderNextBefore: null });
+      return;
+    }
+
+    set({ olderLoading: true });
+
+    try {
+      const page = await api.sessionMessagesPage(sessionId, before);
+
+      // Only apply if the session is still the active one (a switch must
+      // never splice pages of another conversation).
+      if (useRuntimeStore.getState().activeSessionId !== sessionId) {
+        return;
+      }
+
+      set((current) => ({
+        messages: [
+          ...page.messages.map((entry) => entry.message),
+          ...current.messages,
+        ],
+        olderHasMore: page.hasMore,
+        olderNextBefore: page.hasMore ? page.nextBefore : null,
+        olderLoading: false,
+      }));
+    } catch {
+      if (useRuntimeStore.getState().activeSessionId === sessionId) {
+        set({ olderLoading: false });
+      }
+    }
+  },
+
+  renameSession: async (id, title) => {
+    const clean = title.trim();
+
+    if (!clean) {
+      return;
+    }
+
+    try {
+      const updated = await api.updateSession(id, { title: clean });
+
+      set((state) => ({
+        sessions: state.sessions.map((session) =>
+          session.id === id ? { ...session, title: updated.title } : session,
+        ),
+      }));
+    } catch (error) {
+      set({
+        error:
+          error instanceof Error ? error.message : "Failed to rename session.",
+      });
+    }
   },
 }));
 

@@ -17,6 +17,9 @@ import { DownloadProgressPanel } from "./DownloadProgress";
 import { initializeAgent } from "./agent-init";
 import MessageStream, { AttachmentChip } from "./MessageStream";
 import ActivityStream from "./ActivityStream";
+import HistoryPicker from "./HistoryPicker";
+import AgentTaskPanel from "./AgentTaskPanel";
+import { describeRange, refLabel } from "./history-ref";
 import ModelPicker from "./ModelPicker";
 import PerfStrip from "./PerfStrip";
 import { useRuntimeStore } from "./store";
@@ -166,6 +169,13 @@ function AgentBody() {
   const [modelError, setModelError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [showActivity, setShowActivity] = useState(false);
+
+  // v1.2.8: cross-mode history references + the picker's open state.
+  const historyRefs = useRuntimeStore((state) => state.historyRefs);
+  const detachHistoryRef = useRuntimeStore((state) => state.detachHistoryRef);
+  const setHistoryPickerOpen = useRuntimeStore(
+    (state) => state.setHistoryPickerOpen,
+  );
 
   // v1.1.8: Chat / Agent mode surfaces. Both modes share THIS component's
   // session/model/engine wiring — only what is VISIBLE differs. Chat gets
@@ -588,6 +598,12 @@ function AgentBody() {
             </div>
           </div>
 
+          {/* v1.2.8: the agent pipeline panel — the REAL task state
+              (goal/step/files/commands/tests/verification) maintained by
+              the backend from observed tool traffic. Renders nothing when
+              the run has produced no task evidence. */}
+          <AgentTaskPanel />
+
           <div className="runtime-section">
             <span className="eyebrow">ENGINE</span>
 
@@ -850,6 +866,39 @@ function AgentBody() {
           </div>
         ) : null}
 
+        {historyRefs.length > 0 ? (
+          <div className="composer-history-refs" aria-label="Attached history references">
+            {historyRefs.map((ref) => (
+              <span
+                key={ref.sessionId}
+                className="history-ref-chip"
+                title={describeRange(ref)}
+              >
+                <span className="history-ref-icon">⧉</span>
+
+                <span className="history-ref-label">{refLabel(ref)}</span>
+
+                <button
+                  type="button"
+                  className="history-ref-remove"
+                  onClick={() => void detachHistoryRef(ref.sessionId)}
+                  aria-label={`Detach history reference ${ref.sessionId}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => setHistoryPickerOpen(true)}
+            >
+              + More
+            </button>
+          </div>
+        ) : null}
+
         {/* v1.2.0: honest vision gating — an image staged for a model whose
             engine has NO projector gets a visible warning, not a silent
             downgrade. Text attachments are unaffected. */}
@@ -914,6 +963,18 @@ function AgentBody() {
                 {attachmentsUploading ? "Staging…" : "＋ Attach"}
               </button>
 
+              {/* v1.2.8: the cross-mode history picker — attach other Chat /
+                  Agent conversations as provenance-labeled references. */}
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setHistoryPickerOpen(true)}
+                disabled={!activeSessionId}
+                title="Attach another conversation (Chat or Agent) as a history reference"
+              >
+                ⧉ History
+              </button>
+
               <span>
                 {activeSessionId
                   ? "Enter to send · Shift+Enter for newline"
@@ -967,6 +1028,9 @@ function AgentBody() {
           <span>{error}</span>
         </div>
       ) : null}
+
+      {/* v1.2.8: the cross-mode history picker dialog. */}
+      <HistoryPicker />
     </>
   );
 }

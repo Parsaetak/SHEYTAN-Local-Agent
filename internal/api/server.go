@@ -6,6 +6,7 @@ import (
         "context"
         "encoding/json"
         "fmt"
+        "io"
         "io/fs"
         "net/http"
         "os"
@@ -23,6 +24,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/histref"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
@@ -396,6 +398,10 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("/api/lab/", s.handleLabTask)
         mux.HandleFunc("/api/research", s.handleResearch)
         mux.HandleFunc("/api/models/open-folder", s.handleModelsFolder)
+
+        // v1.2.8: history surfaces — picker search (cross-mode capable),
+        // rolling session summaries and lazy history paging.
+        mux.HandleFunc("/api/history/search", s.handleHistorySearch)
 
         // v1.2.4: Workspace surface — one compact work-environment view plus
         // the reveal/switch actions.
@@ -864,10 +870,45 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
                         return
                 }
 
+                // v1.2.8: mode-separated histories. `?mode=chat|agent`
+                // filters the list to ONE conversation space; without the
+                // parameter the full list is served (compat: the CLI and
+                // existing tests rely on it).
+                if mode := strings.TrimSpace(r.URL.Query().Get("mode")); mode == sessions.ModeChat || mode == sessions.ModeAgent {
+                        filtered := make([]*sessions.Session, 0, len(list))
+                        for _, st := range list {
+                                if st == nil {
+                                        continue
+                                }
+                                stMode := st.Mode
+                                if stMode == "" {
+                                        stMode = sessions.DefaultMode
+                                }
+                                if stMode == mode {
+                                        filtered = append(filtered, st)
+                                }
+                        }
+                        list = filtered
+                }
+
                 writeJSON(w, list)
 
         case http.MethodPost:
-                sess := s.store.Create()
+                // v1.2.8: the creation request MAY carry the conversation
+                // space ({"mode":"chat"|"agent"}). An empty body keeps the
+                // default (agent) — old clients behave identically.
+                mode := ""
+                var body struct {
+                        Mode string `json:"mode,omitempty"`
+                }
+                if r.Body != nil {
+                        if data, err := io.ReadAll(io.LimitReader(r.Body, 4<<10)); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+                                _ = json.Unmarshal(data, &body)
+                        }
+                }
+                mode = body.Mode
+
+                sess := s.store.CreateInMode(mode)
                 writeJSON(w, sess)
 
         default:
@@ -886,6 +927,18 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
         // 1.1.6: per-session context policy subresource.
         if id, sub := splitSessionPath(rest); sub == "context" {
                 s.handleSessionContext(w, r, id)
+                return
+        }
+
+        // v1.2.8: history subresources — the durable summary and the lazy
+        // message pager.
+        if id, sub := splitSessionPath(rest); sub == "summary" {
+                s.handleSessionSummary(w, r, id)
+                return
+        }
+
+        if id, sub := splitSessionPath(rest); sub == "messages" {
+                s.handleSessionMessages(w, r, id)
                 return
         }
 
@@ -1126,6 +1179,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 Thinking  string   `json:"thinking,omitempty"`  // "auto" | "fast" | "thinking"
                 ToolMode  string   `json:"toolMode,omitempty"`  // "auto" | "manual"
                 ToolAllow []string `json:"toolAllow,omitempty"` // manual-mode allow-list
+
+                // v1.2.8: cross-mode history references — sessions the user
+                // EXPLICITLY attached as context. DATA, never authority: the
+                // retrieved portions are provenance-tagged and never
+                // authorize execution by themselves.
+                HistoryRefs []histref.Ref `json:"historyRefs,omitempty"`
         }
 
         if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1150,6 +1209,48 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         if err != nil {
                 writeErr(w, http.StatusNotFound, err)
                 return
+        }
+
+        // v1.2.8: resolve the attached history references. Self-references
+        // are dropped (the active transcript is already here); unknown or
+        // foreign ids are silently skipped by Resolve (never fabricated).
+        // The surviving refs persist on the session context so later turns
+        // keep retrieving them (bounded, deduplicated).
+        requestedRefs := histref.NormalizeRefs(body.HistoryRefs)
+        {
+                kept := make([]histref.Ref, 0, len(requestedRefs))
+                for _, ref := range requestedRefs {
+                        if ref.SessionID == sess.ID {
+                                continue
+                        }
+                        kept = append(kept, ref)
+                }
+                requestedRefs = kept
+        }
+
+        if len(requestedRefs) > 0 {
+                merged := sess.Context.HistoryRefs
+
+                for _, ref := range requestedRefs {
+                        known := false
+
+                        for _, knownRef := range merged {
+                                if knownRef.SessionID == ref.SessionID {
+                                        known = true
+                                        break
+                                }
+                        }
+
+                        if !known {
+                                merged = append(merged, ref)
+                        }
+                }
+
+                if len(merged) > sessions.MaxHistoryRefs {
+                        merged = merged[len(merged)-sessions.MaxHistoryRefs:]
+                }
+
+                sess.Context.HistoryRefs = merged
         }
 
         // Regenerate: drop trailing assistant output so the previous user
@@ -1382,6 +1483,51 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                 )...,
                         )
                 }
+        }
+
+        // v1.2.8: retrieve the relevant portions of the attached history
+        // references for THIS turn and load the session's rolling summary.
+        // Both blocks are pre-bounded and provenance-tagged; the planner
+        // still decides whether they travel (history-refs are the first
+        // retrieval section dropped under pressure). The summary never
+        // replaces the transcript — it is a derived aid.
+        var histRefBlocks []llm.Message
+
+        if len(requestedRefs) > 0 {
+                query := body.Message
+
+                if query == "" {
+                        // Regenerate: retrieve against the last user turn.
+                        for i := len(sess.Messages) - 1; i >= 0; i-- {
+                                if sess.Messages[i].Role == "user" {
+                                        query = sess.Messages[i].Content
+                                        break
+                                }
+                        }
+                }
+
+                // Budget: the per-reference default, scaled to the ref count
+                // (bounded by design — the picker caps refs at MaxRefsPerRun).
+                histRefBlocks = histref.Resolve(
+                        s.store,
+                        requestedRefs,
+                        query,
+                        histref.DefaultBlockTokens*len(requestedRefs),
+                )
+
+                if len(histRefBlocks) > 0 {
+                        logging.Default().Info(
+                                "history",
+                                "retrieved %d history block(s) for session %s (refs=%d queryBytes=%d)",
+                                len(histRefBlocks), sess.ID, len(requestedRefs), len(query),
+                        )
+                }
+        }
+
+        var summaryBlock string
+
+        if sum, err := s.store.SummaryForRun(sess.ID); err == nil {
+                summaryBlock = sessions.RenderSummaryBlock(sum)
         }
 
         // Spawn the run.
@@ -1649,6 +1795,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         agent.WithThinkingMode(body.Thinking),
                         agent.WithToolPolicy(body.ToolMode, body.ToolAllow),
                         agent.WithReceivedAt(receivedAt),
+                        agent.WithSessionSummaryBlock(summaryBlock),
+                        agent.WithHistoryBlocks(histRefBlocks),
                 )
 
                 if err != nil {
@@ -1706,6 +1854,35 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 tl.persistedAt = time.Now()
 
                 settle(resultOutcome, terminalCaption, res.Text != "", res.Text, res.Reasoning)
+
+                // v1.2.8: rolling session summary — ONE bounded update per
+                // settled turn (never a full-transcript re-summarization).
+                // The summary is the durable whole-session memory the next
+                // turn, the cross-mode picker and the compaction path all
+                // consume. Best-effort: failures are logged, never fail the
+                // run (the transcript itself stays authoritative).
+                if res.Text != "" {
+                        s.updateSessionSummaryRolling(sess, body.Message, res.Text, res.ToolsUsed)
+                }
+
+                // v1.2.8: mandatory agent.md handoff — a COMPLETED agent run
+                // with engineering evidence (files changed / commands /
+                // tests) updates <workspace>/agent.md so the NEXT agent can
+                // pick up the state without reconstructing this transcript.
+                // Never written for speculative or failed outcomes.
+                if sess.Mode == sessions.ModeAgent && resultOutcome == "done" && res.Task != nil {
+                        if handoffPath := s.writeAgentHandoff(sess, res.Task, resultOutcome); handoffPath != "" {
+                                publish(agent.Activity{
+                                        Type:    "handoff",
+                                        Caption: "agent.md handoff updated for the next agent",
+                                        Detail: map[string]any{
+                                                "path":      handoffPath,
+                                                "sessionId": sess.ID,
+                                        },
+                                        Timestamp: time.Now(),
+                                })
+                        }
+                }
 
                 // Index completed exchange into persistent recall.
                 if s.recall != nil && res.Text != "" {

@@ -1,180 +1,257 @@
-# UPDATE.md — v1.2.7 SHEYTAN-LA Run-Transport Terminal-State Repair, CI/Test Stabilisation, Release Consistency
+# UPDATE.md — v1.2.8 SHEYTAN-LA Professional Chat + Agent Workspaces, Mode-Separated Histories, Cross-Mode References, Durable Summaries, Context Layers, Agent Handoff
 
-**Release:** `v1.2.7` (codename Zeta) · **Base:** `main @ e759189` (`v1.2.6`)
-**Date:** 2026-09-19
-**Package:** `SHEYTAN-Local-Agent-v1.2.7-UPDATE.zip`
+**Release:** `v1.2.8` (codename Zeta) · **Base:** `main @ e2bbbb0` (`v1.2.7`)
+**Date:** 2026-09-20
+**Package:** `SHEYTAN-Local-Agent-v1.2.8-UPDATE.zip`
 
-This update fixes the failed CI run 35367243405 at its root and closes
-the run-lifecycle audit that failure exposed. The failing test was
-`TestStaleRunEventsFilteredByServer` ("expected idle, got
-run_snapshot") — a real transport bug, not a flaky test: the activity
-WebSocket attach path treated the run-registry map membership as "a run
-is active", while a run that has already settled but has not yet been
-deleted from the registry (the deferred cleanup first releases the run
-budget and the memory-manager tracking) is authoritatively TERMINAL. A
-socket attaching inside that window received a stale terminal
-`run_snapshot` and then — because the hub closed without any forwardable
-post-snapshot event — parked on `clientGone` forever, with no terminal
-marker at all. The repair makes the authoritative `runLive` state the
-only lifecycle authority, orders the outcome registry record before the
-terminal flip, and adds a terminal-recovery fallthrough. Three
-regression tests pin the contracts. No architecture was rewritten, no
-queue system was added, no runtime changed.
+This update turns the two UI modes into two first-class workspaces on ONE
+runtime. Chat becomes a conversation-first local AI workspace; Agent
+becomes an execution-first engineering workspace. They keep INDEPENDENT
+conversation histories, can explicitly READ selected sessions from the
+other space as provenance-labeled retrieved context, every session
+maintains a durable rolling summary, long sessions compact BEFORE the
+context ceiling instead of silently exhausting it, and every completed
+Agent engineering task updates a workspace `agent.md` handoff. The
+existing `runLive` + sequence + snapshot + terminal-registry transport,
+the context planner, recall and continuum remain the single authoritative
+architecture — nothing was duplicated, no second runtime was created.
 
 ## 0. Execution method (read this first)
 
-- The failure was REPRODUCED before any edit: the test passes in
-  isolation (`-run TestStaleRunEventsFilteredByServer`) and fails the
-  full package run roughly 1 in 5 times (shared-state ordering race,
-  window widened by `MemMgr.TrackRunEnd` inside the deferred cleanup).
-- The root cause was fixed in the transport, not in the test. The test
-  was not touched; three new tests were ADDED alongside it.
+- The v1.2.8 basis commit `e2bbbb0` was cloned fresh; every change below
+  is in the working tree delivered by this package.
+- Each subsystem was mapped from the actual code before any edit
+  (sessions, run transport, context stack, agent loop, frontend).
 - Everything below is measured from the actual code and executed
   commands — nothing is claimed from compilation success alone.
+- Labels follow the documentation truth standard: IMPLEMENTED / TESTED /
+  PARTIALLY IMPLEMENTED / EXPERIMENTAL / PLANNED.
 
-## 1. ROOT CAUSE — run transport terminal-state mismatch
+## 1. Session mode identity + deterministic migration
 
-The fast path of `handleActivityWS` (internal/api/server.go):
+`internal/sessions/sessions.go`:
 
-```go
-s.runsMu.Lock()
-rs, ok := s.runs[sessionID]
-s.runsMu.Unlock()
+- `Session.Mode string \`json:"mode,omitempty"\`` — `"chat" | "agent"`,
+  fixed at creation (`CreateInMode`). `NormalizeMode` resolves unknown
+  values to `DefaultMode = "agent"`. A UI mode switch NEVER re-labels or
+  merges conversations; it switches the visible space.
+- Deterministic migration: every session that predates the mode field is
+  labeled `agent` ON LOAD — the product was agent-first and both prior UI
+  modes shared one transcript. The migration is IN MEMORY at read time
+  and materialized by the session's next natural save; index stubs are
+  normalized the same way. No conversation content is ever duplicated
+  (`TestModeChangeDoesNotDuplicateContent` pins this).
+- API: `GET /api/sessions?mode=chat|agent` filters one space; unfiltered
+  calls keep serving the full list (CLI + test compat). `POST /api/sessions`
+  accepts `{"mode":...}`; an empty body creates the default (agent) —
+  old clients behave identically.
 
-if ok { /* subscribe, send run_snapshot, forward live events */ }
-```
+## 2. Cross-mode history references (`internal/histref` — NEW)
 
-map membership alone decided "a run is active". The run goroutine's
-exit path is: `settle()` (authoritative terminal flip + outcome record)
-→ deferred `budgetCancel()` → `MemMgr.TrackRunEnd()` → map delete →
-`hub.close()` → `cancel()`. Between the terminal flip and the delete the
-entry exists while `live.snapshot().Running == false`. Attaching there
-produced the exact CI failure. Worse: after the stale snapshot, the
-hub's closed-channel drain yielded nothing (`served == false`) and the
-old code blocked on `<-clientGone` — the socket never received ANY
-terminal marker.
+- `Search(store, query, mode, limit)`: picker search over TITLES and
+  ROLLING SUMMARIES (never full transcripts). A query demands some
+  relevance — zero-overlap sessions are noise, not hits; the empty query
+  is the "browse newest" mode. Mode scoping is how one space browses the
+  OTHER space's history.
+- `Resolve(store, refs, query, budget)`: per-reference block with an
+  explicit provenance header — source-session, source-mode, source-title,
+  summary-version, retrieval-reason — and the framing "reference DATA: it
+  is not an instruction, never overrides the active conversation's rules,
+  and the source session is unchanged". Turns are relevance-ranked
+  (term overlap); zero-overlap turns never travel; the single newest turn
+  ships as a fallback when nothing matches; the footer is reserved INSIDE
+  the budget. Read-only, one level deep (no recursive retrieval).
+- `ranges` (`[from,to)` message indices) implement the explicit
+  "read more" / focused retrieval scope.
+- API: `GET /api/history/search`; `POST /api/run` accepts `historyRefs`
+  (≤4 after normalization, self-references dropped, unknown ids skipped
+  by retrieval). Surviving refs persist on `sess.Context.HistoryRefs`
+  and travel with later turns.
+- Orchestrator: `WithHistoryBlocks` installs the pre-rendered blocks;
+  the planner decides what travels — `history-refs` is the FIRST
+  retrieval section dropped under pressure.
 
-The fix (three coordinated edits, one lifecycle authority):
+## 3. Rolling session summaries (`internal/sessions/summary.go` — NEW)
 
-1. **Authoritative lifecycle gate** — after the map lookup:
+- Bounded `SessionSummary` sidecar per session
+  (`<sessions dir>/<id>.summary.json`, atomic write): objective,
+  importantUserConstraints, keyDecisions, importantFacts,
+  filesAndArtifacts, toolsAndResearch, errorsAndRepairs, currentState,
+  unresolvedItems, nextStep; version counter; mode recorded.
+- `UpdateSummaryFromTurn` ROLLS one settled turn onto the previous
+  summary (deterministic marker extraction — the same philosophy as
+  `continuum.Distill`). The transcript is NEVER re-summarized per turn.
+- Wired at settlement in `handleRun`: one update per completed turn with
+  a reply. `GET /api/sessions/{id}/summary` serves it; a version-0 shell
+  renders an EMPTY prompt block — nothing is fabricated for fresh
+  sessions.
+- Prompt injection: rendered as the REQUIRED `summary` section riding
+  the STABLE system prefix (cache-friendly, survives history windowing).
 
-   ```go
-   if ok && rs != nil && rs.live != nil && !rs.live.snapshot().Running {
-       ok = false
-   }
-   ```
+## 4. Context planner: summary + history-refs + pressure language
 
-   A terminal entry falls through to the standby path, whose idle
-   sentinel carries the recorded `lastRun` outcome.
+`internal/contextplan/contextplan.go`:
 
-2. **Outcome-record ordering** — inside `settle()`, the outcome is
-   recorded in the bounded registry BEFORE `live.settleTerminal()`
-   flips the authoritative state. Invariant for every observer:
-   terminal-visible ⇒ outcome recorded (happens-before edge through
-   `settleTerminal`'s mutex). The idle sentinel therefore always has
-   the `lastRun` block in the gate's fallthrough.
+- `SectionSummary` (priority 2 — REQUIRED, budgeted with the fixed
+  sections) and `SectionHistoryRefs` (priority 4 — OPTIONAL, the first
+  retrieval section dropped under pressure). `Input.SummaryTokens` /
+  `Input.HistoryRefTokens` flow through `Assemble` and the
+  history-budget recompute.
+- `ClassifyPressure` (ok <50% / warm <75% / high <90% / critical ≥90%)
+  — one pressure vocabulary shared with continuum's levels.
+- The existing pipeline is unchanged and remains the compaction path:
+  preflight degradation ladder → history windowing → in-loop
+  tool-result bounding → continuum chapter rollover. The summary is
+  what makes history elision SURVIVABLE; exact evidence stays
+  recoverable through the authoritative transcript and history
+  retrieval.
 
-3. **Terminal-recovery fallthrough** — the post-drain `served == false`
-   branch no longer parks on `<-clientGone`. The socket falls through
-   to the idle sentinel and the standby loop, which re-checks the runs
-   map and attaches to a replacement run the moment one starts. The
-   write-failure clientGone check (`served == true` path) is preserved.
+## 5. Agent task memory (`internal/agent/taskstate.go` — NEW)
 
-## 2. Run-lifecycle audit results (boundaries re-verified)
+- One bounded `TaskState` per run: goal, constraints, currentStep,
+  plan, filesInspected, filesChanged, toolsUsed, commandsRun, testsRun,
+  failures, repairs, verification, artifacts, openQuestions, nextStep —
+  maintained ONLY from observed tool traffic (files read/write actions,
+  shell commands, test-command recognition, pass-marker scanning,
+  failure→repair pairing). Caps: 8 items per list, 200 chars per item,
+  normalized dedup. No model claims, no speculative success.
+- Published as a `task` Activity once per tool round; `runLive.observe`
+  folds it into the authoritative state and `run_snapshot.task` carries
+  it — a WebSocket reconnect mid-run restores the whole task view. The
+  run NEVER restarts because the UI reconnected.
+- `RunResult.Task` is set on every exit path (done / max-iterations);
+  the verification verdict comes from the objective evidence collector.
 
-- **Identity** — one runId minted per run, stamped by the single
-  `publish()` wrapper; the replay filter drops events of other runs
-  (`ev.RunID != snap.RunID`) and already-folded sequences
-  (`ev.Seq <= snap.Sequence`). Unchanged and re-verified.
-- **State monotonicity** — `runLive.observe` and `settleTerminal` only
-  ever move a run toward terminal (`terminalOutcome` is exactly-once);
-  a terminal run can never become active again. The gate now ENFORCES
-  this at the attach boundary too.
-- **Replacement** — the newer run's registration cancels+closes the
-  older run and replaces its entry; the older goroutine's cleanup only
-  deletes the entry it still owns (`current.hub == hub`). Unchanged.
-- **Abort** — `POST /api/abort` and the WS `abort` action cancel the
-  current entry's context; the run settles from real signals
-  (`ctx.Err()` → "aborted"). New regression test proves a fresh attach
-  after an abort receives the idle sentinel with the recorded outcome.
-- **Cleanup** — `hub.close()` is idempotent (double-close safe);
-  subscribers receive closed channels, never send-on-closed; race
-  detector runs over the transport, scheduler, runtime, continuum and
-  sessions packages are clean.
-- **WebSocket / reconnect** — `attached` ack first, `run_snapshot` on
-  every live attach, gapless + duplicate-free replay; the frontend was
-  re-audited against the fixed server (its `idle` dispatch is guarded,
-  its `lastRun` recovery is authoritative) and needed no changes.
+## 6. agent.md handoff (`internal/agent/handoff.go` — NEW)
 
-## 3. What is preserved
+- `WriteHandoffFile` renders a marker-bounded dynamic section
+  (`<!-- sheytan:handoff:begin -->` … `<!-- sheytan:handoff:end -->`)
+  titled `# Latest Agent Handoff` with Task / Objective / Current state /
+  Changes made / Files changed / Tests and verification / Important
+  evidence / Failures / blockers / Remaining work / Recommended next
+  action / Do not redo. Machine-parseable headings; exact values passed
+  through verbatim; no private chain-of-thought.
+- Everything OUTSIDE the markers is preserved byte-for-byte — stable
+  engineering instructions already in an agent.md are never rewritten.
+  A torn section (begin marker without its end) is superseded. The
+  filename constant is lowercase `agent.md` (Windows case-collision
+  contract) — no second, differently cased file is ever created.
+- Wired at settlement: agent-mode run + outcome `done` + engineering
+  evidence (files changed / commands / tests non-empty) →
+  `<EffectiveWorkspaceRoot>/agent.md` updated; a `handoff` Activity is
+  published with the path. Never written for speculative or failed
+  outcomes.
+- This repository's own `agent.md` now carries the same structured
+  section for the v1.2.8 handoff (self-demonstrating).
 
-Everything from v1.2.6: the authoritative run transport (runstate.go,
-single publisher, seq/runId filtering), the deterministic `attached`
-ack, the bounded outcome registry, the measured run timeline, the
-non-blocking startup, the evidence-based accelerator resolution, the
-adaptive context tiers, the download manager. The only behavioural
-changes are the three repairs above.
+## 7. History paging + frontend workspaces
 
-## 4. Verification performed (all executed, all clean)
+- Backend: `GET /api/sessions/{id}/messages?before=&limit=` (limit ≤200)
+  serves bounded pages — newest by default, absolute message indices,
+  `hasMore` / `nextBefore`. Streaming and settlement are unaffected.
+- Frontend (`src/`):
+  - `mode-sessions.ts` + `history-ref.ts` (pure modules, node:test
+    coverage): the deterministic core of mode separation and ref
+    hygiene.
+  - Store: one active session PER mode (`activeSessionByMode`),
+    mode-filtered lists, per-mode eager first-session creation, mode
+    switching that keeps the other space's selection and never cancels a
+    server-side run (its authoritative snapshot replays on reconnect),
+    history refs + picker state + task state + paging state.
+  - `HistoryPicker.tsx`: searchable, mode-filterable, multi-select,
+    summary previews, explicit Attach; active session excluded.
+  - `AgentTaskPanel.tsx`: the REAL task pipeline from backend evidence —
+    no decorative stage strip, concise summaries only, no
+    chain-of-thought exposure.
+  - Composer: `⧉ History` button + attached-reference chips with detach
+    and per-chip retrieval-scope descriptions; refs travel with every
+    run.
+  - Sidebar: per-space search, inline session rename (double-click / ✎),
+    delete.
+  - MessageStream: "Load earlier messages" pager; copy-response was
+    already present and remains.
+  - Root-cause fix: `parseEndedAt` accepts the RFC3339 `lastRun.endedAt`
+    the backend actually sends (pinned by the Go contract test) — the
+    previous number-only parser made the authoritative recovery fast
+    path dead code.
 
-```text
-go test ./internal/... -tags headless -count=1     PASS (all packages)
-go test -tags headless ./... -run Test -count=1    PASS (all packages)
-go vet -tags headless ./...                        PASS
-go test ./internal/api -tags headless -race        PASS (incl. 15× loop of the
-                                                    previously flaky suite)
-go test -race (scheduler/runtime/continuum/sessions) PASS
-npm ci                                             PASS (0 vulnerabilities)
-npm run typecheck                                  PASS
-npm run lint                                       PASS (0 warnings, 0 errors)
-npm run test:units                                 PASS (39/39)
-npm run build                                      PASS (embedded web/static synced)
-cmake + ctest native/engine                        PASS (12/12)
-stress suite ./scripts/stress-main stress          PASS (47/47, 0 hangs, 0 crashes)
-node scripts/release-version.mjs --check           PASS (all surfaces 1.2.7)
-```
+## 8. Tests added
 
-## 5. Queue status (read literally)
+- `internal/sessions`: mode migration (file + index paths), mode filter,
+  no-duplication, summary rolling/determinism/caps/sidecar round-trip/
+  unknown-session rejection (13 tests).
+- `internal/histref`: provenance + relevance, budget bound (footer
+  reserved), ranges scope, read-only source, search scoping/relevance/
+  browse mode, ref normalization (6 tests).
+- `internal/contextplan`: summary as required fixed section,
+  history-refs dropped under pressure, history-refs included when room,
+  pressure ladder (4 tests).
+- `internal/agent`: taskstate files/commands/tests detection, failure→
+  repair pairing, bounds, nil safety, test-command recognition, handoff
+  create/replace/stable-content preservation/torn-marker supersede/
+  lowercase contract/factual mapping (9 tests).
+- `internal/api`: mode separation, history search endpoint, summary
+  endpoint, messages paging, context-refs persistence via PUT, task
+  state rides run snapshot (+ nil-task shape), agent settlement →
+  summary + handoff e2e, chat run → agent history provenance e2e,
+  self-reference ignored (9 tests).
+- `src`: mode-sessions (5) + history-ref (7) node:test units; 51/51
+  total with the prior 39.
 
-Durable, guaranteed request queuing is NOT part of this release and is
-not claimed anywhere. The current contract: one active run per session;
-a newer `POST /api/run` cancels and replaces the active run by design;
-invalid requests are rejected; requests lost to a process crash are
-gone (sessions persist, queued intents do not). The durable queue
-(persistent jobId, ACCEPTED → QUEUED → WAITING_FOR_RESOURCES → RUNNING
-→ COMPLETED/FAILED/CANCELED with retry states, FIFO/fair per-session
-scheduling, bounded concurrency, crash recovery, idempotent execution,
-engine/resource gating, queue-state replay) remains documented design
-intent in `README.md` ("Development direction") and `ARCHITECTURE.md`
-(Part II).
+## 9. Race-sensitive test adjustments (honest)
 
-## 6. Known limitations (unchanged, honest)
+The v1.2.8 settle tail added a durable write (the summary sidecar) after
+reply persistence. That WIDENED a pre-existing TEST-side race: several
+transport tests ended their assertions while the run goroutine was still
+writing, and `t.TempDir`'s RemoveAll raced it ("directory not empty").
+Fixes are in the TESTS only — no production ordering was weakened:
 
-- The v1.2.6 honest limitation stands: implemented and tested on Linux;
-  Windows-only paths compile (GOOS=windows gate) and their parsers are
-  fixture-tested, but real-hardware Windows validation was NOT
-  performed here.
-- The native engine serves only the llama-architecture path it
-  documents; llama.cpp remains the default and the fallback.
-- GPU/NPU acceleration requires measured engine/runtime evidence;
-  presence of a Vulkan DLL or an NPU device alone never selects a
-  non-CPU execution target.
+- `waitForSummarySettled` (new helper): polls the summary endpoint for
+  version ≥ 1 — the deterministic synchronization point for the settle
+  tail.
+- `TestMidRunAttachReceivesSnapshotAndContinues`,
+  `TestRunEventsCarryMonotonicSequence`,
+  `TestActivitiesCarryRunIdAndDoneAttachesMidRun`,
+  `TestTaskStateRidesRunSnapshot` end with the deterministic wait.
+- `TestRunEventsCarryMonotonicSequence` additionally widens its stream
+  window (30→80 ms per chunk) and accepts the terminal-snapshot path
+  (attach after completion still verifies sequence + persisted reply).
+- `internal/api` looped 10× clean after these adjustments.
 
-## 7. Apply procedure
+## 10. Verification results (measured, this host)
 
-1. Back up or commit the current working tree.
-2. Extract `SHEYTAN-Local-Agent-v1.2.7-UPDATE.zip`.
-3. Copy the extracted `SHEYTAN-Local-Agent-v1.2.7-UPDATE/` tree over
-   the repository root (it contains the complete updated project state:
-   `internal/`, `src/`, `scripts/`, `packaging/`, `build/`, `.github/`,
-   docs and all package metadata — no `.git`, no `node_modules`).
-4. Verify the release identity: `node scripts/release-version.mjs --check`.
-5. Build and test: `npm ci && npm run typecheck && npm run lint && npm
-   run build`, then `go test ./internal/... -tags headless -count=1`,
-   `go test -tags headless ./... -run Test -count=1`,
-   `go vet -tags headless ./...`, and optionally the native engine
-   (`cmake -S native/engine -B native/engine/build && cmake --build
-   native/engine/build && ctest --test-dir native/engine/build`) and
-   the stress suite (`go run ./scripts/stress-main stress`).
-6. Commit and push to GitHub as usual — the ZIP is the complete update;
-   nothing else is required.
+- Go: `go test` on all 43 internal packages (+ cmd helpers) — PASS;
+  `internal/api` looped 10× clean; `go test -race` on
+  internal/{api,sessions,histref,agent,contextplan} — PASS.
+- `go vet -tags headless ./internal/... ./cmd/... .` — clean;
+  `GOOS=windows go build/vet ./internal/desktop/ .` — clean.
+- Frontend: `tsc --noEmit` clean; `oxlint` 0 warnings; `node --test`
+  51/51; `vite build` + `sync-web` OK (bundle refreshed in `web/static`).
+- Version: `node scripts/release-version.mjs --check` — consistent
+  (package.json 1.2.8 → config.go / build/config.yml / SIGNATURE).
+- Clean-room: the packaged source tree was extracted to a fresh
+  directory and verified there: `go build -tags headless ./cmd/... .`,
+  `GOOS=windows go build ./internal/desktop/ .`, `npm ci`, `npm run
+  build`, focused Go suites — ALL PASS.
+
+## 11. NOT VERIFIED (explicit)
+
+- Linux desktop (Wails) build: the Wails v3 `webview` dependency needs
+  gtk4/webkitgtk-6.0/libsoup-3.0 system libraries; this host provides
+  none and has no root. The SAME desktop sources compile clean under
+  `GOOS=windows`. No Linux desktop binary was produced by this agent.
+- Native C++ engine host build (no cmake toolchain here) — NOT VERIFIED.
+- CI Actions runs — NOT VERIFIED (nothing was pushed).
+
+## 12. Known limitations / honest boundaries
+
+- Summaries are deterministic-extractive (LLM refinement via
+  `continuum.Enhance` remains unwired by design for this release).
+- The picker's "read more" range UI is backend-supported
+  (`ranges`) with chip-level scope descriptions; a full range-selection
+  dialog is future work.
+- Cross-mode retrieval is term-overlap ranked (deterministic, cheap);
+  semantic relevance rides the existing recall architecture and is not
+  duplicated here.
+- One active run per session remains the contract; a durable multi-job
+  queue is PLANNED (ROADMAP), not shipped here.
