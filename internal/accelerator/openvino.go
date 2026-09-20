@@ -14,63 +14,63 @@
 package accelerator
 
 import (
-        "fmt"
-        "os"
-        "path/filepath"
-        "runtime"
-        "strings"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 // openvinoLibraryName is the runtime DLL name per platform.
 func openvinoLibraryName() string {
-        switch runtime.GOOS {
-        case "windows":
-                return "openvino.dll"
-        case "darwin":
-                return "libopenvino.dylib"
-        default:
-                return "libopenvino.so"
-        }
+	switch runtime.GOOS {
+	case "windows":
+		return "openvino.dll"
+	case "darwin":
+		return "libopenvino.dylib"
+	default:
+		return "libopenvino.so"
+	}
 }
 
 // DetectOpenVINO measures whether the OpenVINO runtime is loadable from
 // the engine directory or the system search path. engineDir may be empty
 // (PATH-only probe).
 func DetectOpenVINO(engineDir string) OpenVINOStatus {
-        lib := openvinoLibraryName()
+	lib := openvinoLibraryName()
 
-        candidates := []string{}
+	candidates := []string{}
 
-        if dir := strings.TrimSpace(engineDir); dir != "" {
-                candidates = append(candidates, filepath.Join(dir, lib))
-        }
+	if dir := strings.TrimSpace(engineDir); dir != "" {
+		candidates = append(candidates, filepath.Join(dir, lib))
+	}
 
-        // PATH probe: find the library via the OS search semantics.
-        if path, err := findLibraryOnPath(lib); err == nil {
-                candidates = append(candidates, path)
-        }
+	// PATH probe: find the library via the OS search semantics.
+	if path, err := findLibraryOnPath(lib); err == nil {
+		candidates = append(candidates, path)
+	}
 
-        for _, candidate := range candidates {
-                if _, err := os.Stat(candidate); err != nil {
-                        continue
-                }
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err != nil {
+			continue
+		}
 
-                // The file exists — try the actual load. This is the measured gate.
-                if loadable(candidate) {
-                        return OpenVINOStatus{
-                                RuntimePresent: true,
-                                Detail:         fmt.Sprintf("runtime loadable at %s", candidate),
-                        }
-                }
+		// The file exists — try the actual load. This is the measured gate.
+		if loadable(candidate) {
+			return OpenVINOStatus{
+				RuntimePresent: true,
+				Detail:         fmt.Sprintf("runtime loadable at %s", candidate),
+			}
+		}
 
-                return OpenVINOStatus{
-                        RuntimePresent: false,
-                        Detail:         fmt.Sprintf("runtime present at %s but not loadable (architecture mismatch?)", candidate),
-                }
-        }
+		return OpenVINOStatus{
+			RuntimePresent: false,
+			Detail:         fmt.Sprintf("runtime present at %s but not loadable (architecture mismatch?)", candidate),
+		}
+	}
 
-        return OpenVINOStatus{
-                RuntimePresent: false,
-                Detail:         "OpenVINO runtime not found beside the engine or on the library path",
-        }
+	return OpenVINOStatus{
+		RuntimePresent: false,
+		Detail:         "OpenVINO runtime not found beside the engine or on the library path",
+	}
 }

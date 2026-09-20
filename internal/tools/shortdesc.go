@@ -15,65 +15,65 @@ package tools
 
 // Shell — bounded terminal commands.
 func (Shell) ShortDescription() string {
-        return "Run bounded terminal commands."
+	return "Run bounded terminal commands."
 }
 
 // Files — read and modify project files.
 func (Files) ShortDescription() string {
-        return "Read and modify project files."
+	return "Read and modify project files."
 }
 
 // CodeExec — sandboxed Python snippets.
 func (CodeExec) ShortDescription() string {
-        return "Run short Python snippets for calculations."
+	return "Run short Python snippets for calculations."
 }
 
 // WebSearch — web search with provenance.
 func (WebSearch) ShortDescription() string {
-        return "Search the web and return sourced results."
+	return "Search the web and return sourced results."
 }
 
 // Git — repository state and history.
 func (Git) ShortDescription() string {
-        return "Inspect and manage repository state."
+	return "Inspect and manage repository state."
 }
 
 // Browser — real browser automation.
 func (b *BrowserTool) ShortDescription() string {
-        return "Automate a real browser to open and read pages."
+	return "Automate a real browser to open and read pages."
 }
 
 // Fetch — public URL fetcher.
 func (t *FetchTool) ShortDescription() string {
-        return "Fetch a public web page or file by URL."
+	return "Fetch a public web page or file by URL."
 }
 
 // Screenshot — see the screen.
 func (Screenshot) ShortDescription() string {
-        return "Capture and analyze the current screen."
+	return "Capture and analyze the current screen."
 }
 
 // DataTool — datasets and charts.
 func (t *DataTool) ShortDescription() string {
-        return "Analyze CSV/JSON data and render charts."
+	return "Analyze CSV/JSON data and render charts."
 }
 
 // JSONTool — JSON queries.
 func (JSONTool) ShortDescription() string {
-        return "Query and transform JSON files."
+	return "Query and transform JSON files."
 }
 
 // LinuxSim — safe shell simulator.
 func (t *LinuxSim) ShortDescription() string {
-        return "Run commands in a safe built-in shell simulator."
+	return "Run commands in a safe built-in shell simulator."
 }
 
 // DiffTool — file comparison.
 func (DiffTool) ShortDescription() string {
-        return "Compare two files and show the differences."
+	return "Compare two files and show the differences."
 }
 
 // ArchiveTool — zip/unzip.
 func (t *ArchiveTool) ShortDescription() string {
-        return "Create and extract ZIP archives."
+	return "Create and extract ZIP archives."
 }

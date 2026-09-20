@@ -24,7 +24,7 @@ type engineScript struct {
 	summary   string
 	executor  string
 
-	mu          sync.Mutex
+	mu           sync.Mutex
 	criticInputs []string
 }
 
@@ -124,7 +124,7 @@ func TestCriticSeesObjectiveVerification(t *testing.T) {
 	script := &engineScript{
 		plan:      `{"summary":"one step","steps":[{"id":1,"goal":"do it","tool":"llm","args":{}}]}`,
 		summary:   "summarized",
-		executor:   "executor answer claiming success",
+		executor:  "executor answer claiming success",
 		critiques: []string{`{"satisfied": true, "issues": [], "next_step": ""}`},
 	}
 
@@ -212,9 +212,9 @@ func TestMaxIterZeroStillRunsCritic(t *testing.T) {
 
 func TestCriticRevisionLoopReExecutes(t *testing.T) {
 	script := &engineScript{
-		plan:      `{"summary":"s","steps":[{"id":1,"goal":"g","tool":"llm","args":{}}]}`,
-		summary:   "summary",
-		executor:   "attempt",
+		plan:     `{"summary":"s","steps":[{"id":1,"goal":"g","tool":"llm","args":{}}]}`,
+		summary:  "summary",
+		executor: "attempt",
 		critiques: []string{
 			`{"satisfied": false, "issues": ["incomplete"], "next_step": "finish it"}`,
 			`{"satisfied": true, "issues": [], "next_step": ""}`,

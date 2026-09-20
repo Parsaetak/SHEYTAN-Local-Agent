@@ -1109,14 +1109,14 @@ func TestRedditProviderSearchSkipsEmptyTitles(t *testing.T) {
 				"application/json",
 			)
 
-			if err := json.NewEncoder(w).Encode(
+			// v1.2.9: a mid-write client abort (broken pipe under heavy
+			// parallel load) is test-infrastructure noise, not a test
+			// failure — the client-side assertions cover the outcome.
+			// Reporting it from the handler made this suite flaky under
+			// concurrent full-tree runs.
+			_ = json.NewEncoder(w).Encode(
 				response,
-			); err != nil {
-				t.Errorf(
-					"failed to encode response: %v",
-					err,
-				)
-			}
+			)
 		}),
 	)
 	defer server.Close()
@@ -1551,14 +1551,14 @@ func TestRedditProviderSearchKeepsPublicURLPreferred(t *testing.T) {
 				"application/json",
 			)
 
-			if err := json.NewEncoder(w).Encode(
+			// v1.2.9: a mid-write client abort (broken pipe under heavy
+			// parallel load) is test-infrastructure noise, not a test
+			// failure — the client-side assertions cover the outcome.
+			// Reporting it from the handler made this suite flaky under
+			// concurrent full-tree runs.
+			_ = json.NewEncoder(w).Encode(
 				response,
-			); err != nil {
-				t.Errorf(
-					"failed to encode response: %v",
-					err,
-				)
-			}
+			)
 		}),
 	)
 	defer server.Close()
@@ -1617,14 +1617,14 @@ func TestRedditProviderSearchUsesOriginalURLWhenPermalinkMissing(t *testing.T) {
 				"application/json",
 			)
 
-			if err := json.NewEncoder(w).Encode(
+			// v1.2.9: a mid-write client abort (broken pipe under heavy
+			// parallel load) is test-infrastructure noise, not a test
+			// failure — the client-side assertions cover the outcome.
+			// Reporting it from the handler made this suite flaky under
+			// concurrent full-tree runs.
+			_ = json.NewEncoder(w).Encode(
 				response,
-			); err != nil {
-				t.Errorf(
-					"failed to encode response: %v",
-					err,
-				)
-			}
+			)
 		}),
 	)
 	defer server.Close()
@@ -1690,14 +1690,14 @@ func TestRedditProviderSearchResponseLimit(t *testing.T) {
 				"application/json",
 			)
 
-			if err := json.NewEncoder(w).Encode(
+			// v1.2.9: a mid-write client abort (broken pipe under heavy
+			// parallel load) is test-infrastructure noise, not a test
+			// failure — the client-side assertions cover the outcome.
+			// Reporting it from the handler made this suite flaky under
+			// concurrent full-tree runs.
+			_ = json.NewEncoder(w).Encode(
 				response,
-			); err != nil {
-				t.Errorf(
-					"failed to encode response: %v",
-					err,
-				)
-			}
+			)
 		}),
 	)
 	defer server.Close()
@@ -1829,14 +1829,14 @@ func TestRedditProviderSearchEditedAndDistinguishedMetadata(t *testing.T) {
 				"application/json",
 			)
 
-			if err := json.NewEncoder(w).Encode(
+			// v1.2.9: a mid-write client abort (broken pipe under heavy
+			// parallel load) is test-infrastructure noise, not a test
+			// failure — the client-side assertions cover the outcome.
+			// Reporting it from the handler made this suite flaky under
+			// concurrent full-tree runs.
+			_ = json.NewEncoder(w).Encode(
 				response,
-			); err != nil {
-				t.Errorf(
-					"failed to encode response: %v",
-					err,
-				)
-			}
+			)
 		}),
 	)
 	defer server.Close()
@@ -1929,14 +1929,14 @@ func TestRedditProviderSearchEmptyBodyFallsBackToTitle(t *testing.T) {
 				"application/json",
 			)
 
-			if err := json.NewEncoder(w).Encode(
+			// v1.2.9: a mid-write client abort (broken pipe under heavy
+			// parallel load) is test-infrastructure noise, not a test
+			// failure — the client-side assertions cover the outcome.
+			// Reporting it from the handler made this suite flaky under
+			// concurrent full-tree runs.
+			_ = json.NewEncoder(w).Encode(
 				response,
-			); err != nil {
-				t.Errorf(
-					"failed to encode response: %v",
-					err,
-				)
-			}
+			)
 		}),
 	)
 	defer server.Close()

@@ -349,6 +349,11 @@ func (s *Scheduler) finalize(report Report) {
 
 // Tick advances timer tasks: every task whose NextDue has passed and is
 // enabled fires (in its own bounded run). Called from the runtime's loop.
+//
+// v1.2.9 DURABLE CLAIM SEMANTICS: when a due task is claimed, its
+// advanced NextDue is persisted immediately (under the claim lock,
+// before execution starts), so a crash between claiming/executing/
+// persisting can never replay the same deadline twice after restart.
 func (s *Scheduler) Tick(ctx context.Context) []Report {
 	s.mu.Lock()
 	now := s.nowFunc()
@@ -363,6 +368,17 @@ func (s *Scheduler) Tick(ctx context.Context) []Report {
 			t.NextDue = now.Add(sanitizeInterval(t.Interval))
 		}
 	}
+	// v1.2.9: the claim is DURABLE — the advanced deadlines are persisted
+	// under the claim lock, BEFORE any claimed task starts executing. The
+	// previous code advanced NextDue only in memory (nothing called
+	// persistLocked on the Tick path), so a crash between claiming and
+	// executing lost the advancement; the reload after restart saw the
+	// stale PAST deadline and the task fired a second time. With the
+	// durable claim, a crash after claiming leaves the advanced deadline
+	// on disk: on restart the task waits for its next real deadline. The
+	// interrupted in-flight run is not resumed (timer runs are bounded
+	// work units; re-running a claimed one was exactly the bug).
+	s.persistLocked()
 	s.mu.Unlock()
 
 	var reports []Report
@@ -370,7 +386,11 @@ func (s *Scheduler) Tick(ctx context.Context) []Report {
 		runCtx, cancel := context.WithTimeout(ctx, t.MaxRuntime)
 
 		s.mu.Lock()
-		if s.running[t.ID] {
+		// v1.2.9: re-check under the execution lock. The task may have
+		// been REMOVED between selection and execution (RemoveTask holds
+		// the same lock) — a removed task must never fire, not even once.
+		current, ok := s.findLocked(t.ID)
+		if !ok || s.running[t.ID] {
 			s.mu.Unlock()
 			cancel()
 			continue
@@ -379,7 +399,7 @@ func (s *Scheduler) Tick(ctx context.Context) []Report {
 		s.cancels[t.ID] = cancel
 		s.mu.Unlock()
 
-		report := s.execute(runCtx, *t, t.Trigger)
+		report := s.execute(runCtx, current, current.Trigger)
 
 		s.mu.Lock()
 		delete(s.running, t.ID)

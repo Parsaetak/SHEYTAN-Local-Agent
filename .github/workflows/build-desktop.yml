@@ -136,6 +136,7 @@ jobs:
 
           npm run typecheck
           npm run lint
+          npm run test:units
           npm run build
 
       - name: Verify embedded frontend
@@ -147,6 +148,29 @@ jobs:
           grep -q '<div id="root"></div>' web/static/index.html
 
           echo "Embedded frontend verification passed."
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # v1.2.9: focused race gate. The concurrency-heavy packages run
+      # under the race detector on every push/PR (headless tag: the
+      # desktop shell is not needed for these suites; CGO is required
+      # by the engine-boundary code paths they exercise).
+      - name: Go race gate (concurrency-heavy packages)
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+
+          go version
+
+          go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime
+
+          echo "Race gate passed."
 
       # v1.1.5Z Phase 1: the C++ native engine skeleton builds and its
       # dependency-free test suites pass on the same runner the Go build
@@ -308,6 +332,7 @@ jobs:
 
           npm run typecheck
           npm run lint
+          npm run test:units
           npm run build
 
       - name: Verify embedded frontend
@@ -891,6 +916,7 @@ jobs:
 
           npm run typecheck
           npm run lint
+          npm run test:units
           npm run build
 
       - name: Verify embedded frontend

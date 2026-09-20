@@ -10,7 +10,7 @@
 package sysinfo
 
 import (
-        "fmt"
+	"fmt"
 )
 
 // cimScript is the single batched query. Rules:
@@ -50,21 +50,21 @@ if ($disk) {
 // probe yields the facts that did parse (never an error the caller must
 // guess about — missing facts stay zero).
 func cimBatch() (cimFacts, error) {
-        out, err := probeOutput("powershell", "-NoProfile", "-NonInteractive", "-Command", cimScript)
-        if err != nil && len(out) == 0 {
-                return cimFacts{}, fmt.Errorf("batched CIM probe: %w", err)
-        }
+	out, err := probeOutput("powershell", "-NoProfile", "-NonInteractive", "-Command", cimScript)
+	if err != nil && len(out) == 0 {
+		return cimFacts{}, fmt.Errorf("batched CIM probe: %w", err)
+	}
 
-        facts := parseCIMBatch(string(out))
+	facts := parseCIMBatch(string(out))
 
-        // A response with zero recognized keys is a failed probe (PowerShell
-        // error text, locale issues) — surface it so the caller logs honestly.
-        if facts.cpuName == "" && len(facts.gpus) == 0 && facts.ramTotalKB == 0 && !facts.npu.present {
-                if err != nil {
-                        return facts, fmt.Errorf("batched CIM probe produced no facts: %w", err)
-                }
-                return facts, fmt.Errorf("batched CIM probe produced no facts")
-        }
+	// A response with zero recognized keys is a failed probe (PowerShell
+	// error text, locale issues) — surface it so the caller logs honestly.
+	if facts.cpuName == "" && len(facts.gpus) == 0 && facts.ramTotalKB == 0 && !facts.npu.present {
+		if err != nil {
+			return facts, fmt.Errorf("batched CIM probe produced no facts: %w", err)
+		}
+		return facts, fmt.Errorf("batched CIM probe produced no facts")
+	}
 
-        return facts, nil
+	return facts, nil
 }

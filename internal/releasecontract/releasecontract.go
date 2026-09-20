@@ -66,10 +66,10 @@ const (
 // Actions `${{ … }}` spelling contains spaces and is deliberately not
 // part of the agreement regex set).
 const (
-	WinRootPwsh   = "${env:WIN_PKG_ROOT}"    // PowerShell steps
-	WinRootBash   = "${WIN_PKG_ROOT}"        // bash steps (release job)
-	WinRootGHA    = "${{ env.WIN_PKG_ROOT }}" // with: blocks
-	LinuxRootBash = "${LINUX_PKG_ROOT}"       // bash steps
+	WinRootPwsh   = "${env:WIN_PKG_ROOT}"       // PowerShell steps
+	WinRootBash   = "${WIN_PKG_ROOT}"           // bash steps (release job)
+	WinRootGHA    = "${{ env.WIN_PKG_ROOT }}"   // with: blocks
+	LinuxRootBash = "${LINUX_PKG_ROOT}"         // bash steps
 	LinuxRootGHA  = "${{ env.LINUX_PKG_ROOT }}" // with: blocks
 )
 

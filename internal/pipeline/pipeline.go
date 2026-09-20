@@ -170,12 +170,21 @@ func Run(ctx context.Context, r Runner, stages []Stage, onEvent OnEvent) *Report
 			timeout = 600 * time.Second
 		}
 
+		// v1.2.9: stage duration anchors at THIS stage's actual start —
+		// the pipeline's own `started` (which includes every earlier
+		// stage's runtime) stays reserved for Report.DurationMs. The
+		// previous `time.Since(started)` made every stage's
+		// Duration/DurationMs CUMULATIVE (stage 3 reporting the elapsed
+		// time of stages 1+2+3), which silently poisoned per-stage
+		// evidence and the `stage N done (Xms)` activity lines.
+		stageStart := time.Now()
+
 		stageCtx, cancel := context.WithTimeout(ctx, timeout)
 		out, err := r.RunTool(stageCtx, st.Tool, st.Args)
 		cancel()
 
-		res.Duration = time.Since(started)
-		res.DurationMs = time.Since(started).Milliseconds()
+		res.Duration = time.Since(stageStart)
+		res.DurationMs = res.Duration.Milliseconds()
 
 		if err != nil {
 			res.OK = false

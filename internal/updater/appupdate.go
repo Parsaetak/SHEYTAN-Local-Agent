@@ -14,6 +14,31 @@
 //	  }
 //	}
 //
+// v1.2.9 TRUST MODEL — precise terminology (this package previously
+// blurred these, and mislabeling an integrity check as authentication
+// overstates the security actually provided):
+//
+//   - TRANSPORT SECURITY: manifest and artifacts are fetched over HTTPS
+//     (GitHub). This protects against passive network tampering.
+//   - ARTIFACT INTEGRITY: the downloaded archive's SHA-256 must match
+//     the digest the manifest declared, and the declared size when
+//     present. This proves the BYTES did not drift after the manifest
+//     was written — it detects corruption and accidental substitution.
+//   - MANIFEST AUTHENTICITY: NOT CRYPTGRAPHICALLY ESTABLISHED. The
+//     manifest is fetched over HTTPS from the project's own release
+//     URL, which ties it to the repository's transport identity, but
+//     the application does NOT verify a publisher signature on the
+//     manifest itself. A GitHub-side compromise (or a hostile fork
+//     pointed at via configuration) could publish a manifest whose
+//     sha256 matches its own malicious artifact. SHA-256 matching is
+//     therefore INTEGRITY, not publisher AUTHENTICATION — the previous
+//     "signed-by-CI" / "pinned-identity" phrasing overstated it.
+//   - SIGNATURE VERIFICATION: not implemented — no release artifact or
+//     manifest carries a cryptographic signature this code verifies.
+//     Implementing one requires new release infrastructure (signing
+//     keys + a trust root shipped with the app); the downloader seams
+//     (per-source Trust, digest, size caps) are where it would attach.
+//
 // Contract:
 //
 //   - package.json (→ CI) is the version authority for the INSTALLED app;
@@ -39,7 +64,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -80,7 +104,9 @@ type AppPlatformUpdate struct {
 	Kind string `json:"kind,omitempty"`
 }
 
-// AppManifest is the signed-by-CI release manifest (v1.2.0 schema).
+// AppManifest is the release manifest (v1.2.0 schema). v1.2.9: NOT
+// signed — see the package trust model; its authenticity rests on the
+// HTTPS transport identity of the release URL, nothing stronger.
 type AppManifest struct {
 	Version     string                       `json:"version"`
 	Channel     string                       `json:"channel,omitempty"`
@@ -137,55 +163,6 @@ func FetchAppManifest(ctx context.Context, url string) (*AppManifest, error) {
 		return nil, errors.New("manifest has no version")
 	}
 	return &m, nil
-}
-
-// CompareVersions orders dotted numeric versions (1.2.10 > 1.2.9).
-// Non-numeric components compare lexically; malformed input returns 0 and
-// the caller must treat equality as "unknown, not up to date".
-func CompareVersions(a, b string) int {
-	pa := strings.Split(strings.TrimSpace(a), ".")
-	pb := strings.Split(strings.TrimSpace(b), ".")
-	n := len(pa)
-	if len(pb) > n {
-		n = len(pb)
-	}
-	for i := 0; i < n; i++ {
-		av, bv := "0", "0"
-		if i < len(pa) {
-			av = pa[i]
-		}
-		if i < len(pb) {
-			bv = pb[i]
-		}
-		an, aerr := strconv.Atoi(av)
-		bn, berr := strconv.Atoi(bv)
-		switch {
-		case aerr == nil && berr == nil:
-			if an != bn {
-				if an < bn {
-					return -1
-				}
-				return 1
-			}
-		default:
-			// Prerelease awareness: "0" vs "0-beta" — the plain numeric
-			// component is the RELEASE and sorts ABOVE the prerelease
-			// (semver convention), instead of raw lexical order.
-			if bv != av && strings.HasPrefix(bv, av) && strings.HasPrefix(bv[len(av):], "-") {
-				return 1
-			}
-			if av != bv && strings.HasPrefix(av, bv) && strings.HasPrefix(av[len(bv):], "-") {
-				return -1
-			}
-			if av != bv {
-				if av < bv {
-					return -1
-				}
-				return 1
-			}
-		}
-	}
-	return 0
 }
 
 // AppUpdateStatus is the /api/update/status payload.

@@ -1,12 +1,12 @@
 @echo off
-REM SHEYTAN-LA v1.2.0 (SHEYTAN Local Agent) launcher
+REM SHEYTAN-LA v1.2.9 (SHEYTAN Local Agent) launcher
 REM
 REM Double-click to launch the native desktop GUI.
 REM (c) 2024-2026 Parsaetak. All rights reserved.
 REM SHEYTAN is a trademark of Parsaetak (https://github.com/Parsaetak).
 REM Everything (models, sessions, logs, charts) lives in this folder - portable.
 REM
-REM v1.2.0: the executable is SHEYTAN-LA.exe (unified product identity:
+REM v1.2.0+: the executable is SHEYTAN-LA.exe (unified product identity:
 REM AppUserModelID Parsaetak.SHEYTAN-LA, ProductName SHEYTAN-LA). The
 REM launcher falls back to the legacy sheytan-local-agent.exe name so old
 REM portable folders keep working after an in-place update.

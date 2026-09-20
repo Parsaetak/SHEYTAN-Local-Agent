@@ -27,7 +27,13 @@ export default defineConfig(({ mode }) => ({
   build: {
     target: "es2022",
     sourcemap: mode !== "production",
-    manifest: true,
+    // v1.2.9: manifest generation disabled — no runtime consumer exists
+    // (the embedded index.html references the hashed assets directly;
+    // verified by repository-wide reference search). The stale
+    // web/static/.vite/manifest.json is removed by the clean rebuild
+    // (npm run build runs sync-web, which regenerates web/static from
+    // dist).
+    manifest: false,
     rollupOptions: {
       output: {
         entryFileNames: "assets/[name]-[hash].js",

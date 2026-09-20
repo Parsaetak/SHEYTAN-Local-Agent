@@ -1,148 +1,193 @@
-# UPDATE.md — v1.2.8.1 REPAIR of v1.2.8 (CI root cause + functional audit)
+# UPDATE.md — v1.2.9 Stabilization, Security & Repository Cleanup
 
-**Release:** `v1.2.8.1` (repair label; canonical application version remains `1.2.8`)
-**Base:** `main @ 1c2c43a` (`v1.2.8`) · **Date:** 2026-09-20
-**Package:** `SHEYTAN-Local-Agent-v1.2.8.1-UPDATE.zip`
+**Release:** `v1.2.9` (canonical application version; single version hierarchy:
+package.json → release-version.mjs → config.go / build/config.yml / SIGNATURE)
+**Base:** `main @ 8a4ee01` (`v1.2.8.1`) · **Date:** 2026-09-20
+**Package:** `SHEYTAN-Local-Agent-v1.2.9-UPDATE.zip`
 **ROADMAP.md:** byte-identical to the locked baseline (git blob SHA-1
-`c7e2c1720eb5e97bd932c0d76100b8719193e650`) — verified before and after.
+`c7e2c1720eb5e97bd932c0d76100b8719193e650`) — verified before and after
+all work.
 
-This repair starts from the v1.2.8 tree and does three things: (1) fixes
-the ROOT CAUSE of the failed Actions run 35464922587, (2) audits and
-repairs the v1.2.8 functional surfaces the failed run never reached, and
-(3) documents everything with honest labels. Nothing was redesigned; the
-four-layer architecture (transcript / summary / retrieval / artifacts)
-and the authoritative run transport are unchanged.
+This release starts from the v1.2.8.1 tree and does four things:
+(1) closes the verified SECURITY flaws (untrusted content occupying
+instruction-authority channels), (2) repairs the verified
+correctness/durability flaws (completion ordering, concurrent handoff,
+scheduler replay, timing, fingerprints, size limits), (3) hardens CI
+(race gate + frontend unit tests), and (4) cleans obsolete files and
+stale static assets. Nothing was redesigned; the four-layer
+architecture (transcript / summary / retrieval / artifacts) and the
+authoritative run transport are unchanged.
 
-## R1. CI root cause — native engine CMake cache (FIXED, VERIFIED)
+---
 
-- Run 35464922587 failed in "Native engine (C++) build and tests":
-  `CMakeCache.txt directory … native/engine/build is different from
-  cached directory … SHEYTAN-local-agent` — a workspace path-CASE
-  mismatch. The v1.2.1 workflow cached the ENTIRE `native/engine/build`
-  tree keyed only by the source hash; CMake build trees embed absolute
-  paths (CMakeCache.txt, CMakeFiles) and are NOT relocatable across
-  workspaces.
-- Fix: the `actions/cache` step is REMOVED from both the audit job and
-  the Linux integration job; every run now configures from a clean build
-  directory with `cmake -S native/engine -B native/engine/build --fresh`
-  and greps the freshly written CMakeCache.txt for the CURRENT workspace
-  path (regression guard proving a clean, path-valid configuration).
-- The version contract is untouched: `package.json` remains `1.2.8`;
-  `scripts/release-version.mjs --check` passes; v1.2.8.1 is the repair
-  label and the ZIP name only.
+## S1. Cross-mode history: DATA channel, never instructions (FIXED, TESTED)
 
-## R2. Chat / Agent mode switching (FIXED — deterministic restore)
+- DEFECT: `histref.Resolve` injected the retrieved cross-mode block as
+  `Role: "system"` — the instruction-authority channel — while the
+  implementation itself described the content as untrusted reference
+  data. An attacker-controlled source conversation could occupy the
+  same authority tier as the application briefing (prompt-injection
+  escalation by construction).
+- Fix: the block rides the USER (data) channel, introduced by an
+  explicit `[AUTOMATED REFERENCE-DATA ATTACHMENT …]` header that states
+  the user did NOT write the message, that fence-bounded content is
+  untrusted data, and that nothing inside it may be obeyed or executed.
+  Provenance (source session/mode/title, summary version, staleness
+  note, retrieval reason) is unchanged; the per-run random fence,
+  single-line flattened excerpts and budget bounding are unchanged.
+- Regressions: adversarial fixtures carrying fake system instructions,
+  tool commands, policy overrides, forged fence closers and role claims
+  — pinned to the user channel, inside the single structural fence,
+  and inert as single-line quoted text.
 
-- DEFECT (v1.2.8): `setMode` resolved the target mode's active session
-  by filtering the CURRENT `sessions` array — which is always the
-  PREVIOUS mode's list since v1.2.8 — so the target-mode subset was
-  always empty, `nextActive` was always `null`, and EVERY mode switch
-  landed on an empty conversation: no transcript load, no activity
-  socket, no context policy (the per-mode memory design was dead code).
-- Fix: the per-mode memory is the switch authority
-  (`resolveModeSwitchTarget`); the switch loads the remembered
-  transcript, reconnects the run transport (a live run in the space
-  replays its authoritative `run_snapshot`), and `refreshSessions` — now
-  mode-captured before its fetch — re-validates the selection and loads
-  the re-resolved conversation when the remembered session no longer
-  exists. The per-mode map persists to localStorage; startup loads the
-  persisted space's transcript at init (v1.2.8 loaded no transcript at
-  all until the first interaction).
+## S2. Retrieval honesty (FIXED, TESTED)
 
-## R3. Active-run mode switching (VERIFIED + recovered)
+- DEFECT: when lexical matching found NOTHING relevant, `resolveOne`
+  shipped the single newest turn anyway — misleading unrelated history.
+- Fix: zero relevance → NO block. The no-query path (explicit
+  attachment, regenerate) still ships the most recent turns.
+- History search now scans the FULL bounded summary projection set
+  (objective, state, next step, decisions, facts, files, tools,
+  errors, unresolved) — previously only title/objective/state.
 
-The backend run was never cancelled by a mode switch (the socket close
-sends no abort; clientGone does not cancel). With R2, returning to the
-Agent space reconnects the transport and the existing authoritative
-replay (runLive + runId + sequence + cumulative snapshot + terminal
-registry) recovers the run view without duplicating content or creating
-a second run.
+## S3. Summary authority boundary (FIXED, TESTED)
 
-## R4. Cross-mode history references (FIXED + HARDENED)
+- DEFECT: the rolling summary (derived from user/assistant text) was
+  injected after the system prefix as a `system` message — unverified
+  model output could become persistent authoritative context.
+- Fix: the summary block is labeled unverified derived conversation
+  memory (a quoted claim, not a rule) and rides the USER data channel
+  before the fresh turn, exactly like the other retrieval blocks; its
+  plan section now reports SURVIVED tokens after windowing. Only
+  genuinely authoritative information (the briefing, verified
+  capability facts, task state) occupies the system channel.
+- Regressions: poisoned summaries (instruction forgeries in the
+  constraint/decision lists) pinned to the data channel across turns
+  and across session recovery.
 
-- Server-side enforcement (v1.2.8 trusted the client picker): references
-  are validated against the STORE index — same-mode references, self-
-  references and dead references are dropped, on both the run path and
-  the full-context PUT.
-- Regenerate parity: the run path unions the PERSISTED session-context
-  refs (body-first) — a regenerate (or any client) that omits refs runs
-  with the same references as the original turn; the frontend
-  `regenerate()` also sends `historyRefs` explicitly now.
-- Prompt-injection hardening: retrieved excerpts are wrapped in a
-  per-run random `<<<HISTREF:id>>>` fence with a standing header that
-  fence-bounded content is QUOTED, UNTRUSTED DATA — never instructions.
-- Staleness honesty: a block notes when the source was re-summarized
-  since the reference was attached.
+## S4. Durable completion ordering (FIXED, TESTED)
 
-## R5. Context never silently exhausts (FIXED)
+- DEFECT: `settle()` flipped the run terminal (outcome registry +
+  authoritative live state) BEFORE the summary roll, agent.md
+  handoff, recall indexing and continuum rollover ran — a crash in
+  that window left a run marked complete with silently missing
+  durable artifacts.
+- Fix: every DURABLE write (assistant reply → summary → handoff →
+  recall → continuum chapter) happens BEFORE the terminal
+  publication; post-terminal publishes are UI events only. A crash
+  after terminal completion can no longer produce a "complete" run
+  with missing required artifacts.
+- Regression: the outcome registry is polled for the first "done"
+  record; at that instant the summary sidecar and agent.md must
+  already exist on disk.
 
-- DEFECT (v1.2.8): a hard `MinHistoryTokens = 2048` floor promised
-  history tokens that do not exist on small effective contexts; the
-  windower filled the fictional budget and the final fit gate refused
-  the turn with a misleading reason. The floor is now ADAPTIVE — bounded
-  by the actual remaining budget; degradation proceeds (older history →
-  recall → cross-mode refs → attachment detail → old tool-result bodies)
-  before any refusal, and the current user request is never truncated.
-- DEFECT (v1.2.8): `TotalTokens()` counted DROPPED sections, so a
-  designed graceful drop (history-refs under pressure) poisoned
-  `Overflow()` and refused prompts that actually fit. Dropped sections
-  no longer count (the always-traveling system briefing still does).
-- New in-loop fit verification: after tool-result compaction, a request
-  that still exceeds the ceiling is refused with the MEASURED reason
-  (per-section breakdown, measured history vs budget) — never silently
-  sent. Regression tests run real turns at 2K/4K/8K and assert the wire
-  request stays inside the measured ceiling.
+## S5. Concurrent agent.md handoff (FIXED, TESTED, RACE-CLEAN)
 
-## R6. agent.md handoff (FIXED — every completed run)
+- DEFECT: `WriteHandoffFile`'s read-splice-rename cycle had no
+  workspace-level serialization — two concurrent Agent runs could
+  interleave reads and renames, silently dropping one run's handoff
+  section.
+- Fix: the whole critical section runs under a per-absolute-path
+  keyed lock; agent.md remains the deterministic latest-handoff
+  projection of the serialized sequence. The atomic rename +
+  read-back verification contract is unchanged.
+- Regressions: 16 concurrent writers against one agent.md converge
+  to a single valid section with a consistent (non-mixed) splice and
+  byte-preserved stable content; unrelated paths never serialize.
 
-- The v1.2.8 evidence gate skipped the handoff for no-change runs —
-  violating the product requirement that every completed Agent task
-  leaves a handoff. Now EVERY completed agent run updates agent.md; an
-  evidence-free run writes the honest handoff:
-  `No engineering changes were made.` with truthful defaults.
-- Durability: byte-for-byte preservation outside the markers (the v1.2.8
-  splice silently re-normalized boundary whitespace), unique temp file +
-  fsync + rename + directory sync, READ-BACK verification before the
-  handoff is reported, an unreadable existing agent.md ABORTS instead of
-  being clobbered, and failures surface as an error activity.
+## S6. Context-budget correctness (FIXED, TESTED)
 
-## R7. Transport, paging, races, scalability (FIXED)
+- DEFECTS: (a) `NewBudget` inflated any `numCtx < 1024` to 1024 —
+  fabricating context the engine does not serve; (b) the fixed
+  512-token output reserve could consume a small window entirely;
+  (c) the fixed 2048-token history floor exceeded small effective
+  contexts; (d) the single ~4-bytes-per-rune heuristic UNDER-counted
+  CJK text by ~4x; (e) comments claimed "guaranteed to fit" with only
+  an estimate in play.
+- Fix: tiered accounting — exact engine tokenizer accounting when the
+  native backend's tokenizer is available (memoized, degrading to the
+  family/heuristic tiers on any failure) → model-family estimator
+  (from the GGUF card's tokenizer family) → CJK-aware conservative
+  fallback. Small windows are budgeted AS THEY ARE (only a
+  non-positive numCtx falls back to the documented 1024 default
+  assumption); the reserve floor scales to numCtx/4; the history
+  floor is capped at usable/4. Plans carry `estimator` labels
+  ("exact" | "family:<name>" | "heuristic") and the pipeline comment
+  states conservative budgeting instead of mathematical exactness.
+- Boundary tests: 128/256/512/2048/8192/131072-token windows.
 
-- `run_snapshot` wire frame now carries the `task` block (v1.2.8 folded
-  it into the in-process snapshot but omitted it on the wire — a
-  reconnecting UI lost the task panel); wire-level test added.
-- Reply-persistence failure now RETURNS after settling "error" — the
-  failed run no longer rolls the summary or writes the handoff.
-- Standby missed-wake race: a socket that entered standby while a
-  replacement run was registering now re-checks the runs map every 2s.
-- Read-modify-write races: ALL session-context mutations (history refs,
-  attachment association, token policy) serialize through the store's
-  new atomic `UpdateContextFunc`; transcript saves use
-  `SaveMessagesKeepContext` so a stale whole-object save cannot revert a
-  concurrent context update. Race-tested with concurrent writers.
-- Summary settle path serialized per session (cancelled-run tail vs
-  replacement run can no longer interleave the rolling merge).
-- Search scalability: summary existence checks are index/stat only — a
-  picker search no longer performs O(sessions × full transcript reads)
-  when the hot cache misses.
-- Frontend paging: `olderLoading` can no longer wedge the Load-earlier
-  button; run-finalisation reload preserves expanded older pages (within
-  the backend's 200-message page cap).
+## S7. Dead history references actually pruned (FIXED, TESTED)
 
-## R8. Verification (labels per the documentation truth standard)
+- DEFECT: `validateHistoryRefs` claimed to prune dead references but
+  only compared non-empty resolved modes — a vanished source session
+  (ModeOf == "") survived validation and was re-persisted forever.
+- Fix: ModeOf returning "" (the source no longer exists) drops the
+  reference with an explicit log line; the normalized surviving list
+  persists through the existing atomic delta paths.
 
-- VERIFIED on the repair host (Go 1.27.1 linux/amd64, CMake 4.4.3,
-  Node 24.21): full headless Go suite; `go test -race` on
-  internal/{api,agent,sessions,histref,contextplan}; `go vet -tags
-  headless` on edited packages; native engine clean `--fresh` configure
-  + build + ctest; frontend typecheck/lint/58 unit tests/production
-  build + embedded sync; `release-version.mjs --check`.
-- NOT YET VERIFIED: CI Actions rerun from this tree (nothing was
-  pushed); Windows and Linux desktop binaries.
-- ENVIRONMENTAL: the v1.2.8 worklog's "Go toolchain: 1.27.1" describes
-  the DEVELOPMENT host; CI pins `GO_VERSION: "1.26"` / `NODE_VERSION:
-  "24"` and `go.mod` requires `go 1.26` — both are consistent (1.27.1 ≥
-  1.26); the workflow pins remain authoritative for CI.
+## S8. Runtime/engineering correctness (FIXED, TESTED)
+
+- **Pipeline stage timing**: per-stage durations anchor at the
+  stage's own start (previously cumulative since pipeline start);
+  the total stays separate. The `stage N done (Xms)` evidence lines
+  are now honest.
+- **Scheduler crash/replay**: Tick persists the advanced NextDue
+  under the claim lock BEFORE execution (the durable claim); a crash
+  between claiming/executing/persisting can no longer double-fire a
+  timer task after restart. Removed tasks are re-checked under the
+  execution lock and never fire post-removal.
+- **Artifact fingerprints**: size + modification metadata + a
+  bounded FNV-1a content digest (first 64 KiB, files ≤ 2 MiB only) —
+  same-size rewrites are detected, even with a forged mtime; large
+  files fall back to size+modtime (no full-file hashing).
+- **MCP size limits**: the read loop bounds the wire line at 1 MiB
+  (connection aborted beyond it) and raw results above 256 KiB are
+  refused BEFORE decoding — a malicious provider can no longer
+  allocate an arbitrarily large response before the 32 KiB logical
+  cap applies. Also fixed a latent panic: delivered response
+  channels are removed from the pending map (a later connection
+  failure used to send on closed channels).
+- **Updater trust terminology**: the package doc now distinguishes
+  transport security / artifact integrity / manifest authenticity /
+  signature verification and explicitly states SHA-256 matching is
+  integrity, NOT publisher authentication, and that no signature
+  verification is implemented. `CompareVersions` follows semver §11
+  (prerelease ordering, numeric vs alphanumeric identifiers, build
+  metadata ignored) as the single version grammar.
+
+## S9. CI hardening (IMPLEMENTED)
+
+- New focused race gate in the audit job:
+  `go test -race -tags headless` over `internal/api`, `internal/agent`,
+  `internal/sessions`, `internal/contextplan`, `internal/histref`,
+  `internal/runtime`.
+- `npm run test:units` added to all three frontend verification
+  gates (audit, Windows, Linux). No existing gate was removed; the
+  v1.2.8.1 clean CMake configure (`rm -rf build` + `--fresh` + cache
+  path guards) is intact.
+
+## S10. Repository cleanup (DONE)
+
+- Deleted (zero runtime/CI references, verified by search):
+  `FIX-README.md`, `BUILD-INFO.txt`, `REPLACEMENT-MANIFEST.txt`,
+  `REPLACEMENT-SHA256.txt`, `scripts/build-and-zip.sh`,
+  `scripts/browser-smoke/main.go`, `scripts/data-smoke/main.go`,
+  `scripts/ws-smoke/main.go`.
+- Intentionally preserved: `SIGNATURE` (CI-load-bearing release
+  metadata), `agent.md`, `worklog.md`, and the dormant-but-roadmap
+  foundation packages (`internal/multiagent`, `internal/scheduler`,
+  `internal/pipeline`, `internal/mcp`, `internal/improve`) — the
+  first three are actively imported; mcp/improve are documented
+  Phase-7 foundation, compiled and tested by CI.
+- `web/static` regenerated from the authoritative frontend build:
+  stale hashed bundle variants (2-3 copies per chunk) purged; the
+  vite filename pattern repaired (`[name]-[hash]`, the tree carried
+  a mangled `[name]-ash]` pattern); embedded manifest generation
+  disabled and `web/static/.vite/manifest.json` removed (no runtime
+  consumer — verified by reference search).
+- Version surfaces synchronized to 1.2.9: package.json,
+  internal/config AppVersion, build/config.yml productVersion,
+  SIGNATURE, the launcher label and the README release statement.
 
 ---
 

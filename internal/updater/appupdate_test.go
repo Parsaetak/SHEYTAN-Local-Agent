@@ -29,10 +29,30 @@ func TestCompareVersions_Ordering(t *testing.T) {
 		{"2.0.0", "1.99.99", 1},
 		{"1.2", "1.2.0", 0},
 		{"1.2.0", "1.2.0-beta", 1}, // prerelease sorts below the release, semver-style
+
+		// v1.2.9 semver §11 cases (the single version grammar):
+		{"1.3.0-alpha.1", "1.3.0-alpha.2", -1}, // numeric identifiers numerically
+		{"1.3.0-alpha.2", "1.3.0-alpha.10", -1},
+		{"1.3.0-alpha", "1.3.0-alpha.1", -1},  // shorter prerelease list sorts lower with equal prefix
+		{"1.3.0-alpha.1", "1.3.0-beta", -1},   // alphanumeric lexically
+		{"1.3.0-1", "1.3.0-alpha", -1},        // numeric identifier sorts below alphanumeric
+		{"1.3.0-beta.2", "1.3.0-beta.11", -1}, // two-digit numeric comparison
+		{"v1.3.0", "1.3.0", 0},                // v-prefix tolerated
+		{"1.3.0+build.5", "1.3.0", 0},         // build metadata ignored (semver §10)
+		{"1.3.0-beta+build.5", "1.3.0-beta", 0},
+		{"not-a-version", "1.2.0", -1}, // malformed compares LOW, never newer
+		{"", "1.2.0", -1},              // empty compares LOW
 	}
 	for _, tc := range cases {
 		if got := CompareVersions(tc.a, tc.b); got != tc.want {
 			t.Errorf("CompareVersions(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+		// Antisymmetry: reversed operands must give the mirrored result.
+		if tc.want != 0 {
+			rev := -tc.want
+			if got := CompareVersions(tc.b, tc.a); got != rev {
+				t.Errorf("CompareVersions(%q, %q) = %d, want %d (antisymmetry)", tc.b, tc.a, got, rev)
+			}
 		}
 	}
 }

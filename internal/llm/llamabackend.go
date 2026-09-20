@@ -243,9 +243,9 @@ func hardwareFromSysInfo(si *sysinfo.SysInfo, backend string) HardwareInfo {
 	}
 
 	hw := HardwareInfo{
-		Backend:     backend,
+		Backend:      backend,
 		Architecture: si.Arch,
-		OS:          si.OS,
+		OS:           si.OS,
 		CPU: CPUHardware{
 			Name:          si.CPU.Name,
 			PhysicalCores: si.CPU.PhysicalCores,

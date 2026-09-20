@@ -28,14 +28,14 @@ const maxPerfSamples = 16
 // client (tokenTimer). Zero-value fields mean "not measured this request"
 // and are skipped by the aggregator rather than averaged as zeros.
 type PerfSample struct {
-	At            time.Time `json:"at"`
-	Model         string    `json:"model,omitempty"`
-	PromptTokens  int       `json:"promptTokens,omitempty"`
-	Tokens        int       `json:"tokens,omitempty"`
-	TokensPerSec  float64   `json:"tokensPerSec,omitempty"`
-	TTFTMs        int64     `json:"ttftMs,omitempty"`
-	WallMs        int64     `json:"wallMs,omitempty"`
-	PromptTokSec  float64   `json:"promptTokSec,omitempty"`
+	At           time.Time `json:"at"`
+	Model        string    `json:"model,omitempty"`
+	PromptTokens int       `json:"promptTokens,omitempty"`
+	Tokens       int       `json:"tokens,omitempty"`
+	TokensPerSec float64   `json:"tokensPerSec,omitempty"`
+	TTFTMs       int64     `json:"ttftMs,omitempty"`
+	WallMs       int64     `json:"wallMs,omitempty"`
+	PromptTokSec float64   `json:"promptTokSec,omitempty"`
 }
 
 // perfTracker is a mutex-guarded ring of recent samples.

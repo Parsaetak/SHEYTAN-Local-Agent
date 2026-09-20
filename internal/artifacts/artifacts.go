@@ -16,6 +16,7 @@
 package artifacts
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,7 +95,53 @@ func New(watchDirs []string) *Tracker {
 }
 
 // fileState is the fingerprint used to detect change.
-type fileState struct{ size int64 }
+//
+// v1.2.9: size-only fingerprints could not detect SAME-SIZE content
+// changes (a rewritten file of identical length — a common case for
+// logs, JSON reports and code edits — was invisible). The fingerprint
+// now carries size + modification metadata (ModTime, nanosecond
+// resolution on mainstream filesystems) plus a BOUNDED content digest:
+// the first 64 KiB hashed with FNV-1a, computed only for files up to
+// 2 MiB so large artifacts never pay a full-file read (performance and
+// huge files stay protected — the digest is 0 for those, and their
+// change detection falls back to size+modtime).
+type fileState struct {
+	size    int64
+	modNano int64
+	digest  uint64
+}
+
+// digestCapBytes bounds the hashed prefix of one file.
+const digestCapBytes = 64 << 10
+
+// digestMaxFileBytes is the file-size ceiling for computing a digest at
+// all (beyond this, hashing is skipped: size+modtime carry the signal).
+const digestMaxFileBytes = 2 << 20
+
+// fileDigest returns a bounded FNV-1a digest of the first 64 KiB of
+// path (0 when the file is too large to hash or unreadable).
+func fileDigest(path string, size int64) uint64 {
+	if size <= 0 || size > digestMaxFileBytes {
+		return 0
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	buf := make([]byte, min(digestCapBytes, size))
+	n, _ := io.ReadFull(f, buf)
+	if n <= 0 {
+		return 0
+	}
+	var h uint64 = 14695981039346656037
+	for _, b := range buf[:n] {
+		h ^= uint64(b)
+		h *= 1099511628211
+	}
+	return h
+}
 
 func snapshot(roots []string) map[string]fileState {
 	out := map[string]fileState{}
@@ -116,7 +163,12 @@ func snapshot(roots []string) map[string]fileState {
 				continue
 			}
 			n++
-			out[filepath.Join(root, e.Name())] = fileState{size: info.Size()}
+			path := filepath.Join(root, e.Name())
+			out[path] = fileState{
+				size:    info.Size(),
+				modNano: info.ModTime().UnixNano(),
+				digest:  fileDigest(path, info.Size()),
+			}
 		}
 	}
 	return out
@@ -155,8 +207,28 @@ func abs(p string) string {
 	return filepath.Clean(p)
 }
 
+// changedFile reports whether the AFTER fingerprint differs from BEFORE
+// under the v1.2.9 rules:
+//   - new file, or size change → changed;
+//   - small files (digest != 0): the bounded CONTENT digest decides —
+//     a pure mtime touch with identical content is NOT a change, while
+//     a same-size rewrite (even with a forged mtime) IS;
+//   - large files (digest == 0, hashing skipped): mtime carries the
+//     signal (a rewrite always bumps it).
+func changedFile(prev, cur fileState) bool {
+	if prev.size != cur.size {
+		return true
+	}
+	if cur.digest != 0 || prev.digest != 0 {
+		return prev.digest != cur.digest
+	}
+	return prev.modNano != cur.modNano
+}
+
 // EndTurn diffs against the BeginTurn snapshot and returns every file that
-// appeared (or changed size) during the turn, newest first.
+// appeared (or changed) during the turn, newest first. Change detection
+// follows changedFile (v1.2.9: same-size rewrites detected, pure mtime
+// touches on unchanged content ignored).
 func (t *Tracker) EndTurn() []Artifact {
 	t.mu.Lock()
 	before := t.lastSnap
@@ -191,7 +263,7 @@ func (t *Tracker) EndTurn() []Artifact {
 
 	for path := range now {
 		prev, existed := before[path]
-		if !existed || prev.size != now[path].size {
+		if !existed || changedFile(prev, now[path]) {
 			add(path)
 		}
 	}

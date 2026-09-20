@@ -290,15 +290,22 @@ func TestSessionMessagesPaging(t *testing.T) {
 // contract the UI relies on: a context PUT that only carries historyRefs
 // must not silently wipe the other context fields (the frontend always
 // sends the full context; the backend replaces it wholesale).
+// v1.2.9: the ref points at a REAL source session — the server now
+// prunes dead references (source session not in the store).
 func TestSessionContextUpdateKeepsHistoryRefs(t *testing.T) {
 	engine := remoteFakeEngine(t, "ok.")
 	server := newRemoteServer(t, engine.URL)
+
+	// The referenced CHAT source session (the target below is an AGENT
+	// session — cross-mode is enforced server-side).
+	src := createSessionWithMode(t, server, "chat")
+	srcID := src["id"].(string)
 
 	created := createSessionWithMode(t, server, "agent")
 	id := created["id"].(string)
 
 	// Attach a history ref via the context PUT.
-	payload := `{"context":{"contextTokens":8192,"historyRefs":[{"sessionId":"other-1","mode":"chat","summaryVersion":3}]}}`
+	payload := fmt.Sprintf(`{"context":{"contextTokens":8192,"historyRefs":[{"sessionId":%q,"mode":"chat","summaryVersion":3}]}}`, srcID)
 	req, _ := http.NewRequest(http.MethodPut, server.URL+"/api/sessions/"+id, strings.NewReader(payload))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -323,7 +330,67 @@ func TestSessionContextUpdateKeepsHistoryRefs(t *testing.T) {
 	if full.Context.ContextTokens != 8192 {
 		t.Fatalf("contextTokens = %d", full.Context.ContextTokens)
 	}
-	if len(full.Context.HistoryRefs) != 1 || full.Context.HistoryRefs[0].SessionID != "other-1" {
+	if len(full.Context.HistoryRefs) != 1 || full.Context.HistoryRefs[0].SessionID != srcID {
 		t.Fatalf("historyRefs wrong: %+v", full.Context.HistoryRefs)
+	}
+}
+
+// TestDeadHistoryReferencePruned pins the v1.2.9 pruning contract: a
+// reference whose source session no longer exists is dropped by
+// validation (and its removal persists via the atomic delta path).
+func TestDeadHistoryReferencePruned(t *testing.T) {
+	engine := remoteFakeEngine(t, "ok.")
+	server := newRemoteServer(t, engine.URL)
+
+	src := createSessionWithMode(t, server, "chat")
+	srcID := src["id"].(string)
+
+	created := createSessionWithMode(t, server, "agent")
+	id := created["id"].(string)
+
+	// Attach the ref (valid at attach time).
+	payload := fmt.Sprintf(`{"historyRefs":[{"sessionId":%q,"mode":"chat"}]}`, srcID)
+	req, _ := http.NewRequest(http.MethodPut, server.URL+"/api/sessions/"+id, strings.NewReader(payload))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT refs: %v", err)
+	}
+	resp.Body.Close()
+
+	// Delete the source session (the ref is now dead).
+	del, err := http.NewRequest(http.MethodDelete, server.URL+"/api/sessions/"+srcID, nil)
+	if err != nil {
+		t.Fatalf("build delete: %v", err)
+	}
+	delResp, err := http.DefaultClient.Do(del)
+	if err != nil {
+		t.Fatalf("DELETE source: %v", err)
+	}
+	delResp.Body.Close()
+
+	// Re-PUT the same ref list: validation must prune the dead ref, and
+	// the session context must no longer carry it.
+	req2, _ := http.NewRequest(http.MethodPut, server.URL+"/api/sessions/"+id, strings.NewReader(payload))
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("PUT refs again: %v", err)
+	}
+	resp2.Body.Close()
+
+	detail, err := http.Get(server.URL + "/api/sessions/" + id)
+	if err != nil {
+		t.Fatalf("GET session: %v", err)
+	}
+	defer detail.Body.Close()
+
+	var full struct {
+		Context sessions.Context `json:"context"`
+	}
+	if err := json.NewDecoder(detail.Body).Decode(&full); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	if len(full.Context.HistoryRefs) != 0 {
+		t.Fatalf("dead reference survived validation: %+v", full.Context.HistoryRefs)
 	}
 }

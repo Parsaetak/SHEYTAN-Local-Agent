@@ -13,10 +13,10 @@
 // tool traffic of a run. Verification evidence arrives through two
 // channels today, both of which the collector recognizes:
 //
-//   1. The Coding Lab verify action — its result text carries the
-//      verification summary (checks passed/failed, task verdict).
-//   2. Explicit build/test evidence — a run/build/test command whose
-//      output contains recognizable success or failure markers.
+//  1. The Coding Lab verify action — its result text carries the
+//     verification summary (checks passed/failed, task verdict).
+//  2. Explicit build/test evidence — a run/build/test command whose
+//     output contains recognizable success or failure markers.
 //
 // The collector never fabricates a pass: unknown tools and ambiguous
 // output contribute nothing, and a final "completed" turn without any
@@ -51,20 +51,20 @@ const (
 type EvidenceKind string
 
 const (
-	EvidenceLabVerify  EvidenceKind = "lab_verify"
-	EvidenceBuild      EvidenceKind = "build"
-	EvidenceTest       EvidenceKind = "test"
-	EvidenceFileState  EvidenceKind = "file_state"
-	EvidenceGitState   EvidenceKind = "git_state"
+	EvidenceLabVerify EvidenceKind = "lab_verify"
+	EvidenceBuild     EvidenceKind = "build"
+	EvidenceTest      EvidenceKind = "test"
+	EvidenceFileState EvidenceKind = "file_state"
+	EvidenceGitState  EvidenceKind = "git_state"
 	EvidenceCommand   EvidenceKind = "command"
 )
 
 // Evidence is one objective observation recorded during a run.
 type Evidence struct {
-	Kind    EvidenceKind `json:"kind"`
-	Source  string       `json:"source"`
-	Passed  bool         `json:"passed"`
-	Detail  string       `json:"detail,omitempty"`
+	Kind   EvidenceKind `json:"kind"`
+	Source string       `json:"source"`
+	Passed bool         `json:"passed"`
+	Detail string       `json:"detail,omitempty"`
 }
 
 // VerificationReport is the run-level verification record carried on

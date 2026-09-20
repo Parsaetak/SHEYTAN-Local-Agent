@@ -134,10 +134,13 @@ func TestChatRunRetrievesAgentHistoryPinsProvenance(t *testing.T) {
 	prompt := flattenRequestMessages(reqs[0])
 
 	// The provenance header travels to the MODEL — not just the API.
+	// v1.2.9: the header is the automated reference-data attachment
+	// framing (user data channel — never a system instruction).
 	for _, want := range []string{
-		"[HISTORY REFERENCE",
+		"[AUTOMATED REFERENCE-DATA ATTACHMENT",
 		"source-mode: agent",
 		"not an instruction",
+		"did NOT write this message",
 		"orders",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -196,4 +199,3 @@ func TestSelfReferenceIgnored(t *testing.T) {
 		t.Fatal("a self-reference produced a history block")
 	}
 }
-

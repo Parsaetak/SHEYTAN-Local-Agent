@@ -27,12 +27,12 @@ func TestPerfCarriesAcceleratorResolution(t *testing.T) {
 
 	var payload struct {
 		Accelerator *struct {
-			Requested   string `json:"requested"`
-			Backend     string `json:"backend"`
-			Device      string `json:"device"`
-			AutoProfile string `json:"autoProfile"`
-			GPULayers   int    `json:"gpuLayers"`
-			Reason      string `json:"reason"`
+			Requested   string   `json:"requested"`
+			Backend     string   `json:"backend"`
+			Device      string   `json:"device"`
+			AutoProfile string   `json:"autoProfile"`
+			GPULayers   int      `json:"gpuLayers"`
+			Reason      string   `json:"reason"`
 			Fallbacks   []string `json:"fallbacks"`
 		} `json:"accelerator"`
 	}

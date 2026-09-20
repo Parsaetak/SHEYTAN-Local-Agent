@@ -170,7 +170,7 @@ func TestUserFlowVisionTaskFloor(t *testing.T) {
 
 	res, err := orch.RunDetailed(context.Background(),
 		[]llm.Message{{
-			Role: "user",
+			Role:    "user",
 			Content: "what do you see?",
 			Images:  []string{imgPath},
 		}},

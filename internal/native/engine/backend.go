@@ -22,8 +22,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
@@ -62,6 +64,15 @@ func (b *Backend) Health(ctx context.Context) (llm.HealthReport, error) {
 // LoadModel implements Backend: the engine validates the file, loads it
 // natively (GGUF validate → memory-map → metadata → memory plan → llama
 // graph validation) and reports real model state.
+//
+// v1.2.9: a successful load ALSO initializes the model's tokenizer and,
+// when the tokenizer is supported, installs the EXACT token-counting tier
+// used by the context planner (chunking.SetExactTokenCounter). This is
+// the "exact model/engine tokenizer accounting when available" tier of
+// the context-budget chain; the counter is memoized (bounded) so inner
+// planning loops do not pay an IPC round-trip per call, and any encode
+// failure degrades to the family/heuristic estimator instead of trusting
+// a broken number.
 func (b *Backend) LoadModel(ctx context.Context, spec llm.ModelSpec) error {
 	if spec.Path == "" {
 		return fmt.Errorf("model spec path is empty")
@@ -74,12 +85,88 @@ func (b *Backend) LoadModel(ctx context.Context, spec llm.ModelSpec) error {
 		return err
 	}
 
-	return b.eng.LoadModel(ctx, ModelSpec{Path: spec.Path})
+	if err := b.eng.LoadModel(ctx, ModelSpec{Path: spec.Path}); err != nil {
+		return err
+	}
+
+	b.wireExactTokenizer(ctx)
+	return nil
+}
+
+// tokenCountMemo bounds the exact-counter memo so repeated planning
+// measurements of the same strings stay IPC-free. Guarded by its own
+// mutex; capped, evict-all-on-full (simple and predictable).
+type tokenCountMemo struct {
+	mu    sync.Mutex
+	cap   int
+	count map[string]int
+}
+
+var tokenizerMemo = &tokenCountMemo{cap: 512, count: map[string]int{}}
+
+func (m *tokenCountMemo) get(s string) (int, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.count[s]
+	return n, ok
+}
+
+func (m *tokenCountMemo) put(s string, n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.count) >= m.cap {
+		m.count = map[string]int{} // bounded: reset rather than grow
+	}
+	m.count[s] = n
+}
+
+// wireExactTokenizer initializes the tokenizer for the loaded model and
+// installs the exact counting tier when it is actually available.
+// Unsupported tokenizer kinds keep the estimator chain on its lower
+// tiers (family/heuristic) — never a silent wrong number.
+func (b *Backend) wireExactTokenizer(ctx context.Context) {
+	res, err := b.eng.InitTokenizer(ctx)
+	if err != nil || !res.Initialized {
+		// ErrUnsupportedTokenizer and any init failure: leave the
+		// estimator chain on its lower tiers.
+		chunking.ResetTokenEstimator()
+		return
+	}
+
+	eng := b.eng
+	counter := func(s string) int {
+		if s == "" {
+			return 0
+		}
+		if n, ok := tokenizerMemo.get(s); ok {
+			return n
+		}
+		// Count without BOS/EOS (the planner counts content tokens) and
+		// without an output cap that could silently truncate.
+		enc, err := eng.TokenizerEncode(context.Background(), s, EncodeOptions{MaxTokens: 1 << 20})
+		if err != nil {
+			return -1 // fall through to the estimate tiers
+		}
+		if enc.Truncated {
+			return -1 // a truncated count is a lower bound, not a count
+		}
+		n := int(enc.Count)
+		tokenizerMemo.put(s, n)
+		return n
+	}
+
+	chunking.SetExactTokenCounter(counter)
 }
 
 // UnloadModel implements Backend: releases the natively loaded model
 // (mapping, handles, cached metadata, generation binding). Idempotent.
+// v1.2.9: it also drops the exact tokenizer tier — the memo belongs to a
+// model that is no longer loaded.
 func (b *Backend) UnloadModel(ctx context.Context) error {
+	chunking.ResetTokenEstimator()
+	tokenizerMemo.mu.Lock()
+	tokenizerMemo.count = map[string]int{}
+	tokenizerMemo.mu.Unlock()
 	return b.eng.UnloadModel(ctx)
 }
 

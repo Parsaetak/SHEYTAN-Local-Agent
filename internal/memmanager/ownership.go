@@ -54,8 +54,8 @@ func AllLevels() []Level {
 
 // activeOwner is one named ACTIVE holder (a live request).
 type activeOwner struct {
-	name    string
-	heldAt  time.Time
+	name   string
+	heldAt time.Time
 }
 
 // ownership tracks the manager's ownership accounting.
@@ -123,12 +123,12 @@ func (o *ownership) recordRelease(bytes int64, at time.Time) {
 
 // LevelStats is one level's accounting in the snapshot.
 type LevelStats struct {
-	Level       Level  `json:"level"`
-	Owners      int    `json:"owners,omitempty"`      // ACTIVE holders
-	Names       []string `json:"names,omitempty"`     // ACTIVE owner names
-	Bytes       int64  `json:"bytes,omitempty"`       // RELEASE bytes
-	At          string `json:"at,omitempty"`          // RELEASE time
-	Description string `json:"description"`
+	Level       Level    `json:"level"`
+	Owners      int      `json:"owners,omitempty"` // ACTIVE holders
+	Names       []string `json:"names,omitempty"`  // ACTIVE owner names
+	Bytes       int64    `json:"bytes,omitempty"`  // RELEASE bytes
+	At          string   `json:"at,omitempty"`     // RELEASE time
+	Description string   `json:"description"`
 }
 
 // OwnershipSnapshot renders the full ladder with live counters. The
