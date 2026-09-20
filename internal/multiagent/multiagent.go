@@ -118,7 +118,7 @@ func (m *MultiAgent) model() string {
 
 // Run executes one full multi-agent turn. Every phase emits an agent.Activity.
 //
-// v1.1.5Z Phase 6 (multi-agent efficiency): the executor runs through
+// v1.1.5 Phase 6 (multi-agent efficiency): the executor runs through
 // RunDetailed so the CRITIC sees the run's objective verification verdict
 // (verified / partially_verified / failed / not_verified) and tool-use
 // stats — not just the executor's prose. A completion claim with no
@@ -131,7 +131,7 @@ func (m *MultiAgent) Run(
 	prompt string,
 	onActivity func(agent.Activity),
 ) (string, error) {
-	// v1.1.4Z: local default instead of mutating the shared struct —
+	// v1.1.4: local default instead of mutating the shared struct —
 	// concurrent Run calls previously raced this write.
 	maxIter := m.maxIter
 	if maxIter < 1 {
@@ -622,7 +622,7 @@ func boundedExcerpt(s string, n int) string {
 //
 // LLMs sometimes wrap JSON in markdown fences or add prose around it.
 // ExtractJSON extracts the first brace-balanced JSON object from a model
-// reply (fences and prose tolerated). Exported (v1.1.4Z) so the release
+// reply (fences and prose tolerated). Exported (v1.1.4) so the release
 // stress suite tests the REAL parser instead of a hand-copied duplicate.
 func ExtractJSON(s string) string {
 	return extractJSON(s)

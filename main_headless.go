@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	// v1.1.3Z: headless mode (build tag `headless`) runs the SAME runtime
+	// v1.1.3: headless mode (build tag `headless`) runs the SAME runtime
 	// stack and HTTP/WebSocket API as the desktop shell, minus the native
 	// window. This is what CI, containers, and servers use — and what makes
 	// `go build -tags headless ./...` and the headless test suite possible

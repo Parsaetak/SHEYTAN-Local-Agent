@@ -1,4 +1,4 @@
-// blankwarn_v130_test.go — v1.3.0 regression: WARN/ERROR records are
+// WARN/ERROR records are
 // never blank. The v1.2.9 runtime log carried lines like
 // "WARN  [updater]" with nothing after them.
 package logging

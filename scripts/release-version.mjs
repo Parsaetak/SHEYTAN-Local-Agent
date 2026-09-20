@@ -1,26 +1,28 @@
 #!/usr/bin/env node
 /**
  * release-version.mjs — Single-source-of-truth release metadata gate for
- * SHEYTAN-Local-Agent (Zeta line).
+ * SHEYTAN-Local-Agent.
  *
- * The canonical version lives in package.json ("version", e.g. "1.1.3-zeta").
+ * The canonical version lives in package.json ("version", e.g. "1.3.1").
  * Every other release surface is derived from it and must stay in sync:
  *
- *   - internal/config/config.go            ->  AppVersion  = "1.1.3"        (base version)
- *   - build/config.yml                     ->  productVersion: "1.1.3-zeta"  (full version)
- *   - SIGNATURE                            ->  SHEYTAN-Local-Agent v1.1.3     (base version)
+ *   - internal/config/config.go            ->  AppVersion = "1.3.1"
+ *   - build/config.yml                     ->  productVersion: "1.3.1"
+ *   - SIGNATURE                            ->  SHEYTAN-Local-Agent v1.3.1
  *
- * v1.1.8: the workflow NO LONGER carries a hardcoded APP_VERSION. CI derives
+ * The product has a version-only identity: there is no codename dimension,
+ * no release suffix and no second version variable. The workflow derives
  * the release identity at runtime from package.json via `--env`, so version
- * metadata has exactly one source and can never drift between files again.
- * The workflow is still audited here (shape check) to prove the derivation
+ * metadata has exactly one source and can never drift between files. The
+ * workflow is still audited here (shape check) to prove the derivation
  * step has not been dropped.
  *
  * Usage:
  *   node scripts/release-version.mjs            # sync mode (default): repair drift in place
  *   node scripts/release-version.mjs --check    # verify only: exit 1 on any drift
- *   node scripts/release-version.mjs --env      # print APP_VERSION / APP_VERSION_FULL /
- *                                               # APP_CODENAME as VAR=value lines (CI consumption)
+ *   node scripts/release-version.mjs --env      # print APP_VERSION /
+ *                                               # APP_VERSION_FULL as VAR=value
+ *                                               # lines (CI consumption)
  *
  * Designed for CI: zero dependencies, CRLF-safe, never rewrites a file that
  * is already correct, and emits GitHub Actions ::error:: annotations in
@@ -43,31 +45,32 @@ const targets = [
   {
     label: "internal/config/config.go",
     file: "internal/config/config.go",
-    // gofmt-aligned const, e.g. `      AppVersion  = "1.1.3"`
+    // gofmt-aligned const, e.g. `      AppVersion = "1.3.1"` (whitespace-
+    // flexible: the alignment depends on the identifiers in the block)
     pattern: /((?:^|\r?\n)[ \t]*AppVersion[ \t]*=[ \t]*")([^"]*)(")/,
-    expected: (base) => base,
+    expected: (version) => version,
     describe: (v) => `AppVersion = "${v}"`,
   },
   {
     label: "build/config.yml",
     file: join("build", "config.yml"),
     pattern: /((?:^|\r?\n)[ \t]*productVersion:[ \t]*")([^"]*)(")/,
-    expected: (base, full) => full,
+    expected: (version) => version,
     describe: (v) => `productVersion: "${v}"`,
   },
   {
     label: "SIGNATURE",
     file: "SIGNATURE",
-    // First line only: "SHEYTAN-Local-Agent v1.1.3"
+    // First line only: "SHEYTAN-Local-Agent v1.3.1"
     pattern: /(^[ \t]*SHEYTAN-Local-Agent[ \t]+v)([^\r\n]*)/,
     multiline: true,
     // group(2) holds only the version token after the "SHEYTAN-Local-Agent v"
-    // prefix, so the splice value is the bare base version.
-    expected: (base) => base,
+    // prefix, so the splice value is the bare canonical version.
+    expected: (version) => version,
     describe: (v) => `first line = "SHEYTAN-Local-Agent v${v}"`,
   },
   {
-    // v1.1.8 shape check: the workflow must derive APP_VERSION at runtime
+    // Shape check: the workflow must derive APP_VERSION at runtime
     // (see --env) instead of pinning a stale hardcoded version constant.
     label: ".github/workflows/build-desktop.yml",
     file: join(".github", "workflows", "build-desktop.yml"),
@@ -105,21 +108,19 @@ if (typeof packageVersion !== "string" || packageVersion.length === 0) {
   fail("package.json has no usable \"version\" field.");
 }
 
-const suffixMatch = packageVersion.match(/^(\d+\.\d+\.\d+)(?:-(.+))?$/);
+const semverMatch = packageVersion.match(/^(\d+)\.(\d+)\.(\d+)$/);
 
-if (!suffixMatch) {
+if (!semverMatch) {
   fail(
-    `package.json version "${packageVersion}" is not semver (expected e.g. "1.1.3-zeta").`,
+    `package.json version "${packageVersion}" is not plain semver ` +
+      `(expected exactly "MAJOR.MINOR.PATCH", e.g. "1.3.1").`,
   );
 }
 
-const baseVersion = suffixMatch[1];
-const codename = suffixMatch[2] ? suffixMatch[2].toUpperCase() : "ZETA";
-const fullVersion = packageVersion;
+const version = packageVersion;
 
 console.log(
-  `[sheytan-release] source of truth: package.json = ${fullVersion} ` +
-    `(base ${baseVersion}, codename ${codename})`,
+  `[sheytan-release] source of truth: package.json = ${version}`,
 );
 
 // ---------------------------------------------------------------------------
@@ -129,14 +130,12 @@ console.log(
 if (PRINT_ENV) {
   // One VAR=value per line so both bash ($GITHUB_ENV) and PowerShell
   // ($env:) consumers can parse it with a naive split on the first "=".
-  // APP_VERSION       base semver          e.g. "1.1.8"
-  // APP_VERSION_FULL  full package version e.g. "1.1.8" or "1.1.8-zeta"
-  // APP_CODENAME      display codename     e.g. "Zeta"
-  const displayCodename = codename.charAt(0) + codename.slice(1).toLowerCase();
-
-  console.log(`APP_VERSION=${baseVersion}`);
-  console.log(`APP_VERSION_FULL=${fullVersion}`);
-  console.log(`APP_CODENAME=${displayCodename}`);
+  // APP_VERSION       canonical semver  e.g. "1.3.1"
+  // APP_VERSION_FULL  compatibility alias — equals APP_VERSION exactly;
+  //                   retained so existing consumers keep working while
+  //                   the identity stays one-dimensional.
+  console.log(`APP_VERSION=${version}`);
+  console.log(`APP_VERSION_FULL=${version}`);
   process.exit(0);
 }
 
@@ -171,7 +170,7 @@ for (const target of targets) {
   }
 
   const current = match[2];
-  const wanted = target.expected(baseVersion, fullVersion);
+  const wanted = target.expected(version);
 
   if (current === wanted) {
     console.log(
@@ -227,6 +226,6 @@ if (repaired === 0) {
 } else {
   console.log(
     `[sheytan-release] ${repaired} file(s) repaired from package.json ` +
-      `version ${fullVersion}.`,
+      `version ${version}.`,
   );
 }

@@ -882,7 +882,7 @@ func htmlToText(s string) string {
 
 var searchUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
 
-// searchClient is the WebSearch HTTP client. v1.1.4Z: it no longer shares
+// searchClient is the WebSearch HTTP client. v1.1.4: it no longer shares
 // http.DefaultClient — the default follows redirects to ANY scheme/host,
 // so a compromised search endpoint could bounce the agent at internal
 // addresses. This client caps redirects and validates every hop stays on

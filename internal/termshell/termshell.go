@@ -40,7 +40,7 @@ type ProcEntry struct {
 
 // Engine is one shell session (its own cwd, history and environment).
 //
-// v1.1.4Z: Exec is serialized by a mutex. The engine instance is shared
+// v1.1.4: Exec is serialized by a mutex. The engine instance is shared
 // between the agent's `linux` tool and any future Terminal view; the agent
 // executes tools from concurrent session runs, and cwd/history/env were
 // unsynchronized shared state.

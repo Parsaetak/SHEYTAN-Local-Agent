@@ -25,12 +25,12 @@ type stressTest struct {
 	run  func() error
 }
 
-// runStressSuite exercises the Zeta chaos suite: the core hostile
+// runStressSuite exercises the chaos suite: the core hostile
 // scenarios across the agent, tools, sessions, and memory, the current
-// subsystem contracts, and the v1.1.1Z release surface.
+// subsystem contracts, and the release surface.
 //
-// The versioned scenario files that accumulated across v0.8 → v1.0.11
-// (cmd/stress_v08.go ... cmd/stress_v110.go) were retired in v1.1.1Z.
+// The versioned scenario files that accumulated across early releases
+// (cmd/stress_v08.go ... cmd/stress_v110.go) were retired long ago.
 // The feature coverage they provided lives on in the unit tests under
 // internal/ (vision, continuum, chunking, lab, llm, memory, recall,
 // research, tools). This suite keeps what only it can do: hostile-input
@@ -84,12 +84,12 @@ func runStressSuite(cfg *config.Config) int {
 		{"extract_json_nested", func() error { return stressExtractJSONNested() }},
 		{"extract_json_no_braces", func() error { return stressExtractJSONNoBraces() }},
 		{"sandbox_smoke_test", func() error { return stressSandboxSmoke() }},
-		// v1.1.1Z (Zeta) release surface: repaired Linux CI
-		// dependencies, pinned toolchains, portable packaging,
+		// Release surface: repaired Linux CI dependencies,
+		// pinned toolchains, portable packaging,
 		// collision-proof memory IDs, Windows-safe log rotation.
-		{"zeta_release_surface", func() error { return stressZetaReleaseSurface() }},
-		{"zeta_memory_unique_ids", func() error { return stressZetaMemoryUniqueIDs() }},
-		{"zeta_trimlogs_rotate", func() error { return stressZetaTrimLogsRotate() }},
+		{"release_surface", func() error { return stressReleaseSurface() }},
+		{"memory_unique_ids", func() error { return stressMemoryUniqueIDs() }},
+		{"trimlogs_rotate", func() error { return stressTrimLogsRotate() }},
 	}
 	// v1.2.1 release hardening: updater integrity (offline, tampered
 	// sha256, size mismatch, staged drift, zip-slip), vision readiness
@@ -329,7 +329,7 @@ func randomString(n int) string {
 	return string(b)
 }
 
-// --- new v0.7 stress tests ---
+// --- subsystem stress tests ---
 
 func stressMemorySearch() error {
 	tmp, err := os.CreateTemp("", "stress-mem-*.jsonl")

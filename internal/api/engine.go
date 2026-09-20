@@ -1,6 +1,6 @@
 package api
 
-// Engine state surface (v1.1.3Z): the backend engine/process state is the
+// Engine state surface (v1.1.3): the backend engine/process state is the
 // single source of truth for the UI. This file exposes it two ways:
 //
 //   - GET /api/engine — the authoritative snapshot (state, model, detail…)
@@ -9,7 +9,7 @@ package api
 //
 // The frontend must never invent a state it has not received from here.
 //
-// v1.1.5Z Phase 1: the snapshot additionally reports WHICH backend serves
+// v1.1.5 Phase 1: the snapshot additionally reports WHICH backend serves
 // generation (backend) and the supervised native engine's own status
 // (native) when the native path is enabled. Since Phase 5 the native
 // backend can genuinely serve generation: when it is the SELECTED backend
@@ -45,12 +45,12 @@ type engineSnapshot struct {
 	CacheStats any      `json:"cacheStats,omitempty"`
 	Timestamp  string   `json:"timestamp"`
 
-	// Backend (v1.1.5Z) names the backend that serves generation
+	// Backend (v1.1.5) names the backend that serves generation
 	// ("llama" in Phase 1 — the native engine reports
 	// generation-incapable and the selection falls back).
 	Backend string `json:"backend"`
 
-	// Native (v1.1.5Z) carries the supervised native engine's status
+	// Native (v1.1.5) carries the supervised native engine's status
 	// when the native path is enabled (nil otherwise). Purely local
 	// reads — the poll path never performs IPC.
 	Native *nativeEngineSnapshot `json:"native,omitempty"`
@@ -126,7 +126,7 @@ func (s *Server) engineSnapshot() engineSnapshot {
 		Restarts: s.llama.Restarts(),
 	}
 
-	// v1.1.5Z: effective generation backend per the selection policy.
+	// v1.1.5: effective generation backend per the selection policy.
 	snap.Backend = "llama"
 
 	if s.stack != nil && s.stack.Engine() != nil {
@@ -197,13 +197,13 @@ func (s *Server) engineSnapshot() engineSnapshot {
 
 	// When native serves, LoadedPath/Logs were already sourced from
 	// the native engine above; only the llama fallback path (and the
-	// pre-native v1.1.4Z contract) populates them from llama.cpp.
+	// pre-native v1.1.4 contract) populates them from llama.cpp.
 	if snap.Backend != "native" {
 		snap.LoadedPath = s.llama.LoadedModel()
 		snap.Logs = tailStrings(s.llama.Logs(), 24)
 	}
 
-	// v1.1.5Z: native engine status block (local reads only).
+	// v1.1.5: native engine status block (local reads only).
 	if s.native != nil {
 		native := &nativeEngineSnapshot{
 			Selected:  s.src.Load().NativeBackendEnabled(),
@@ -305,7 +305,7 @@ func nativeEngineActivity(ev llm.EngineEvent) agent.Activity {
 
 // watchEngineEvents subscribes to the engine state machines once per
 // server and fans transitions out to every live run hub and standby
-// connection. v1.1.5Z: it ALSO watches the native engine's transitions
+// connection. v1.1.5: it ALSO watches the native engine's transitions
 // when the native path is enabled. It returns when stop closes (server
 // shutdown).
 func (s *Server) watchEngineEvents(stop <-chan struct{}) {

@@ -1,6 +1,6 @@
 package engine
 
-// model_test.go — native model lifecycle tests (v1.1.5Z Phase 2).
+// model_test.go — native model lifecycle tests (v1.1.5 Phase 2).
 //
 // Exercises the Go-side model state machine against the fake host
 // (protocol-exact), covering the required matrix:

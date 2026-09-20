@@ -43,7 +43,7 @@ type Stack struct {
 	// engine, API handlers). Values obtained from Load() are immutable.
 	Src *config.Source
 
-	// Cfg is the configuration the stack was CONSTRUCTED with (v1.1.4Z:
+	// Cfg is the configuration the stack was CONSTRUCTED with (v1.1.4:
 	// historical field kept for construction-time consumers; live reads
 	// must go through Src).
 	Cfg    *config.Config
@@ -67,7 +67,7 @@ type Stack struct {
 	// bound and one place for the API layer to read from.
 	Sessions *sessions.Store
 
-	// Native (v1.1.5Z Phase 1) is the supervised SHEYTAN native engine.
+	// Native (v1.1.5 Phase 1) is the supervised SHEYTAN native engine.
 	// nil unless cfg.EngineBackend == "native" at construction: the
 	// native path is an explicit opt-in. Since Phase 5 the native
 	// engine performs REAL generation for validated llama-architecture
@@ -154,7 +154,7 @@ type Stack struct {
 
 // NewStack wires every tool into the orchestrator. The sandbox is optional —
 // if the Job-Object sandbox can't be created, the plain codeExec tool stays
-// registered. SandboxEnabled (v1.1.4Z, default true) gates the override: the
+// registered. SandboxEnabled (v1.1.4, default true) gates the override: the
 // setting was previously stored but never read — a meaningless toggle.
 func NewStack(cfg *config.Config) *Stack {
 	src := config.NewSource(cfg)
@@ -166,11 +166,11 @@ func NewStack(cfg *config.Config) *Stack {
 	client := llm.NewClient(src)
 	orch := agent.New(src, client)
 
-	// v1.1.3Z: content-aware context cache shared by attachments, chunking
+	// v1.1.3: content-aware context cache shared by attachments, chunking
 	// pipelines and retrieval.
 	cache := contextcache.New()
 
-	// v1.1.3Z: real attachment staging under the app's private data dir.
+	// v1.1.3: real attachment staging under the app's private data dir.
 	attMgr, attErr := attachments.NewManager(
 		filepath.Join(cfg.DataDir, "attachments"),
 		attachments.Options{Cache: cache},
@@ -222,9 +222,9 @@ func NewStack(cfg *config.Config) *Stack {
 	// v1.0.6: vision + terminal.
 	llamaSrv := llm.NewLlamaServer(src)
 
-	// v1.1.5Z Phase 1: SHEYTAN Native Engine architecture. The native
+	// v1.1.5 Phase 1: SHEYTAN Native Engine architecture. The native
 	// engine exists ONLY behind the explicit "native" opt-in; the
-	// default ("llama") preserves v1.1.4Z behavior byte-for-byte.
+	// default ("llama") preserves v1.1.4 behavior byte-for-byte.
 	// Even when selected, generation still runs on llama.cpp until
 	// the native engine implements it (see Stack.Engine).
 	var nativeEng *nativeengine.Engine
@@ -250,7 +250,7 @@ func NewStack(cfg *config.Config) *Stack {
 
 	llamaBack := llm.NewLlamaBackend(llamaSrv, client)
 
-	// v1.1.5Z Phase 5: the backend-aware generation router. The
+	// v1.1.5 Phase 5: the backend-aware generation router. The
 	// orchestrator's loop calls this seam instead of the client
 	// directly, so generation actually flows through
 	// llm.SelectGenerationBackend: the native engine when the user
@@ -402,10 +402,10 @@ func NewStack(cfg *config.Config) *Stack {
 
 	orch.Register(linuxSim)
 
-	// Version Zeta: autonomous Coding Lab.
+	// Autonomous Coding Lab.
 	var labTool *lab.Tool
 
-	// v1.1.5Z Phase 6: persistent project intelligence. One store per
+	// v1.1.5 Phase 6: persistent project intelligence. One store per
 	// install, keyed per project root. The workspace gets observed at
 	// startup (bounded walk) and the card is injected per run; Lab
 	// verification outcomes record VERIFIED build/test commands against
@@ -475,7 +475,7 @@ func NewStack(cfg *config.Config) *Stack {
 		return intel.Card(src.Load().EffectiveWorkspaceRoot())
 	})
 
-	// Version Zeta: unified external research.
+	// Unified external research.
 	var researchService *research.Service
 	var researchTool *research.Tool
 
@@ -738,7 +738,7 @@ func NewStack(cfg *config.Config) *Stack {
 	}
 
 	// Job-Object sandbox (overrides plain codeExec when available).
-	// v1.1.4Z: the config's sandbox controls actually apply now —
+	// v1.1.4: the config's sandbox controls actually apply now —
 	// SandboxEnabled gates registration, SandboxMemory/SandboxCPU feed the
 	// governor (previously hardcoded 512 MB / 25% and the settings card did
 	// nothing).
@@ -777,7 +777,7 @@ func NewStack(cfg *config.Config) *Stack {
 		cfg.EffectiveMultiAgentDepth(),
 	)
 
-	// v1.1.3Z: inference traffic reports engine busy state to the
+	// v1.1.3: inference traffic reports engine busy state to the
 	// authoritative state machine (no-op unless the local engine is
 	// alive, so remote providers are unaffected).
 	client.SetBusyHook(llamaSrv.MarkBusy)
@@ -954,7 +954,7 @@ func formatCapsuleLine(
 }
 
 // BrowserTool returns the shared browser tool registered in the stack.
-// (v1.1.4Z: the lazy cache is mutex-guarded — two concurrent callers could
+// (v1.1.4: the lazy cache is mutex-guarded — two concurrent callers could
 // previously race the field write.)
 func (s *Stack) BrowserTool() *tools.BrowserTool {
 	s.browserMu.Lock()
@@ -974,7 +974,7 @@ func (s *Stack) BrowserTool() *tools.BrowserTool {
 	return nil
 }
 
-// Engine (v1.1.5Z) returns the backend that must serve a generation
+// Engine (v1.1.5) returns the backend that must serve a generation
 // request, applying the single selection policy (llm.SelectGenerationBackend):
 // the native engine when the user selected it AND it can actually generate,
 // otherwise the llama.cpp fallback. Since Phase 5 a validated llama-architecture
@@ -1005,7 +1005,7 @@ func (s *Stack) NativeBackend() llm.Backend {
 // start the host (idempotent — an already-started engine returns nil) and
 // load the selected model natively with the load-time capability verdict.
 //
-// v1.1.5Z repair: this was previously reachable ONLY through the launch
+// v1.1.5 repair: this was previously reachable ONLY through the launch
 // prewarm (prewarmNative). The engine toggle started the host but never
 // loaded a model, so a native-selected user who disabled auto-start and
 // pressed "engine start" got an alive-but-incapable engine whose runs
@@ -1147,7 +1147,7 @@ func (s *Stack) EnsureLLM() error {
 		return nil
 	}
 
-	// v1.1.5Z: bring the native engine up too when enabled (best-effort
+	// v1.1.5: bring the native engine up too when enabled (best-effort
 	// — never blocks or fails the generation path).
 	if s.Src.Load().NativeBackendEnabled() && s.Native != nil && !s.Native.IsAlive() {
 		s.prewarmNative()
@@ -1162,7 +1162,7 @@ func (s *Stack) EnsureLLM() error {
 
 // PrewarmLLM boots the local engine in the background so a freshly
 // launched application reaches a healthy model WITHOUT any user action
-// (v1.1.3Z acceptance: launch → engine starts automatically → ready).
+// (v1.1.3 acceptance: launch → engine starts automatically → ready).
 // Failures are logged and reflected in the engine state — never fatal,
 // because the user may only be browsing settings; a later explicit start
 // or the first message retries through EnsureLLM.
@@ -1178,7 +1178,7 @@ func (s *Stack) PrewarmLLM() {
 		return
 	}
 
-	// v1.1.5Z: supervised native engine (opt-in) — started alongside,
+	// v1.1.5: supervised native engine (opt-in) — started alongside,
 	// never fatal.
 	s.prewarmNative()
 
@@ -1351,7 +1351,7 @@ func (s *Stack) Close() {
 			_ = s.Sandbox.Close()
 		}
 
-		// v1.1.5Z: stop the native engine FIRST (bounded) so its
+		// v1.1.5: stop the native engine FIRST (bounded) so its
 		// teardown never waits behind the llama.cpp stop.
 		if s.Native != nil {
 			stopCtx, cancel := context.WithTimeout(

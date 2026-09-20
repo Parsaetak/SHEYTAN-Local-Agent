@@ -1,6 +1,6 @@
 package engine
 
-// tokenizer.go — native engine tokenizer concern (v1.1.5Z Phase 4: REAL).
+// tokenizer.go — native engine tokenizer concern (v1.1.5 Phase 4: REAL).
 //
 // The C++ engine materializes the GGUF tokenizer arrays (tokens,
 // token_type, scores, merges, special-token ids) and serves encode/

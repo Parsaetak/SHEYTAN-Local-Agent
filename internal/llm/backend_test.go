@@ -1,6 +1,6 @@
 package llm
 
-// backend_test.go — backend contract tests (v1.1.5Z Phase 1).
+// backend_test.go — backend contract tests (v1.1.5 Phase 1).
 //
 // Coverage required by the Phase 1 plan:
 //   - backend selection (native selected + capable / incapable / absent;

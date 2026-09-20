@@ -9,7 +9,7 @@ import (
 // variables removed: API keys, tokens, passwords, credentials, cookies and
 // cloud-provider credential namespaces never reach spawned processes.
 //
-// v1.1.4Z: moved here from internal/lab (it was duplicated in spirit by the
+// v1.1.4: moved here from internal/lab (it was duplicated in spirit by the
 // sandbox, which passed the FULL os.Environ() to model-spawned code —
 // python os.environ could read host API keys).
 //

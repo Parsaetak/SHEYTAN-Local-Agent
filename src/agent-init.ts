@@ -41,7 +41,7 @@ async function initializeAgentOnce(): Promise<void> {
       api.sessions(mode),
     ]);
 
-    // AAA polish (v1.1.2Z): a fresh install starts with zero sessions, which
+    // AAA polish (v1.1.2): a fresh install starts with zero sessions, which
     // left the runtime status on "Offline" and the composer inert — the app
     // LOOKED broken on first launch. Create the initial session eagerly so
     // the workspace is immediately live: WebSocket connects, activity

@@ -400,7 +400,7 @@ func decodeImage(data []byte) (image.Image, string, error) {
 		return img, "gif", nil
 	}
 	r.Reset(data)
-	// v1.1.4Z: .bmp files were accepted by IsImageFile but had no decoder —
+	// v1.1.4: .bmp files were accepted by IsImageFile but had no decoder —
 	// a bmp attachment always failed at encode time with "unsupported
 	// image format".
 	if img, err := bmp.Decode(r); err == nil {

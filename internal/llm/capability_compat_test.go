@@ -91,7 +91,7 @@ func TestShouldRetryFullSpeedGates(t *testing.T) {
 			wantTry: false,
 		},
 		{
-			name: "v1.1.6Z upgrade: recorded option reason, no stamp — one retry",
+			name: "v1.1.6 upgrade: recorded option reason, no stamp — one retry",
 			cfg: &config.Config{
 				EngineCompat:       2,
 				EngineCompatReason: "option-layout:flash-attn",

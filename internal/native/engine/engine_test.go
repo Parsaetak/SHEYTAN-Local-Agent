@@ -1,6 +1,6 @@
 package engine
 
-// engine_test.go — native engine lifecycle tests (v1.1.5Z Phase 1).
+// engine_test.go — native engine lifecycle tests (v1.1.5 Phase 1).
 //
 // The fake host uses the SAME test-binary re-exec pattern as the llama
 // tests (internal/llm/llama_test.go): the test executable re-runs itself

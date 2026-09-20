@@ -83,19 +83,19 @@ type RunResult struct {
 	// Continuum chapter-rollover decision in the UI.
 	ContextUsage continuum.Usage
 
-	// Verification (v1.1.5Z Phase 6): the run-level verification verdict
+	// Verification (v1.1.5 Phase 6): the run-level verification verdict
 	// — verified / partially_verified / failed / not_verified — computed
 	// from the objective evidence the run's tool traffic actually
 	// produced (lab verify actions, build/test outcomes). "The model
 	// said so" is not proof; this field is the honest record.
 	Verification VerificationReport
 
-	// LoopStats (v1.1.5Z Phase 6): per-tool call counts (total and
+	// LoopStats (v1.1.5 Phase 6): per-tool call counts (total and
 	// distinct arguments) for the run report — makes repetitive
 	// behaviour visible after the fact.
 	LoopStats []StatsSnapshot
 
-	// FailureTally (v1.1.5Z Phase 6): how many tool failures were
+	// FailureTally (v1.1.5 Phase 6): how many tool failures were
 	// classified, by category — the reliability HUD for the timeline.
 	FailureTally map[FailureCategory]int
 
@@ -126,7 +126,7 @@ type RunResult struct {
 }
 
 // abortCaption renders the correct end caption for a canceled context:
-// a user abort and the v1.1.4Z per-run time budget are different events
+// a user abort and the v1.1.4 per-run time budget are different events
 // and must not be reported identically.
 func abortCaption(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -143,7 +143,7 @@ type Recaller interface {
 }
 
 // SetProjectCard installs the persistent project intelligence provider
-// (v1.1.5Z Phase 6). When set and non-empty, its block is injected as a
+// (v1.1.5 Phase 6). When set and non-empty, its block is injected as a
 // system message immediately before the last user message — the same
 // cache-friendly position as the recall block — so the model starts the
 // task already knowing the measured facts of the current project
@@ -488,14 +488,14 @@ func (o *Orchestrator) RunDetailed(
 	cardProvider := o.projectCard
 	o.mu.Unlock()
 
-	// v1.1.4Z: one consistent config snapshot per run. The previous code
+	// v1.1.4: one consistent config snapshot per run. The previous code
 	// read the shared mutable Config throughout the loop — a Settings PATCH
 	// mid-run produced a data race and could flip sampling/tool policy
 	// between two iterations of the SAME turn. Changes now apply cleanly
 	// from the next run on.
 	cfg := o.src.Load()
 
-	// v1.1.5Z Phase 6 reliability core: one loop guard (repeat detection,
+	// v1.1.5 Phase 6 reliability core: one loop guard (repeat detection,
 	// tool-call/wall-clock budgets) and one evidence collector (objective
 	// verification record) per run. Both are local to the run — nothing
 	// accumulates across runs.
@@ -1009,7 +1009,7 @@ func (o *Orchestrator) RunDetailed(
 	// like the other injected blocks.
 	plan.SetSectionTokens(contextplan.SectionSummary, survivedSummary)
 
-	// v1.1.5Z Phase 3: record the MEASURED prompt size (bytes actually
+	// v1.1.5 Phase 3: record the MEASURED prompt size (bytes actually
 	// carried by the assembled messages) on the plan — the context report
 	// now carries a real byte figure alongside the token estimates.
 	plan.SetPromptBytes(int64(measureMessagesBytes(messages)))
@@ -1201,7 +1201,7 @@ func (o *Orchestrator) RunDetailed(
 		status,
 	)
 
-	// v1.1.3Z: publish the context provenance report once per turn so
+	// v1.1.3: publish the context provenance report once per turn so
 	// the UI can show the real budget split without exposing prompts.
 	onActivity(Activity{
 		Type:      "context",
@@ -1496,7 +1496,7 @@ func (o *Orchestrator) RunDetailed(
 		if hud := perf.String(); hud != "" {
 			result.Perf = hud
 
-			// v1.1.4Z: ShowPerfHUD was a stored setting no
+			// v1.1.4: ShowPerfHUD was a stored setting no
 			// runtime path ever read. When enabled (the default)
 			// the live HUD line now reaches the activity stream
 			// ("perf" events never touch the streamed text).
@@ -1540,7 +1540,7 @@ func (o *Orchestrator) RunDetailed(
 			result.ToolsUsed = toolList(toolsUsed)
 			result.ContextUsage = peakUsage
 
-			// v1.1.5Z Phase 6: the run's verification verdict —
+			// v1.1.5 Phase 6: the run's verification verdict —
 			// computed ONLY from objective evidence the tool
 			// traffic produced. A completion claim with no
 			// evidence reports not_verified, so the UI (and the
@@ -1754,7 +1754,7 @@ func (o *Orchestrator) RunDetailed(
 				continue
 			}
 
-			// v1.1.5Z Phase 6 loop guard: observe the call BEFORE
+			// v1.1.5 Phase 6 loop guard: observe the call BEFORE
 			// executing it. A repeat gets a strategy-change
 			// warning appended to its result; a call beyond the
 			// repeat bound (or past the run's tool/wall-clock
@@ -1937,7 +1937,7 @@ func (o *Orchestrator) RunDetailed(
 
 			logging.Default().ToolCall(rec)
 
-			// v1.1.5Z Phase 6: record the outcome for repeat
+			// v1.1.5 Phase 6: record the outcome for repeat
 			// detection and collect verification evidence (lab
 			// verify actions, build/test outcomes).
 			rawOutput := result2
@@ -1994,7 +1994,7 @@ func (o *Orchestrator) RunDetailed(
 					)
 				}
 
-				// v1.1.5Z Phase 6 failure classification:
+				// v1.1.5 Phase 6 failure classification:
 				// diagnose WHY the call failed and append the
 				// category's repair hint so the model re-plans
 				// against the diagnosis instead of retrying
@@ -2368,7 +2368,7 @@ func measuredSectionBreakdown(p contextplan.Plan) string {
 	return strings.Join(parts, " · ")
 }
 
-// historyBudgetFor was removed in v1.1.3Z: the context plan (contextplan
+// historyBudgetFor was removed in v1.1.3: the context plan (contextplan
 // package) is the single budget authority and tool schemas are measured
 // exactly before windowing.
 

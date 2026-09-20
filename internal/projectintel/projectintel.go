@@ -1,4 +1,4 @@
-// Package projectintel — v1.1.5Z Phase 6: persistent project intelligence.
+// Package projectintel — v1.1.5 Phase 6: persistent project intelligence.
 //
 // A local agent works in the same projects repeatedly, yet every session
 // starts from zero: the model re-discovers the language, the build command,

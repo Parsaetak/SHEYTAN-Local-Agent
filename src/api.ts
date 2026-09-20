@@ -285,10 +285,10 @@ export interface Model {
   path?: string;
   sizeBytes?: number;
   loaded?: boolean;
-  // v1.1.5Z Phase 6: true when the ACTIVE backend is currently serving
+  // v1.1.5 Phase 6: true when the ACTIVE backend is currently serving
   // this model (the honest "currently serving" marker).
   serving?: boolean;
-  // v1.1.4Z: GGUF header metadata (populated from the model card parser).
+  // v1.1.4: GGUF header metadata (populated from the model card parser).
   architecture?: string;
   quantization?: string;
   contextLength?: number;
@@ -321,7 +321,7 @@ export interface ModelsResponse {
   local: Model[];
   loaded: Model[];
   llamaRunning: boolean;
-  // v1.1.5Z Phase 6: honest status — which backend serves generation
+  // v1.1.5 Phase 6: honest status — which backend serves generation
   // ("native" | "llama") and which model file it is serving right now.
   backend?: string;
   servingPath?: string;
@@ -711,7 +711,7 @@ export interface ResearchConfig {
   providers: string[];
 }
 
-// v1.1.3Z: authoritative engine state (backend process state is the single
+// v1.1.3: authoritative engine state (backend process state is the single
 // source of truth; the UI never invents these).
 export type EngineState =
   | "idle"
@@ -733,11 +733,11 @@ export interface EngineSnapshot {
   pid?: number;
   vision: boolean;
   provider: string;
-  // v1.1.5Z: the backend that serves generation ("llama" in Phase 1 —
+  // v1.1.5: the backend that serves generation ("llama" in Phase 1 —
   // the native engine reports generation-incapable and selection falls
   // back). Informational; the badge keeps reading `state`.
   backend: string;
-  // v1.1.5Z: supervised native engine status when the native path is
+  // v1.1.5: supervised native engine status when the native path is
   // enabled (engineBackend: "native"). Absent by default. Local status
   // reads only — the poll never performs engine IPC.
   native?: NativeEngineStatus;
@@ -779,7 +779,7 @@ export interface EngineSnapshot {
   timestamp: string;
 }
 
-// v1.1.5Z Phase 1: native engine status block. The state vocabulary is
+// v1.1.5 Phase 1: native engine status block. The state vocabulary is
 // the same engine state union above; the UI badge must keep following
 // the llama.cpp snapshot state until the native engine serves generation.
 export interface NativeEngineStatus {
@@ -793,7 +793,7 @@ export interface NativeEngineStatus {
   restarts?: number;
 }
 
-// v1.1.3Z: staged attachment metadata returned by the backend.
+// v1.1.3: staged attachment metadata returned by the backend.
 export interface AttachmentChunk {
   id: string;
   attId: string;
@@ -823,7 +823,7 @@ export interface UploadResponse {
   failed: { name: string; error: string }[];
 }
 
-// v1.1.3Z: full session payload with persisted conversation history.
+// v1.1.3: full session payload with persisted conversation history.
 export interface SessionDetail extends Session {
   messages?: ChatMessage[];
   context?: {
@@ -1310,7 +1310,7 @@ export const api = {
     );
   },
 
-  // v1.1.3Z: authoritative engine snapshot (poll target).
+  // v1.1.3: authoritative engine snapshot (poll target).
   engine(): Promise<EngineSnapshot> {
     return request<EngineSnapshot>("/engine");
   },
@@ -1346,7 +1346,7 @@ export const api = {
     });
   },
 
-  // v1.1.3Z: staged attachments.
+  // v1.1.3: staged attachments.
   attachments(): Promise<{ attachments: Attachment[]; limits?: unknown }> {
     return request("/attachments");
   },
@@ -1412,7 +1412,7 @@ export const api = {
     );
   },
 
-  // v1.1.4Z: recall feedback — 👍/👎 on a past exchange steers future
+  // v1.1.4: recall feedback — 👍/👎 on a past exchange steers future
   // recall scoring (the backend sidecar existed since v1.0.6 with no
   // writer).
   feedback(payload: {

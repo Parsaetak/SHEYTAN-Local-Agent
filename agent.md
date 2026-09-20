@@ -10,493 +10,110 @@ Branch: `main`
 # Latest Agent Handoff
 
 ## Task
-Repair SHEYTAN-LA v1.2.8 (repair label v1.2.8.1): eliminate the Actions run 35464922587 native-engine CMake cache/path failure, then audit and repair every v1.2.8 functional surface (mode separation, mode switching, active-run recovery, cross-mode references, regenerate parity, context degradation, summaries, tool-result compaction, task state, reconnect transport, agent.md handoff, history paging, provenance security, RMW races, search scalability).
+SHEYTAN-LA v1.3.1 (product polish, stable file structure & repository cleanup): remove the retired product codename from every surface, give the embedded frontend STABLE deterministic filenames, make `web/static` exactly mirror one clean authoritative build, simplify the release/version architecture to a single canonical source, consolidate the version-suffixed test pile into behavior-oriented files, harden CI with hygiene gates, and professionalize the documentation — without changing working architecture or dropping any functionality.
 
 ## Objective
-v1.2.8 must actually deliver what it documents: independent Chat/Agent histories that restore reliably, cross-mode retrieval as validated DATA, graceful context degradation that never silently exhausts or silently overflows, and an agent.md handoff after every completed Agent run. ROADMAP.md stays byte-identical (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650, verified unchanged).
+v1.3.1 must leave the repository feeling like ONE maintained product: a version-only identity (package.json → APP_VERSION, no codename dimension), stable generated filenames the agent can always identify, no stale generated files, no duplicate implementations, behavior-oriented test names, and one reproducible release workflow — while ROADMAP.md stays byte-identical (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650, verified unchanged before and after).
 
 ## Current state
-All planned v1.2.8.1 repairs are IMPLEMENTED and TESTED on this host: Go suites (headless) pass, race runs on internal/{api,agent,sessions,histref,contextplan} pass, frontend typecheck/lint/58 unit tests/production build pass, native engine configures with `--fresh` from a clean build dir (CMake 4.4.3 local; CI workflow now cleans + guards the cache path). Canonical version remains 1.2.8 (`release-version.mjs --check` clean); v1.2.8.1 is the repair label / ZIP name only.
+All v1.3.1 work is IMPLEMENTED and TESTED on this host: Go headless suites pass across `./internal/...`, race runs on the concurrency-heavy packages pass, frontend typecheck/lint/unit tests/production build pass, the clean frontend rebuild produces stable deterministic assets (verified by `scripts/verify-static-assets.mjs --dist`), the native C++ engine configures/builds/ctests clean, the stress suite passes with the renamed release-surface scenarios, and `release-version.mjs --check` is consistent at canonical 1.3.1.
 
 ## Changes made
-- `.github/workflows/build-desktop.yml`: removed the `native/engine/build` actions/cache from BOTH the audit job and the Linux integration job (root cause of run 35464922587: CMakeCache.txt/CMakeFiles embed absolute workspace paths; the source-hash key did not encode the workspace path, so a cache entry from `SHEYTAN-local-agent` was restored into `SHEYTAN-Local-Agent`); every run now configures clean with `cmake -S native/engine -B native/engine/build --fresh` and greps CMakeCache.txt for the CURRENT workspace path (regression guard).
-- `internal/contextplan`: adaptive history floor — the floor is bounded by the ACTUAL remaining budget (the v1.2.8 hard `max(remaining, 2048)` promised tokens that do not exist on 2K/4K windows and forced hard refusals); `TotalTokens()` no longer counts dropped (`Included=false`) sections (the system briefing still counts — it always travels), so designed graceful drops no longer poison `Overflow()`.
-- `internal/agent/orchestrator`: injected blocks (card/skills/recall/staged/history-refs) are reconciled by SURVIVAL after windowing (initial + escalation paths) — section tokens reflect the real prompt; new in-loop fit verification after tool-result compaction refuses with a measured reason instead of silently sending over-ceiling requests; pass-2 tool-result bounding reserve raised 12→64 tokens (marker overhead); refusal gates now report the measured section breakdown; the tool-result elision marker points at the session transcript as the recoverable evidence.
-- `internal/chunking`: `WindowMessages` dropped its artificial 256-token floor (kept the current turn verbatim under any budget).
-- `internal/histref`: per-run random `<<<HISTREF:id>>>` fence + untrusted-data header around retrieved excerpts (prompt-injection hardening); staleness note when the source was re-summarized since attach; `NormalizeRefs` preserves the Mode hint.
-- `internal/api/server.go`: run path falls back to the PERSISTED session-context refs (body-first union) — regenerate/CLI turns keep the original run's cross-mode context; server-side cross-mode enforcement via `store.ModeOf` (same-mode, self and dead refs dropped; shared by run + PUT); context deltas (refs, attachment association) applied atomically; the run_snapshot wire frame now carries `task`; return-after-settle when reply persistence fails (an "error" outcome no longer rolls the summary or writes the handoff); standby missed-wake race closed with a 2s runs-map re-check; handoff failures surface as a stamped error activity; PUT gained an atomic `historyRefs` delta field.
-- `internal/sessions`: `UpdateContextFunc` (locked read-modify-write — the single serialization point for context mutations), `ModeOf` (index-only mode lookup), `SaveMessagesKeepContext` (transcript saves never revert concurrent context mutations); summary existence checks are index/stat only (search no longer O(sessions × full transcript reads)); objective refresh for trivial openers ("hi" is not forever).
-- `internal/agent/handoff.go`: EVERY completed agent run updates agent.md — evidence-free runs write the honest "No engineering changes were made." handoff with truthful defaults; byte-exact preservation outside the markers (no boundary re-normalization); unique temp file + fsync + rename + dir sync + READ-BACK VERIFICATION; an unreadable existing agent.md aborts instead of being clobbered.
-- `internal/api/history.go`: evidence gate removed from `writeAgentHandoff` (returns path+error); per-session summary RMW lock (cancelled-run tail vs replacement-run settlement can no longer interleave).
-- `src/store.ts`: setMode resolves the target active session from the PER-MODE MEMORY (the v1.2.8 code filtered the previous mode's single-mode list — always empty — so every switch landed on null: empty conversation, no socket, no context); refreshSessions captures the mode before the await and loads the conversation when it re-resolves a different id; `activeSessionByMode` persists to localStorage and the startup transcript loads at init; regenerate() sends historyRefs (parity with run()) and resets the task panel; loadOlderMessages always clears `olderLoading`; run-finalization reload preserves expanded older pages (bounded 200); isStaleRunEvent only advances the dedup watermark for frames attributable to the tracked run; ref attach/detach uses the atomic historyRefs delta; the picker defaults to the OTHER space.
-- `src/mode-sessions.ts`: `resolveModeSwitchTarget` + `crossModePickerFilter` pure helpers (regression-tested).
-- Tests: `contextplan_v1281_test.go` (2K/4K/8K adaptive degradation, overflow honesty, floor-when-room), `preflight_v1281_test.go` (end-to-end small-context fit: engine called AND wire request ≤ measured ceiling), `handoff_v1281_test.go` (no-change handoff, byte preservation, read-error abort, read-back verification), `histref_v1281_test.go` (fencing, staleness, mode hint), `run_crossmode_v1281_test.go` (regenerate parity, same-mode enforcement, concurrent context mutations, wire task frame), `sessions_v1281_test.go` (atomic RMW merge, SaveMessagesKeepContext, objective refresh), `mode-sessions.test.ts` (switch-target authority, picker filter).
+- **Identity**: `internal/config/config.go` declares AppName + AppVersion only (no codename constant); `scripts/release-version.mjs` rewritten to validate plain semver, sync derived surfaces and emit `APP_VERSION` (+ `APP_VERSION_FULL` alias) — no codename parsing/generation anywhere.
+- **Workflow**: `.github/workflows/build-desktop.yml` — codename outputs/env/package text/assertions removed; "Synchronize release metadata" step names; Linux ZIP + release tag drop the historical `Z` suffix; explicit `rm -rf dist` before every production build; new gates: codename-removal scan, stable-asset contract (`node scripts/verify-static-assets.mjs --dist` in audit/Windows/Linux jobs).
+- **Research**: providers identify as `SHEYTAN-Local-Agent/<AppVersion>` via `research.DefaultUserAgent()` (runtime-derived); the user-configured `Config.EffectiveResearchUserAgent()` is still honored; tests derive expectations from the same function.
+- **Frontend**: `vite.config.ts` emits `assets/[name].js` / `assets/[name][extname]` (code splitting preserved); `web/static` regenerated from a clean build — all hashed bundles deleted; `scripts/verify-static-assets.mjs` added (also `npm run verify:web`).
+- **Stress**: the codename-branded stress file renamed `cmd/stress_release_surface.go`; scenarios renamed `release_surface` / `memory_unique_ids` / `trimlogs_rotate`; `internal/releasecontract` updated in lockstep (Linux zip slot without the suffix).
+- **Tests**: 24 version-suffixed + 5 phase-suffixed Go test files consolidated into canonical behavior-named files (merges verified collision-free, coverage identical, all suites pass).
+- **Docs**: README/ARCHITECTURE/UPDATE/agent.md/worklog.md professionalized — current state first, codename terminology eliminated, `v1.x.yZ` labels rewritten to plain versions (version/date/change facts preserved), README release tables collapsed into a one-line history summary.
+- **Startup/runtime comments**: historical patch-narrative comments rewritten to describe current behavior and invariants.
 
 ## Files changed
-- .github/workflows/build-desktop.yml
-- internal/contextplan/contextplan.go, internal/contextplan/contextplan_test.go, internal/contextplan/contextplan_v1281_test.go (NEW)
-- internal/chunking/chunking.go
-- internal/agent/orchestrator.go, internal/agent/handoff.go, internal/agent/handoff_v1281_test.go (NEW), internal/agent/preflight_v1281_test.go (NEW)
-- internal/histref/histref.go, internal/histref/histref_test.go, internal/histref/histref_v1281_test.go (NEW)
-- internal/sessions/sessions.go, internal/sessions/summary.go, internal/sessions/sessions_v1281_test.go (NEW)
-- internal/api/server.go, internal/api/sessioncontext.go, internal/api/history.go, internal/api/run_crossmode_v1281_test.go (NEW)
-- src/store.ts, src/api.ts, src/agent-init.ts, src/mode-sessions.ts, src/mode-sessions.test.ts
-- README.md, ARCHITECTURE.md, UPDATE.md, worklog.md, agent.md
-- web/static/* (rebuilt embedded frontend)
+- scripts/release-version.mjs, scripts/verify-static-assets.mjs (NEW), package.json, vite.config.ts
+- .github/workflows/build-desktop.yml, internal/releasecontract/releasecontract.go
+- internal/config/config.go, internal/runtime/runtime.go, internal/research/{provider,github,reddit,duckduckgo,searxng}.go (+ tests)
+- cmd/stress_release_surface.go (renamed), cmd/stress.go
+- internal/**: consolidated test files (see UPDATE.md S5)
+- README.md, ARCHITECTURE.md, UPDATE.md, agent.md, worklog.md
+- web/static/* (clean stable rebuild)
 
 ## Tests and verification
-- Go: headless suites pass (contextplan/chunking/agent/histref/sessions/api + full internal tree); `go test -race` on internal/{api,agent,sessions,histref,contextplan} PASS; `go vet -tags headless` clean on edited packages; native engine builds and ctests clean from a fresh `--fresh` configure (CMake 4.4.3, local).
-- Frontend: `tsc --noEmit` clean; `oxlint` 0 warnings/0 errors; `node --test` 58/58; `vite build` + `sync-web` OK.
-- Version: `node scripts/release-version.mjs --check` consistent (canonical 1.2.8).
-- VERIFIED on this host: everything above. ENVIRONMENTAL: Go 1.27.1 local toolchain (CI pins Go 1.26 — go.mod requires ≥1.26); Wails desktop shell needs GTK4/webkitgtk (not installed here; headless tag verified instead).
-- NOT YET VERIFIED: CI Actions rerun from this tree (no push was performed); Windows build.
+- Go: `gofmt` clean; `go build -tags headless ./...`; `go vet -tags headless ./...` clean; `go test -tags headless -count=1 ./internal/...` 0 FAIL; `go test -race -tags headless` on internal/{api,agent,sessions,contextplan,histref,runtime} PASS.
+- Frontend: `npm ci`, `npm run typecheck`, `npm run lint`, `npm run test:units`, clean `npm run build`; `verify-static-assets.mjs --dist` satisfied (stable names, no hashes, exact dist mirror).
+- Native: clean CMake configure + build + ctest.
+- Stress: full suite pass (release_surface / memory_unique_ids / trimlogs_rotate renamed scenarios included).
+- Version: `node scripts/release-version.mjs --check` consistent (1.3.1).
+- Repository scans: zero codename matches; zero hashed asset filenames; ROADMAP.md blob SHA-1 unchanged.
 
 ## Failures / blockers
-- None open. The v1.2.8 defects this repair fixes were: CI CMake cache path/case poisoning, the deterministic empty-conversation-after-mode-switch (nextActive always null), regenerate losing cross-mode refs (frontend + backend), the 2048 history floor refusing small-context turns, dropped-section token poisoning of Overflow(), the run_snapshot wire frame missing `task`, the evidence-gated (skipped) handoff for no-change runs, non-atomic context read-modify-write, summary-search full-transcript reads, and the missing `task` field on the wire.
+- None open. Known environmental limits: the Wails desktop shell needs GTK4/WebKitGTK (not installed on this host — headless tag verified instead); Windows build/NSIS validated by CI, not locally.
 
 ## Remaining work
-- CI Actions rerun + release packaging on the maintainer's side (no push from this repair).
-- Optional (unchanged from v1.2.8): continuum.Enhance LLM summary refinement; picker "read more" range UI.
+- CI Actions rerun from a push of this tree (maintainer-side).
+- Optional future: durable request queue remains documented design intent only.
 
 ## Recommended next action
-Tag v1.2.8.1 (or merge as v1.2.8+repair) and push; CI will configure the native engine clean (`--fresh` + path guards) and run the full matrix. Do not re-add an actions/cache for native/engine/build.
+Tag `v1.3.1` and push; CI will run the full matrix (identity derivation, codename gate, stable-asset contract, Windows/Linux/native builds, packaging, release verification).
 
 ## Do not redo
-- Do NOT cache `native/engine/build` (CMake build trees are not relocatable; the guards + `--fresh` are the contract).
-- Do NOT re-gate the handoff on engineering evidence; do not write `Agent.md`/`AGENT.md`; only lowercase `agent.md`.
-- Do NOT raise the history floor above the actual remaining budget; do not count dropped sections in `TotalTokens()`.
+- Do NOT reintroduce a codename dimension anywhere (CI gate fails the build on any match).
+- Do NOT revert the Vite stable-filename output patterns or rename generated assets after build; the contract is enforced by `verify-static-assets.mjs` in CI.
+- Do NOT hand-edit `web/static` — regenerate via the clean build + sync flow only.
+- Do NOT cache `native/engine/build` (CMake build trees are not relocatable).
+- Do NOT re-gate the handoff on engineering evidence; only lowercase `agent.md`.
 - Cross-mode references are server-validated DATA (fenced, provenance-labeled); never trust the client payload.
-- ROADMAP.md is byte-locked (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650) — never touch it in a repair.
+- ROADMAP.md is byte-locked (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650) — never touch it.
 <!-- sheytan:handoff:end -->
 
-Current release: `v1.2.8.1` repair of `v1.2.8` (CI root cause fixed: the native-engine CMake build tree is no longer cached — clean `--fresh` configure + CMakeCache path guards; mode switching now restores the per-mode conversation deterministically; regenerate keeps cross-mode history references (frontend + persisted-context fallback); the context planner degrades adaptively on 2K/4K/8K windows instead of refusing and no longer counts dropped sections as overflow; agent.md handoff fires on EVERY completed agent run with honest no-change defaults, byte-exact preservation, fsync + read-back verification; run_snapshot carries the task state on the wire; session-context mutations serialize through the store; summary search is index-only; cross-mode references are server-validated, fenced, untrusted DATA. ROADMAP.md untouched (blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650). Prior: `v1.2.8` (professional Chat + Agent workspaces on ONE runtime: session.mode identity with deterministic legacy migration, INDEPENDENT mode-separated histories, cross-mode history references (`internal/histref` — provenance-tagged, relevance-ranked, budget-bounded retrieval framed as DATA, never authority), durable rolling session summaries (`internal/sessions/summary.go`), context planner gains the required `summary` + optional `history-refs` sections and shared pressure classification, bounded agent task memory folded into the authoritative run snapshot (reconnect-safe), the mandatory lowercase `agent.md` handoff writer (`internal/agent/handoff.go`, marker-bounded section, evidence-gated), lazy history paging (`GET /api/sessions/{id}/messages`), and a root-cause fix: the frontend recovery fast path now parses the RFC3339 `lastRun.endedAt` the backend actually sends. Details: `ARCHITECTURE.md` §I.8e, README v1.2.8 table. Prior line: `v1.2.7` (run-transport terminal-state repair + CI/test stabilisation: the activity WebSocket attach path no longer treats the run-registry map membership (`s.runs[sessionID]`) as "a run is active" — the AUTHORITATIVE `runLive` state decides (`live.snapshot().Running`); a terminal-but-registered entry (the window between `settleTerminal` and the deferred registry cleanup, widened by the memory-manager `TrackRunEnd` that runs before the delete) now serves the idle sentinel with the recorded `lastRun` outcome instead of a stale terminal `run_snapshot` that then parked the socket on `clientGone` forever — the exact CI failure of run 35367243405 (`TestStaleRunEventsFilteredByServer`: "expected idle, got run_snapshot", repro'd ~1-in-5, 0/15+ after the fix). `settle()` records the outcome in the bounded registry BEFORE the authoritative state flips terminal, so a terminal-visible run always has its `lastRun` block ready (happens-before via `settleTerminal`'s mutex). A hub that closed before any post-snapshot event existed (e.g. an abort that settles without publishing a terminal activity) falls through to the idle sentinel + standby loop instead of stranding the socket. Three new regression tests pin the contracts (`internal/api/runtransport_v127_test.go`); the frontend was re-audited and is compatible without changes (its `idle` dispatch is guarded, its `lastRun` recovery is authoritative). Queue honesty: durable request queuing is NOT shipped — one active run per session remains the contract, a newer run cancels-and-replaces an active run by design, and the planned durable queue (persistent jobId, ACCEPTED→QUEUED→…→COMPLETED/FAILED/CANCELED, bounded concurrency, crash recovery) is documented as design intent only. Prior line: `v1.2.6` (verified-runtime repair: the v1.2.5 missing-answer root cause — a fast run finishing before the activity socket attaches left the UI running forever because the idle-sentinel grace guard dropped the only terminal evidence — is fixed by the BOUNDED RUN-OUTCOME REGISTRY (`internal/api/runregistry.go`): every idle sentinel now carries the session's last terminal run outcome (runId/outcome/endedAt/persisted) and the frontend's `recoverRunFromIdle` finalises from it, plus a bounded grace re-check so the composer can never freeze. One runId now stamps every activity of a run; API-side stages (accepted/registered/engineGate/persisted/published) are measured and logged. The thinking control no longer inflates context (+20 complexity and the forced STANDARD floor removed — measured: a one-line question with thinking went from ~12,962 tokens to ~548, tier FAST, 0 tools); zero-signal chat offers ZERO tool schemas and the compact briefing only; naming a tool in the request is a capability signal; a refused tool re-enters the surface on escalation; tier selection and context planning share ONE clamped output reserve (`contextplan.OutputReserveFor`). The Windows hardware probe's ~7 sequential PowerShell spawns (measured 5,399 ms) collapse into ONE batched CIM invocation, and the interactive endpoints serve an instant in-process fast snapshot (`sysinfo.ProbeFast`) while the deep probe (GPU/NPU via Win32_PnPEntity incl. PNPClass ND) warms in the background (`hardware.WarmDeep` at startup; `deepReady` on the wire). Settings/System are PROGRESSIVE through one shared resource layer (`src/resources.ts` + `useResource.ts`: dedup, TTL, stale-while-revalidate, last-known-good, AbortController) — config immediate, models/sysinfo lazy per tab, one slow endpoint can never block another. NEW `internal/accelerator` package: CPU/GPU_VULKAN/GPU_OPENVINO/NPU_OPENVINO kinds, AUTO/GPU/NPU/CPU requests, INTERACTIVE_GPU/LOW_POWER_NPU/CPU_SAFE/VISION_GPU/MAXIMUM auto-profiles; GPU requires ENGINE evidence (llama.cpp `--list-devices` enumeration cached per binary — `llm.EnumerateEngineDevices` — or the runtime "offloaded N/M layers to GPU" log line — `LlamaServer.OffloadEvidence`), the DLL-presence rule survives only as the documented weaker fallback with the verification plan in the reason; NPU requires presence + MEASURED OpenVINO runtime load (`accelerator.DetectOpenVINO`) + arch/quant gates + a measured benchmark beating GPU — presence alone NEVER wins. `/api/perf` carries the full resolution with reasons. Config gains `accelerator` (default auto). HONEST LIMITATION: implemented and tested on Linux; Windows-only paths compile (GOOS=windows gate) and their parsers are fixture-tested, but real-hardware Windows validation (§13 of the v1.2.6 brief) was NOT performed by this agent — see the v1.2.6 log in `worklog.md`. Prior line: `v1.2.5` (adaptive context tiers, runId/run-clock telemetry, thinking/tool controls). Prior line: `v1.2.3` (CI engine race fixed at the ROOT — the load/unload guard now covers the WHOLE in-flight generation window and the unload-guard test synchronizes on the first streamed token instead of polling; a reusable native-Go Download Manager (`internal/downloader`: HTTPS-only, Range resume, .part→verify→atomic rename, SHA-256/size pinning, ordered sources with explicit fallback trust, source cache, bounded backoff, cancel/pause, measured progress) now powers engine bootstrap, engine self-update and app-update staging; app update staging is ASYNC with live progress + `/api/update/cancel`; downloader progress UI (phase chain, %, speed, ETA, source, verification) across Updates/Runtime/System with a header percent pill; model-picker skeletons; two known native warnings cleaned; see the v1.2.3 notes below — all prior notes remain authoritative). Prior line: `v1.2.2` (generation visibility & black-screen repair: error boundaries everywhere, `gpus: null` wire defect fixed, live-run socket lease across tab switches + `idle`-sentinel resync, live generation timeline, cumulative-snapshot streaming fix, partial-output preservation, honest engine-asset errors, log session banners; see the v1.2.2 notes below — all prior notes remain authoritative). Prior line: `v1.2.1` (CI package-root contract fix + installer options + packaging hardening; see the v1.2.1 notes below — all prior notes remain authoritative). (SHEYTAN-LA unified product upgrade: vision readiness state machine, hardware intelligence, evidence-based recommendation engine, chat markdown/composer polish, Environment Centre, verified health, SHEYTAN-LA Windows identity + AUMID, NSIS installer, manifest-verified app updater, release checksums; see the v1.2.0 notes below — all prior notes remain authoritative). Prior line: `v1.1.9` (CI output-name fix + mode-aware navigation + explicit model states on top of v1.1.8; see the v1.1.9 notes below. The v1.1.8 Chat/Agent separation + model picker + CI release-identity fix, the v1.1.7 options/telemetry/diagnostics work and the v1.1.6-zeta stabilisation before it remain authoritative: context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs).
+Current release: `v1.3.1` — product polish, stable file structure & repository
+cleanup (version-only identity, deterministic frontend filenames, CI hygiene
+gates, test consolidation, documentation professionalization). Prior lines:
+`v1.3.0` (runtime path correctness, clean logging, universal scrolling,
+professional Settings, GitHub cloning), `v1.2.9` (stabilization & security),
+`v1.2.8`/`v1.2.8.1` (professional Chat + Agent workspaces, cross-mode
+references, handoff), `v1.2.7` (run-transport terminal-state repair),
+`v1.2.6` (authoritative run transport, measured timing), `v1.2.5` (adaptive
+context tiers), `v1.2.3` (download manager), `v1.2.2` (generation
+visibility), `v1.2.1` (package-root contract), `v1.2.0` (unified product
+upgrade), `v1.1.5`–`v1.1.9` (native engine phases, Chat/Agent separation,
+options/diagnostics). Full engineering evidence: `worklog.md`.
 
-**v1.2.7 notes for the next agent (run lifecycle gate, outcome-record ordering, terminal fallthrough):**
+# Durable engineering invariants (from past repairs — still binding)
 
-- RUN LIFECYCLE GATE — in `handleActivityWS` (internal/api/server.go),
-  the fast path checks the map, THEN consults the authoritative state:
-  `if ok && rs != nil && rs.live != nil && !rs.live.snapshot().Running { ok = false }`.
-  Map membership is NOT "run active"; `runLive` is the ONE lifecycle
-  authority. Do not add a second one (no timestamps, no hub-closed
-  flag as authority). A terminal entry MUST fall through to the
-  standby path whose idle sentinel carries the recorded `lastRun`.
-- OUTCOME RECORD ORDERING — inside `settle()` (handleRun),
-  `s.outcomes.record(...)` happens BEFORE `live.settleTerminal(...)`.
-  This ordering is what guarantees "terminal-visible ⇒ outcome
-  recorded" for every observer. Do not swap them back; do not record
-  outcomes outside `settle()`.
-- TERMINAL FALLTHROUGH — after the hub-closed drain in the WS attach
-  loop there is NO `<-clientGone` park anymore: served or not, the
-  socket falls through to the idle sentinel and the standby loop
-  (which re-checks the runs map and attaches to a replacement run).
-  The `served` clientGone check (write-failure path) is kept.
-- REGRESSION LOCKS — `internal/api/runtransport_v127_test.go` pins:
-  terminal-entry → idle (never snapshot), closed-hub → snapshot then
-  idle (no hang), abort → attach → idle with recorded outcome. If you
-  touch the attach loop or settle path, run these FIRST, then the full
-  `internal/api` suite looped several times (the original bug was a
-  ~1-in-5 ordering flake that passed in isolation).
-- QUEUE — the durable request queue is documented as PLANNED (README
-  "Development direction"); the current contract is one active run per
-  session with cancel-and-replace. Do not describe the queue as
-  shipped, and do not "simplify" the replacement semantics without an
-  explicit replacement design.
-
-**v1.2.6 continuation notes for the next agent (authoritative run transport, measured timing, explicit accelerator evidence):**
-
-- RUN TRANSPORT — `internal/api/runstate.go` owns the AUTHORITATIVE
-  per-run state (phase/running/cumulative response+reasoning snapshots/
-  latest status/monotonic sequence/terminal outcome/persisted reply;
-  snapshots capped at 256 KiB, recent-events ring at 32). EVERY activity
-  of a run is published through ONE wrapper in `handleRun` that stamps
-  `Activity.Seq` (assigned BEFORE any subscriber sees the event) and
-  folds the event into the live state. The WS attach loop subscribes
-  FIRST, reads the snapshot SECOND, then forwards only events with
-  `seq > snapshot.sequence` and the snapshot's own runId — that ordering
-  is what makes (snapshot at N) + (events > N) gapless and
-  duplicate-free. Do not publish to the hub directly in `handleRun`;
-  route through `publish()`.
-- ATTACH CONTRACT — the FIRST frame after every WS upgrade is
-  `attached` (the deterministic acknowledgement); the frontend's
-  `waitForActivityAttached()` (src/store.ts) awaits it before POSTing
-  /api/run (a 5 s bound exists ONLY for backends that predate the
-  frame). POST /api/run returns `runId` + `state:"registered"`; the
-  store binds `activeRunId` from it and drops frames of other runs and
-  replayed sequences (`isStaleRunEvent`). Never make POST completion
-  imply live transport again.
-- TIMING — the transport ladder (`request_sent`/`response_headers`/
-  `first_byte`) is emitted by the llm client as `StreamEvent.TimingMark`
-  at the moments they happen (llm/client.go streamOnce: before `Do`,
-  after headers, at the first scanner line — a keep-alive comment counts
-  as first byte) and folded into the agent RunClock. `first_token` is
-  the first content/reasoning delta. `tool_start` marks before EVERY
-  tool-call path (execution, refusal, loop guard, cache) and `tool_end`
-  after it; per-tool time accumulates via `AddToolMs`. Raw stage
-  timestamps ride `Timing.stageTimestamps` — durations are checkable.
-  Never re-derive a transport stage from a content delta.
-- STARTUP — `Server.New()` serves `sysinfo.ProbeFast()` (never the deep
-  probe); `/api/perf` recommendations and the session-context memory
-  assessment read `ProbeFast()` LIVE (deep facts merge as they land).
-  `sysinfo.deepProbeFn` + `resetDeepProbeForTest` are the test seam.
-- ACCELERATOR — `Resolution` carries the explicit evidence state:
-  `selected`/`available`/`executionVerified`/`verification`/`fallback`.
-  The Vulkan-DLL fallback selects GPU_VULKAN with `executionVerified:
-  false` and the pending-log verification plan — never present it as
-  verified. The launcher passes `--device <backend-name>` (e.g.
-  `Vulkan0`) ONLY when the engine's own `--list-devices` enumerated it
-  AND the capability profile proves the build accepts the flag
-  (`EngineCaps.DeviceFlag`, help-parse or tag ≥ b3000, fail-closed).
-- WINDOWS IDENTITY — `fastOSIdentity()` measures the build via
-  `RtlGetVersion` (in-process, lie-proof); `WindowsDisplayForBuild`
-  (osdisplay.go, pure + fixture-tested) derives the label (26200 =
-  "Windows 11 25H2"). The raw build rides `SysInfo.OSBuild`. There is
-  NO manual OS label anywhere — keep it that way.
-- RESOURCE OWNERSHIP — subscribers (mounted components) own shared
-  requests; an unmount never aborts a request another subscriber needs;
-  a request with ZERO subscribers is aborted after a bounded grace
-  (10 s). `ensure()` callers are NOT owners (every production caller
-  fire-and-forgets). HealthCard uses the shared "health" resource.
-- HONEST LIMITS — this continuation was implemented and verified on
-  Linux. Windows-only paths compile + are fixture-tested; real Arc/NPU
-  hardware validation was NOT available (see the v1.2.6 continuation
-  log in worklog.md). `test_host` (native) fails on 2-core agent
-  machines at BASELINE too — it is environmental, not a regression
-  (zero native/ files changed).
-
-**v1.2.6 notes for the next agent:**
-
-- RUN VISIBILITY — `internal/api/runregistry.go` owns the bounded
-  outcome ring (4/session, 256 sessions LRU). The idle sentinel's
-  `lastRun` block is the AUTHORITATIVE replay contract; keep it wired
-  when touching the WS loop. The frontend's `recoverRunFromIdle`
-  (src/store.ts) trusts it and arms a bounded grace re-check — never
-  remove the re-check, it is the last line of defense for
-  attach-after-done sockets on older backends.
-- CONTEXT CONTRACT — "chat → none/minimal" is now regression-locked
-  (TestV126TrivialChatOffersNoToolsAndCompactBriefing,
-  TestSelectForTaskPureChat in toolsets tests). Thinking depth =
-  the nudge + escalation ladder, NEVER context size. If you need more
-  context, add an EscalationReason with evidence — do not re-inflate
-  the starting tiers.
-- HARDWARE — `sysinfo.ProbeFast()` (in-process, never spawns on
-  Windows) is what interactive endpoints serve; `sysinfo.Probe()` is
-  the batched deep probe (ONE PowerShell CIM invocation — parseable
-  KEY=VALUE contract in `cim_parse.go`, NPU via Win32_PnPEntity incl.
-  PNPClass ND). `hardware.Snapshot`/`hardware.Collect`/`WarmDeep` are
-  the three entry points. New Windows facts belong in the ONE batched
-  script — never a new process spawn.
-- ACCELERATOR — `internal/accelerator.Resolve` is PURE and
-  evidence-gated; the evidence assembly lives in
-  `api/perf.go buildAcceleratorResolution`. GPU claims require engine
-  enumeration or the runtime offload line (`llm.EnumerateEngineDevices`
-  + `LlamaServer.OffloadEvidence`, cached per binary). NPU requires
-  every gate INCLUDING a measured benchmark. Extend the arch/quant
-  tables only with measured runtime evidence. NPU execution itself is
-  NOT wired (llama.cpp + native remain the only backends) — the
-  resolution layer is ready for it, honestly.
-- FRONTEND RESOURCES — `src/resources.ts` is the ONE shared loader;
-  new panels must use `useResource`, never their own fetch-cache. The
-  v1.2.5 global Promise.all pattern is the regression this fixed.
-
-**v1.2.3 notes for the next agent:**
-
-- ENGINE GUARD — `generation_in_flight` (native/engine/src/engine.cpp) is
-  the SINGLE authority for load/unload rejection: registered work + the
-  scheduler's active slot + the executor's `active_generations`. Do not
-  reintroduce partial guards: any observable "active request" MUST imply
-  SHTN_ERR_MODEL_STATE for load/unload. The unload-guard test waits on the
-  FIRST STREAMED TOKEN (condvar, 60 s bound) — an explicit data signal
-  emitted from inside the runner — never on sleeps or poll budgets.
-- DOWNLOAD MANAGER — ALL remote asset fetches go through
-  `internal/downloader` (engine bootstrap, engine self-update, app-update
-  staging). Never add a second HTTP-download path: the manager owns the
-  HTTPS-only rule (loopback exemption for tests only), .part → verify →
-  atomic rename, resume, mirrors-with-trust, backoff and progress. Trust
-  boundary: `TrustFallback` sources are SKIPPED unless the caller sets
-  `AllowFallback` explicitly; untrusted mirrors are never silently
-  substituted.
-- ASYNC STAGING — `/api/update/download` returns immediately; progress is
-  polled from `/api/update/status` (`download` block); `/api/update/cancel`
-  stops network+file activity and KEEPS the .part. Close() cancels in-flight
-  staging. Engine downloads publish progress via EngineEvent.Download
-  (WS `engine` frames + `/api/engine` snapshot) and are cancelled with
-  `POST /api/llama {action:"cancel-download"}`.
-- FRONTEND — the shared downloader visual lives in `src/DownloadProgress.tsx`
-  + the `.dl-*` styles (styles.css). The model picker distinguishes
-  "loading" (`modelsLoading` in the store) from "no models". The header pill
-  shows a live percentage during engine bootstrap.
-- VERSION — 1.2.3 via the identity chain (package.json →
-  release-version.mjs).
-- VERIFIED — native ctest 12/12 (incl. 3 runs under CPU saturation);
-  `go test ./internal/... -tags headless` + `go test ./...` + `go vet` green;
-  downloader suite race-clean ×3; stress suite 47/47 (incl. the two new
-  downloader hardening scenarios); typecheck/lint/build green.
-
-**v1.2.2 notes for the next agent:**
-
-- ERROR BOUNDARIES — `src/ErrorBoundary.tsx` ships `AppErrorBoundary`
-  (root, wraps `<App/>` in `main.tsx`) and `PanelErrorBoundary` (one per
-  lazy workspace panel in `App.tsx`, `resetKey` = view id). A panel render
-  failure now shows that panel's recover/reload card. NEVER delete these
-  — the pre-v1.2.2 app had ZERO boundaries, so one `gpus.length`-on-null
-  TypeError blanked the entire window (the reported black screen).
-- GPU WIRE CONTRACT — `hardware.Collect` and `sysinfo.Probe` now
-  guarantee `"gpus": []` on the wire (nil Go slices marshal as `null`).
-  `internal/hardware/hardware_test.go` locks it. The frontend ALSO
-  defends (`Array.isArray(device.gpus)` in SystemPanel) — keep both
-  layers; the WMI/PowerShell probe genuinely fails under full inference
-  load, which is why the System tab crashed DURING generation.
-- STREAMING WIRE CONTRACT — the orchestrator's `emitProgress` publishes
-  CUMULATIVE captions: every `response`/`reasoning` activity event
-  carries the FULL text so far. `src/stream-accumulator.ts` (+ unit
-  tests via `npm run test:units`, Node's native TS runner) implements
-  replace-semantics; the OLD store appended every caption and duplicated
-  the streamed text. If you ever touch the streaming path again, do NOT
-  go back to append semantics.
-- SOCKET OWNERSHIP — `store.ts` exposes `acquireActivity`/
-  `releaseActivity` (+ engine-poll equivalents, refcounted). AgentBody
-  acquires on mount, releases on unmount; a LIVE run keeps the socket
-  across workspace tab switches (the backend `activityHub` has NO event
-  replay — unmount-disconnecting lost `done` and froze the composer
-  forever). The backend `idle` sentinel is now handled: a run the UI
-  believes live but the backend no longer registers is re-synced from
-  authoritative history (`recoverRunFromIdle`, with a 2.5 s grace guard
-  against the standby attach race right after Send).
-- RUN PHASES — `src/run-phase.ts` is the pure lifecycle machine
-  (`idle/preparing/thinking/generating/finalising/complete/error/
-  aborted`), unit-tested; the store feeds it real wire events only.
-  `MessageStream.tsx` renders the GenerationBubble whenever a run is
-  live: phase badge, elapsed clock, collapsible reasoning (auto-open
-  while thinking, auto-fold on first answer token, user intent wins
-  through `onToggle`), streamed text, progressive activity strip.
-  Finalisation (`finaliseRun`) confirms the history actually gained the
-  assistant reply and otherwise promotes the partial locally — errors
-  and aborts never discard the streamed output.
-- ENGINE ASSET ERRORS — `updater.IsNoAssetError` classifies "upstream
-  ships no prebuilt asset" vs network failure; `llamaDownloadURL`
-  reports each with its real remedy (the old text claimed "no prebuilt
-  asset (upstream no longer publishes Linux binaries)" on
-  GitHub-blocked WINDOWS machines). GitHub/Atom socket failures stay
-  non-fatal WARNs by design.
-- LOG SESSIONS — `logging.Manager.SessionBanner` writes one
-  `==== SHEYTAN-LA v<ver> session start (pid N) ====` line at every boot
-  (wired in `cmd/root.go`); everything above a banner is verifiably
-  historical in app.log and the in-app Log Viewer.
-- VERSION — 1.2.2 via the identity chain (package.json →
-  release-version.mjs). Frontend regression tests run with
-  `npm run test:units` (no new dependencies).
-
-**v1.2.1 notes for the next agent:**
-
-- PACKAGE-ROOT CONTRACT — the workflow defines `WIN_PKG_ROOT: "SHEYTAN-LA"`
-  and `LINUX_PKG_ROOT: "SHEYTAN-Local-Agent"` ONCE (workflow env block) and
-  derives every packaging path from them. `internal/releasecontract.go`
-  mirrors them: `WorkflowWinRootEnvLine` / `WorkflowLinuxRootEnvLine`, the
-  `${env:WIN_PKG_ROOT}` / `${LINUX_PKG_ROOT}` slot spellings, staging-dir
-  slots and `Required*ZipWorkflowEntries()`. The stress gate (3e2/3h/3i in
-  `cmd/stress_zeta.go`) fails the build when the workflow loses any of
-  these — do NOT reintroduce a root literal anywhere in the packaging
-  path; that is the exact run-34871838054 failure class (the Linux ZIP was
-  verified against `SHEYTAN-LA/` while created under
-  `SHEYTAN-Local-Agent/`, and the Go contract's own
-  `RequiredLinuxZipEntries` mixed roots so the gate stayed green).
-- NSIS INSTALLER — desktop shortcut is a checkbox on the directory page
-  (`DirectoryPageShow`, default CHECKED via `.onInit` →
-  `CreateDesktopShortcut = BST_CHECKED`); silent installs keep the
-  default. Upgrades close a running instance (graceful taskkill, bounded
-  retry, Retry/Cancel on a locked exe). The uninstaller must keep plain
-  `RMDir` only — a CI contract check FORBIDS `RMDir /r` in the script and
-  requires the `preserve user data` marker; user data
-  (%LOCALAPPDATA%\SHEYTAN-LA + SHEYTAN_DATA_DIR) is never touched. CI
-  greps the SOURCE for these fragments before building — keep them intact.
-- PACKAGING GATES — in-package `BUILD-INFO.txt` must carry the resolved
-  `Version:` (verified inside both ZIPs); job-level `timeout-minutes`
-  bound all four jobs; `native/engine/build` is cached on
-  `hashFiles('native/engine/**')` (exact source hash — reproducible).
-- STRESS — new scenarios live in `cmd/stress_release.go`
-  (`stressReleaseScenarios`): updater integrity, vision honesty,
-  memory/session robustness, bounded context machinery, LoopGuard
-  ceiling. The suite ends with a machine-readable
-  `STRESS-RESULT pass=N fail=M hangs=0 crashes=0` line.
-- VERSION — 1.2.1 via the identity chain (package.json →
-  release-version.mjs). The updater needs a strictly higher version to
-  offer the improved installer.
-
-**v1.2.0 notes for the next agent:**
-
-- VISION STATE MACHINE — `internal/vision/states.go` is the single
-  authority: `unsupported/supported/projector-missing/projector-found/
-  projector-verified/loading/ready/degraded/failed`. Pre-boot state comes
-  from `vision.EvaluateModel` (override wins if it exists; a paired mmproj
-  beats the architecture allow-list; the allow-list is CONSERVATIVE —
-  extend `visionArchs` only for arches llama.cpp mtmd actually supports).
-  `ready` is ONLY reachable through a verified boot WITH the projector
-  (llama.go setVision call sites at the setState(StateReady) paths).
-  `/api/models` carries per-model `visionFields`; `/api/engine` carries
-  the runtime block. The UI renders via `src/vision.ts visionBadge()` —
-  do not invent states client-side.
-- RECOMMENDATIONS — `internal/recommendation.Recommend` owns
-  Detected→Calculated→Recommended. It never mutates config: the UI applies
-  through the existing `PUT /api/config` and measures through `/api/perf`.
-  New task profiles must be added to `Tasks()` (single source) and stay
-  explainable — every branch must append a reason or a note.
-- SETTINGS — the Performance tab has three LEVELS (Simple/Performance/
-  Advanced) in `PerformanceLevel` (SettingsPanel.tsx); Simple postures are
-  task profiles (low-power/chat/maximum). New performance surfaces belong
-  in the right LEVEL, not all three.
-- IDENTITY — `internal/platform` owns OS integration: AUMID
-  `Parsaetak.SHEYTAN-LA` is set in `desktop.Run` BEFORE the first window.
-  Windows version resources come from `config.AppShortName /
-  AppDescription / AppPublisher / ExecutableName` via gen-syso. The
-  firewall manager creates NOTHING by default (loopback needs none) and
-  its netsh argument vectors are unit-locked — changing scope is a
-  reviewed security decision.
-- UPDATES — `internal/updater/appupdate.go`: the release manifest
-  (`release-manifest.json`, produced by CI) is authoritative; downloads
-  are SHA-256 verified BEFORE staging under `<DataDir>/updates/staging`;
-  nothing is ever auto-executed. `/api/update/status|check|download` keep
-  the last check in `Server.lastAppUpdate` (atomic.Value).
-- RELEASE ARTIFACTS — CI now produces `SHEYTAN-LA-v<ver>-windows-x64.zip`,
-  `SHEYTAN-LA-v<ver>-windows-x64-installer.exe` (NSIS,
-  packaging/nsis/installer.nsi), `SHA256SUMS.txt` and
-  `release-manifest.json`. The Linux artifact keeps its existing name.
-  Signing is still NOT configured — the installer verification step
-  REPORTS Authenticode status honestly instead of failing or faking.
-- The vision retry contract is unchanged: one text-only fallback when the
-  projector fails with every profile — now surfaced as `degraded` with a
-  reason instead of a silent downgrade.
-
-**v1.1.9 notes for the next agent:**
-
-- CI run `34791882219` root cause: the audit job's `outputs:` mapped
-  `steps.identity.outputs.version` / `version_full` / `codename`, but
-  the identity step writes `APP_VERSION` / `APP_VERSION_FULL` /
-  `APP_CODENAME` to `$GITHUB_OUTPUT` (the exact key names from
-  `release-version.mjs --env`). Every `needs.audit.outputs.*` therefore
-  resolved to "" and Linux/Windows failed metadata verification. The
-  fix is the mapping (audit outputs now use the `APP_*` names) plus a
-  fail-fast empty-identity assertion inside the identity step. If you
-  ever rename the emitted keys, you MUST rename the audit output
-  mappings in the same commit — they are two spellings of one contract.
-- Navigation is mode-aware: `WorkspaceLayer.modes` in
-  `src/workspace.ts` + `visibleWorkspaceLayers(mode)`; `App.tsx`
-  filters the nav and falls back to the workspace view when the
-  restored hash points at machinery the current mode hides (e.g. Lab
-  while Chat). The agent view label is "Workspace" — do not confuse it
-  with the Agent MODE (the `[ Chat │ Agent ]` switch in the header).
-- Model cards (`src/ModelPicker.tsx`) carry an explicit `ModelState`:
-  `ready` (serving), `loading` (busy switch targeting THIS model),
-  `incompatible` (estimated footprint > total host RAM), `available`.
-  The fact grid shows Context / RAM / Tools / Vision / Native; Tools is
-  derived ONLY from `chatTemplate` (the honest prerequisite signal) and
-  renders "—" when unknown. Do not add fields the backend does not
-  report; there is still NO Remove action (no deletion API).
-- Settings: the llama.cpp EngineCard moved from the performance tab to
-  Advanced in `src/SettingsPanel.tsx`. `touchesEngine` restart logic is
-  unchanged and tab-independent.
-- CSS: `--border-soft` is now a defined token (it was referenced by
-  five blocks but never declared). The runtime panel's model facts use
-  `.runtime-model-facts` (renamed from `.model-card-facts`, which the
-  picker uses for its inline facts line). Background gradients and the
-  body grid overlay are gone — keep the background flat.
-- `PerfStrip` skips `/api/perf` fetches while `document.hidden` and
-  refreshes on visibilitychange. The 2.5 s `/api/engine` poll in the
-  store is unchanged.
-
-**v1.1.8 notes for the next agent:**
-
-- Release identity has ONE source: `package.json`. The workflow NO
-  LONGER carries `APP_VERSION`/`APP_CODENAME` env constants — the audit
-  job resolves them at runtime (`node scripts/release-version.mjs
-  --env`, step id `identity`) and every other job consumes them via
-  `needs.audit.outputs.*`. To bump the version: edit `package.json`, run
-  `node scripts/release-version.mjs`, commit. Do NOT reintroduce a
-  hardcoded version constant anywhere — that was the root cause of run
-  `34788709977`. The `--env` flag prints `APP_VERSION`,
-  `APP_VERSION_FULL`, `APP_CODENAME`; the workflow shape check lives in
-  `release-version.mjs`'s target list.
-- Chat/Agent separation is a UI-only concern: `WorkspaceMode` in
-  `src/store.ts` (`mode` + `setMode`, persisted under `localStorage`
-  key `sheytan.mode`, default `chat`). Both modes share the SAME
-  session/model/engine wiring in `AgentBody.tsx`; do not fork runtime
-  state per mode. Mode decides VISIBILITY: Chat hides the runtime
-  panel, context pills (`AgentHeader`), telemetry and activity; Agent
-  shows everything.
-- The model picker (`src/ModelPicker.tsx`) renders ONLY backend facts
-  from `/api/models`. The new per-model fields (`multimodal`,
-  `nativeBackend`, `chatTemplate`, `nativeReason`, `estimatedVRAMBytes`)
-  come from `llm.ResolveModelCapabilities` via the SAME bounded
-  path+size+mtime cache as the header card (`modelCardFor` in
-  `internal/api/server.go` — now also caches caps). Do not compute
-  capabilities client-side; do not remove the Remove-less action set
-  (there is no model-deletion API by design).
-- `switchModel` in `AgentBody.tsx` returns success and owns the engine
-  restart dance; the picker closes only when it returns true. Keep ONE
-  implementation — the chat rail select, the agent panel select, and
-  the picker all route through it.
-- Settings tabs: Models and Advanced were split out of General
-  (`TABS` + `SettingsTab` in `src/SettingsPanel.tsx`). The
-  restart-after-save condition (`touchesEngine`) must still list every
-  engine-affecting config key regardless of which tab hosts it.
-- Performance strip (`src/PerfStrip.tsx`) polls the EXISTING `/api/perf`
-  every 4 s while mounted and renders N/A for anything unmeasured —
-  same honesty contract as the perf HUD.
-
-**v1.1.7 notes for the next agent:**
-
-- `shouldRetryFullSpeed` (`internal/llm/capability.go`) is the ONLY path
-  that may re-attempt compatibility level 0 after a persisted downgrade.
-  Its four gate conditions are regression-locked in
-  `capability_compat_test.go` — extend the gate and the tests together.
-  `engineCompatReason`/`engineCompatAt` in config are backend-managed:
-  never let a UI patch write them.
-- `/api/perf`, `/api/logs`, `/api/netcheck` (`internal/api/perf.go`,
-  `logs.go`, `netcheck.Diagnose`) are read-only surfaces over EXISTING
-  infrastructure (sysinfo probe, logging ring, netcheck). If you add a
-  metric, it must come from a real measurement — the UI renders N/A for
-  anything absent, and fabricated values are a defect, not a placeholder.
-- Tool descriptions: `ShortDescription()` (one line, UI) vs
-  `Description()` (full spec, model). Never shorten the model-facing one;
-  the JSON action syntax lives there.
-- The Settings restart-after-save condition (`touchesEngine` in
-  `src/SettingsPanel.tsx`) must list every engine-affecting config key —
-  add new engine options there AND to `EngineCaps`/`argProblems`/
-  `repairCapsFor` together.
-- The log viewer displays entries redacted by `logging.RecentParsed`;
-  keep `redact()` ahead of any new secret-shaped string the app logs.
-
-**v1.1.6-zeta context (previous release):** stabilisation on top of Phase 7: the `internal/improve` recursive-mutex CI deadlock is fixed and regression-locked; context is per-session and per-agent — `sessions.Context.ContextTokens` + `llm.ResolveSessionContext` (min of session policy / global / GGUF max / engine-verified window), resource-aware classification (`internal/llm/resources.go`), full per-turn context telemetry, wire-level `n_ctx` truthfulness; startup shows real phases and `ready` means VERIFIED serving; Windows icon (16–256 ladder + `build/sheytan.ico` via `scripts/gen-syso`), per-layer `SHEYTAN — X` branding, a central theme-token system, and a real Settings scroll container. Phase 7: runtime stability + context intelligence + Agent OS foundation. The llama.cpp launch contract is now detected, validated and surgically repaired per option — the historical `--flash-attn`/`--cache-reuse` malformed-argument failure is fixed at the source and regression-locked. Context is a preflight budget pipeline with a guaranteed fit: model-aware effective window, safety margin, dynamic toolsets, compact-briefing fallback, in-loop tool-result bounding, and an honest refusal (no engine call) when the budget is impossible. Foundations wired: dynamic toolsets, verified-learning skills, specialist consultations, programmatic pipelines, computer-use abstraction, MCP bridge (off by default), event scheduler, context telemetry, self-improvement tactics. Phase 5 (real native inference) and Phase 6 (reliability + verification + safe edits + project intelligence) remain authoritative — see `worklog.md` for the full phase logs.
-
-**Phase 5 repair (2026-09-11)**: the phase5 commit had accidentally deleted `build/config.yml` and four internal packages (`sessions`, `sandbox`, `attachments`, `memory`) that live code still imports — the tree did not compile and CI failed at the release gate. All were restored byte-identical from the Phase 4 baseline; two real native-path defects (misleading engine badge state; run gate requiring llama.cpp when native serves) and one CI gap (Go↔C++ integration tests never executed in any job) were fixed. Evidence in `worklog.md` — "v1.1.5Z Phase 5 Repair Log".
-
-**Phase 5 validation pass (2026-09-12)**: every validation stage re-run independently and clean; two more real defects fixed — the engine toggle never loaded a model natively (alive-but-incapable engine; runs still gated on llama.cpp; fixed via the `Stack.EnsureNativeReady` seam + honest toggle result), and the llama.cpp auto-download could never succeed on Linux again (upstream removed Linux prebuilt binaries; fixed with a bounded probe → release scan → honest actionable error). llama.cpp no longer publishes Linux binaries — Linux users build from source (`llamaBinPath`) or select the native engine. Evidence in `worklog.md` — "v1.1.5Z Validation & Repair Log".
-
-**Read `worklog.md` before working.** It records the audit findings and the fixes this release shipped, including which subsystems were previously unwired and why.
-
-**Read `ARCHITECTURE.md` for the implementation truth table and the validated future direction.** Its Part I now carries the Phase 7 rows (engine capability adapter, model capabilities, preflight budget pipeline, dynamic toolsets, skills, specialists, pipelines, computer use, MCP, scheduler, telemetry, self-improvement) with their honest IMPLEMENTED / PARTIALLY IMPLEMENTED / foundation status. Its Part II records what is still planned (tiered model routing, hierarchical retrieval, parallel multi-agent, artifact communication, document editing) — never present those as current capability. Its Part III defines the documentation truth standard every change must follow.
-
-**Phase 7 notes for the next agent:**
-
-- `internal/llm/capability.go` is the single authority for the llama.cpp
-  CLI contract. Never hard-code a flag layout again: extend `EngineCaps`
-  and the `--help` parser instead. The verified profile lives in
-  `DataDir/engine-caps.json`, keyed by release tag.
-- `internal/llm/modelcaps.go` is the single authority for model
-  capabilities. The effective context is `min(configured, GGUF limit,
-  engine limit)` — never raise a window beyond what the model declares.
-- The orchestrator preflight (`RunDetailed`) composes optional blocks and
-  injects them only when the plan keeps them. If you add a new prompt
-  section, wire it through `contextplan.Assemble` — do not bypass the
-  plan.
-- The compat ladder (levels 1–3) now fires only after per-option surgical
-  repair fails. When adding engine options, add them to `EngineCaps`,
-  `argProblems` and `repairCapsFor` together.
-- Every new subsystem (toolsets, skills, pipelines, computer, mcp,
-  scheduler, ctxtelemetry, improve) inherits the security invariants —
-  loopback-only, path jails, sanitized env, bounded resources,
-  deny-by-default risk policy.
-
----
+- **Run lifecycle gate** — in `handleActivityWS` (internal/api/server.go) map
+  membership is NOT "run active"; `runLive` is the ONE lifecycle authority.
+  A terminal-but-registered entry serves the idle sentinel with the recorded
+  `lastRun` outcome. Do not add a second authority.
+- **Outcome-record ordering** — `settle()` records the run outcome in the
+  bounded registry BEFORE the authoritative state flips terminal.
+- **Transport attach contract** — first frame after WS upgrade is the
+  `attached` ack; attachments receive a seq/runId-filtered `run_snapshot`;
+  idle sentinels carry the authoritative `lastRun` outcome.
+- **One active run per session** — a newer run cancels-and-replaces by
+  design; durable queuing is documented design intent only.
+- **Download Manager** — every remote asset flows through
+  `internal/downloader` (HTTPS-only, `.part` → verify → atomic rename,
+  Range resume, ordered sources, explicit fallback opt-in). No second
+  download path.
+- **Package-root contract** — one canonical root variable per platform
+  (`WIN_PKG_ROOT` / `LINUX_PKG_ROOT`); `internal/releasecontract` mirrors
+  them and the stress gate fails on drift.
+- **Stable asset contract** — generated frontend filenames are
+  deterministic (`assets/[name].js`), verified in CI; `web/static` exactly
+  mirrors the clean build.
+- **Version identity** — package.json is the single source; no hardcoded
+  version or codename constants in the workflow.
+- **`gpus` wire guarantee** — hardware/sysinfo probes serialize `[]`, never
+  JSON `null` (a null slice crashes defensive frontend readers).
+- **Streaming snapshot semantics** — progress captions are cumulative
+  snapshots (replace, not append); replayed frames are idempotent.
+- **Engine guard coherence** — the load/unload guard covers the WHOLE
+  in-flight generation window; observable state can never contradict it.
+- **Windows hardware probe** — ONE batched CIM invocation; the deep probe
+  warms in the background (`deepReady` on the wire).
+- **Accelerator evidence** — GPU requires ENGINE evidence, NPU requires
+  presence + measured OpenVINO load + arch/quant gates; presence alone
+  never wins.
 
 # 1. Mission
 
@@ -547,11 +164,11 @@ When the user says "done, check verify and continue":
 inspect → verify → diagnose → fix → retest → continue
 ```
 
-# 3. Architecture (v1.1.5Z)
+# 3. Architecture
 
 Backend: Go 1.26, Wails v3 (desktop shell), Go HTTP API + WebSocket on `127.0.0.1:8765`.
 
-Engine stack (v1.1.5Z Phase 5 — the native engine performs REAL transformer inference for the llama architecture and serves REAL generation with streaming + cancellation + measured metrics; llama.cpp remains the default/fallback and serves every model the native engine cannot execute):
+Engine stack (the native engine performs REAL transformer inference for the llama architecture and serves REAL generation with streaming + cancellation + measured metrics; llama.cpp remains the default/fallback and serves every model the native engine cannot execute):
 
 ```text
 React/TypeScript → Wails → Go Core → llm.Backend contract
@@ -576,7 +193,7 @@ internal/agent       orchestrator (per-run config snapshot, tool registry)
                      detection, tool/wall-clock budgets), EvidenceCollector
                      (run-level verified/partial/failed/not_verified)
 internal/llm         LlamaServer (engine lifecycle) + OpenAI-compatible client
-                     + Backend contract + LlamaBackend + selection (v1.1.5Z)
+                     + Backend contract + LlamaBackend + selection (v1.1.5)
 internal/native/engine  SHEYTAN native engine: protocol (v4), supervised runtime,
                      Backend adapter, hardware profile, metrics, model lifecycle,
                      tokenizer, KV cache, scheduler, sampler AND REAL llama-
@@ -592,7 +209,7 @@ internal/attachments streaming staged uploads, shared chunk engine,
 internal/contextplan context budget authority (+ measured PromptBytes)
 internal/contextcache content-keyed LRU cache, single-flight coalescing,
                     oversized-entry guard
-internal/continuum   chapter rollover (wired post-run since v1.1.4Z)
+internal/continuum   chapter rollover (wired post-run since v1.1.4)
 internal/lab         Coding Lab (policy, runner, verifier, repair,
                      safe anchored edits: read_file/edit_file)
 internal/sandbox     Job-Object code-exec governor
@@ -625,9 +242,9 @@ native/engine/       C++ native engine (CMake + Makefile): C ABI core,
 - Runs, requests and engine starts take ONE snapshot per operation.
 - `updater.RunScheduled` runs `CheckAndApply` on a private copy and publishes back.
 
-Violating this contract reintroduces the v1.1.3Z data race (`*s.cfg = updated` in the patch handler). `TestSourceConcurrentReadWrite` and `TestConfigPatchIsRaceFree` guard it under `-race` — keep them passing.
+Violating this contract reintroduces the v1.1.3 data race (`*s.cfg = updated` in the patch handler). `TestSourceConcurrentReadWrite` and `TestConfigPatchIsRaceFree` guard it under `-race` — keep them passing.
 
-# 4b. Data-pipeline rules (v1.1.5Z Phase 3)
+# 4b. Data-pipeline rules
 
 The local data path has one owner per stage — Source/Input → Loader →
 Normalizer → Chunker (chunking.ChunkText) → Cache (contextcache) →
@@ -654,15 +271,15 @@ separate from sources and bounded:
 - `MarkBusy` performs the whole transition under one lock — do not split it again (see `setStateLocked`).
 - Streaming has NO overall client timeout by design; the stall watchdog (5 min zero-byte) provides the hang bound. Do not reintroduce a blanket `http.Client.Timeout` on the stream client.
 - Engine downloads are context-bounded (10 min) and size-capped (2 GiB).
-- v1.1.5Z Phase 5 backend rules: generation is routed by `llm.SelectGenerationBackend` (wired through the orchestrator's generation router — `Stack.streamGeneration`) — the native engine only when selected (`engineBackend: "native"`) AND `GenerationCapable()` (alive + a loaded model whose llama graph validated at load time); otherwise llama.cpp. Request shapes the native path cannot serve (tools, images) and pre-first-token native failures fall back to llama.cpp with the reason logged and inspectable. Native engine failures never fail the llama path (best-effort, logged, visible in `native.state`).
+- v1.1.5 Phase 5 backend rules: generation is routed by `llm.SelectGenerationBackend` (wired through the orchestrator's generation router — `Stack.streamGeneration`) — the native engine only when selected (`engineBackend: "native"`) AND `GenerationCapable()` (alive + a loaded model whose llama graph validated at load time); otherwise llama.cpp. Request shapes the native path cannot serve (tools, images) and pre-first-token native failures fall back to llama.cpp with the reason logged and inspectable. Native engine failures never fail the llama path (best-effort, logged, visible in `native.state`).
 - Native MODEL loading (Phase 2) is real: `LoadModel` validates the file and loads it natively (GGUF validate → memory-map → metadata → memory plan). Model states use their own dedicated vocabulary — `unloaded/loading/loaded/failed` — separate from the engine states above; a host restart resets the model state (a fresh host maps nothing). Loading a model does NOT enable generation.
-- v1.1.5Z Phase 5 native generation (REAL): the native engine performs the actual transformer computation for the llama architecture — token embeddings → per-layer RMSNorm → Q/K/V projection → RoPE → causal GQA attention over a REAL fp16 KV cache → output projection + residual → RMSNorm → SwiGLU FFN + residual → final norm → logits. The sampler consumes the REAL logits (temperature, top-k, top-p, repetition penalty, seed — the Phase 4 primitives). Generation streams coarse-grained chunks over IPC (one generate request → event frames → final frame; NEVER one frame per token), supports REAL cooperative cancellation (observed every token), stops honestly (EOS without emitting it / max_tokens / context bound / error) and reports MEASURED metrics only (prompt tokens, generated tokens, prefill time, TTFT, decode tok/s, KV positions — monotonic clock). The context bound is a REJECT policy: prompt+max_tokens beyond the context window fails explicitly (no silent truncation).
+- v1.1.5 Phase 5 native generation (REAL): the native engine performs the actual transformer computation for the llama architecture — token embeddings → per-layer RMSNorm → Q/K/V projection → RoPE → causal GQA attention over a REAL fp16 KV cache → output projection + residual → RMSNorm → SwiGLU FFN + residual → final norm → logits. The sampler consumes the REAL logits (temperature, top-k, top-p, repetition penalty, seed — the Phase 4 primitives). Generation streams coarse-grained chunks over IPC (one generate request → event frames → final frame; NEVER one frame per token), supports REAL cooperative cancellation (observed every token), stops honestly (EOS without emitting it / max_tokens / context bound / error) and reports MEASURED metrics only (prompt tokens, generated tokens, prefill time, TTFT, decode tok/s, KV positions — monotonic clock). The context bound is a REJECT policy: prompt+max_tokens beyond the context window fails explicitly (no silent truncation).
 - Native generation support is NARROW and honest: architecture llama only; tensor types F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 only; RoPE freq_scale 1.0 only; no chat-template interpretation (plain role-labeled prompt format — llama.cpp keeps template fidelity); tools/images requests return ErrNotImplemented (the router sends them to llama.cpp). A model outside the supported set loads fine but reports `generationCapable=false` with an inspectable reason; generation selection (`llm.SelectGenerationBackend` → native only when selected AND capable) then routes to llama.cpp. A native failure BEFORE the first streamed token falls back to llama.cpp with the reason logged; after the first token it surfaces like any engine error.
 - The native KV cache now stores REAL fp16 bits (uint16_t, Phase 5 corrected the Phase 4 float[]-but-reported-f16 defect: capacity_bytes == the actual allocation, layer offsets exact, used_bytes consistent with written positions — pinned by regression tests). The cache allocates at the first generate (sized from model dims) and resets per request; `kv_cache_info` reports the measured population.
 - The native scheduler runs a REAL single-slot worker thread (max concurrent = 1): queued/active/completed/cancelled/failed counts are real; the generation lane in the host keeps the dispatch loop responsive (cancel/metrics/shutdown while generating).
 - Model loads now compute the llama-graph verdict (metadata-level: every required tensor present with the right shape and a supported type) and report `generationCapable` + `generationReason` in model_info. Pre-warm loads the selected model natively and logs the verdict; an incapable model keeps llama.cpp serving generation.
 - The native engine host (`shtn-engine-host`) runs with a sanitized environment, bounded op timeouts (10 s; model loads 30 s), a 1 MiB frame cap and a protocol/ABI handshake that fails closed (protocol/ABI v4 — both sides bumped together; v4 adds the generate/cancel ops with streamed event frames + real cancellation to v3; generation runs on bounded lanes so the host stays responsive mid-generation; malformed generate payloads and host-side errors are bounded error frames, never crashes). Build it from `native/engine/` (CMake or Make); this phase does not ship or auto-download it.
-- v1.1.5Z Phase 4 frontend perf contract: streaming model output is COALESCED through `flushStreaming` (rAF-boundary batching in `store.ts`). The UI updates at most once per frame regardless of token rate — a model emitting 200 tokens/sec no longer triggers 200 React renders/sec. Lifecycle events (done/error/session) bypass the coalescer and reset state immediately. A frame-budget diagnostic HUD (`src/perf-hud.ts`) is OFF by default — toggle with Ctrl+Shift+P or `window.__shtnTogglePerfHUD()`. The HUD measures real frame time, dropped frames, longtask count and coalesced stream-update frequency. The target budget is auto-detected from the display refresh rate (8.33 ms for 120 Hz, 16.67 ms for 60 Hz) — the HUD does NOT claim guaranteed 120 FPS; it reports `optimized for high-refresh displays / frame-budget aware / 120 Hz-capable presentation where hardware permits`.
+- v1.1.5 Phase 4 frontend perf contract: streaming model output is COALESCED through `flushStreaming` (rAF-boundary batching in `store.ts`). The UI updates at most once per frame regardless of token rate — a model emitting 200 tokens/sec no longer triggers 200 React renders/sec. Lifecycle events (done/error/session) bypass the coalescer and reset state immediately. A frame-budget diagnostic HUD (`src/perf-hud.ts`) is OFF by default — toggle with Ctrl+Shift+P or `window.__shtnTogglePerfHUD()`. The HUD measures real frame time, dropped frames, longtask count and coalesced stream-update frequency. The target budget is auto-detected from the display refresh rate (8.33 ms for 120 Hz, 16.67 ms for 60 Hz) — the HUD does NOT claim guaranteed 120 FPS; it reports `optimized for high-refresh displays / frame-budget aware / 120 Hz-capable presentation where hardware permits`.
 
 # 6. Bounded-resource invariants
 
@@ -703,7 +320,7 @@ secrets redacted: config GET, diagnostics zip, logs
 
 Fail closed. Never weaken a control to unblock a feature.
 
-# 8. Wired-surface contract (the v1.1.4Z lesson)
+# 8. Wired-surface contract
 
 Before this release, several subsystems were fully implemented but had **zero production callers** (GGUF cards, continuum rollover, recall feedback, RunScheduled, sandbox settings, parts of sampling). The rule going forward:
 

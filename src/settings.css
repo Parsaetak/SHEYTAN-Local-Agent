@@ -134,7 +134,7 @@
   background: rgba(0, 0, 0, 0.22);
   color: var(--text-primary, #f4f4f4);
   font: inherit;
-  /* v1.1.2Z: long option strings ("No local GGUF models found") must
+  /* v1.1.2: long option strings ("No local GGUF models found") must
      ellipsize instead of clipping mid-glyph in the narrow runtime panel. */
   text-overflow: ellipsis;
   overflow: hidden;

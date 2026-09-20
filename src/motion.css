@@ -1,5 +1,5 @@
 /* ==========================================================================
-   SHEYTAN-Local-Agent — v1.1.2Z Motion System
+   SHEYTAN-Local-Agent — v1.1.2 Motion System
    --------------------------------------------------------------------------
    A 120Hz-first animation layer: every duration is frame-quantized for
    120 fps displays (8.33ms/frame) and every animation runs exclusively on
@@ -479,7 +479,7 @@ html.reduce-motion .panel-loading-mark {
 }
 
 /* ==========================================================================
-   v1.1.2Z — Component motion integration
+   v1.1.2 — Component motion integration
    Entrance choreography for every major panel surface, expressed purely in
    CSS so components stay declarative. Each grid staggers its children with
    nth-child frame offsets (capped at 8 steps to keep long lists instant).

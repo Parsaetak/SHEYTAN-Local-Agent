@@ -1,6 +1,6 @@
 package engine
 
-// model.go — native engine model concern (v1.1.5Z Phase 2: REAL).
+// model.go — native engine model concern (v1.1.5 Phase 2: REAL).
 //
 // The C++ engine loads GGUF models (validate → memory-map → metadata →
 // memory plan); this file owns the Go-side model state machine and the

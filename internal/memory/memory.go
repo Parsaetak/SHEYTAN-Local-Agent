@@ -75,12 +75,12 @@ type Store struct {
 	path string
 	mu   sync.Mutex
 
-	// v1.1.4Z: parsed-entry cache keyed by file (size, mtime). Every read
+	// v1.1.4: parsed-entry cache keyed by file (size, mtime). Every read
 	// previously re-opened and re-parsed the whole JSONL file — the memory
 	// tool calls Search on every use, so long stores made each tool call
 	// O(file). Appends invalidate by bumping the observed stat.
 	//
-	// v1.1.5Z Phase 3: the store is APPEND-AWARE. AppendEntry/DeleteByID/
+	// v1.1.5 Phase 3: the store is APPEND-AWARE. AppendEntry/DeleteByID/
 	// Clear now update the parsed cache incrementally (and refresh the
 	// observed stat), so the remember→recall cycle no longer re-parses the
 	// whole file after every write. fullParses/incrementalAppends are

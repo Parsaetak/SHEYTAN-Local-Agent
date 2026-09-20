@@ -110,7 +110,7 @@ func New(dataDir string) *Engine {
 // Dir returns the recall directory (UI/metadata use).
 func (e *Engine) Dir() string { return e.dir }
 
-// maxCapsules bounds the in-memory + on-disk index (v1.1.4Z: the index was
+// maxCapsules bounds the in-memory + on-disk index (v1.1.4: the index was
 // append-only forever — recall scoring is O(corpus) and old exchanges lose
 // value over time). Retention keeps the newest capsules.
 const maxCapsules = 5000
@@ -118,7 +118,7 @@ const maxCapsules = 5000
 // loadLocked reads the whole index into memory exactly once (append-only
 // format: subsequent writes only append + mirror in memory).
 //
-// v1.1.4Z: when the index exceeds maxCapsules it is compacted to the newest
+// v1.1.4: when the index exceeds maxCapsules it is compacted to the newest
 // maxCapsules lines — unbounded growth made both startup loads and every
 // search slower forever.
 func (e *Engine) loadLocked() {
@@ -452,7 +452,7 @@ func (e *Engine) Search(query string, k int) []Capsule {
 	for i, c := range e.capsules {
 		var score float64
 		if len(qTerms) > 0 {
-			// v1.1.5Z Phase 3: count occurrences directly against the
+			// v1.1.5 Phase 3: count occurrences directly against the
 			// cached term slice — no tf map per capsule per query. The
 			// scoring math is unchanged (f values, distinct-count dl and
 			// raw-length avgLen are all identical to the pre-Phase-3 path).

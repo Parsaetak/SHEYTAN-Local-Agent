@@ -1,4 +1,4 @@
-// reliability.go — v1.1.5Z Phase 6: the agent reliability core.
+// reliability.go — v1.1.5 Phase 6: the agent reliability core.
 //
 // SHEYTAN's strategic product target is that a small local model plus
 // SHEYTAN accomplishes work that normally requires a substantially larger

@@ -1,6 +1,6 @@
 package api
 
-// Attachment API (v1.1.3Z): real staged file uploads backing the Agent
+// Attachment API (v1.1.3): real staged file uploads backing the Agent
 // conversation. Flow: select → validate → safe staging → inspect → type
 // detection → extract → chunk → cache → associate with the session →
 // retrieve relevant content at run time.

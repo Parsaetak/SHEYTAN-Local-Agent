@@ -1,6 +1,6 @@
 package agent
 
-// authority_v129_test.go — v1.2.9 security regressions for the summary
+// Security regressions for the summary
 // and history-ref injection channels: DERIVED memory and recalled
 // history must ride the DATA (user) channel, never the system
 // instruction channel.

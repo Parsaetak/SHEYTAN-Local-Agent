@@ -8,7 +8,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 )
 
-// TestRunBudgetTimerSurvivesRunStart pins the v1.1.4Z self-audit fix: the
+// TestRunBudgetTimerSurvivesRunStart pins the v1.1.4 self-audit fix: the
 // budget cancel was briefly invoked at goroutine START (killing the timer
 // immediately) instead of in the deferred cleanup. This test proves the
 // timer is armed for the configured duration, not cancelled up front.

@@ -11,7 +11,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 )
 
-// v1.1.4Z: Diagnostics now lives where its name says (it was buried in
+// v1.1.4: Diagnostics now lives where its name says (it was buried in
 // license.go next to the Logs helper).
 
 // Diagnostics exports the full diagnostics zip (logs + stats + redacted

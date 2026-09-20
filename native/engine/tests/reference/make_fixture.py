@@ -536,7 +536,7 @@ def main():
     print(f"wrote {txt_path}")
     print(f"argmax token: {ref['argmax_token']} ({ref['argmax_token_text']!r})")
 
-    # App fixture (v1.1.5Z repair): the F32 fixture dims (greedy decode
+    # App fixture (v1.1.5 repair): the F32 fixture dims (greedy decode
     # deterministically runs to max_tokens — pinned by test_generate) but
     # with a 2048-token context so a REAL application prompt (system
     # briefing + user turn) fits the native engine's honest

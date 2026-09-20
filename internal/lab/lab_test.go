@@ -635,7 +635,7 @@ func TestCodingLabToolEndToEnd(t *testing.T) {
 
 	if err := os.WriteFile(
 		filepath.Join(source, "app.txt"),
-		[]byte("zeta"),
+		[]byte("release"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -701,7 +701,7 @@ func TestCodingLabToolEndToEnd(t *testing.T) {
 		"checks": []map[string]any{
 			{
 				"name":     "content",
-				"command":  verificationContentCheck("app.txt", "zeta"),
+				"command":  verificationContentCheck("app.txt", "release"),
 				"required": true,
 			},
 		},

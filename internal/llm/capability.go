@@ -879,7 +879,7 @@ func compatReasonFromError(err error) string {
 // at the full-speed profile (level 0) before falling back to the persisted
 // compatibility level.
 //
-// The historical defect (v1.1.6Z log evidence: the same
+// The historical defect (v1.1.6 log evidence: the same
 // "started in compatibility mode 2 (no speed flags)" line on every boot):
 // once any launch failure pushed the ladder down, EngineCompat was
 // persisted and EVERY later boot resumed at that level — even after the
@@ -893,7 +893,7 @@ func compatReasonFromError(err error) string {
 //     in well under a second — unlike a model-load failure that can burn
 //     the full 180 s load timeout, so those are never re-attempted);
 //  3. a VERIFIED capability profile exists AND is newer than the recorded
-//     downgrade (or no downgrade time exists — the v1.1.6Z upgrade case),
+//     downgrade (or no downgrade time exists — the v1.1.6 upgrade case),
 //     meaning the engine contract changed since the descent;
 //  4. the level-0 launch profile validates cleanly against that verified
 //     profile, so the known incompatibility cannot simply replay.

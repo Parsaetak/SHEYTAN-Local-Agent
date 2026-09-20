@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 )
 
 var (
@@ -13,6 +15,17 @@ var (
 	ErrInvalidQuery        = errors.New("invalid research query")
 	ErrNoResults           = errors.New("research returned no results")
 )
+
+// DefaultUserAgent returns the outbound HTTP identity carried by every
+// research provider when the runtime does not supply a configured one:
+// "SHEYTAN-Local-Agent/<AppVersion>". It is derived from the runtime
+// constants the whole application reports, so the research surface always
+// tracks the canonical version — a provider must never hardcode a release
+// identity of its own. The runtime passes the user-configured
+// Config.EffectiveResearchUserAgent() on top of this default.
+func DefaultUserAgent() string {
+	return config.AppName + "/" + config.AppVersion
+}
 
 // Provider identifies one external research backend.
 type Provider interface {

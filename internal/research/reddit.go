@@ -60,7 +60,7 @@ func NewRedditProvider(
 
 	userAgent = strings.TrimSpace(userAgent)
 	if userAgent == "" {
-		userAgent = "SHEYTAN-Local-Agent/Version-Zeta"
+		userAgent = DefaultUserAgent()
 	}
 
 	return &RedditProvider{
@@ -227,7 +227,7 @@ func (p *RedditProvider) Search(
 		return SearchResponse{}, redditHTTPError(response)
 	}
 
-	// v1.1.4Z: +1 byte so an oversized payload is DETECTED instead of
+	// v1.1.4: +1 byte so an oversized payload is DETECTED instead of
 	// silently truncated mid-JSON (the other providers already did this).
 	const maxResponseBytes = 4 << 20
 

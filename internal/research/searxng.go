@@ -143,7 +143,7 @@ func (p *SearXNGProvider) Search(
 
 	request.Header.Set(
 		"User-Agent",
-		"SHEYTAN-Local-Agent/Version-Zeta",
+		DefaultUserAgent(),
 	)
 
 	response, err := p.Client.Do(request)

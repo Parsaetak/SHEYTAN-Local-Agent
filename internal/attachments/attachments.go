@@ -1,5 +1,5 @@
 // Package attachments implements SHEYTAN's real attachment pipeline
-// (v1.1.3Z): select → validate → safe staging → inspect → type detection
+// (v1.1.3): select → validate → safe staging → inspect → type detection
 // → extract → chunk → cache → associate with a session/message → retrieve
 // relevant content → send a bounded representation to the model.
 //
@@ -246,7 +246,7 @@ func (m *Manager) metaPath(id string) string {
 // and processes (chunks) the content. The returned Attachment is safe to
 // persist and display. `sessionID` records provenance (may be empty).
 //
-// v1.1.5Z Phase 3: staging is STREAMING — content is spooled to a temp
+// v1.1.5 Phase 3: staging is STREAMING — content is spooled to a temp
 // file while hashed on the fly, so only a bounded sniff head (16 KiB) and
 // one copy buffer ever sit in RAM, whatever the upload size. Previously the
 // whole file (up to 64 MiB) was buffered just to hash and classify it.
@@ -462,7 +462,7 @@ func commitObject(obj, tmp string) error {
 
 // processText normalizes and chunks text content, caching the result.
 //
-// v1.1.5Z Phase 3: chunk derivation runs through the shared chunking
+// v1.1.5 Phase 3: chunk derivation runs through the shared chunking
 // engine (chunking.ChunkText) with full metadata, and the cache lookup is
 // single-flight — concurrent processing of the same content computes once.
 func (m *Manager) processText(
@@ -669,7 +669,7 @@ func (m *Manager) Retrieve(
 
 // RetrieveWithStats is Retrieve plus the measured RetrievalStats.
 //
-// v1.1.5Z Phase 3: object text is read from disk AT MOST ONCE per
+// v1.1.5 Phase 3: object text is read from disk AT MOST ONCE per
 // attachment per call and reused for every selected chunk (previously the
 // whole object was re-read per selected chunk — N chunks meant N full
 // reads). Objects larger than the per-call retention cap degrade to
@@ -1160,7 +1160,7 @@ func isUTF8ish(data []byte) bool {
 // NormalizeText converts staged bytes into prompt-ready text: invalid
 // UTF-8 replaced, BOM dropped, CRLF normalized, trailing newlines trimmed.
 //
-// v1.1.5Z Phase 3: the clean case (valid UTF-8, no BOM, no CR) returns the
+// v1.1.5 Phase 3: the clean case (valid UTF-8, no BOM, no CR) returns the
 // ORIGINAL bytes without a single full-content copy — previously every
 // staged text paid up to three copies (ToValidUTF8 + two ReplaceAll) even
 // when nothing needed replacing.

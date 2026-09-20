@@ -1,4 +1,4 @@
-// engine.h — the SHEYTAN Native Engine C ABI (v1.1.5Z Phase 4).
+// engine.h — the SHEYTAN Native Engine C ABI (v1.1.5 Phase 4).
 //
 // This is the NARROW boundary the Go core sees. Only C types, only
 // coarse operations — no C++ classes, templates or exceptions cross this

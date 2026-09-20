@@ -1,5 +1,5 @@
 // Package contextplan implements SHEYTAN's explicit long-context budget
-// (v1.1.3Z). Every inference request assembles its prompt from named
+// (v1.1.3). Every inference request assembles its prompt from named
 // sections — system instructions, tool schemas, recalled memory, attachment
 // chunks, recent history, and reserved output space — and every section is
 // measured, prioritized, and accounted against the model's real context

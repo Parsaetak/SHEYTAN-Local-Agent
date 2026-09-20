@@ -1,4 +1,4 @@
-// verification.go — v1.1.5Z Phase 6: verification as a first-class system
+// verification.go — v1.1.5 Phase 6: verification as a first-class system
 // at the ORCHESTRATOR level.
 //
 // The Coding Lab already owns OBJECTIVE verification (policy-checked

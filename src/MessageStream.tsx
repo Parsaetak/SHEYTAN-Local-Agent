@@ -201,7 +201,7 @@ const MessageBubble = memo(function MessageBubble({
 }) {
   const isUser = message.role === "user";
 
-  // v1.1.4Z: recall feedback. 👍/👎 on an assistant reply steers the
+  // v1.1.4: recall feedback. 👍/👎 on an assistant reply steers the
   // recall engine's future relevance scoring (the backend steering has
   // existed since v1.0.6 — this is its first user-facing write path).
   const sendFeedback = useRuntimeStore((state) => state.sendFeedback);

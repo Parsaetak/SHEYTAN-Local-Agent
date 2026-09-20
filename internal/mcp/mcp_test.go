@@ -1,6 +1,6 @@
 package mcp
 
-// mcp_v129_test.go — v1.2.9 regressions: result-size limits must be
+// Result-size limits must be
 // enforced BEFORE or DURING response decoding, and the read loop must
 // bound the wire line length, so a malformed/malicious MCP provider
 // cannot allocate an arbitrarily large response before the logical

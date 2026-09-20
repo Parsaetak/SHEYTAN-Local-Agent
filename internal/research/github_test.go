@@ -98,7 +98,7 @@ func TestGitHubProviderSearch(t *testing.T) {
 			t.Fatalf("unexpected Accept header: %q", got)
 		}
 
-		if got := r.Header.Get("User-Agent"); got != "SHEYTAN-Local-Agent/Version-Zeta" {
+		if got := r.Header.Get("User-Agent"); got != DefaultUserAgent() {
 			t.Fatalf("unexpected User-Agent: %q", got)
 		}
 

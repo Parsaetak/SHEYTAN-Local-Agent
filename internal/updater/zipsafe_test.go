@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestSafeZipPathRejectsTraversal pins the v1.1.4Z zip-slip fix and the
+// TestSafeZipPathRejectsTraversal pins the v1.1.4 zip-slip fix and the
 // v1.2.0 Windows hardening: the updater's extractZip previously joined
 // member names with no validation, and the first separator-canonical
 // rewrite still accepted "\absolute\path" because filepath.IsAbs reports

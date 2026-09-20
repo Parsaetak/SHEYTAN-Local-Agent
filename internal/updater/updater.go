@@ -406,7 +406,7 @@ func assetExists(ctx context.Context, tag string) bool {
 
 // AssetExists is the exported test/production seam for assetExists: it
 // HEAD-checks whether the prebuilt engine asset for this platform exists
-// at the given tag. v1.1.5Z repair: the engine download path needs this to
+// at the given tag. v1.1.5 repair: the engine download path needs this to
 // probe the pinned tag before falling back to a release scan, because
 // llama.cpp removed its Linux prebuilt assets upstream (the pinned tag
 // now 404s on Linux while the Windows asset still exists).
@@ -550,7 +550,7 @@ func checkAndApply(ctx context.Context, cfg *config.Config, eng Engine, force bo
 // cadences fire even in long-running sessions. `notify` (optional) receives
 // human-readable status lines; `save` persists the config.
 //
-// v1.1.4Z: takes the live config Source. CheckAndApply mutates cfg
+// v1.1.4: takes the live config Source. CheckAndApply mutates cfg
 // (LastUpdateCheck) in place, so each pass runs on a PRIVATE copy that is
 // published back through the source — a published immutable value is never
 // mutated. Wired by api.Server.EnsureSetup (previously zero callers).
@@ -621,7 +621,7 @@ func RunScheduled(ctx context.Context, src *config.Source, eng Engine, notify fu
 // server binary (plus adjacent runtime DLLs) into binDir, staging first so
 // a bad download can never destroy a working engine.
 //
-// v1.1.4Z: the transfer is capped (engineUpdateCapBytes) — the previous
+// v1.1.4: the transfer is capped (engineUpdateCapBytes) — the previous
 // io.Copy accepted an arbitrarily large body.
 // v1.2.3: the transfer runs through the reusable Download Manager:
 // HTTPS-only (loopback test doubles excepted), streamed to a .part file,
@@ -731,7 +731,7 @@ func copyAll(srcDir, dstDir string) error {
 
 // extractZip extracts a zip archive into dir.
 //
-// v1.1.4Z: every member path is sanitized (no absolute paths, volume
+// v1.1.4: every member path is sanitized (no absolute paths, volume
 // names, or .. traversal) and per-entry sizes are bounded. The previous
 // version joined filepath.Join(dir, f.Name) with NO validation — a
 // hostile archive could write outside the staging directory.

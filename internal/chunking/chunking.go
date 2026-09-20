@@ -125,7 +125,7 @@ func IsKnownTextExt(path string) bool {
 // any run longer than maxBytes. Returns nil for empty input. Chunks keep
 // their trailing newline so re-joining is lossless.
 //
-// v1.1.5Z Phase 3: the split runs as one interval pass shared with
+// v1.1.5 Phase 3: the split runs as one interval pass shared with
 // ChunkText (no rescanning, chunk strings share the source backing array,
 // hard splits are UTF-8-rune-aligned). With no multi-byte runes the cut
 // points are byte-identical to the pre-Phase-3 primitive.

@@ -48,7 +48,7 @@ import (
 // runtime instead of constructing a second independent orchestrator.
 type Server struct {
 	// src is the live configuration source shared with the runtime stack.
-	// (v1.1.4Z: handlers snapshot it per request; the old shared mutable
+	// (v1.1.4: handlers snapshot it per request; the old shared mutable
 	// *Config raced the patch handler against active runs.)
 	src       *config.Source
 	store     *sessions.Store
@@ -61,12 +61,12 @@ type Server struct {
 	recall    *recall.Engine // v1.0.2 persistent memory over past chats
 
 	// continuum evaluates chapter rollover after long sessions
-	// (v1.1.4Z: the manager was fully implemented and tested but never
+	// (v1.1.4: the manager was fully implemented and tested but never
 	// wired into any production path before).
 	continuum *continuum.Manager
 
 	// updateCancel stops the scheduled engine-update loop on Close
-	// (v1.1.4Z: updater.RunScheduled existed with zero callers).
+	// (v1.1.4: updater.RunScheduled existed with zero callers).
 	// updateDone is RunScheduled's completion channel: closed once the
 	// loop observed cancellation AND any in-flight pass finished —
 	// Close waits on it (bounded) so the updater can never outlive the
@@ -104,12 +104,12 @@ type Server struct {
 	// instead of staying stuck on a run it never observed.
 	outcomes *runRegistry
 
-	// v1.1.2Z: idle WebSocket standby registry — sessionID → connections.
+	// v1.1.2: idle WebSocket standby registry — sessionID → connections.
 	// Before this, an activity WebSocket with no active run was closed
 	// immediately after one "idle" sentinel, so the UI permanently showed
 	// "Offline" between runs. Idle connections now stay open, and the
 	// instant a run starts they are woken and attached to the run hub.
-	// v1.1.3Z: each standby connection also owns an engineCh fed by the
+	// v1.1.3: each standby connection also owns an engineCh fed by the
 	// engine event bus so idle UIs still observe engine transitions.
 	standbyMu sync.Mutex
 	standby   map[string][]*standbyConn
@@ -306,7 +306,7 @@ func New(cfg *config.Config) (*Server, error) {
 		engineDone: make(chan struct{}),
 	}
 
-	// v1.1.3Z: the engine event bus fans authoritative state transitions
+	// v1.1.3: the engine event bus fans authoritative state transitions
 	// to every WebSocket as they happen.
 	go func() {
 		defer close(s.engineDone)
@@ -336,14 +336,14 @@ func (s *Server) EnsureSetup() error {
 	// render immediately, deep facts land when the probe finishes.
 	hardware.WarmDeep()
 
-	// v1.1.3Z — THE acceptance requirement: the application owns the engine
+	// v1.1.3 — THE acceptance requirement: the application owns the engine
 	// lifecycle. A clean launch must reach a healthy model without any
 	// manual llama.cpp intervention.
 	if cfg.LlamaAutoStart && s.stack != nil {
 		s.stack.PrewarmLLM()
 	}
 
-	// v1.1.4Z: the scheduled engine-update loop is live. RunScheduled was
+	// v1.1.4: the scheduled engine-update loop is live. RunScheduled was
 	// fully implemented (immediate pass when due, re-check every 6 h) but
 	// had zero callers — the "update (scheduled: daily/weekly/monthly)"
 	// contract in the CLI help was only ever honored by manual runs. It
@@ -500,12 +500,12 @@ func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
 }
 
 // modelInfo is the rich local-model descriptor consumed by the UI's model
-// pickers. Before v1.1.2Z the API shipped bare filename strings while the
+// pickers. Before v1.1.2 the API shipped bare filename strings while the
 // frontend expected {id, name, path, sizeBytes} objects — every <option>
 // rendered with an undefined value, so selecting a model silently wrote
 // "undefined" into the config. The wire format now matches the contract.
 //
-// v1.1.4Z: architecture / quantization / context capacity arrive from the
+// v1.1.4: architecture / quantization / context capacity arrive from the
 // GGUF header (llm.ReadModelCard) — a full parser that existed in the
 // repository with ZERO callers while the README documented exactly these
 // fields. Headers are read from a bounded 8 MB prefix and cached by
@@ -544,7 +544,7 @@ type modelInfo struct {
 	NativeReason       string `json:"nativeReason,omitempty"`
 	EstimatedVRAMBytes int64  `json:"estimatedVRAMBytes,omitempty"`
 
-	// Serving (v1.1.5Z Phase 6): true when the ACTIVE backend is
+	// Serving (v1.1.5 Phase 6): true when the ACTIVE backend is
 	// currently serving THIS model — the honest "currently serving"
 	// marker for the picker. The backend itself is reported once at
 	// the response level.
@@ -558,7 +558,7 @@ type modelInfo struct {
 
 // modelCardCache memoizes GGUF header reads for handleModels.
 //
-// v1.1.5Z Phase 3: entries are keyed by path+SIZE+mtime (a same-size
+// v1.1.5 Phase 3: entries are keyed by path+SIZE+mtime (a same-size
 // rewrite used to serve stale metadata) and the map is bounded — past the
 // cap it is reset wholesale (model files change rarely; the read is cheap
 // and buffered).
@@ -703,7 +703,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// v1.1.5Z Phase 6 (honest model status): report WHICH backend is
+	// v1.1.5 Phase 6 (honest model status): report WHICH backend is
 	// serving and WHICH model it serves, and mark that model in the
 	// local list. The UI vocabulary stays honest: discovered (listed
 	// here), loaded (llama.cpp loaded list), serving (the active
@@ -766,11 +766,11 @@ func (s *Server) handleLlama(w http.ResponseWriter, r *http.Request) {
 
 		switch body.Action {
 		case "start":
-			// v1.1.5Z: when the native path is enabled, the
+			// v1.1.5: when the native path is enabled, the
 			// engine toggle brings BOTH engines up: the native
 			// engine AND the llama.cpp engine.
 			//
-			// v1.1.5Z repair (toggle usability): the toggle must
+			// v1.1.5 repair (toggle usability): the toggle must
 			// produce a USABLE native engine — start the host AND
 			// load the selected model natively. Starting the host
 			// alone left it generation-incapable, so every run
@@ -837,7 +837,7 @@ func (s *Server) handleLlama(w http.ResponseWriter, r *http.Request) {
 			return
 
 		case "stop":
-			// v1.1.5Z: stop both engines (native bounded, errors
+			// v1.1.5: stop both engines (native bounded, errors
 			// logged only — the llama stop result is the
 			// authoritative one).
 			if s.native != nil {
@@ -1071,7 +1071,7 @@ func (s *Server) redactedConfig() config.Config {
 //
 // Fields omitted from the request retain their current values.
 //
-// v1.1.4Z: the patch is applied to a PRIVATE COPY under the source's write
+// v1.1.4: the patch is applied to a PRIVATE COPY under the source's write
 // lock and the new value is atomically published (copy-on-write). The old
 // implementation wrote `*s.cfg = updated` in place on the shared pointer —
 // a genuine data race against every run goroutine and the engine manager,
@@ -1187,7 +1187,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.redactedConfig())
 
 	case http.MethodPut, http.MethodPost:
-		// v1.1.4Z: bounded body — the config endpoint previously
+		// v1.1.4: bounded body — the config endpoint previously
 		// accepted unbounded request bodies.
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
@@ -1448,7 +1448,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// v1.1.4Z: a failed pre-run persistence was previously invisible —
+	// v1.1.4: a failed pre-run persistence was previously invisible —
 	// the user message could silently vanish while the run continued.
 	// v1.2.8.1: the save preserves the STORE's current context (fetched
 	// under the same lock) — the run's context deltas were applied
@@ -1515,7 +1515,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// v1.1.3Z: staged attachments enter the real context pipeline here —
+	// v1.1.3: staged attachments enter the real context pipeline here —
 	// relevant chunks are retrieved for the current query and injected
 	// as a bounded, provenance-tagged block BEFORE the fresh user turn
 	// (stable prompt prefix preserves the engine KV cache). Raw binaries
@@ -1536,7 +1536,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 		budget := s.src.Load().AttachmentsBudgetBytes()
 
-		// v1.1.5Z Phase 3: retrieval is instrumented with MEASURED
+		// v1.1.5 Phase 3: retrieval is instrumented with MEASURED
 		// values only (chunks considered/selected, object reads,
 		// bytes). Logged per turn for diagnosability; the wire/UI
 		// contract is unchanged.
@@ -1632,7 +1632,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// Spawn the run.
 	//
-	// v1.1.4Z: RunTimeoutMinutes (default 60) bounds the whole turn.
+	// v1.1.4: RunTimeoutMinutes (default 60) bounds the whole turn.
 	// Previously a run was bounded ONLY by maxIterations and the LLM
 	// client's per-call timeout — a pathological turn could legally run
 	// for hours while holding the run slot.
@@ -1696,7 +1696,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		s.stack.MemMgr.TrackRunStart()
 	}
 
-	// v1.1.2Z: release every activity connection parked in standby for
+	// v1.1.2: release every activity connection parked in standby for
 	// this session so they attach to the new run hub immediately.
 	s.wakeStandby(sess.ID)
 
@@ -1783,7 +1783,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			cancel()
 		}()
 
-		// v1.1.3Z: gate every run on a real, healthy engine. A cold start
+		// v1.1.3: gate every run on a real, healthy engine. A cold start
 		// here streams the authoritative engine transitions to the UI
 		// (starting → ready) while the request waits, bounded by the
 		// engine gate timeout.
@@ -1874,7 +1874,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 
-				// v1.1.4Z: persistence failures surface as a
+				// v1.1.4: persistence failures surface as a
 				// visible warning instead of vanishing.
 				if err := s.store.AppendActivity(
 					sess.ID,
@@ -1933,7 +1933,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 					Reasoning: res.Reasoning,
 				},
 			); err != nil {
-				// v1.1.4Z: a lost reply is a REAL failure the
+				// v1.1.4: a lost reply is a REAL failure the
 				// user must see, not a swallowed error.
 				publish(stampRun(agent.Activity{
 					Type:      "error",
@@ -2117,7 +2117,7 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// v1.1.4Z: bounded body AND a decode failure that previously
+	// v1.1.4: bounded body AND a decode failure that previously
 	// returned {ok:true} while aborting nothing.
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 
@@ -2151,7 +2151,7 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 // --- Recall feedback ---
 
 // handleFeedback records the user's 👍/👎 verdict for one past exchange
-// (v1.1.4Z). The recall feedback sidecar (SetFeedback / FeedbackFor and
+// (v1.1.4). The recall feedback sidecar (SetFeedback / FeedbackFor and
 // the liked×1.25 / disliked×0.6 scoring boosts) existed since v1.0.6 with
 // NO write path — the steering could never fire. The frontend sends the
 // query text of the exchange it is rating; the deterministic capsule id
@@ -2235,7 +2235,7 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
 
 	defer conn.Close()
 
-	// v1.1.2Z: the read pump owns every incoming frame. It detects client
+	// v1.1.2: the read pump owns every incoming frame. It detects client
 	// disconnects (read error closes clientGone) and routes abort actions
 	// to whatever run is currently active for the session.
 	clientGone := make(chan struct{})

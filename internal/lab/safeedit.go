@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Safe file editing — v1.1.5Z Phase 6 (coding effectiveness).
+// Safe file editing — v1.1.5 Phase 6 (coding effectiveness).
 //
 // Small local models corrupt files through shell-based edits: broken quoting,
 // half-written heredocs, glob surprises. The safe-edit primitives replace that

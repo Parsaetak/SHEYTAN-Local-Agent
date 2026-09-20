@@ -91,7 +91,7 @@ type ToolCall struct {
 // endpoint (provider=remote) using cfg.EffectiveBaseURL/APIKey.
 type Client struct {
 	// src is the live config source: sampling values are read per request
-	// so Settings patches apply to the very next call (v1.1.4Z: previously
+	// so Settings patches apply to the very next call (v1.1.4: previously
 	// a shared mutable pointer — a data race against the config patcher).
 	src  *config.Source
 	http *http.Client
@@ -101,7 +101,7 @@ type Client struct {
 	// context plus the stream stall watchdog provide the bounds instead.
 	streamHTTP *http.Client
 
-	// v1.1.3Z: engine busy hook. Runtime wiring sets it to LlamaServer
+	// v1.1.3: engine busy hook. Runtime wiring sets it to LlamaServer
 	// MarkBusy so real inference traffic flips the authoritative engine
 	// state ready↔busy for the UI. Nil = no reporting (tests).
 	busyMu   sync.RWMutex
@@ -118,7 +118,7 @@ type Client struct {
 }
 
 // SetBusyHook wires the engine busy reporter. Safe under concurrency
-// (v1.1.4Z: previously an unsynchronized write raced the streaming read
+// (v1.1.4: previously an unsynchronized write raced the streaming read
 // path — benign only because wiring happened at boot, now guaranteed).
 func (c *Client) SetBusyHook(fn func(busy bool)) {
 	c.busyMu.Lock()
@@ -166,7 +166,7 @@ func newTunedTransport() *http.Transport {
 }
 
 func NewClient(src *config.Source) *Client {
-	// v1.1.4Z: two clients. `http` keeps the 10-minute overall timeout for
+	// v1.1.4: two clients. `http` keeps the 10-minute overall timeout for
 	// non-streaming calls. `streamHTTP` has no overall timeout — long
 	// generations are legal — but the transport bounds the response HEADER
 	// wait and the SSE read loop is guarded by the stall watchdog in
@@ -461,7 +461,7 @@ func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, err
 		c.logCall(req, start, contentLen, toolCalls, finish, nil)
 		return &out, nil
 	}
-	// v1.1.4Z: retry exhaustion was previously invisible in llm.jsonl —
+	// v1.1.4: retry exhaustion was previously invisible in llm.jsonl —
 	// only individual transport errors were logged, never the final
 	// give-up. This is the record that actually explains a dead turn.
 	if lastErr != nil {
@@ -692,7 +692,7 @@ func (c *Client) StreamChatDetailed(ctx context.Context, req *ChatRequest, onEve
 			return perf, lastErr
 		}
 	}
-	// v1.1.4Z: record the final give-up (mirrors the Chat path).
+	// v1.1.4: record the final give-up (mirrors the Chat path).
 	if lastErr != nil {
 		c.logCall(req, time.Now(), 0, 0, "", lastErr)
 	}
@@ -768,7 +768,7 @@ var (
 var streamStallTimeout = 5 * time.Minute
 
 func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, onEvent func(StreamEvent) error) error {
-	// v1.1.4Z: the request runs on a child context the stall watchdog can
+	// v1.1.4: the request runs on a child context the stall watchdog can
 	// cancel. A blocked SSE body read cannot be interrupted by any reader
 	// wrapper — canceling the request context is the only reliable way to
 	// unwind a hung connection.
@@ -796,7 +796,7 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 		return err
 	}
 
-	// v1.1.4Z: streaming uses the timeout-free client — the overall
+	// v1.1.4: streaming uses the timeout-free client — the overall
 	// bound is the caller's context plus the stall watchdog below.
 	resp, err := c.streamHTTP.Do(httpReq)
 	if err != nil {
@@ -851,7 +851,7 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 	// for comment/keep-alive lines, which on a fast stream meant thousands
 	// of short-lived allocations per reply (GC pressure = dropped frames).
 	//
-	// v1.1.4Z stall watchdog: a stalled engine (deadlocked generation,
+	// v1.1.4 stall watchdog: a stalled engine (deadlocked generation,
 	// half-dead TCP connection) previously hung the stream until the
 	// 10-minute client timeout — which in turn silently TRUNCATED every
 	// longer generation. The watchdog aborts only when NO bytes arrive
@@ -1203,7 +1203,7 @@ func (c *Client) ImageCacheLenForTest() int {
 // Reasoning/attachment display fields are stripped from the wire copy;
 // v1.0.6: images are projected into OpenAI content parts.
 //
-// v1.1.4Z: the previously-ignored sampling settings (minP, repeatLastN,
+// v1.1.4: the previously-ignored sampling settings (minP, repeatLastN,
 // presence/frequency penalty) now actually reach the engine — they were
 // editable in Settings but silently dropped from every request before.
 func (c *Client) BuildChatRequest(model string, messages []Message, tools []ToolSpec) *ChatRequest {

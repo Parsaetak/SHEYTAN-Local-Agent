@@ -164,7 +164,7 @@ func (r *Runner) Run(
 	// Coding Lab processes must not inherit the full host environment.
 	// This removes API keys, tokens, passwords, credentials, cookies, and
 	// other host secrets while retaining normal compiler/runtime variables.
-	// v1.1.4Z: HOME and USERPROFILE are pinned to the workspace. A lexical
+	// v1.1.4: HOME and USERPROFILE are pinned to the workspace. A lexical
 	// policy check cannot see through shell expansion, so $HOME/~/ tokens
 	// previously escaped the workspace jail while still resolving to the
 	// real user profile (reads AND writes outside the sandbox).
@@ -364,7 +364,7 @@ func envKey(value string) string {
 }
 
 // homeOverrides pins the shell-visible home directory into the workspace so
-// $HOME/~/ expansion cannot escape the jail (v1.1.4Z).
+// $HOME/~/ expansion cannot escape the jail (v1.1.4).
 func homeOverrides(workingDir string) map[string]string {
 	return map[string]string{
 		"HOME":          workingDir,

@@ -1,7 +1,7 @@
 package engine
 
 // runtime.go — supervised lifecycle of the native engine host subprocess
-// (v1.1.5Z Phase 1).
+// (v1.1.5 Phase 1).
 //
 // The Engine owns the shtn-engine-host process: it starts it, performs the
 // protocol/ABI handshake, health-checks it, marks it ready, stops it,

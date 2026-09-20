@@ -50,7 +50,7 @@ func (t *Tool) currentIntel() IntelRecorder {
 	return t.intel
 }
 
-// IntelRecorder receives durable project facts from Lab runs (v1.1.5Z
+// IntelRecorder receives durable project facts from Lab runs (v1.1.5
 // Phase 6 persistent project intelligence). Implementations must be safe
 // for concurrent use; errors are non-fatal (intelligence is best-effort,
 // never a gate).
@@ -681,7 +681,7 @@ func (t *Tool) verifyTask(
 
 	_ = t.sessions.Touch(task.ID)
 
-	// v1.1.5Z Phase 6: verified commands become persistent project facts.
+	// v1.1.5 Phase 6: verified commands become persistent project facts.
 	// Only checks that PASSED objective verification are recorded, and only
 	// against the task's SOURCE root (the project the workspace was cloned
 	// from) — a lab workspace is disposable, the project is not.

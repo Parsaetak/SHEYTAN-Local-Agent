@@ -18,23 +18,22 @@ concurrency:
 permissions:
   contents: read
 
-# v1.1.8: the release identity is NOT hardcoded here anymore. package.json
-# is the single source of truth; the audit job resolves it at runtime
+# The release identity is NOT hardcoded here. package.json is the single
+# source of truth; the audit job resolves it at runtime
 # (scripts/release-version.mjs --env) and every other job consumes it via
 # needs-outputs. A version bump therefore only touches package.json + the
-# derived surfaces the script repairs — a stale env constant can never
-# desync CI again (root cause of run 34788709977).
+# derived surfaces the script repairs. The identity is version-only:
+# APP_VERSION (with the APP_VERSION_FULL compatibility alias); there is no
+# codename dimension.
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
-  # v1.2.1: canonical package-root variables — ONE root per platform, from
-  # which every staging directory, ZIP name, ZIP entry check, artifact name
-  # and release-metadata reference is derived. The root cause of run
-  # 34871838054 was duplicated root literals: the Linux ZIP was created
-  # under SHEYTAN-Local-Agent/ while its verifier expected SHEYTAN-LA/
-  # entries. No root literal is repeated below anymore; the Go contract
-  # (internal/releasecontract) mirrors these values and the stress gate
-  # fails the build if the two copies of the truth ever drift apart again.
+  # Canonical package-root variables — ONE root per platform, from which
+  # every staging directory, ZIP name, ZIP entry check, artifact name and
+  # release-metadata reference is derived. No root literal is repeated
+  # below; the Go contract (internal/releasecontract) mirrors these values
+  # and the stress gate fails the build if the two copies of the truth ever
+  # drift apart.
   WIN_PKG_ROOT: "SHEYTAN-LA"
   LINUX_PKG_ROOT: "SHEYTAN-Local-Agent"
 
@@ -44,17 +43,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
 
-    # v1.1.9: the identity step emits APP_VERSION / APP_VERSION_FULL /
-    # APP_CODENAME (exactly as release-version.mjs --env names them). Run
-    # 34791882219 failed because these mappings pointed at lowercase names
-    # (steps.identity.outputs.version) that the step never writes, so every
-    # needs.audit.outputs.* resolved to an empty string and the Linux/Windows
-    # release-metadata verification failed on empty APP_VERSION. The output
-    # names here MUST match the keys written to GITHUB_OUTPUT below.
+    # The identity step emits APP_VERSION / APP_VERSION_FULL (exactly as
+    # release-version.mjs --env names them). The output names here MUST
+    # match the keys written to GITHUB_OUTPUT below.
     outputs:
       version: ${{ steps.identity.outputs.APP_VERSION }}
       version_full: ${{ steps.identity.outputs.APP_VERSION_FULL }}
-      codename: ${{ steps.identity.outputs.APP_CODENAME }}
 
     steps:
       - name: Checkout
@@ -91,36 +85,34 @@ jobs:
 
           node scripts/release-version.mjs
 
-          # v1.1.8: derive the release identity from package.json (the one
+          # Derive the release identity from package.json (the one
           # canonical source) instead of trusting a workflow env constant.
           identity_out="$(node scripts/release-version.mjs --env)"
 
           while IFS='=' read -r key value; do
             case "$key" in
-              APP_VERSION | APP_VERSION_FULL | APP_CODENAME)
+              APP_VERSION | APP_VERSION_FULL)
                 export "$key=$value"
                 printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
                 ;;
             esac
           done <<< "$identity_out"
 
-          # v1.1.9: fail fast here — before any expensive build job starts —
-          # if the release identity did not resolve. An empty value used to
-          # surface only later as a cryptic metadata-verification failure in
-          # Linux/Windows (root cause of run 34791882219).
-          if [ -z "${APP_VERSION:-}" ] || [ -z "${APP_VERSION_FULL:-}" ] || [ -z "${APP_CODENAME:-}" ]; then
-            echo "::error::Release identity did not resolve. APP_VERSION, APP_VERSION_FULL and APP_CODENAME must all be non-empty after 'release-version.mjs --env'."
+          # Fail fast — before any expensive build job starts — if the
+          # release identity did not resolve.
+          if [ -z "${APP_VERSION:-}" ] || [ -z "${APP_VERSION_FULL:-}" ]; then
+            echo "::error::Release identity did not resolve. APP_VERSION and APP_VERSION_FULL must both be non-empty after 'release-version.mjs --env'."
             exit 1
           fi
 
           # The identity step must be tagged so needs-outputs can read it
           # (id: identity above). Job outputs map from the APP_* names.
-          echo "Resolved identity: $APP_VERSION / $APP_VERSION_FULL / $APP_CODENAME"
+          echo "Resolved identity: $APP_VERSION / $APP_VERSION_FULL"
 
           # Belt and suspenders: the repaired tree must pass check mode.
           node scripts/release-version.mjs --check
 
-          grep -F "AppVersion  = \"$APP_VERSION\"" internal/config/config.go
+          grep -E "AppVersion[[:space:]]+=[[:space:]]+\"$APP_VERSION\"" internal/config/config.go
           grep -F "\"version\": \"$APP_VERSION_FULL\"" package.json
           grep -F "productVersion: \"$APP_VERSION_FULL\"" build/config.yml
           grep -F "SHEYTAN-Local-Agent v$APP_VERSION" SIGNATURE
@@ -137,6 +129,10 @@ jobs:
           npm run typecheck
           npm run lint
           npm run test:units
+
+          # Production build contract: start from a CLEAN dist so no
+          # previous-generation asset can survive into web/static.
+          rm -rf dist
           npm run build
 
       - name: Verify embedded frontend
@@ -149,16 +145,47 @@ jobs:
 
           echo "Embedded frontend verification passed."
 
+      # v1.3.1: the static-asset acceptance contract. The embedded
+      # frontend must use STABLE deterministic filenames (index.js,
+      # AgentBody.js, ...) — content-hashed names are rejected, every
+      # referenced asset and dynamic-import chunk must exist, and
+      # web/static must exactly mirror the clean build in dist/.
+      - name: Verify stable frontend asset contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node scripts/verify-static-assets.mjs --dist
+
+      # v1.3.1: codename removal gate. The product identity is
+      # version-only; no codename may remain anywhere in the tracked
+      # tree (case-insensitive scan for the retired terms).
+      - name: Codename removal gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pattern='app_?codename|version-z[e]ta|(^|[^[:alpha:]])z[e]ta([^[:alpha:]]|$)'
+          hits="$(git grep -inE "$pattern" -- . || true)"
+
+          if [ -n "$hits" ]; then
+            echo "::error::Retired product-codename references remain:"
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+
+          echo "Codename removal gate passed: zero codename references."
+
       - name: Setup Go 1.26
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      # v1.2.9: focused race gate. The concurrency-heavy packages run
-      # under the race detector on every push/PR (headless tag: the
-      # desktop shell is not needed for these suites; CGO is required
-      # by the engine-boundary code paths they exercise).
+      # Focused race gate. The concurrency-heavy packages run under the
+      # race detector on every push/PR (headless tag: the desktop shell is
+      # not needed for these suites; CGO is required by the engine-boundary
+      # code paths they exercise).
       - name: Go race gate (concurrency-heavy packages)
         shell: bash
         env:
@@ -172,20 +199,16 @@ jobs:
 
           echo "Race gate passed."
 
-      # v1.1.5Z Phase 1: the C++ native engine skeleton builds and its
-      # dependency-free test suites pass on the same runner the Go build
-      # uses. Ubuntu-24.04 images ship cmake (>= 3.28) and g++.
-      # v1.2.8.1 REPAIR (root cause of run 35464922587): the v1.2.1
-      # actions/cache step cached the ENTIRE native/engine/build tree —
-      # including CMakeCache.txt / CMakeFiles, which embed absolute paths.
-      # The cache key did not encode the runner workspace path, so a cache
-      # entry produced under one workspace casing (…/SHEYTAN-local-agent/…)
-      # was restored into another (…/SHEYTAN-Local-Agent/…) and cmake
-      # refused to configure: "current CMakeCache.txt directory … different
-      # from cached directory". A relocatable CMake build tree is NOT a
-      # safe cache artifact, so the cache step is removed entirely and
-      # every run configures from a clean build directory with `--fresh`.
-      # Compile cost is paid once per run; reproducibility is exact.
+      # The C++ native engine builds and its dependency-free test suites
+      # pass on the same runner the Go build uses. Ubuntu-24.04 images ship
+      # cmake (>= 3.28) and g++.
+      #
+      # CMake cache rule: a relocatable CMake build tree is NOT a safe
+      # cache artifact — CMakeCache.txt / CMakeFiles embed absolute paths,
+      # and a cache entry produced under one workspace casing cannot be
+      # restored into another. The build directory is therefore wiped and
+      # reconfigured with `--fresh` on every run; compile cost is paid once
+      # per run and reproducibility is exact.
       - name: Native engine (C++) build and tests
         shell: bash
         run: |
@@ -193,16 +216,15 @@ jobs:
 
           cmake --version
 
-          # v1.2.8.1 regression guard: never reuse a stale or path-mismatched
-          # cache. Wipe the build dir unconditionally, then configure with
-          # --fresh so cmake regenerates every cache entry from scratch.
+          # Regression guard: never reuse a stale or path-mismatched cache.
+          # Wipe the build dir unconditionally, then configure with --fresh
+          # so cmake regenerates every cache entry from scratch.
           rm -rf native/engine/build
           cmake -S native/engine -B native/engine/build --fresh
 
-          # v1.2.8.1 regression guard: the freshly written CMakeCache.txt
-          # must record THIS runner workspace's absolute paths (correct
-          # letter case included). A path/case mismatch here is exactly the
-          # failure mode of run 35464922587.
+          # Regression guard: the freshly written CMakeCache.txt must
+          # record THIS runner workspace's absolute paths (correct letter
+          # case included).
           grep -F "$(pwd)/native/engine/build" native/engine/build/CMakeCache.txt > /dev/null
           grep -F "$(pwd)/native/engine" native/engine/build/CMakeCache.txt > /dev/null
 
@@ -217,12 +239,11 @@ jobs:
     needs: audit
     timeout-minutes: 60
 
-    # v1.1.8: identity flows from the audit job's runtime resolution of
+    # Identity flows from the audit job's runtime resolution of
     # package.json — no local hardcoded version can drift here either.
     env:
       APP_VERSION: ${{ needs.audit.outputs.version }}
       APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
-      APP_CODENAME: ${{ needs.audit.outputs.codename }}
     runs-on: windows-latest
 
     steps:
@@ -270,7 +291,7 @@ jobs:
             throw "Unexpected web/package.json found."
           }
 
-      - name: Synchronize Zeta release metadata
+      - name: Synchronize release metadata
         shell: pwsh
         run: node scripts/release-version.mjs
 
@@ -279,8 +300,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # v1.1.4Z CI repair: the original step reused Bash-style
-          # backslash-quote escaping inside PowerShell strings. PowerShell
+          # PowerShell escaping rule: never reuse Bash-style backslash-quote
+          # escaping inside PowerShell strings. PowerShell
           # terminates the string at the quote after the backslash, splits
           # the -Pattern argument into extra positional tokens and fails
           # with "A positional parameter cannot be found that accepts
@@ -292,7 +313,7 @@ jobs:
             @{
               Label   = "internal/config/config.go AppVersion"
               Path    = "internal/config/config.go"
-              Pattern = 'AppVersion  = "' + $env:APP_VERSION + '"'
+              Pattern = 'AppVersion\s*=\s*"' + $env:APP_VERSION + '"'
             },
             @{
               Label   = "package.json version"
@@ -333,6 +354,12 @@ jobs:
           npm run typecheck
           npm run lint
           npm run test:units
+
+          # Production build contract: start from a CLEAN dist so no
+          # previous-generation asset can survive into web/static.
+          if (Test-Path "dist") {
+            Remove-Item "dist" -Recurse -Force
+          }
           npm run build
 
       - name: Verify embedded frontend
@@ -351,6 +378,19 @@ jobs:
           }
 
           Write-Host "Embedded frontend verification passed."
+
+      # v1.3.1: stable deterministic frontend filenames — no content
+      # hashes, every referenced chunk exists, web/static mirrors dist/.
+      - name: Verify stable frontend asset contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          node scripts/verify-static-assets.mjs --dist
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Static asset contract verification failed."
+          }
 
       - name: Setup Go 1.26
         uses: actions/setup-go@v7
@@ -393,7 +433,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # v1.2.1: staging root derives from the canonical WIN_PKG_ROOT.
+          # Staging root derives from the canonical WIN_PKG_ROOT.
           $appRoot = "dist/windows/app/${env:WIN_PKG_ROOT}"
 
           New-Item `
@@ -418,7 +458,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # v1.2.1: the probed executable derives from the canonical root.
+          # The probed executable derives from the canonical root.
           $exe = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
           $probe = "dist/windows/sheytan-version-smoke.exe"
 
@@ -469,8 +509,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # v1.2.1: canonical package root — same value controls staging,
-          # ZIP creation, ZIP verification and artifact naming.
+          # Canonical package root — the same value controls staging, ZIP
+          # creation, ZIP verification and artifact naming.
           $root = "dist/windows/app/${env:WIN_PKG_ROOT}"
 
           New-Item `
@@ -484,7 +524,7 @@ jobs:
             -Path "$root/workspace" | Out-Null
 
           @"
-          SHEYTAN-LA $env:APP_VERSION ($env:APP_CODENAME)
+          SHEYTAN-LA $env:APP_VERSION
 
           Portable Windows x64 distribution.
 
@@ -506,7 +546,6 @@ jobs:
           @"
           SHEYTAN-LA (SHEYTAN Local Agent)
           Version: $env:APP_VERSION
-          Codename: $env:APP_CODENAME
           Platform: Windows x64
           Commit: $env:GITHUB_SHA
           "@ | Set-Content "$root/BUILD-INFO.txt" -Encoding utf8
@@ -570,9 +609,9 @@ jobs:
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-          # v1.2.1: every expected entry is rooted at the canonical
-          # WIN_PKG_ROOT — the same variable that staged and zipped the
-          # application. No duplicated root literal exists to drift.
+          # Every expected entry is rooted at the canonical WIN_PKG_ROOT —
+          # the same variable that staged and zipped the application. No
+          # duplicated root literal exists to drift.
           $zipPath = Resolve-Path `
             "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
 
@@ -666,15 +705,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # v1.2.0: the primary user installer. NSIS is the broad Win32
+          # The primary user installer. NSIS is the broad Win32
           # distribution path; the portable ZIP remains the advanced
           # option. Models are NEVER bundled — the installer ships the
           # application only.
           #
-          # PATH CONTRACT (v1.2.0): makensis resolves compile-time paths
-          # relative to the .nsi SCRIPT directory, not the invoking CWD —
-          # the previous repo-root-relative -DBUILDDIR made it look under
-          # packaging\nsis\dist\... and fail with "no files found". CI
+          # PATH CONTRACT: makensis resolves compile-time paths relative to
+          # the .nsi SCRIPT directory, not the invoking CWD. CI therefore
           # passes ABSOLUTE BUILDDIR/OUTFILE paths, which are unambiguous
           # from any invocation context, and the script itself asserts the
           # staging executable exists before compiling anything.
@@ -690,7 +727,7 @@ jobs:
 
           # Pre-flight assertions: refuse to invoke NSIS against a broken
           # staging tree — the exact executable, at the exact stage path.
-          # v1.2.1: the staging path derives from the canonical root.
+          # The staging path derives from the canonical root.
           $repoRoot = (Get-Location).Path
           $stagingDir = Join-Path $repoRoot "dist\windows\app\${env:WIN_PKG_ROOT}"
           $stagingExe = Join-Path $stagingDir "SHEYTAN-LA.exe"
@@ -702,7 +739,7 @@ jobs:
             throw "NSIS staging executable missing: $stagingExe"
           }
 
-          # v1.2.1: NSIS installer source-contract — the installer MUST
+          # NSIS installer source-contract — the installer MUST
           # keep the directory-selection page, the optional desktop
           # shortcut (default checked), a registered uninstaller, and the
           # user-data-preserving uninstall section. Checking the SOURCE
@@ -780,8 +817,8 @@ jobs:
           $sig = Get-AuthenticodeSignature $installer.FullName
           Write-Host "Installer Authenticode status: $($sig.Status)"
 
-          # v1.2.0: structural inspection instead of trusting the exit
-          # code — the installer must be a valid PE carrying the identity.
+          # Structural inspection instead of trusting the exit code — the
+          # installer must be a valid PE carrying the identity.
           $bytes = New-Object byte[] 2
           $fs = [System.IO.File]::OpenRead($installer.FullName)
           try { $null = $fs.Read($bytes, 0, 2) } finally { $fs.Dispose() }
@@ -819,12 +856,11 @@ jobs:
     needs: audit
     timeout-minutes: 50
 
-    # v1.1.8: identity flows from the audit job's runtime resolution of
+    # Identity flows from the audit job's runtime resolution of
     # package.json — no local hardcoded version can drift here either.
     env:
       APP_VERSION: ${{ needs.audit.outputs.version }}
       APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
-      APP_CODENAME: ${{ needs.audit.outputs.codename }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -891,7 +927,7 @@ jobs:
           command -v unzip
           command -v file
 
-      - name: Synchronize Zeta release metadata
+      - name: Synchronize release metadata
         shell: bash
         run: node scripts/release-version.mjs
 
@@ -900,7 +936,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          grep -F "AppVersion  = \"$APP_VERSION\"" internal/config/config.go
+          grep -E "AppVersion[[:space:]]+=[[:space:]]+\"$APP_VERSION\"" internal/config/config.go
           grep -F "\"version\": \"$APP_VERSION_FULL\"" package.json
           grep -F "productVersion: \"$APP_VERSION_FULL\"" build/config.yml
           grep -F "SHEYTAN-Local-Agent v$APP_VERSION" SIGNATURE
@@ -917,6 +953,10 @@ jobs:
           npm run typecheck
           npm run lint
           npm run test:units
+
+          # Production build contract: start from a CLEAN dist so no
+          # previous-generation asset can survive into web/static.
+          rm -rf dist
           npm run build
 
       - name: Verify embedded frontend
@@ -927,24 +967,30 @@ jobs:
           test -f web/static/index.html
           grep -q '<div id="root"></div>' web/static/index.html
 
+      # v1.3.1: stable deterministic frontend filenames — no content
+      # hashes, every referenced chunk exists, web/static mirrors dist/.
+      - name: Verify stable frontend asset contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node scripts/verify-static-assets.mjs --dist
+
       - name: Setup Go 1.26
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      # v1.1.5Z Phase 5 repair: build the C++ engine BEFORE the Go tests
-      # so the Go↔C++ integration suites (internal/native/engine
-      # TestRealCppHost*) run against the REAL shtn-engine-host binary
-      # instead of skipping. The audit job builds and ctests the engine,
-      # but on its own runner/workspace — without this step the boundary
-      # tests never actually executed in any Go job.
-      # v1.2.8.1 REPAIR (run 35464922587): the v1.2.1 source-hash cache of
-      # native/engine/build is REMOVED here as well (see the audit job for
-      # the full root-cause analysis). CMake build trees embed absolute
-      # paths and are not relocatable across workspaces; this job now
-      # always configures a clean build directory with --fresh and guards
-      # the recorded cache paths before compiling.
+      # Build the C++ engine BEFORE the Go tests so the Go↔C++ integration
+      # suites (internal/native/engine TestRealCppHost*) run against the
+      # REAL shtn-engine-host binary instead of skipping. The audit job
+      # builds and ctests the engine, but on its own runner/workspace —
+      # without this step the boundary tests never actually execute in any
+      # Go job. CMake build trees embed absolute paths and are not
+      # relocatable across workspaces; this job always configures a clean
+      # build directory with --fresh and guards the recorded cache paths
+      # before compiling.
       - name: Native engine (C++) build for Go integration tests
         shell: bash
         run: |
@@ -952,7 +998,7 @@ jobs:
 
           cmake --version
 
-          # v1.2.8.1 regression guard: clean configure, no restored cache.
+          # Regression guard: clean configure, no restored cache.
           rm -rf native/engine/build
           cmake -S native/engine -B native/engine/build --fresh
 
@@ -1005,7 +1051,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # v1.2.1: staging root derives from the canonical LINUX_PKG_ROOT.
+          # Staging root derives from the canonical LINUX_PKG_ROOT.
           mkdir -p "dist/linux/app/${LINUX_PKG_ROOT}"
 
           go build \
@@ -1063,7 +1109,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # v1.2.1: canonical package root — the same single value controls
+          # Canonical package root — the same single value controls
           # staging, ZIP creation, ZIP verification and artifact naming.
           root="dist/linux/app/${LINUX_PKG_ROOT}"
 
@@ -1072,7 +1118,7 @@ jobs:
             "$root/workspace"
 
           cat > "$root/README.txt" <<EOF
-          SHEYTAN-Local-Agent ${APP_VERSION} (${APP_CODENAME})
+          SHEYTAN-Local-Agent ${APP_VERSION}
 
           Portable Linux x64 distribution.
 
@@ -1094,7 +1140,6 @@ jobs:
           cat > "$root/BUILD-INFO.txt" <<EOF
           SHEYTAN-Local-Agent
           Version: ${APP_VERSION}
-          Codename: ${APP_CODENAME}
           Platform: Linux x64
           Commit: ${GITHUB_SHA}
           EOF
@@ -1154,7 +1199,7 @@ jobs:
 
           mkdir -p dist
 
-          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip"
+          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
 
           rm -f "$zip"
 
@@ -1166,19 +1211,17 @@ jobs:
           test -f "$zip"
           test -s "$zip"
 
-      # v1.2.1 THE FIX (run 34871838054): this verifier used to expect
-      # SHEYTAN-LA/… entries while the ZIP was created under the
-      # SHEYTAN-Local-Agent/ root. Every expected entry now derives from
-      # the ONE canonical LINUX_PKG_ROOT variable that also staged and
-      # zipped the application — the mismatch class is structurally gone,
-      # and the verifier is STRICTER than before (version-checked
-      # BUILD-INFO content on top of the entry list).
+      # Every expected entry derives from the ONE canonical
+      # LINUX_PKG_ROOT variable that also staged and zipped the
+      # application — a root mismatch is structurally impossible, and the
+      # verifier is strict (version-checked BUILD-INFO content on top of
+      # the entry list).
       - name: Verify Linux ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip"
+          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
 
           test -f "$zip"
           test -s "$zip"
@@ -1244,8 +1287,8 @@ jobs:
       - name: Upload Linux package
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}Z
-          path: dist/${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}Z.zip
+          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}
+          path: dist/${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -1257,18 +1300,16 @@ jobs:
       - audit
     timeout-minutes: 20
 
-    # v1.1.8: the release job consumes the audit job's runtime-resolved
-    # identity (package.json) — it needs no checkout to verify the tag.
+    # The release job consumes the audit job's runtime-resolved identity
+    # (package.json) — it needs no checkout to verify the tag.
     env:
       APP_VERSION: ${{ needs.audit.outputs.version }}
       APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
-      APP_CODENAME: ${{ needs.audit.outputs.codename }}
 
-    # v1.1.4Z: version-agnostic gate — the job runs for any v* tag and the
-    # first step verifies the tag equals v${APP_VERSION}Z. The previous
-    # hardcode silently skipped the release job on every version bump
-    # until someone remembered to edit this file (the single most
-    # dangerous trap in the old pipeline).
+    # Version-agnostic gate — the job runs for any v* tag and the first
+    # step verifies the tag equals v${APP_VERSION}. A hardcoded tag would
+    # silently skip the release job on every version bump until someone
+    # remembered to edit this file.
     if: startsWith(github.ref, 'refs/tags/v')
 
     runs-on: ubuntu-24.04
@@ -1282,7 +1323,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          test "${GITHUB_REF_NAME}" = "v${APP_VERSION}Z"
+          test "${GITHUB_REF_NAME}" = "v${APP_VERSION}"
 
           echo "Release tag verified: ${GITHUB_REF_NAME}"
 
@@ -1301,7 +1342,7 @@ jobs:
       - name: Download Linux package
         uses: actions/download-artifact@v7
         with:
-          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}Z
+          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}
           path: dist/linux
 
       - name: Verify release ZIP payloads
@@ -1309,9 +1350,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # v1.2.1: artifact names derive from the canonical roots.
+          # Artifact names derive from the canonical roots.
           windows_zip_name="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip"
-          linux_zip_name="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip"
+          linux_zip_name="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
           installer_name="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe"
 
           windows="$(find dist/windows -type f -name "$windows_zip_name" -print -quit)"
@@ -1477,14 +1518,14 @@ jobs:
             "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "platforms": {
               "windows-x64": {
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${tag_base}Z/${win_inst}",
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${tag_base}/${win_inst}",
                 "sha256": "${win_inst_sha}",
                 "kind": "installer"
               }
             },
             "artifacts": {
               "windows-x64-zip": {
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${tag_base}Z/${win_zip}",
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${tag_base}/${win_zip}",
                 "sha256": "${win_zip_sha}",
                 "kind": "zip"
               }
@@ -1526,7 +1567,7 @@ jobs:
           echo "$payload"
 
           windows_asset="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip"
-          linux_asset="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}Z.zip"
+          linux_asset="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
           installer_asset="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe"
 
           echo "$payload" |

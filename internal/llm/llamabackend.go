@@ -2,11 +2,11 @@ package llm
 
 // LlamaBackend adapts the two existing llama.cpp pieces — LlamaServer
 // (subprocess lifecycle, authoritative engine state) and Client
-// (OpenAI-compatible generation) — to the Backend contract (v1.1.5Z
+// (OpenAI-compatible generation) — to the Backend contract (v1.1.5
 // Phase 1).
 //
 // It is a thin delegation layer: every method forwards to the exact code
-// path that already ships in v1.1.4Z, so streaming, retries, the stall
+// path that already ships in v1.1.4, so streaming, retries, the stall
 // watchdog, cancellation, busy reporting, engine events and the config
 // snapshot contract are preserved byte-for-byte. No functionality is
 // duplicated here — the backend is the seam, not a second engine.
@@ -77,7 +77,7 @@ func (b *LlamaBackend) Start(ctx context.Context) error {
 }
 
 // Stop implements Backend (graceful SIGTERM → bounded grace → kill, the
-// v1.1.4Z path unchanged).
+// v1.1.4 path unchanged).
 func (b *LlamaBackend) Stop(ctx context.Context) error {
 	// Stop is bounded internally (4 s grace); ctx is honored as a
 	// pre-check only — a partially-stopped engine must still finish

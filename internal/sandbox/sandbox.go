@@ -323,7 +323,7 @@ func (s *CodeExecSandbox) Execute(
 
 	cmd.Dir = dir
 
-	// v1.1.4Z: sandboxed code runs with a SANITIZED environment. The
+	// v1.1.4: sandboxed code runs with a SANITIZED environment. The
 	// previous full os.Environ() handed every host secret (API keys,
 	// tokens) to model-generated python/node. TEMP/TMP stay sandbox-local
 	// so Python's tempfile & co. litter inside the workdir.

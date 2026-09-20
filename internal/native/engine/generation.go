@@ -1,6 +1,6 @@
 package engine
 
-// generation.go — native engine generation concern (v1.1.5Z Phase 5:
+// generation.go — native engine generation concern (v1.1.5 Phase 5:
 // REAL native generation through the supervised host).
 //
 // The full path this file drives:

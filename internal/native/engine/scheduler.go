@@ -1,6 +1,6 @@
 package engine
 
-// scheduler.go — native engine request scheduler concern (v1.1.5Z Phase 1:
+// scheduler.go — native engine request scheduler concern (v1.1.5 Phase 1:
 // TYPES ONLY).
 //
 // The future native engine will schedule concurrent generation requests.

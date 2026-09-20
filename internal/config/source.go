@@ -4,7 +4,7 @@ import "sync"
 
 // Source is the concurrency-safe holder for the live runtime configuration.
 //
-// v1.1.4Z: prior versions mutated the single shared *Config in place from
+// v1.1.4: prior versions mutated the single shared *Config in place from
 // the HTTP config-patch handler (mergeConfigPatch did `*s.cfg = updated`)
 // while agent runs, the LLM client and the engine manager concurrently
 // read the same struct — a genuine data race (flagged under -race and by

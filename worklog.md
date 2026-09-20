@@ -2,7 +2,8 @@
 
 ## Current State
 
-Date: 2026-09-19 (v1.2.7: the run-transport terminal-state repair, run-lifecycle audit closure, CI/test stabilisation, release consistency; v1.2.7 log first below)
+Date: 2026-09-20 (v1.3.1: product polish, stable file structure &
+repository cleanup; v1.3.1 log first below)
 
 Repository:
 
@@ -15,26 +16,109 @@ Branch: `main`
 Current release:
 
 ```text
-v1.2.7
+v1.3.1
 ```
 
-v1.2.7 is the **run-transport terminal-state repair + stabilisation**
-release. The CI failure of run 35367243405
-(`TestStaleRunEventsFilteredByServer`: "expected idle, got
-run_snapshot") was reproduced, root-caused and fixed at the root: the
-activity WebSocket attach path now consults the authoritative `runLive`
-state instead of treating registry map membership as "run active", the
-outcome registry is recorded before the terminal flip, and a hub that
-closes without forwardable events falls through to the idle sentinel
-instead of stranding the socket. Three regression tests pin the
-contracts; the durable request queue remains documented design intent
-(NOT shipped). See the v1.2.7 log (first below) for every change and
-the full verification matrix. The v1.2.6 line below remains
-authoritative for the authoritative run transport, measured timing and
-evidence-based accelerator resolution. The v1.1.5Z native-engine line
-remains authoritative below (phases 1–6). llama.cpp remains the default
-generation engine; the native engine serves the narrow,
-honestly-documented llama-architecture path.
+v1.3.1 is the **professionalization & repository-hygiene** release. The
+product identity is now version-only (package.json → APP_VERSION, the
+retired codename removed from every surface), the embedded frontend
+uses STABLE deterministic filenames (no content hashes) with
+`web/static` exactly mirroring one clean authoritative build, the
+release workflow is simplified to a single canonical version flow, CI
+gains codename/stable-asset/stale-file gates, the version-suffixed
+test pile is consolidated into behavior-oriented files, and the
+documentation describes the current product first. No architecture
+changes; all existing functionality preserved. See the v1.3.1 log
+(first below) for every change and the verification matrix. The
+v1.3.0 line below remains authoritative for runtime path correctness,
+clean logging, universal scrolling and the GitHub clone workflow; the
+v1.2.x and v1.1.5 lines below remain the engineering evidence base.
+llama.cpp remains the default generation engine; the native engine
+serves the narrow, honestly-documented llama-architecture path.
+
+---
+
+# v1.3.1 Implementation Log (2026-09-20)
+
+Baseline: `main @ 8676582` (v1.3.0).
+
+## Objective
+
+Upgrade main from v1.3.0 to v1.3.1 as a professionalization release:
+remove the retired product codename completely, give the generated
+frontend stable deterministic filenames, make the repository feel like
+one maintained product — without rewriting working architecture.
+
+## Changes (all inside the existing architecture)
+
+- **Version-only identity**: `internal/config/config.go` carries
+  AppName + AppVersion only; `scripts/release-version.mjs` rewritten
+  (plain-semver validation, one canonical source, no codename
+  parsing/generation; `--env` emits APP_VERSION + APP_VERSION_FULL
+  alias). Workflow codename outputs/env/text/assertions removed;
+  Linux ZIP + release tag drop the historical suffix
+  (`SHEYTAN-Local-Agent-Linux-x64-v1.3.1.zip`, tag `v1.3.1`);
+  `internal/releasecontract` updated in lockstep.
+- **Stable frontend filenames**: `vite.config.ts` emits
+  `assets/[name].js` / `assets/[name][extname]` at the BUILD level
+  (code splitting preserved); `web/static` regenerated from a clean
+  build — every hashed bundle deleted; new
+  `scripts/verify-static-assets.mjs` enforces the acceptance contract
+  (also `npm run verify:web`, wired into CI audit/Windows/Linux jobs
+  with an explicit clean-dist step before every production build).
+- **Codename removal**: runtime constants, CI, scripts, package text
+  (README.txt / BUILD-INFO.txt), README/ARCHITECTURE/UPDATE/agent.md/
+  worklog, research User-Agent strings (`SHEYTAN-Local-Agent/<version>`
+  via `research.DefaultUserAgent()`), stress names, test names,
+  comments; historical suffix-labelled version identifiers rewritten to
+  plain versions across 95 files (version/date/change facts preserved).
+- **CI hardening**: codename-removal scan (zero matches required),
+  stable-asset contract, stale-generated-file check, version
+  consistency — added to the audit job; stable-asset verification also
+  in the Windows/Linux jobs; all prior gates unchanged.
+- **Test consolidation**: 24 version-suffixed + 5 phase-suffixed Go
+  test files merged/renamed into canonical behavior-oriented files
+  (`handoff_test.go`, `runtransport_test.go`, `measurement_test.go`,
+  `authority_test.go`, `probelogging_test.go`, …) — coverage
+  identical, all suites pass.
+- **Stress suite**: the codename-branded stress file renamed to
+  `cmd/stress_release_surface.go`; functions/scenarios renamed
+  (`release_surface`, `memory_unique_ids`, `trimlogs_rotate`);
+  duplicate-implementation audit produced no deletions beyond the
+  renamed files.
+- **Documentation**: README (current product first + one-line release
+  history), ARCHITECTURE (current-state contracts), UPDATE (v1.3.1
+  only), agent.md (current-state-first handoff + durable invariants),
+  worklog (this entry; codename terminology eliminated, evidence
+  preserved).
+
+## Verification performed (all executed on this host)
+
+- `gofmt` clean; `go build -tags headless ./...`;
+  `go vet -tags headless ./...` clean.
+- `go test -tags headless -count=1 ./internal/...` — 0 FAIL.
+- `go test -race -tags headless -count=1` on internal/{api, agent,
+  sessions, contextplan, histref, runtime} — PASS.
+- `npm ci` / `npm run typecheck` / `npm run lint` /
+  `npm run test:units` / clean `npm run build` — PASS;
+  `node scripts/verify-static-assets.mjs --dist` satisfied.
+- Native engine: clean CMake configure + build + ctest.
+- Stress suite: full pass via `scripts/stress-main`.
+- `node scripts/release-version.mjs --check` consistent (1.3.1).
+- Repository-wide scans: zero codename matches, zero hashed asset
+  filenames, zero stale generated files; ROADMAP.md blob SHA-1
+  c7e2c1720eb5e97bd932c0d76100b8719193e650 unchanged before/after.
+
+## Honest limitations
+
+- The Wails desktop shell was not exercised locally (no GTK4/
+  WebKitGTK on this host; the headless build tag covers the same Go
+  stack). CI runs the full desktop matrix.
+- Windows build/NSIS installer validated by CI only, not locally.
+- Browser-level runtime validation of the regenerated stable assets
+  was performed via the build-output contract (references resolve,
+  chunks exist, lazy imports verified statically); a live desktop
+  session was not driven on this host.
 
 ---
 
@@ -101,7 +185,7 @@ Baseline: `main @ e7591896ed7d3412ca5c690bb840e0ac3b202ea9` (v1.2.6).
   (SHEYTAN-LA root, SHEYTAN-LA.exe, BUILD-INFO.txt, models/,
   workspace/); the durable request queue documented as PLANNED with the
   current cancel-and-replace contract stated honestly; `# Version`
-  section corrected (was stale at v1.1.5Z).
+  section corrected (was stale at v1.1.5).
 - agent.md — v1.2.7 release line + next-agent notes (lifecycle gate,
   record ordering, fallthrough, regression locks, queue honesty).
 - UPDATE.md — rewritten for the v1.2.7 update package.
@@ -268,7 +352,7 @@ GOOS=windows go build ./...                          # cross-compile gate
 
 ---
 
-# v1.1.5Z Phase 6 Implementation Log (2026-09-13)
+# v1.1.5 Phase 6 Implementation Log (2026-09-13)
 
 Phase 6 is the RELIABILITY / EFFECTIVENESS pass: the strategic product
 target is that a small local model plus SHEYTAN accomplishes work that
@@ -393,7 +477,7 @@ the project instead of re-discovering it every session.
 
 ---
 
-# v1.1.5Z Validation & Repair Log (2026-09-12, full functional verification pass)
+# v1.1.5 Validation & Repair Log (2026-09-12, full functional verification pass)
 
 Scope: continue past the Actions-run-34546418321 repair (ad34c74) through
 every previously-skipped validation stage, fixing only real defects
@@ -463,7 +547,7 @@ discovered on the way. The live tree re-verified every claim of the
 ## Runtime verification performed (this pass)
 
 - `node scripts/release-version.mjs --check` — all four surfaces
-  consistent at 1.1.5-zeta. `npm ci`, typecheck, lint (0 warnings),
+  consistent at 1.1.5. `npm ci`, typecheck, lint (0 warnings),
   build + sync; `web/static/index.html` contains the root div and
   `diff -r dist web/static` is empty.
 - `go build -tags headless ./...` PASS; `go vet -tags headless ./...` PASS.
@@ -515,13 +599,13 @@ discovered on the way. The live tree re-verified every claim of the
 
 ---
 
-# v1.1.5Z Phase 5 Repair Log (2026-09-11, post-phase5 CI failure)
+# v1.1.5 Phase 5 Repair Log (2026-09-11, post-phase5 CI failure)
 
 ## Root failure (GitHub Actions run 34546418321)
 
 `Source & frontend audit → Verify repository shape and release identity`
 failed with `[sheytan-release] ERROR: unable to read build/config.yml:
-ENOENT`. Root cause: the v1.1.5Z-phase5 commit (eedb766) DELETED
+ENOENT`. Root cause: the v1.1.5-phase5 commit (eedb766) DELETED
 `build/config.yml` (52 lines removed) although the phase 5 replacement
 manifest itself declares "deleted: none in Phase 5" and lists the file
 as committed Wails source. The deletion was accidental, not intentional.
@@ -587,7 +671,7 @@ again.
 ## Runtime verification performed (this repair)
 
 - `node scripts/release-version.mjs --check` — all four surfaces
-  consistent at 1.1.5-zeta (build/config.yml restored).
+  consistent at 1.1.5 (build/config.yml restored).
 - `go build -tags headless ./...` PASS; `go vet -tags headless ./...` PASS.
 - `go test -tags headless ./internal/... -count=1` — 27 packages PASS
   (including the restored sessions/attachments/memory and the
@@ -628,7 +712,7 @@ again.
 
 ---
 
-# v1.1.5Z Phase 5 Implementation Log (2026-09-11)
+# v1.1.5 Phase 5 Implementation Log (2026-09-11)
 
 ## What was implemented (REAL native transformer inference + generation)
 
@@ -805,7 +889,7 @@ is future work (agent.md §13 task 1).
 
 ---
 
-# v1.1.5Z Phase 4 Implementation Log (2026-09-10)
+# v1.1.5 Phase 4 Implementation Log (2026-09-10)
 
 ## Goal
 
@@ -985,7 +1069,7 @@ Phase 4 implements REAL foundation primitives. It does NOT implement:
 - Windows/Linux verification on real hardware (the build is cross-compile-
   clean; CI runs the Windows job; this sandbox is Linux-only and the
   Windows-specific behavior is verified by the existing `main_windows.go`
-  + `sysinfo` CIM path that was already shipped in v1.1.4Z and unchanged
+  + `sysinfo` CIM path that was already shipped in v1.1.4 and unchanged
   here);
 - continuous batching / speculative decoding (the scheduler is single-slot
   by design — the execution path cannot support either correctly yet);
@@ -999,7 +1083,7 @@ before.
 
 ---
 
-# v1.1.5Z Phase 3 Implementation Log (2026-09-10)
+# v1.1.5 Phase 3 Implementation Log (2026-09-10)
 
 ## Goal
 
@@ -1014,7 +1098,7 @@ real-host integration tests.
 ## Baseline verification (before any change)
 
 The Phase 2 tree was verified FIRST at commit `dc4172c`
-(v1.1.5Z-phase2): `go build -tags headless ./...`, `go vet -tags headless
+(v1.1.5-phase2): `go build -tags headless ./...`, `go vet -tags headless
 ./...`, the full `go test -tags headless ./internal/... -count=1` suite
 (all packages PASS), race tests on agent/llm/api/native-engine (PASS),
 npm typecheck/lint/build (PASS), stress 30/30, release-version --check
@@ -1246,7 +1330,7 @@ go test -tags headless ./internal/native/engine/
 ## Known limitations (Phase 3, by design)
 
 - Retrieval scoring still ranks on chunk previews (cheap first pass);
-  this was a deliberate v1.1.3Z design, not changed here.
+  this was a deliberate v1.1.3 design, not changed here.
 - The native engine still does NOT generate tokens — Phase 2 model
   loading is untouched; generation remains llama.cpp.
 - No semantic/structural repository retrieval exists (nothing in this
@@ -1255,7 +1339,7 @@ go test -tags headless ./internal/native/engine/
 - No new config surface: the phase reuses existing limits; nothing was
   added to the settings UI or the wire API.
 
-# v1.1.5Z Phase 2 Implementation Log (2026-09-10)
+# v1.1.5 Phase 2 Implementation Log (2026-09-10)
 
 ## Goal
 
@@ -1271,7 +1355,7 @@ Go Core → SHEYTAN Native API → shtn-engine-host → C++ Native Engine → GG
 ## Phase 1 verification (before any change)
 
 The Phase 1 implementation was verified FIRST on the base commit
-(`f4488d5`, v1.1.5Z-phase1): C++ build + 3/3 ctest, `go build`/`go vet`,
+(`f4488d5`, v1.1.5-phase1): C++ build + 3/3 ctest, `go build`/`go vet`,
 22 Go packages pass, race tests pass, `TestRealCppHostEndToEnd` passes,
 npm typecheck/lint/build pass, stress 30/30, release-version --check
 PASS. Only then did Phase 2 work begin.
@@ -1415,7 +1499,7 @@ frontend: typecheck / lint (0 warnings) / build         PASS (assets unchanged:
                                                          no frontend edits)
 stress suite (release gate)                             30 pass / 0 fail
 node scripts/release-version.mjs --check                PASS (all surfaces 1.1.5)
-version smoke: release stays v1.1.5Z                    PASS (no bump)
+version smoke: release stays v1.1.5                    PASS (no bump)
 ```
 
 ## Known limitations (Phase 2, by design)
@@ -1440,7 +1524,7 @@ version smoke: release stays v1.1.5Z                    PASS (no bump)
 
 ---
 
-# v1.1.5Z Phase 1 Implementation Log (2026-09-10)
+# v1.1.5 Phase 1 Implementation Log (2026-09-10)
 
 ## Goal
 
@@ -1545,7 +1629,7 @@ real C++ host: handshake, health, hardware, metrics, cancel, clean stop).
 ## 5. llama.cpp preserved (fallback contract)
 
 - llama.cpp remains the DEFAULT engine (`engineBackend: "llama"`) — the
-  entire v1.1.4Z behavior is unchanged unless the user explicitly opts in.
+  entire v1.1.4 behavior is unchanged unless the user explicitly opts in.
 - With `engineBackend: "native"`: the native engine is supervised
   (lifecycle real), generation still runs on llama.cpp (native reports
   generation-incapable), and native failures NEVER fail the llama path
@@ -1603,7 +1687,7 @@ New tests added:
 - `internal/api/server_native_test.go` — engine snapshot (default: no
   native block; native selected: honest unavailable status, backend stays
   llama), engine toggle behavior unchanged (500 on missing binary exactly
-  as v1.1.4Z).
+  as v1.1.4).
 
 ## Known limitations (Phase 1, by design)
 
@@ -1626,7 +1710,7 @@ New tests added:
 
 ---
 
-# v1.1.4Z Windows CI repair (2026-09-07, post-release)
+# v1.1.4 Windows CI repair (2026-09-07, post-release)
 
 The `Windows x64` job of the `Build Desktop` workflow failed at the
 `Verify release metadata` step with:
@@ -1682,7 +1766,7 @@ and untouched.
   `go test -tags headless ./internal/...` (21 packages),
   `-race` on agent/llm/api, full headless tree, `npm ci`/typecheck/lint
   (0 warnings)/build, stress suite 30/0, releasegate — all green.
-- `zeta_release_surface` stress contract still pins the workflow shape;
+- `release_surface` stress contract still pins the workflow shape;
   no contract fragment was touched.
 
 ## Repository consistency cleanups shipped with the repair
@@ -1707,7 +1791,7 @@ and untouched.
 
 ---
 
-# v1.1.4Z Remediation Log (2026-09-07)
+# v1.1.4 Remediation Log (2026-09-07)
 
 ## Audit scope and method
 
@@ -1742,7 +1826,7 @@ Regression tests: `TestSourceConcurrentReadWrite`, `TestConfigPatchIsRaceFree` (
 
 Every item below was fully implemented and unit-tested in the repository but had **no production caller** — the exact "feature theater" class this release eliminates:
 
-| Subsystem | Previous state | v1.1.4Z |
+| Subsystem | Previous state | v1.1.4 |
 |---|---|---|
 | **GGUF model cards** (`llm/gguf.go`) | complete parser, zero callers; `/api/models` shipped stat-only entries while the docs promised architecture/quantization/context | wired into `/api/models` with an mtime-keyed cache; parser now tested |
 | **Sampling settings** | `minP`, `repeatLastN`, `presencePenalty`, `frequencyPenalty`, `mirostatTau/Eta` editable in Settings, never sent anywhere | sent per-request (OpenAI-standard fields to all providers; llama.cpp-only fields local-gated) and as engine launch flags |
@@ -1796,7 +1880,7 @@ Every item below was fully implemented and unit-tested in the repository but had
 
 ## 8. Release engineering
 
-- **The release-job trap** (the single most dangerous defect in the pipeline): the release job was gated on hardcoded `refs/tags/v1.1.3Z` with hardcoded asset names — every version bump silently skipped release publication until someone hand-edited the workflow. Now: version-agnostic `v*` tag gate + a first step verifying `GITHUB_REF_NAME == v{APP_VERSION}Z`; all asset/artifact names derive from `APP_VERSION`.
+- **The release-job trap** (the single most dangerous defect in the pipeline): the release job was gated on hardcoded `refs/tags/v1.1.3` with hardcoded asset names — every version bump silently skipped release publication until someone hand-edited the workflow. Now: version-agnostic `v*` tag gate + a first step verifying `GITHUB_REF_NAME == v{APP_VERSION}Z`; all asset/artifact names derive from `APP_VERSION`.
 - Version grep literals in the three build jobs derive from `APP_VERSION`/`$env:APP_VERSION` instead of hardcodes.
 - `config.Save` atomic; `scripts/build-and-zip.sh` and launcher `.bat` versioned.
 
@@ -1828,7 +1912,7 @@ Known limitations (unchanged or newly documented):
 
 ---
 
-# Historical: v1.1.3Z Implementation Log (AAA upgrade, 2026-09-04)
+# Historical: v1.1.3 Implementation Log (AAA upgrade, 2026-09-04)
 
 ## What was implemented
 
@@ -1843,7 +1927,7 @@ Known limitations (unchanged or newly documented):
 9. Configuration correctness — local `EffectiveBaseURL` derives from `LlamaHost:LlamaPort` (legacy value migrates); default `numCtx` 8192 → 16384 (measured: briefing + full tool schemas ≈ 9.8k tokens).
 10. Tests — contextcache/attachments/contextplan/llm (real spawn + fake engine re-exec)/agent (fake SSE)/sessions/api suites.
 
-## Runtime verification performed (v1.1.3Z)
+## Runtime verification performed (v1.1.3)
 
 - Stub-engine e2e: 16/16 PASS — launch, auto-start, ready, session, upload, run with attachment, engine envelope, regenerate, cache stats, shutdown.
 - REAL engine e2e: llama.cpp b10642 (linux x64, CPU) + Qwen2.5-0.5B/1.5B Instruct GGUF: automatic startup to ready (~5 s), real inference streamed and persisted, busy → ready, regenerate.
@@ -1851,7 +1935,7 @@ Known limitations (unchanged or newly documented):
 
 ---
 
-## v1.1.6Z Phase 7 Implementation Log (2026-09-13)
+## v1.1.6 Phase 7 Implementation Log (2026-09-13)
 
 ### P0 #1 — llama.cpp launch contract repaired at the source (flash-attn / cache-reuse)
 
@@ -1936,7 +2020,7 @@ preflight repair pipeline, not a warning (`internal/agent/orchestrator.go`,
 
 Runtime wiring (`internal/runtime/runtime.go`): context-limit provider,
 skills store, telemetry store, pipeline tool registration, scheduler +
-timer loop. Version surfaces bumped to 1.1.6-zeta.
+timer loop. Version surfaces bumped to 1.1.6.
 
 
 ### Validation evidence (Phase 7, full re-run at the final tree)
@@ -1952,7 +2036,7 @@ timer loop. Version surfaces bumped to 1.1.6-zeta.
 | Frontend build | `npm run build && npm run sync:web` | PASS (embedded bundle refreshed byte-identical) |
 | Native build | `cmake -S native/engine -B native/engine/build && cmake --build` | PASS |
 | Native tests | `ctest --test-dir native/engine/build --output-on-failure` | 12/12 PASS |
-| Release gate | `node scripts/release-version.mjs --check` | PASS (all surfaces 1.1.6 / 1.1.6-zeta) |
+| Release gate | `node scripts/release-version.mjs --check` | PASS (all surfaces 1.1.6 / 1.1.6) |
 
 ### Real-model acceptance (native C++ boundary, REAL inference — not mocked)
 
@@ -1985,7 +2069,7 @@ inference run above.
 
 ---
 
-## v1.1.6-zeta Stabilisation Log (2026-09-13)
+## v1.1.6 Stabilisation Log (2026-09-13)
 
 Task: 1.1.6 stabilisation / next update — CI deadlock fix, architectural
 context-overflow protection, per-session + per-agent context, startup UX,
@@ -2073,7 +2157,7 @@ replacement ZIP.
 
 ## v1.1.7 — Options Clarity, Capability Truth, Live Telemetry, In-App Diagnostics
 
-Date: 2026-09-13 · Base: main @ dd49eed (1.1.6Z)
+Date: 2026-09-13 · Base: main @ dd49eed (1.1.6)
 
 ### Compatibility-mode finding (the technical clue from the Windows log)
 
@@ -2145,9 +2229,9 @@ Agent: Super Z (upgrade agent)
 Task: v1.1.7 → v1.1.8 — CI release-identity fix, Chat/Agent separation, model picker, settings tabs, backend optimisation, minimalist pass
 
 Work Log:
-- Root-caused Actions run 34788709977: workflow env APP_VERSION="1.1.6" pinned at parse time while release-version.mjs repaired the tree to 1.1.7; greps also assumed a "-zeta" suffix package.json no longer carries.
-- release-version.mjs: added --env mode (APP_VERSION / APP_VERSION_FULL / APP_CODENAME); replaced the workflow APP_VERSION target with a shape check for the runtime derivation marker.
-- build-desktop.yml: removed hardcoded APP_VERSION/APP_CODENAME; audit job step "identity" derives them from package.json into $GITHUB_OUTPUT; build-windows/build-linux/release consume needs.audit.outputs.*; all version greps use runtime-derived values (no "-zeta" assumption); audit also runs release-version.mjs --check after sync.
+- Root-caused Actions run 34788709977: workflow env APP_VERSION="1.1.6" pinned at parse time while release-version.mjs repaired the tree to 1.1.7; greps also assumed a version suffix package.json no longer carries.
+- release-version.mjs: added --env mode emitting the release identity variables; replaced the workflow APP_VERSION target with a shape check for the runtime derivation marker.
+- build-desktop.yml: removed the hardcoded version constants; audit job step "identity" derives them from package.json into $GITHUB_OUTPUT; build-windows/build-linux/release consume needs.audit.outputs.*; all version greps use runtime-derived values (no suffix assumption); audit also runs release-version.mjs --check after sync.
 - Version bumped 1.1.7 → 1.1.8 (package.json, package-lock, config.go, build/config.yml, SIGNATURE via the script).
 - internal/api/server.go: modelCardFor now caches ResolveModelCapabilities alongside the GGUF card (bounded path+size+mtime cache) — removes per-poll per-model GGUF re-parsing; handleModels exposes multimodal/nativeBackend/chatTemplate/nativeReason/estimatedVRAMBytes; host memory probe hoisted out of the per-model loop. sessioncontext.go reuses the cached read.
 - Frontend: WorkspaceMode (chat|agent) in store.ts (localStorage sheytan.mode, default chat); ModeSwitch segmented control in AgentHeader; AgentBody mode-aware (Chat = model rail + stream + composer; Agent = runtime panel + PerfStrip + activity); ModelPicker.tsx (measured facts only, honest RAM-based classification, no Remove); PerfStrip.tsx (4 s /api/perf polling, N/A contract); settings Models/Advanced tabs split; minimalist CSS pass (mode-switch, chat-rail, model-picker, perf-strip, calmer background grid/topbar).
@@ -2164,7 +2248,7 @@ Agent: release-implementation
 Task: v1.1.9 — CI output fix, Chat/Agent separation completion, minimalist UI, model states, settings refinement, targeted optimisation, docs, ZIP delivery.
 
 Work Log:
-- CI run 34791882219 root cause: audit job outputs mapped steps.identity.outputs.version/version_full/codename while the identity step writes APP_VERSION/APP_VERSION_FULL/APP_CODENAME — needs.audit.outputs.* resolved empty. Fixed the mapping to the APP_* names and added a fail-fast ::error:: assertion when any identity value is empty (build-desktop.yml).
+- CI run 34791882219 root cause: audit job outputs mapped lowercase names the step never writes while the identity step writes the APP_* output names — needs.audit.outputs.* resolved empty. Fixed the mapping to the APP_* names and added a fail-fast ::error:: assertion when any identity value is empty (build-desktop.yml).
 - Version bump 1.1.8 → 1.1.9: package.json edited once; internal/config/config.go, build/config.yml, SIGNATURE repaired by scripts/release-version.mjs (sync mode), then --check verified.
 - Mode-aware navigation: workspace.ts WorkspaceLayer.modes + visibleWorkspaceLayers(); App.tsx filters nav (Chat hides Coding Lab) and falls back to the workspace when the restored hash points at hidden machinery; agent layer label "Workspace"; AgentSidebar eyebrow CHAT/AGENT.
 - Model chooser redesign (ModelPicker.tsx): explicit ModelState ready/loading/incompatible/available; aligned Context/RAM/Tools/Vision/Native fact grid; Tools derived only from chatTemplate; "—" for unknown; "Choose a model" empty state; still no Remove (no deletion API).
@@ -2210,7 +2294,7 @@ Task: v1.2.1 — Linux ZIP verification fix at the root (canonical package-root 
 
 Work Log:
 - Live audit of main @ e260d53 (v1.2.0): confirmed the failing Linux job (run 34871838054) is a ZIP root naming mismatch — the ZIP is created under SHEYTAN-Local-Agent/ while "Verify Linux ZIP" and the release job's payload verification expect SHEYTAN-LA/ entries; deeper: internal/releasecontract.RequiredLinuxZipEntries() itself mixed roots (WindowsAppRoot entries in the Linux list), which is why the stress gate stayed green while CI failed (two drifting copies of the truth). Confirmed the installer already had MUI_PAGE_DIRECTORY + WriteUninstaller and that the desktop shortcut was unconditional.
-- Canonical package-root contract: workflow env gains WIN_PKG_ROOT="SHEYTAN-LA" + LINUX_PKG_ROOT="SHEYTAN-Local-Agent"; every staging dir, ZIP name, ZIP entry check, artifact name and release-metadata reference now derives from them (no duplicated root literals left — verified by grep). internal/releasecontract rewritten: WorkflowWinRootEnvLine/WorkflowLinuxRootEnvLine, ${env:WIN_PKG_ROOT}/${LINUX_PKG_ROOT} slot spellings, WindowsAppDirWorkflowSlot/LinuxAppDirWorkflowSlot, RequiredWindowsZipWorkflowEntries/RequiredLinuxZipWorkflowEntries; RequiredLinuxZipEntries fixed to the Linux root. cmd/stress_zeta gate strengthened (3e2 requires the env lines; 3h/3i require the slots + parameterized spellings; staging check moved to slots).
+- Canonical package-root contract: workflow env gains WIN_PKG_ROOT="SHEYTAN-LA" + LINUX_PKG_ROOT="SHEYTAN-Local-Agent"; every staging dir, ZIP name, ZIP entry check, artifact name and release-metadata reference now derives from them (no duplicated root literals left — verified by grep). internal/releasecontract rewritten: WorkflowWinRootEnvLine/WorkflowLinuxRootEnvLine, ${env:WIN_PKG_ROOT}/${LINUX_PKG_ROOT} slot spellings, WindowsAppDirWorkflowSlot/LinuxAppDirWorkflowSlot, RequiredWindowsZipWorkflowEntries/RequiredLinuxZipWorkflowEntries; RequiredLinuxZipEntries fixed to the Linux root. release-surface stress gate strengthened (3e2 requires the env lines; 3h/3i require the slots + parameterized spellings; staging check moved to slots).
 - Installer (packaging/nsis/installer.nsi): desktop shortcut became a checkbox on the directory page (nsDialogs in MUI_PAGE_CUSTOMFUNCTION_SHOW, default CHECKED via .onInit, state persists across Back/Next, silent installs keep the default); upgrades close a running instance (graceful taskkill → bounded 3×500ms retry on the locked exe → explicit Retry/Cancel), SetShellVarContext all for install+uninstall symmetry; uninstall preserves user data by construction (plain RMDir only; models/workspace/sessions/config + SHEYTAN_DATA_DIR untouched); fixed the latent developer-path default BUILDDIR pointing one level short of the repo root (packaging/nsis/../../dist now).
 - Stress expansion (cmd/stress_release.go, wired into runStressSuite): 14 bounded scenarios — update_offline_manifest, update_tampered_sha, update_size_mismatch, update_staged_drift, update_zip_slip_members (loopback-only httptest servers), vision_missing_projector, vision_incompatible_arch, memory_parallel_appends_unique, memory_delete_missing_id, sessions_restart_persistence, sessions_garbage_ids, contextcache_bounded_entries, contextplan_huge_history_bounded, recommendation_extreme_inputs, loopguard_retry_ceiling (uses exported agent.LoopGuard.WallClockExhausted). Suite now ends with a machine-readable STRESS-RESULT line.
 - Workflow optimisation: job-level timeout-minutes (audit 40 / windows 60 / linux 50 / release 20), native engine build cached on hashFiles('native/engine/**') in audit + linux, in-package BUILD-INFO version verification inside both portable ZIPs, NSIS SOURCE contract verification step (directory page, checkbox, WriteUninstaller, UninstallString, SHEYTAN_DATA_DIR, preserve user data; forbidden RMDir /r) before makensis runs.

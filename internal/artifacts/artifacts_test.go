@@ -1,6 +1,6 @@
 package artifacts
 
-// artifacts_v129_test.go — v1.2.9 regressions: same-size content
+// Same-size content
 // modification must be detected (the size-only fingerprint could not
 // see it).
 

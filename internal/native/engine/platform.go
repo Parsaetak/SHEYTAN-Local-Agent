@@ -1,6 +1,6 @@
 package engine
 
-// platform.go — hardware capability abstraction (v1.1.5Z Phase 1).
+// platform.go — hardware capability abstraction (v1.1.5 Phase 1).
 //
 // HardwareResult mirrors what the C++ engine actually detects (its own
 // view: CPU, RAM, architecture). MergeHardware combines that native view

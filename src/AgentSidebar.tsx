@@ -17,7 +17,7 @@ const SessionItem = memo(function SessionItem({
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
 }) {
-  // v1.2.8: inline rename — the backend PUT existed since 1.1.3Z; the UI
+  // v1.2.8: inline rename — the backend PUT existed since 1.1.3; the UI
   // finally uses it. Double-click the title (or its menu entry) to edit.
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title || "");

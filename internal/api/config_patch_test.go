@@ -1,4 +1,4 @@
-// config_patch_v130_test.go — v1.3.0 regressions for the settings-save
+// Settings-save
 // contract.
 //
 // Contracts under test (release contract §11 "Settings"):

@@ -250,7 +250,7 @@ type RuntimeState = {
   acquireEnginePolling: () => void;
   releaseEnginePolling: () => void;
 
-  // v1.1.3Z: authoritative engine state (polled + WS-pushed).
+  // v1.1.3: authoritative engine state (polled + WS-pushed).
   engine: EngineSnapshot | null;
 
   // v1.1.6: backend-resolved context status for the active session
@@ -260,7 +260,7 @@ type RuntimeState = {
   setSessionContext: (tokens: number) => Promise<void>;
   refreshSessionContext: () => Promise<void>;
 
-  // v1.1.3Z: real conversation history for the active session plus the
+  // v1.1.3: real conversation history for the active session plus the
   // streaming assistant bubble.
   //
   // v1.2.2 WIRE CONTRACT FIX: the orchestrator's emitProgress publishes
@@ -272,7 +272,7 @@ type RuntimeState = {
   messages: ChatMessage[];
   streaming: { content: string; reasoning: string } | null;
 
-  // v1.1.3Z: staged attachments for the composer.
+  // v1.1.3: staged attachments for the composer.
   pendingAttachments: Attachment[];
   attachmentsUploading: boolean;
 
@@ -295,11 +295,11 @@ type RuntimeState = {
   refreshAgentResources: () => Promise<void>;
   refreshEngine: () => Promise<void>;
   startEnginePolling: () => void;
-  // v1.1.4Z: the engine poll previously ran for the app's LIFETIME once
+  // v1.1.4: the engine poll previously ran for the app's LIFETIME once
   // started (no stop function existed) — even on other views.
   stopEnginePolling: () => void;
 
-  // v1.1.4Z: recall feedback (thumbs up/down on past exchanges) — the
+  // v1.1.4: recall feedback (thumbs up/down on past exchanges) — the
   // backend steering existed since v1.0.6 with no write path.
   sendFeedback: (query: string, liked: boolean) => Promise<void>;
 
@@ -519,7 +519,7 @@ let activitySessionId: string | null = null;
 // count 0 so tab switches mid-generation never drop the event stream.
 let activityConsumers = 0;
 
-// v1.1.4Z: automatic WebSocket reconnection. The old store gave up on the
+// v1.1.4: automatic WebSocket reconnection. The old store gave up on the
 // first close — a mid-run disconnect left `running` stuck true forever (the
 // dead-composer bug's last live variant: no `done` event could ever arrive).
 let reconnectTimer: number | null = null;
@@ -814,7 +814,7 @@ function setActivityBatch(
     };
   });
 
-  // v1.1.3Z: route conversation-relevant events into the message pipeline
+  // v1.1.3: route conversation-relevant events into the message pipeline
   // (streaming bubbles + the run-end bookkeeping that used to leave the
   // composer permanently disabled after one message).
   for (const event of batch) {
@@ -1467,7 +1467,7 @@ function handleConversationEvent(event: ActivityEvent): void {
     }
 
     case "session": {
-      // v1.1.4Z: Continuum chapter rollover — the backend distilled the
+      // v1.1.4: Continuum chapter rollover — the backend distilled the
       // conversation into a fresh chapter session and tells the UI here.
       // Follow the thread into the new chapter automatically.
       const nextSessionId =
@@ -1497,7 +1497,7 @@ function handleConversationEvent(event: ActivityEvent): void {
     case "done":
     case "complete":
     case "error": {
-      // THE v1.1.2Z dead-composer fix: a finished or failed run must
+      // THE v1.1.2 dead-composer fix: a finished or failed run must
       // always release the composer. The old code only reset `running`
       // on error paths, so a successful reply left it disabled forever.
       //
@@ -2074,7 +2074,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // space and becomes that space's active session.
     const session = await api.createSession(get().mode);
 
-    // v1.1.4Z: createSession previously only prepended the session and
+    // v1.1.4: createSession previously only prepended the session and
     // switched the id — the socket stayed bound to the OLD session (the
     // stale-guard then silently discarded every event for the new one)
     // and messages/streaming/running were never reset. First message on
@@ -2201,7 +2201,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           ...state.activeSessionByMode,
           [state.mode]: activeSessionId,
         },
-        // v1.1.4Z: the deleted session's conversation previously stayed
+        // v1.1.4: the deleted session's conversation previously stayed
         // on screen (and kept streaming state) until the next manual switch.
         messages: state.activeSessionId === id ? [] : state.messages,
         activity: state.activeSessionId === id ? [] : state.activity,
@@ -2288,7 +2288,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       agentTask: null,
     });
 
-    // v1.1.3Z: optimistic user bubble — the conversation shows the sent
+    // v1.1.3: optimistic user bubble — the conversation shows the sent
     // message immediately, before any streaming event arrives.
     const attachmentNames = get().pendingAttachments.map((item) => item.name);
 
@@ -2607,7 +2607,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         labError: message,
       });
 
-      // v1.1.4Z: no rethrow — the labError state IS the user-facing
+      // v1.1.4: no rethrow — the labError state IS the user-facing
       // failure surface. The previous `throw` escaped every fire-and-forget
       // call site (LabPanel's `void onAction(...)`) as an unhandled
       // promise rejection.
@@ -2668,7 +2668,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         researchError: message,
       });
 
-      // v1.1.4Z: no rethrow (see runLabAction — the panel calls this
+      // v1.1.4: no rethrow (see runLabAction — the panel calls this
       // fire-and-forget; the rethrow was an unhandled rejection).
       return undefined;
     }
@@ -2719,7 +2719,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         return;
       }
 
-      // v1.1.4Z: a successful (re)connection resets the backoff ladder.
+      // v1.1.4: a successful (re)connection resets the backoff ladder.
       reconnectAttempts = 0;
 
       set({
@@ -2792,7 +2792,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         connection: "disconnected",
       });
 
-      // v1.1.4Z: auto-reconnect while the session is still active. Without
+      // v1.1.4: auto-reconnect while the session is still active. Without
       // this, ANY mid-run drop (backend restart, transient network blip)
       // permanently killed event delivery — `running` could never clear.
       if (reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {

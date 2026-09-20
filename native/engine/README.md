@@ -1,4 +1,4 @@
-# SHEYTAN Native AI Engine — C++ Engine Core (v1.1.5Z Phase 5)
+# SHEYTAN Native AI Engine — C++ Engine Core (v1.1.5 Phase 5)
 
 This is the C++ side of the **SHEYTAN Native AI Engine architecture**:
 

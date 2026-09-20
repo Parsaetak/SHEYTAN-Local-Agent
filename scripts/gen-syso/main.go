@@ -1,4 +1,4 @@
-// gen-syso — Zeta: builds the Windows resource object (rsrc_windows_amd64.syso)
+// gen-syso builds the Windows resource object (rsrc_windows_amd64.syso)
 // that `go build` embeds into sheytan-local-agent.exe automatically.
 //
 // It carries three things the exe never had before:

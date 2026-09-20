@@ -1,7 +1,7 @@
 package engine
 
 // backend.go — the native engine adapter for the llm.Backend contract
-// (v1.1.5Z Phase 5: REAL generation).
+// (v1.1.5 Phase 5: REAL generation).
 //
 // The lifecycle, health, hardware, metrics, cancel and MODEL surfaces
 // (LoadModel / UnloadModel / ModelInfo — native GGUF loading with

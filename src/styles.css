@@ -2318,7 +2318,7 @@ textarea:focus-visible {
 }
 
 /* ============================================================
-   v1.1.3Z — Conversation stream (real message bubbles)
+   v1.1.3 — Conversation stream (real message bubbles)
    ============================================================ */
 
 .conversation-panel {
@@ -2697,7 +2697,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 }
 
-/* --- v1.1.4Z: recall feedback (message ratings) --- */
+/* --- v1.1.4: recall feedback (message ratings) --- */
 
 .message-feedback {
   display: inline-flex;

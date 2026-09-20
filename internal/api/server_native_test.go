@@ -1,8 +1,8 @@
 package api
 
-// server_native_test.go — v1.1.5Z Phase 1: the engine snapshot must expose
+// server_native_test.go — v1.1.5 Phase 1: the engine snapshot must expose
 // the backend selection and the native engine status honestly, without
-// changing any v1.1.4Z behavior when the native path is disabled (the
+// changing any v1.1.4 behavior when the native path is disabled (the
 // default).
 
 import (
@@ -40,7 +40,7 @@ func TestEngineSnapshotDefaultHasNoNativeBlock(t *testing.T) {
 	}
 
 	// Default: generation backend is llama and NO native block exists —
-	// byte-compatible with the v1.1.4Z payload plus the backend name.
+	// byte-compatible with the v1.1.4 payload plus the backend name.
 	if snap.Backend != "llama" {
 		t.Fatalf("backend = %q, want llama (default)", snap.Backend)
 	}
@@ -143,7 +143,7 @@ func TestEngineToggleStartReportsLlamaState(t *testing.T) {
 	defer resp.Body.Close()
 
 	// No llama binary exists in the test environment: the start must
-	// fail with 500 exactly as in v1.1.4Z (no native interference).
+	// fail with 500 exactly as in v1.1.4 (no native interference).
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (missing engine binary, unchanged behavior)", resp.StatusCode)
 	}
@@ -153,7 +153,7 @@ func jsonReader(s string) io.Reader {
 	return strings.NewReader(s)
 }
 
-// TestEngineToggleNativeServesGeneration — v1.1.5Z repair regression
+// TestEngineToggleNativeServesGeneration — v1.1.5 repair regression
 // (HTTP-level, the layer a user notices). The engine toggle must produce a
 // USABLE native engine — host started AND the selected model loaded
 // natively — and a plain-text run must stream REAL native generation

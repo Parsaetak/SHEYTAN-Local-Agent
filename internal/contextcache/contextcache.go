@@ -2,7 +2,7 @@
 // context processing: file extraction, normalization, chunking, chunk
 // metadata, retrieval results, and deterministic context transformations.
 //
-// Design rules (v1.1.3Z):
+// Design rules (v1.1.3):
 //
 //   - Keys are composed by callers from CONTENT identity — never from
 //     paths alone. The same path with different bytes must miss; the same
@@ -35,7 +35,7 @@ import (
 // helpers build. Bump it when the processing pipeline changes shape so
 // stale entries can never be served to new code.
 //
-// v4 (v1.1.5Z Phase 3): chunk derivation moved to the shared chunking
+// v4 (v1.1.5 Phase 3): chunk derivation moved to the shared chunking
 // engine (chunk metadata + byte-range addressing changed shape) and the
 // cache gained single-flight coalescing plus an oversized-entry guard.
 const Version = 4

@@ -129,7 +129,7 @@ function AgentBody() {
   const running = useRuntimeStore((state) => state.running);
   const engine = useRuntimeStore((state) => state.engine);
 
-  // v1.1.4Z: the toggle and the badge previously read DIFFERENT sources
+  // v1.1.4: the toggle and the badge previously read DIFFERENT sources
   // (models.llamaRunning vs engine.state) and could disagree transiently.
   const engineAlive =
     engine?.state === "ready" ||

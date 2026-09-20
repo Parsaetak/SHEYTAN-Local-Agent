@@ -42,7 +42,7 @@ func TestSourceUpdateErrLeavesValueUntouched(t *testing.T) {
 	}
 }
 
-// TestSourceConcurrentReadWrite is the regression test for the v1.1.3Z
+// TestSourceConcurrentReadWrite is the regression test for the v1.1.3
 // data race: the HTTP config patcher mutated the shared *Config in place
 // while run goroutines read it. Under -race this test would previously
 // fail; with copy-on-write it must pass.

@@ -168,7 +168,7 @@ func ReadModelCard(path string) (*ModelCard, error) {
 	if err != nil {
 		return nil, err
 	}
-	// v1.1.5Z Phase 3: the metadata read is BUFFERED. Skipping a tokenizer
+	// v1.1.5 Phase 3: the metadata read is BUFFERED. Skipping a tokenizer
 	// array used to issue one unbuffered CopyN syscall per vocab string
 	// (up to ~150k syscalls for a single header); a 64 KiB bufio window
 	// reduces that to a handful of reads. Parsing semantics unchanged.

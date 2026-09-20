@@ -27,18 +27,21 @@ export default defineConfig(({ mode }) => ({
   build: {
     target: "es2022",
     sourcemap: mode !== "production",
-    // v1.2.9: manifest generation disabled — no runtime consumer exists
-    // (the embedded index.html references the hashed assets directly;
-    // verified by repository-wide reference search). The stale
-    // web/static/.vite/manifest.json is removed by the clean rebuild
-    // (npm run build runs sync-web, which regenerates web/static from
-    // dist).
+    // Manifest generation is disabled — no runtime consumer exists (the
+    // embedded index.html references the stable assets directly; the
+    // static-asset contract is verified by scripts/verify-static-assets.mjs).
     manifest: false,
     rollupOptions: {
       output: {
-        entryFileNames: "assets/[name]-[hash].js",
-        chunkFileNames: "assets/[name]-[hash].js",
-        assetFileNames: "assets/[name]-[hash][extname]",
+        // STABLE FILENAME CONTRACT: production assets are named after
+        // their source module with NO content hash (index.js,
+        // AgentBody.js, index.css, ...). The same physical file keeps the
+        // same name across builds, so the embedded tree can be audited,
+        // diffed and navigated without rebuilding. Code splitting stays
+        // enabled — every lazy chunk is also stable.
+        entryFileNames: "assets/[name].js",
+        chunkFileNames: "assets/[name].js",
+        assetFileNames: "assets/[name][extname]",
       },
     },
   },

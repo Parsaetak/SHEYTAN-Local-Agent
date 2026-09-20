@@ -146,7 +146,7 @@ func State() string {
 // probeAll runs every strategy in PARALLEL and reports online as soon as
 // any one succeeds.
 //
-// v1.1.4Z: the sequential version took up to 7×2.5 s ≈ 17.5 s on a fully
+// v1.1.4: the sequential version took up to 7×2.5 s ≈ 17.5 s on a fully
 // offline machine (every target timing out one after another) — a long
 // stall on the llama-start gate for exactly the users who can least afford
 // it. The parallel version resolves in ~one probeTimeout either way.

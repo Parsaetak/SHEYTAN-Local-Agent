@@ -51,7 +51,7 @@ func sourceFiles(t *testing.T, root string) []string {
 	var files []string
 	// "build" is walked because build/config.yml is committed Wails
 	// source. A blanket `/build/` .gitignore pattern swallowed it for
-	// v1.1.2Z: the file existed locally, git never tracked it, and CI
+	// v1.1.2: the file existed locally, git never tracked it, and CI
 	// failed with ENOENT. Walking it here makes that failure loud.
 	for _, top := range []string{"internal", "cmd", "web", "scripts", ".github", "build"} {
 		base := filepath.Join(root, top)

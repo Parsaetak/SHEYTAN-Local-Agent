@@ -1,7 +1,8 @@
 // Package config holds runtime configuration for SHEYTAN-Local-Agent.
 //
-// Version Zeta introduces the autonomous Coding Lab configuration surface:
-// isolated workspaces, controlled execution, verification, and web research.
+// The configuration surface covers the autonomous Coding Lab (isolated
+// workspaces, controlled execution, verification) and the web research
+// engine, alongside the core runtime settings.
 package config
 
 import (
@@ -16,10 +17,14 @@ import (
 )
 
 const (
-	AppName     = "SHEYTAN-Local-Agent"
-	AppVersion  = "1.3.0"
-	AppCodename = "Zeta"
+	AppName    = "SHEYTAN-Local-Agent"
+	AppVersion = "1.3.1"
 )
+
+// The product identity is version-only: AppName + AppVersion (synchronized
+// from package.json by scripts/release-version.mjs). There is deliberately
+// no codename constant — every release surface derives from these two
+// values and package.json is the single source of truth.
 
 // v1.2.0 product identity: the short product name (SHEYTAN-LA) used on
 // window titles, taskbars, notifications, installers and update artifacts.
@@ -33,9 +38,10 @@ const (
 	ExecutableName = "SHEYTAN-LA.exe"
 )
 
-// legacyDefaultLLMBaseURL is the pre-v1.1.3Z hardcoded local endpoint.
-// Configs still carrying this exact value are migrated to "follow the
-// managed engine port" (see EffectiveBaseURL).
+// legacyDefaultLLMBaseURL is the legacy hardcoded local endpoint. Configs
+// still carrying this exact value are migrated to "follow the managed
+// engine port" (see EffectiveBaseURL) so a moved llama.cpp server never
+// breaks an old installation.
 const legacyDefaultLLMBaseURL = "http://127.0.0.1:8080/v1"
 
 // Provider kinds.
@@ -44,7 +50,7 @@ const (
 	ProviderRemote = "remote"
 )
 
-// Engine backend kinds (v1.1.5Z Phase 1).
+// Engine backend kinds.
 const (
 	// BackendLlama is the managed llama.cpp engine backend — the
 	// complete, shipping inference engine and the default.
@@ -115,7 +121,7 @@ type Config struct {
 	LlamaAutoStart bool   `json:"llamaAutoStart" yaml:"llamaAutoStart"`
 	LlamaExtraArgs string `json:"llamaExtraArgs" yaml:"llamaExtraArgs"`
 
-	// Engine backend selection (v1.1.5Z Phase 1).
+	// Engine backend selection (v1.1.5 Phase 1).
 	//
 	//   "llama" — managed llama.cpp subprocess (default; complete
 	//             inference engine)
@@ -127,7 +133,7 @@ type Config struct {
 	//             anything it cannot serve still falls back to the
 	//             llama backend.
 	//
-	// The default preserves v1.1.4Z behavior exactly: no native
+	// The default preserves v1.1.4 behavior exactly: no native
 	// subprocess is spawned unless the user explicitly opts in.
 	EngineBackend string `json:"engineBackend" yaml:"engineBackend"`
 
@@ -141,12 +147,12 @@ type Config struct {
 	MaxIterations int  `json:"maxIterations" yaml:"maxIterations"`
 	ParallelTools bool `json:"parallelTools" yaml:"parallelTools"`
 
-	// RunTimeoutMinutes bounds one agent turn end-to-end (v1.1.4Z). Zero
+	// RunTimeoutMinutes bounds one agent turn end-to-end (v1.1.4). Zero
 	// disables the budget; the default of 60 prevents a pathological
 	// turn (maxIterations x retrying LLM calls) from running for hours.
 	RunTimeoutMinutes int `json:"runTimeoutMinutes" yaml:"runTimeoutMinutes"`
 
-	// Sandbox governor controls (v1.1.4Z: now actually wired - previously
+	// Sandbox governor controls (v1.1.4: now actually wired - previously
 	// stored but ignored by the runtime). Memory accepts "512m"/"512"/
 	// "1g" strings; CPU is a percent reserved for spawned code.
 	SandboxEnabled bool   `json:"sandboxEnabled" yaml:"sandboxEnabled"`
@@ -250,7 +256,7 @@ type Config struct {
 	TargetFPS    int  `json:"targetFps" yaml:"targetFps"`
 
 	// ---------------------------------------------------------------------
-	// Version Zeta — Autonomous Coding Lab.
+	// Autonomous Coding Lab.
 	// ---------------------------------------------------------------------
 
 	// LabEnabled enables the autonomous coding-laboratory subsystem.
@@ -275,7 +281,7 @@ type Config struct {
 	LabAllowNetwork bool `json:"labAllowNetwork" yaml:"labAllowNetwork"`
 
 	// ---------------------------------------------------------------------
-	// Version Zeta — Web Research Engine.
+	// Web Research Engine.
 	// ---------------------------------------------------------------------
 
 	// ResearchEnabled enables external research tools.
@@ -306,7 +312,9 @@ type Config struct {
 	// ResearchWeb enables general web research/fetching.
 	ResearchWeb bool `json:"researchWeb" yaml:"researchWeb"`
 
-	// ResearchUserAgent identifies bounded research requests.
+	// ResearchUserAgent identifies bounded research requests. When empty or
+	// unset it resolves to the version-derived application identity
+	// (EffectiveResearchUserAgent) — providers never hardcode their own.
 	ResearchUserAgent string `json:"researchUserAgent" yaml:"researchUserAgent"`
 }
 
@@ -326,7 +334,7 @@ func AppRoot() string {
 	return wd
 }
 
-// Default returns Version Zeta defaults.
+// Default returns conservative research/lab-aware defaults.
 func Default() *Config {
 	// v1.3.0: the canonical data root comes from the single authoritative
 	// resolver (internal/config/paths.go). A SHEYTAN_DATA_DIR override is
@@ -353,7 +361,7 @@ func Default() *Config {
 		LlamaPort:      8080,
 		LlamaAutoStart: true,
 
-		// v1.1.5Z Phase 1: llama.cpp stays the default engine; the
+		// v1.1.5 Phase 1: llama.cpp stays the default engine; the
 		// native engine path is an explicit opt-in.
 		EngineBackend:    BackendLlama,
 		NativeEnginePath: "",
@@ -363,7 +371,7 @@ func Default() *Config {
 
 		RunTimeoutMinutes: 60,
 
-		// v1.1.4Z: sandbox on by default (it was silently ALWAYS
+		// v1.1.4: sandbox on by default (it was silently ALWAYS
 		// active while the config claimed "disabled" - the field
 		// was never read). Resource governance for model-spawned
 		// code should fail closed.
@@ -376,7 +384,7 @@ func Default() *Config {
 			TopP:        0.95,
 			TopK:        40,
 			MaxTokens:   1024,
-			// v1.1.3Z: raised from 8192 — measured against the real
+			// v1.1.3: raised from 8192 — measured against the real
 			// llama.cpp engine, the AI-context briefing + full tool
 			// schemas cost ~9.8k tokens, so 8k left NO room for the
 			// conversation and the engine rejected the first request.
@@ -429,7 +437,7 @@ func Default() *Config {
 		SmoothStream: true,
 		TargetFPS:    120,
 
-		// Version Zeta — Coding Lab defaults.
+		// Coding Lab defaults.
 		LabEnabled:           true,
 		LabWorkspaceRoot:     filepath.Join(dataDir, "lab", "workspaces"),
 		LabCommandTimeoutSec: 300,
@@ -437,7 +445,7 @@ func Default() *Config {
 		LabKeepWorkspaces:    false,
 		LabAllowNetwork:      false,
 
-		// Version Zeta — research defaults.
+		// Research defaults.
 		ResearchEnabled:     true,
 		ResearchBackend:     "auto",
 		ResearchMaxResults:  8,
@@ -478,7 +486,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	// v1.1.5Z: normalize the engine-backend opt-in so hand-edited configs
+	// v1.1.5: normalize the engine-backend opt-in so hand-edited configs
 	// ("Native", " NATIVE ") mean what they say; EffectiveEngineBackend
 	// still only accepts the exact canonical values.
 	cfg.EngineBackend = strings.ToLower(strings.TrimSpace(cfg.EngineBackend))
@@ -600,7 +608,7 @@ func copyDir(src, dst string) error {
 
 // Save writes configuration as pretty JSON.
 //
-// v1.1.4Z: the write is atomic (temp file + rename). The previous plain
+// v1.1.4: the write is atomic (temp file + rename). The previous plain
 // WriteFile could leave a truncated config.json behind if the process died
 // mid-write — every other persistent store in the app already used the
 // tmp+rename pattern, config was the odd one out.
@@ -733,7 +741,7 @@ func applyEnv(cfg *Config) {
 		}
 	}
 
-	// Version Zeta — Coding Lab.
+	// Coding Lab.
 	if v := os.Getenv("SHEYTAN_LAB_ENABLED"); v != "" {
 		cfg.LabEnabled = parseBool(v)
 	}
@@ -757,7 +765,7 @@ func applyEnv(cfg *Config) {
 		cfg.LabAllowNetwork = parseBool(v)
 	}
 
-	// Version Zeta — Research.
+	// Research.
 	if v := os.Getenv("SHEYTAN_RESEARCH_ENABLED"); v != "" {
 		cfg.ResearchEnabled = parseBool(v)
 	}
@@ -923,7 +931,7 @@ func (c *Config) IsRemote() bool {
 }
 
 // EffectiveEngineBackend resolves the configured engine backend to a valid
-// kind (v1.1.5Z Phase 1). The native path requires an EXACT "native"
+// kind (v1.1.5 Phase 1). The native path requires an EXACT "native"
 // opt-in; anything else — empty, differently-cased, malformed — resolves
 // to the llama.cpp backend so bad values fail closed to the shipping
 // engine. (Env overlay values are lowercased before they get here; a
@@ -943,7 +951,7 @@ func (c *Config) NativeBackendEnabled() bool {
 // EffectiveBaseURL resolves the chat-completions endpoint of the active
 // provider.
 //
-// v1.1.3Z divergence fix: in local mode the MANAGED ENGINE's endpoint
+// v1.1.3 divergence fix: in local mode the MANAGED ENGINE's endpoint
 // (LlamaHost:LlamaPort) is the single source of truth. LLMBaseURL is now an
 // optional explicit override (advanced external local servers); a legacy
 // stored value equal to the old hardcoded default is treated as unset so it

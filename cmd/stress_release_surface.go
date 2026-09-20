@@ -15,27 +15,23 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
 )
 
-// --- v1.1.2Z (ZETA) release-surface scenarios ---
+// --- release-surface scenarios ---
 //
-// v1.1.1Z was the CI-repair + legacy-cleanup release (GTK4/WebKitGTK-6.0
-// Linux deps, versioned stress/e2e retirement). v1.1.2Z completes the
-// contract: the workflow lost the setup-node pin, the gen-syso Windows
-// resource step, the -H=windowsgui subsystem flag and the .bat launcher
-// during a refactor — the stress gate now runs in CI so that class of
-// regression fails the build instead of shipping.
-//
-// These scenarios pin the v1.1.2Z surface: the repaired Linux CI
-// dependencies, the pinned Node 24 + Go 1.26 toolchain, the Windows
-// resource/icon pipeline, the packaged .bat launcher, portable ZIP
-// packaging, collision-proof memory IDs, and Windows-safe log rotation.
+// These scenarios pin the current CI/desktop release surface so a workflow
+// or packaging regression fails the stress gate instead of shipping:
+// the pinned Node 24 + Go toolchains, the GTK4/WebKitGTK-6.0 Linux
+// dependencies, the Windows resource/icon pipeline (gen-syso) and
+// windowsgui subsystem, the packaged .bat launcher, portable ZIP
+// packaging under the release-contract artifact names, collision-proof
+// memory IDs, and Windows-safe log rotation.
 
-func stressZetaReleaseSurface() error {
-	// Zeta floor: 1.1.2. This is a minimum rather than an exact pin so
-	// future compatible point releases cannot silently downgrade the
-	// release surface.
+func stressReleaseSurface() error {
+	// Release-surface floor: 1.1.2. This is a minimum rather than an exact
+	// pin so future compatible point releases cannot silently downgrade
+	// the release surface.
 	if versionLessThan(config.AppVersion, "1.1.2") {
 		return fmt.Errorf(
-			"AppVersion = %q, want >= 1.1.2 (Zeta)",
+			"AppVersion = %q, want >= 1.1.2",
 			config.AppVersion,
 		)
 	}
@@ -158,7 +154,7 @@ func stressZetaReleaseSurface() error {
 
 	w := string(wf)
 
-	// 3a. The Zeta workflow must pin Go instead of floating on "stable".
+	// 3a. The workflow must pin Go instead of floating on "stable".
 	if strings.Contains(w, "go-version: 'stable'") ||
 		strings.Contains(w, `go-version: stable`) {
 		return fmt.Errorf(
@@ -191,7 +187,7 @@ func stressZetaReleaseSurface() error {
 		return fmt.Errorf("Linux build lost its ubuntu-24.04 runner")
 	}
 
-	// 3c. Zeta builds from main and supports manual execution.
+	// 3c. The desktop workflow builds from main and supports manual execution.
 	if !strings.Contains(w, "branches:") ||
 		!strings.Contains(w, "- main") {
 		return fmt.Errorf(
@@ -207,15 +203,15 @@ func stressZetaReleaseSurface() error {
 
 	if strings.Contains(w, "- master") {
 		return fmt.Errorf(
-			"stale master branch trigger found in Zeta workflow",
+			"stale master branch trigger found in the desktop workflow",
 		)
 	}
 
 	// 3d. Validate the action versions used by the current workflow.
 	//
-	// v1.1.2Z upgraded every action off the Node.js-20 runtime that
+	// v1.1.2 upgraded every action off the Node.js-20 runtime that
 	// GitHub deprecated (2025-09-19 changelog) — the runner logs for the
-	// v1.1.1Z era runs carried the "Node.js 20 is deprecated" warning on
+	// v1.1.1 era runs carried the "Node.js 20 is deprecated" warning on
 	// checkout@v4 / setup-go@v5 / setup-node@v4. The stress gate must
 	// follow the workflow forward, not pin it to the deprecated set.
 	for _, action := range []string{
@@ -236,7 +232,7 @@ func stressZetaReleaseSurface() error {
 
 	// 3e. The Node toolchain is PINNED (v1.1.1): the new React/Vite UI
 	// must never depend on whatever Node version the hosted runner
-	// happens to ship. Since v1.1.2Z the pin lives once in the
+	// happens to ship. Since v1.1.2 the pin lives once in the
 	// workflow-level env block (NODE_VERSION: "24") and every
 	// setup-node step consumes it via ${{ env.NODE_VERSION }} — the same
 	// single-source-of-truth pattern GO_VERSION already uses.
@@ -266,7 +262,7 @@ func stressZetaReleaseSurface() error {
 		}
 	}
 
-	// 3f. THE v1.1.1Z FIX: the Linux job must install the GTK4 /
+	// 3f. THE v1.1.1 FIX: the Linux job must install the GTK4 /
 	// WebKitGTK-6.0 development packages that Wails v3 actually links
 	// through cgo + pkg-config. The v1.1.0 workflow installed the Wails
 	// v2 era packages (libgtk-3-dev / libwebkit2gtk-4.1-dev) and every
@@ -334,7 +330,7 @@ func stressZetaReleaseSurface() error {
 		"Create Linux ZIP",
 		"Verify Windows ZIP",
 		"Verify Linux ZIP",
-		// Renamed in v1.1.2Z when download-artifact moved to the
+		// Renamed in v1.1.2 when download-artifact moved to the
 		// tag-agnostic release job; the artifact-upload steps are
 		// "Upload Windows package" / "Upload Linux package".
 		"Upload Windows package",
@@ -594,14 +590,14 @@ func tTempDir(name string) string {
 	return dir
 }
 
-// stressZetaMemoryUniqueIDs: rapid Appends must produce distinct IDs even
+// stressMemoryUniqueIDs: rapid Appends must produce distinct IDs even
 // when the OS clock returns the same instant for consecutive calls (Windows
 // granularity), and DeleteByID must remove EXACTLY one entry.
 //
 // The old timestamp-only scheme made two entries share an ID so one
 // DeleteByID wiped both.
-func stressZetaMemoryUniqueIDs() error {
-	dir := tTempDir("mem-zeta")
+func stressMemoryUniqueIDs() error {
+	dir := tTempDir("mem-unique-ids")
 	defer os.RemoveAll(dir)
 
 	st := memory.New(filepath.Join(dir, "mem.jsonl"))
@@ -610,7 +606,7 @@ func stressZetaMemoryUniqueIDs() error {
 
 	for i := 0; i < n; i++ {
 		if err := st.Append(
-			[]string{"zeta"},
+			[]string{"stress"},
 			fmt.Sprintf("rapid entry %d", i),
 			"stress",
 		); err != nil {
@@ -659,15 +655,15 @@ func stressZetaMemoryUniqueIDs() error {
 	return nil
 }
 
-// stressZetaTrimLogsRotate: an over-budget log folder must actually shrink
+// stressTrimLogsRotate: an over-budget log folder must actually shrink
 // (bytes freed > 0), the rotated file must end at a line boundary, and no
 // .rot temp files may be left behind.
 //
-// The v1.0.10 rotateTail held the source file open across the rename, which
+// The rotateTail implementation once held the source file open across the rename, which
 // Windows refuses — TrimLogs previously swallowed the error and freed
 // nothing.
-func stressZetaTrimLogsRotate() error {
-	dir := tTempDir("logs-zeta")
+func stressTrimLogsRotate() error {
+	dir := tTempDir("logs-rotate")
 	defer os.RemoveAll(dir)
 
 	// ~6.7 MB single log (64-byte lines) against a 1 MB budget.

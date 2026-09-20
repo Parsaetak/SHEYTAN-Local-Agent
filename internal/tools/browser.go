@@ -355,7 +355,7 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 			return "", err
 		}
 
-		// v1.1.4Z: screenshots used to accumulate without bound — every
+		// v1.1.4: screenshots used to accumulate without bound — every
 		// capture lived on disk forever. Keep the most recent 50.
 		pruneScreenshots(dir, 50)
 

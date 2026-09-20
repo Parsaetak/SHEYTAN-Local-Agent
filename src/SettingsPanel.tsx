@@ -150,7 +150,7 @@ function SettingsPanel() {
     }
   }, [configResource.data]);
 
-  // v1.1.5Z Phase 6: the backend currently serving generation ("native" |
+  // v1.1.5 Phase 6: the backend currently serving generation ("native" |
   // "llama") — reported by /api/models so the local model list can mark the
   // serving model honestly instead of guessing from llamaRunning.
   const models = modelsResource.data?.local ?? [];

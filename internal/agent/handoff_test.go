@@ -2,10 +2,14 @@
 package agent
 
 import (
+	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"path/filepath"
 )
 
 func TestWriteHandoffCreatesAndReplacesDynamicSection(t *testing.T) {
@@ -153,5 +157,286 @@ func TestHandoffFromTaskStateFactualMapping(t *testing.T) {
 	}
 	if !foundFile {
 		t.Fatal("files changed not carried into the handoff")
+	}
+}
+
+// --- handoff write/read contracts ---
+
+// TestNoChangeAgentRunWritesHonestHandoff pins the v1.2.8.1 product
+// contract: an evidence-free completed run (no files, no commands, no
+// tests, no repairs, no artifacts) still produces a usable, honest
+// handoff — never an empty one, never a skipped write.
+func TestNoChangeAgentRunWritesHonestHandoff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, HandoffFileName)
+
+	// A run that only answered prose: no engineering evidence at all.
+	ts := NewTaskState("Explain the deployment layout")
+
+	h := HandoffFromTaskState(ts.snapshot(), "", "done")
+
+	if err := WriteHandoffFile(path, h); err != nil {
+		t.Fatalf("no-change handoff write: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+
+	content := string(data)
+
+	for _, want := range []string{
+		"No engineering changes were made.",
+		"## Task",
+		"## Current state",
+		"## Changes made",
+		"## Remaining work",
+		"None recorded.",
+		"## Recommended next action",
+		HandoffBeginMarker,
+		HandoffEndMarker,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("honest no-change handoff missing %q:\n%s", want, content)
+		}
+	}
+
+	if strings.Contains(content, "## Files changed") {
+		t.Fatal("no-change handoff must not invent a Files changed section")
+	}
+}
+
+// TestHandoffBytePreservationOutsideMarkers pins byte-exact preservation:
+// odd whitespace, CRLF-ish content and trailing text after the markers
+// survive a handoff replacement untouched.
+func TestHandoffBytePreservationOutsideMarkers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, HandoffFileName)
+
+	before := "# Rules\n\n  indented   line \n\n\nkeep   this   spacing\n"
+	after := "\n\n\nTrailing notes: kept exactly.\n"
+
+	seed := before + HandoffBeginMarker + "\n# Latest Agent Handoff\n\nold content\n" + HandoffEndMarker + after
+	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	h := Handoff{Task: "second run", Objective: "second run"}
+	if err := WriteHandoffFile(path, h); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	data, _ := os.ReadFile(path)
+	out := string(data)
+
+	if !strings.HasPrefix(out, before) {
+		t.Fatalf("bytes before the markers were rewritten:\n%q", out[:min(len(out), len(before)+20)])
+	}
+
+	if !strings.HasSuffix(out, after) {
+		t.Fatalf("bytes after the markers were rewritten:\n%q", out)
+	}
+
+	if strings.Count(out, HandoffBeginMarker) != 1 {
+		t.Fatalf("expected exactly one marker pair:\n%s", out)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// TestHandoffReadErrorAborts pins the durability repair: an existing but
+// unreadable agent.md must NEVER be silently replaced (the v1.2.8 code
+// treated any read error as "absent" and clobbered the file).
+func TestHandoffReadErrorAborts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, HandoffFileName)
+
+	original := "# Precious content\n\nDo not lose this.\n"
+	if err := os.WriteFile(path, []byte(original), 0o000); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := WriteHandoffFile(path, Handoff{Task: "clobber attempt"}); err == nil {
+		// Restore permissions so TempDir cleanup works, then fail.
+		_ = os.Chmod(path, 0o644)
+		t.Fatal("an unreadable agent.md was replaced instead of aborting")
+	}
+
+	// The failure must be honest AND the file untouched. Restore read
+	// permission first (the test itself needs it to verify the bytes).
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("restore permissions: %v", err)
+	}
+
+	data, rerr := os.ReadFile(path)
+	if rerr != nil {
+		t.Fatalf("original file unreadable after failed handoff: %v", rerr)
+	}
+
+	if string(data) != original {
+		t.Fatalf("original content changed:\n%s", string(data))
+	}
+
+	if strings.Contains(string(data), "clobber attempt") {
+		t.Fatal("the handoff was written despite the read error")
+	}
+}
+
+// TestHandoffReadBackVerification errors when the write cannot be
+// verified — a handoff is only "completed" after the file on disk is
+// proven to carry the section.
+func TestHandoffReadBackVerification(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, HandoffFileName)
+
+	h := Handoff{Task: "verified write", Objective: "verified write"}
+
+	if err := WriteHandoffFile(path, h); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// verifyHandoffContent accepts the real file…
+	data, _ := os.ReadFile(path)
+	if !verifyHandoffContent(string(data), RenderHandoff(h)) {
+		t.Fatal("read-back verification rejected a correct file")
+	}
+
+	// …and rejects a file whose section was tampered with.
+	tampered := strings.Replace(string(data), "verified write", "tampered!", 1)
+	if verifyHandoffContent(tampered, RenderHandoff(h)) {
+		t.Fatal("read-back verification accepted tampered content")
+	}
+}
+
+// --- concurrent handoff writes ---
+
+// Concurrent agent.md writes
+// are SERIALIZED per workspace path, so two runs (or a run racing the
+// CLI) can never silently drop each other's handoff section.
+
+// TestConcurrentHandoffWritesAllSurvive pins the serialization: N
+// concurrent writers each perform a read-splice-rename cycle against the
+// SAME agent.md. Before the per-path lock, a writer's base could be
+// read before another writer's rename, silently erasing the earlier
+// section. After the fix, the file converges to a valid single-section
+// state and — when writers extend different stable parts — no run's
+// content is silently lost mid-sequence.
+func TestConcurrentHandoffWritesAllSurvive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, HandoffFileName)
+
+	const writers = 16
+
+	// Pre-existing stable content OUTSIDE the section (must survive
+	// byte-for-byte, whatever the interleaving).
+	stable := "# Agent Handoff\n\nStable engineering instructions — never rewritten.\n\n"
+	if err := os.WriteFile(path, []byte(stable), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			h := Handoff{
+				Task:      fmt.Sprintf("task %d", n),
+				Objective: fmt.Sprintf("objective %d", n),
+			}
+			if err := WriteHandoffFile(path, h); err != nil {
+				errs <- fmt.Errorf("writer %d: %w", n, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent write failed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	content := string(data)
+
+	// 1. Exactly ONE marker pair (no interleaved duplication).
+	if got := strings.Count(content, HandoffBeginMarker); got != 1 {
+		t.Fatalf("begin markers = %d, want 1 (interleaved writes corrupted the section):\n%s", got, content)
+	}
+	if got := strings.Count(content, HandoffEndMarker); got != 1 {
+		t.Fatalf("end markers = %d, want 1", got)
+	}
+
+	// 2. The stable content survived byte-for-byte.
+	if !strings.HasPrefix(content, stable) {
+		t.Fatalf("stable prefix was rewritten by a concurrent handoff write:\n%q", content)
+	}
+
+	// 3. The section content is internally consistent: the rendered
+	// section parses (Task and Objective from the SAME writer — a
+	// mixed splice would pair task N with objective M).
+	begin := strings.Index(content, HandoffBeginMarker)
+	end := strings.Index(content, HandoffEndMarker)
+	section := content[begin:end]
+
+	// Consistency check: extract "task N" and "objective N" and require
+	// a matching N (a mixed splice would pair task N with objective M).
+	var taskN, objN = -1, -1
+	for i := 0; i < writers; i++ {
+		if strings.Contains(section, fmt.Sprintf("task %d\n", i)) || strings.HasSuffix(section, fmt.Sprintf("task %d", i)) {
+			taskN = i
+		}
+		if strings.Contains(section, fmt.Sprintf("objective %d\n", i)) || strings.HasSuffix(section, fmt.Sprintf("objective %d", i)) {
+			objN = i
+		}
+	}
+	if taskN != objN {
+		t.Fatalf("mixed splice: section pairs task %d with objective %d — the read-splice-rename was NOT serialized:\n%s", taskN, objN, section)
+	}
+}
+
+// TestConcurrentHandoffDifferentPathsNoDeadlock ensures the keyed locks
+// do not serialize UNRELATED files (and never deadlock).
+func TestConcurrentHandoffDifferentPathsNoDeadlock(t *testing.T) {
+	dir := t.TempDir()
+
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			path := filepath.Join(dir, fmt.Sprintf("ws-%d", n), HandoffFileName)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Errorf("mkdir: %v", err)
+				return
+			}
+			if err := WriteHandoffFile(path, Handoff{Task: fmt.Sprintf("t%d", n)}); err != nil {
+				t.Errorf("write %s: %v", path, err)
+			}
+		}(i)
+	}
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// all writes completed — no cross-path serialization or deadlock
+	case <-time.After(10 * time.Second):
+		t.Fatal("independent-path handoff writes deadlocked — the per-path locks must not interact")
 	}
 }

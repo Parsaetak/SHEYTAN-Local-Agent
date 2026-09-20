@@ -1,6 +1,6 @@
 package engine
 
-// protocol.go — the SHEYTAN Native API wire protocol (v1.1.5Z Phase 5).
+// protocol.go — the SHEYTAN Native API wire protocol (v1.1.5 Phase 5).
 //
 // Frame layout (both directions, binary-safe):
 //

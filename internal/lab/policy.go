@@ -591,7 +591,7 @@ func containsWorkspaceEscapeTokens(tokens []shellToken) bool {
 				return true
 			}
 
-			// v1.1.4Z: home-relative and env-expanded PATH tokens. The
+			// v1.1.4: home-relative and env-expanded PATH tokens. The
 			// lexical policy could not see through shell expansion, so
 			// `cat $HOME/secret` and `~/x` passed the check while the real
 			// shell resolved them OUTSIDE the workspace. HOME is now also

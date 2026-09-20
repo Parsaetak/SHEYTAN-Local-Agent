@@ -151,7 +151,7 @@ func (p *GitHubProvider) Search(
 	)
 	request.Header.Set(
 		"User-Agent",
-		"SHEYTAN-Local-Agent/Version-Zeta",
+		DefaultUserAgent(),
 	)
 	request.Header.Set(
 		"X-GitHub-Api-Version",

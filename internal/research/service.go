@@ -26,7 +26,7 @@ type ServiceConfig struct {
 	Timeout    time.Duration
 }
 
-// DefaultServiceConfig returns conservative Version Zeta research defaults.
+// DefaultServiceConfig returns conservative research defaults.
 func DefaultServiceConfig() ServiceConfig {
 	return ServiceConfig{
 		Backend:    BackendAuto,
@@ -384,13 +384,13 @@ func (s *Service) searchAuto(
 
 	if len(providers) == 0 {
 		return SearchResponse{
-			Provider: BackendAuto,
-			Query:    req.Query,
-			Duration: time.Since(started),
-		}, fmt.Errorf(
-			"%w: no research providers are registered",
-			ErrProviderUnavailable,
-		)
+				Provider: BackendAuto,
+				Query:    req.Query,
+				Duration: time.Since(started),
+			}, fmt.Errorf(
+				"%w: no research providers are registered",
+				ErrProviderUnavailable,
+			)
 	}
 
 	ctx, cancel := context.WithTimeout(

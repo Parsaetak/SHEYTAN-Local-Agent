@@ -1,6 +1,6 @@
 package engine
 
-// kv.go — native engine KV-cache concern (v1.1.5Z Phase 1: TYPES ONLY).
+// kv.go — native engine KV-cache concern (v1.1.5 Phase 1: TYPES ONLY).
 //
 // The future native engine will own its KV cache (cells, capacity,
 // eviction, quantization). Phase 1 defines the data model; the metrics op

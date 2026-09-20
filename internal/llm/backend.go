@@ -1,10 +1,10 @@
 package llm
 
-// engine backend contract (v1.1.5Z Phase 1 — SHEYTAN Native AI Engine
+// engine backend contract (v1.1.5 Phase 1 — SHEYTAN Native AI Engine
 // architecture).
 //
 // Backend is the engine abstraction the rest of SHEYTAN programs against.
-// Before v1.1.5Z every consumer reached directly for the two concrete
+// Before v1.1.5 every consumer reached directly for the two concrete
 // pieces: LlamaServer (subprocess lifecycle) and Client (OpenAI-compatible
 // generation). The backend contract formalizes that surface so the managed
 // llama.cpp engine and the future SHEYTAN native engine are
@@ -44,7 +44,7 @@ var ErrNotImplemented = errors.New("backend operation not implemented in this ph
 // context-based only: abort the request context instead of calling Cancel.
 var ErrCancelContextBased = errors.New("backend cancellation is context-based; abort the request context")
 
-// Backend is the engine abstraction SHEYTAN depends on (v1.1.5Z).
+// Backend is the engine abstraction SHEYTAN depends on (v1.1.5).
 //
 // Implementations:
 //   - *LlamaBackend   (this package) — managed llama.cpp engine
@@ -197,7 +197,7 @@ type ModelInfo struct {
 	TotalMemoryEstimateBytes uint64 `json:"totalMemoryEstimateBytes,omitempty"`
 }
 
-// HardwareInfo is the platform-neutral hardware profile (v1.1.5Z).
+// HardwareInfo is the platform-neutral hardware profile (v1.1.5).
 //
 // It is capable of representing CPU, RAM, GPUs (discrete VRAM or shared /
 // unified memory), NPU-class AI accelerators, the machine architecture and
@@ -260,7 +260,7 @@ type AcceleratorHardware struct {
 	MemoryBytes uint64 `json:"memoryBytes,omitempty"`
 }
 
-// Metrics is the engine metrics snapshot (v1.1.5Z).
+// Metrics is the engine metrics snapshot (v1.1.5).
 //
 // The struct is capable of tracking engine state, model, TTFT, prompt
 // processing, decode speed, active requests and engine process memory.

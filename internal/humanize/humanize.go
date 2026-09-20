@@ -1,4 +1,4 @@
-// Package humanize renders byte counts for UIs and logs. v1.1.4Z:
+// Package humanize renders byte counts for UIs and logs. v1.1.4:
 // consolidated — three identical private implementations lived in
 // attachments, chunking and termshell, plus a variant in the tools
 // archive package.

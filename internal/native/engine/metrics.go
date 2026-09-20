@@ -1,6 +1,6 @@
 package engine
 
-// metrics.go — native engine metrics (v1.1.5Z Phase 1).
+// metrics.go — native engine metrics (v1.1.5 Phase 1).
 //
 // The MetricsResult mirrors what the C++ engine actually measures today:
 // its state, uptime, its own process RSS and the (zero) active request

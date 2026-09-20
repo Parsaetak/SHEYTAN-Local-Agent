@@ -1,6 +1,6 @@
 package engine
 
-// memory.go — native engine memory concern (v1.1.5Z Phase 1: TYPES ONLY).
+// memory.go — native engine memory concern (v1.1.5 Phase 1: TYPES ONLY).
 //
 // The future native engine will budget memory explicitly across weights,
 // KV cache and compute buffers before loading a model. Phase 1 defines the

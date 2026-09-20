@@ -390,7 +390,7 @@ func UnsafeAbsolutePath(p string) bool {
 }
 
 // pruneScreenshots keeps only the newest `keep` shot-*/screen-* PNGs in
-// dir (v1.1.4Z: screenshots previously accumulated without bound). Names
+// dir (v1.1.4: screenshots previously accumulated without bound). Names
 // are timestamp-prefixed, so lexicographic descending order is recency
 // order.
 func pruneScreenshots(dir string, keep int) {

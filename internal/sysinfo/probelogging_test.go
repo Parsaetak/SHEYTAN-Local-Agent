@@ -1,4 +1,4 @@
-// logging_v130_test.go — v1.3.0 regressions for the clean-logging contract.
+// Clean-logging contract regressions.
 //
 // Contracts under test (release contract §4):
 //

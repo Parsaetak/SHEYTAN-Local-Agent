@@ -1,4 +1,4 @@
-# SHEYTAN Native AI Engine — C++ engine core (v1.1.5Z Phase 5)
+# SHEYTAN Native AI Engine — C++ engine core (v1.1.5 Phase 5)
 #
 # Build with CMake (preferred):
 #

@@ -10,7 +10,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 )
 
-// v1.1.4Z: the file formerly known as diagnostics.go held Install /
+// v1.1.4: the file formerly known as diagnostics.go held Install /
 // Sysinfo / Doctor / Setup — it is now named for what it actually contains.
 
 // Install runs the component auto-installer + update check.

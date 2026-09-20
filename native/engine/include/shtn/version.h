@@ -8,21 +8,21 @@
 // shape. Bump SHTN_PROTOCOL_VERSION whenever the wire protocol
 // (framing / ops / payload shapes) changes.
 //
-// Phase 1 (v1.1.5Z): both were 1.
-// Phase 2 (v1.1.5Z): both are 2 — added the model surface
+// Phase 1 (v1.1.5): both were 1.
+// Phase 2 (v1.1.5): both are 2 — added the model surface
 // (load_model / unload_model / model_info) to the wire protocol and
 // shtn_engine_load_model / shtn_engine_unload_model /
 // shtn_engine_model_info / shtn_engine_memory_plan to the C ABI.
 // Pre-existing ops and structs kept their shapes (additive change).
 //
-// Phase 4 (v1.1.5Z): both are 3 — added the tokenizer / KV-cache /
+// Phase 4 (v1.1.5): both are 3 — added the tokenizer / KV-cache /
 // scheduler surface to the wire protocol (tokenizer_init /
 // tokenizer_info / tokenizer_encode / tokenizer_decode / kv_cache_info /
 // scheduler_info) and the matching C ABI functions. Pre-existing ops
 // and structs keep their shapes (additive change — a v2 host can still
 // be built against this header by ignoring the new functions).
 //
-// Phase 5 (v1.1.5Z): both are 4 — REAL native generation. Wire: the
+// Phase 5 (v1.1.5): both are 4 — REAL native generation. Wire: the
 // generate op streams event frames ({"id":N,"ok":true,"event":"chunk",
 // "result":{...}}) followed by one final frame; the cancel op now
 // addresses real generation requests. C ABI:

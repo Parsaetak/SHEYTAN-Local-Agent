@@ -1,4 +1,4 @@
-// chunker.go — the derived-chunk engine (v1.1.5Z Phase 3).
+// chunker.go — the derived-chunk engine (v1.1.5 Phase 3).
 //
 // ChunkText is the single chunk derivation used by every pipeline stage
 // that needs CHUNKS with full provenance (attachments retrieval today,
@@ -248,7 +248,7 @@ func ChunkText(sourceHash, text string, cfg ChunkerConfig) []Chunk {
 // clipRunes truncates to at most n runes (preview helper; local to avoid a
 // dependency cycle with the attachments package which has its own copy).
 //
-// v1.1.5Z Phase 3: byte-scanning instead of a []rune conversion — clipping
+// v1.1.5 Phase 3: byte-scanning instead of a []rune conversion — clipping
 // a 4 KiB chunk used to allocate a full rune slice per chunk just to keep
 // 120 runes; the decode loop touches only the first ~n runes and allocates
 // nothing but the result.

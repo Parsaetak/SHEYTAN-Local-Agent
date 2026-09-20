@@ -116,7 +116,7 @@ func New(dir string) (*Manager, error) {
 		return nil, err
 	}
 
-	// v1.1.4Z: crash reports accumulated without bound — every panic added
+	// v1.1.4: crash reports accumulated without bound — every panic added
 	// one forever. Keep the most recent 20.
 	m.pruneCrashes(20)
 
@@ -548,7 +548,7 @@ func (m *Manager) Diagnostics(zipPath string, configPath string, extraFiles map[
 		}
 	}
 
-	// 4. structured logs — REDACTED (v1.1.4Z: tool/LLM arguments can contain
+	// 4. structured logs — REDACTED (v1.1.4: tool/LLM arguments can contain
 	// secrets the user or the model typed; shipping them raw in a diagnostics
 	// zip was a real leak vector).
 	for _, p := range []string{
@@ -594,7 +594,7 @@ func (m *Manager) Diagnostics(zipPath string, configPath string, extraFiles map[
 
 // redact strips anything that looks like an API key or token.
 //
-// v1.1.4Z: handles the three shapes that actually occur in this app —
+// v1.1.4: handles the three shapes that actually occur in this app —
 // plain "key: value" lines, JSON members ("key":"value"), and env-style
 // "key=value" — instead of only the first.
 //

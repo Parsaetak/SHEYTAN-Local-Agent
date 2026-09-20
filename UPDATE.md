@@ -1,184 +1,167 @@
-# UPDATE.md — v1.3.0 Runtime Structure, UX & GitHub Workflow Upgrade
+# UPDATE.md — v1.3.1 Product Polish, Stable File Structure & Repository Cleanup
 
-**Release:** `v1.3.0` (canonical application version; single version hierarchy:
-package.json → release-version.mjs → config.go / build/config.yml / SIGNATURE)
-**Base:** `main @ 24aa79b` (`v1.2.9`) · **Date:** 2026-09-20
-**Package:** `SHEYTAN-Local-Agent-v1.3.0-UPDATE.zip`
+**Release:** `v1.3.1` (canonical application version; single version
+hierarchy: package.json → release-version.mjs → config.go /
+build/config.yml / SIGNATURE)
+**Base:** `main @ 8676582` (`v1.3.0`) · **Date:** 2026-09-20
+**Package:** `SHEYTAN-Local-Agent-v1.3.1-UPDATE.zip`
 **ROADMAP.md:** byte-identical to the locked baseline (git blob SHA-1
 `c7e2c1720eb5e97bd932c0d76100b8719193e650`) — verified before and after
 all work.
 
-This release upgrades the v1.2.9 tree in six connected areas:
-(1) runtime filesystem correctness (the malformed `%LOCALAPPDATA%` paths),
-(2) clean startup logging, (3) reliable scrolling on every workspace tab,
-(4) a professional, user-outcome-oriented Settings surface, (5) a
-first-class GitHub clone workflow with automatic workspace switching, and
-(6) regression coverage for all of it. The four-layer architecture
-(transcript / summary / retrieval / artifacts), the run transport and the
-engine lifecycle are unchanged — this is not a rewrite; every fix targets
-a verified root cause.
+This release professionalizes the v1.3.0 tree without touching working
+architecture: the product identity becomes **version-only**, the embedded
+frontend moves to **stable deterministic filenames**, the generated tree
+becomes exactly reproducible, the release/version workflow is simplified
+to one canonical source, CI gains explicit hygiene gates, and the
+historical version-suffixed test pile is consolidated into
+behavior-oriented files. Every fix targets repository quality, not
+features — all existing functionality is preserved.
 
 ---
 
-## S1. Runtime path correctness (FIXED, TESTED)
+## S1. Version-only product identity (IMPLEMENTED, TESTED)
 
-- DEFECT: the v1.2.9 NSIS installer declared the data location as a
-  machine-level `REG_EXPAND_SZ` value carrying the literal string
-  `%LOCALAPPDATA%\SHEYTAN-LA`. Machine environment values are expanded
-  before per-user variables exist, so the application received the LITERAL
-  string; because it is not an absolute path, every join anchored it to
-  the working directory and the runtime created real directories shaped
-  like `<root>\%LOCALAPPDATA%\SHEYTAN-LA\models`.
-- FIX (source): the installer now writes a plain `REG_SZ` absolute path,
-  expanding `$LOCALAPPDATA` at install time
-  (packaging/nsis/installer.nsi).
-- FIX (runtime): `internal/config/paths.go` is the ONE authoritative
-  resolver — environment references expand exactly once; a value that
-  still contains an unresolved token (or a doubled product nesting) is
-  REJECTED to the canonical application root with a reported reason;
-  relative values anchor at the executable root, never the CWD; models,
-  sessions, logs and workspace derive from the canonical root. Load-time
-  normalization guarantees no subsystem can observe a raw `%...%` path.
-- Tests: `internal/config/paths_test.go` (expansion, rejection, CWD
-  independence, startup directory contract, persisted-config rejection).
+- The retired product codename is removed from EVERY surface: runtime
+  constants (`internal/config/config.go` no longer declares a codename
+  constant), CI (`build-desktop.yml` carries no codename outputs, env
+  vars, package text or assertions), release scripts
+  (`scripts/release-version.mjs` no longer parses, defaults, emits or
+  verifies codenames), installer/portable package text
+  (`README.txt` / `BUILD-INFO.txt` carry `SHEYTAN-LA` + `Version:` +
+  `Platform:` + `Commit:` only), README/ARCHITECTURE/UPDATE/agent.md/
+  worklog, research User-Agent strings, stress-suite names, test names
+  and comments.
+- `scripts/release-version.mjs` is the single release-metadata gate:
+  it validates **plain semver** (`MAJOR.MINOR.PATCH`), reads one
+  canonical version from `package.json`, synchronizes the derived
+  surfaces (`config.go` `AppVersion`, `build/config.yml`
+  `productVersion`, `SIGNATURE` first line) and verifies the CI
+  derivation shape. `--env` emits exactly `APP_VERSION` and
+  `APP_VERSION_FULL` (a compatibility alias equal to `APP_VERSION` —
+  no third variable, no suffix, no codename).
+- Research providers (GitHub, Reddit, DuckDuckGo, SearXNG) identify as
+  `SHEYTAN-Local-Agent/<AppVersion>` — derived from the same runtime
+  constants the whole application reports (`research.DefaultUserAgent`),
+  with the user-configurable `Config.EffectiveResearchUserAgent()` still
+  honored by the Reddit provider. No provider hardcodes a release
+  identity.
+- The Linux portable ZIP and the release tag drop the historical `Z`
+  suffix: `SHEYTAN-Local-Agent-Linux-x64-v1.3.1.zip` and tag `v1.3.1`
+  (`internal/releasecontract` updated in lockstep with the workflow;
+  the stress gate enforces the agreement).
 
-## S2. Malformed-root migration (IMPLEMENTED, TESTED)
+## S2. Stable frontend filenames (IMPLEMENTED, TESTED)
 
-- `internal/config/migrate.go` folds v1.2.9 malformed trees
-  (`<root>\%LOCALAPPDATA%\SHEYTAN-LA\...`, doubled SHEYTAN-LA nesting)
-  into the canonical root: files are renamed when the destination is
-  free, hash-verified copies otherwise; a collision keeps the NEWER file
-  on either side; a recovered config.json is re-loaded (or preserved as
-  `config.legacy.json` when both trees carry one); the malformed source
-  tree is removed only after every entry is accounted for.
-- Idempotent and restart-safe: an interrupted pass leaves the source
-  partially intact and the next boot completes it; re-running the merge
-  is a no-op.
-- The migration reports every decision to the log with actionable
-  context, rendered so the literal token never appears in runtime output.
-- Tests: `internal/config/migrate_test.go` (token tree, doubled nesting,
-  idempotency, restart resume, newer-wins collisions, config recovery,
-  healthy roots untouched) plus a REAL-BINARY acceptance run
-  (`scripts/` migration harness): fresh boot against a synthetic v1.2.9
-  malformed installation migrates models/sessions/config, removes the
-  token tree, boots v1.3.0 on the recovered configuration, and a second
-  boot is a verified no-op.
+- `vite.config.ts` emits deterministic names at the BUILD level (not
+  post-build renames): `entryFileNames/chunkFileNames` =
+  `assets/[name].js`, `assetFileNames` = `assets/[name][extname]`.
+  Code splitting and lazy loading are fully preserved — every lazy
+  chunk (AgentBody, SettingsPanel, SystemPanel, WorkspacePanel, LabPanel,
+  ResearchPanel, AgentHeader, AgentSidebar, DownloadProgress,
+  useResource, vision) is itself stable.
+- The embedded tree now contains exactly:
+  `web/static/index.html`, `web/static/assets/index.js`,
+  `index.css`, `rolldown-runtime.js` and the stable component chunks —
+  the same physical file keeps the same name across builds, so the
+  agent can always identify what changed.
+- No content-hash filenames, no duplicate component bundles, no
+  orphaned CSS, no `.vite/manifest.json`.
 
-## S3. Clean logging (FIXED, TESTED)
+## S3. Authoritative generated tree (IMPLEMENTED)
 
-- DEFECT: `fastSnapshot()` logged INFO on EVERY call, and every UI
-  surface (environment endpoint, System panel, perf poll) calls it — one
-  session produced dozens of identical `fast snapshot in 0 ms` lines.
-- FIX: routine reads are silent; ONE concise `fast environment ready`
-  summary per process; the deep probe keeps its single
-  `deep probe completed in X ms (sources: …)` measurement; the
-  per-source probe lines moved to DEBUG.
-- DEFECT: the scheduled updater could log `WARN [updater]` with an empty
-  message (UpdateEngine returns `("", err)` on download failures).
-- FIX: the updater call sites always carry the error detail, and the log
-  manager now upgrades any blank WARN/ERROR to a record naming the
-  emitting call site — an empty warning is structurally impossible.
-- Tests: `internal/sysinfo/logging_v130_test.go` (25 concurrent
-  ProbeFast calls produce exactly one summary and zero per-call lines),
-  `internal/logging/blankwarn_v130_test.go`.
+- The production flow is `clean dist → npm run build → stable assets →
+  sync-web → web/static`; the workflow performs an explicit `rm -rf
+  dist` (Windows: `Remove-Item dist`) before every production build and
+  `sync-web.mjs` replaces `web/static` wholesale, so no
+  previous-generation asset can survive.
+- All old hashed bundles (`index-DRb7l71I.js`,
+  `AgentBody-jPzETmLT.js`, `SettingsPanel-CvoMBB6r.js`, …) are deleted
+  from the repository; `web/static` now exactly reflects the current
+  clean build.
+- `scripts/verify-static-assets.mjs` (new, wired into package.json as
+  `npm run verify:web`) enforces the acceptance contract: required
+  entries exist, every index.html reference resolves, every
+  dynamic-import chunk exists, no hashed filename patterns, no vite
+  manifest, and (with `--dist`) `web/static` mirrors the fresh build
+  file-for-file.
 
-## S4. Universal workspace scrolling (FIXED, BROWSER-VALIDATED)
+## S4. CI hardening (IMPLEMENTED)
 
-- DEFECT: `.view-transition` was a plain block under four
-  `overflow: hidden` ancestors; its content-height flex basis overflowed
-  `.workspace` invisibly — the System tab (and tall Workspace/Research
-  content) had NO scrollable viewport anywhere.
-- FIX: ONE layout contract — `.workspace > .view-transition` becomes a
-  shrinkable flex column; System, Workspace, Research and Settings own a
-  single vertical scroll viewport (wheel, trackpad, scrollbar, keyboard
-  with focus inside); Agent and Coding Lab keep their existing internal
-  IDE-style scroll regions (conversation stream, task list, lab detail)
-  which now engage correctly. The per-tab `:has()` special case is
-  deleted — one rule covers every tab.
-- Validation: every tab measured in a real browser (scrollHeight vs
-  clientHeight + programmatic scrollTop with tall injected content),
-  short-window (480 px) re-validated, per-tab evidence captured.
-- Tests: `src/scroll-contract.test.ts` pins the contract in the shipped
-  CSS.
+All existing quality gates are unchanged (Windows/Linux builds, native
+C++ build + ctest, frontend typecheck/lint/unit tests, race gate, Go
+tests + vet, stress suite, packaging, NSIS installer + source contract,
+release manifest, SHA256SUMS, published-release verification). Added:
 
-## S5. Professional Settings (IMPLEMENTED, TESTED, BROWSER-VALIDATED)
+- **Codename removal gate** — a case-insensitive repository scan for the
+  retired terms (the removed constant names, the old user-agent identity
+  and the standalone codename word) fails the build on ANY match
+  (tracked files only; ROADMAP.md is verified clean).
+- **Stable frontend asset contract** — `verify-static-assets.mjs --dist`
+  runs in the audit, Windows and Linux jobs.
+- **Stale generated files** — the `--dist` mirror comparison fails CI if
+  `web/static` contains anything the current build does not produce.
+- **Version consistency** — the identity derivation
+  (`package.json → release-version.mjs --env → APP_VERSION`) is
+  shape-checked by the release script itself; the workflow verifies the
+  derived surfaces against the resolved version in every job.
 
-- Eight sections replace the ten implementation-oriented tabs: General,
-  Models, Performance (Quiet / Balanced / Maximum postures + measured
-  context/metrics), Agent & Tools, Network, Updates, Diagnostics
-  (read-only) and Advanced.
-- Users choose outcomes; SHEYTAN chooses implementation details: the MM
-  projector is "Automatically managed" (detected → matched → loaded →
-  verified by the backend; the raw path field is gone from normal UI —
-  the expert override lives in Advanced); engine host/port/binary/flags,
-  cache tuning, batch/thread controls, sandbox resource caps and storage
-  limits are Advanced-only; compatibility level/reason remain read-only
-  measured facts.
-- Backward compatible: every legacy config field still loads and saves
-  (the backend struct is unchanged); tests pin that ordinary saves
-  cannot erase unexposed fields.
-- Save-safety fixes: `llm` patches now deep-merge field-by-field (the
-  v1.2.9 shallow replace silently zeroed sampling fields on posture and
-  preset applies); posture applies write the real top-level `ubatchSize`
-  (the v1.2.9 apply wrote a phantom `llm.ubatchSize`); hardware facts
-  load on Diagnostics too.
-- Tests: `src/settings-sections.test.ts` (structure contract),
-  `internal/api/config_patch_v130_test.go` (deep merge, legacy field
-  preservation, API-key redaction round-trip).
+## S5. Test-file consolidation (IMPLEMENTED, ALL TESTS PASS)
 
-## S6. First-class GitHub cloning (IMPLEMENTED, TESTED, END-TO-END)
+- 24 version-suffixed files (`*_v114/v125/v126/v127/v1281/v129/v130_
+  test.go`) and 5 phase-suffixed files were consolidated into canonical
+  behavior-oriented test files — merged into existing canonicals where
+  they exist (`handoff_test.go`, `preflight_test.go`,
+  `runtransport_test.go`, `run_crossmode_test.go`,
+  `run_settlement_test.go`, `server_test.go`, `contextplan_test.go`,
+  `histref_test.go`, `scheduler_test.go`, `sessions_test.go`,
+  `pipeline_test.go`, `attachments_test.go`, `contextcache_test.go`,
+  `memory_test.go`, `recall_test.go`) and renamed where they are the
+  package's only tests (`authority_test.go`, `measurement_test.go`,
+  `config_patch_test.go`, `artifacts_test.go`, `policy_test.go`,
+  `client_test.go`, `blankwarn_test.go`, `mcp_test.go`,
+  `probelogging_test.go`).
+- Coverage is preserved or strengthened: every test function moved
+  verbatim; measurement tests renamed to behavior names
+  (`TestFirstPromptCostMeasurement`, `TestThinkingSimplePromptStaysCompact`,
+  `TestTrivialChatOffersNoToolsAndCompactBriefing`).
+- The stress suite keeps full scenario coverage; the codename-branded
+  file is renamed `cmd/stress_release_surface.go` with neutral function
+  and scenario names (`release_surface`, `memory_unique_ids`,
+  `trimlogs_rotate`).
 
-- `internal/gitclone`: URL validation (https, `.git`, bare-host and SSH
-  forms; credentials/ports/queries rejected), destination validation
-  (non-empty unrelated directories refused), structured clone execution
-  through the validated `internal/proc` seam — explicit argument vector,
-  no shell, tree-kill cancellation, bounded captured output, hard
-  timeout, non-interactive git env, post-clone verification
-  (`git rev-parse HEAD`), and classified failures with actionable
-  messages (git-unavailable, invalid-url, auth, not-found, network,
-  destination-exists, permission, canceled, timeout).
-- `internal/api/clone.go`: `POST /api/workspace/clone`,
-  `GET /api/workspace/clone/status`, `POST /api/workspace/clone/cancel`
-  — the v1.2.3 Download-Manager job pattern (single slot, immediate
-  first snapshot, ~1.2 s polling). On success the workspace switches
-  through the EXACT `/api/workspace/switch` sequence (tool rebind →
-  project intel → config persist), skipped honestly if a run is active.
-- Workspace tab UI: Clone card (URL, optional destination/branch,
-  progress bar, cancel, classified errors with git output under
-  "details", success with HEAD commit and the switched workspace).
-- Tests: `internal/gitclone/clone_test.go` (fake-git process matrix),
-  `internal/api/clone_api_test.go` (HTTP contract incl. auto-switch),
-  `src/clone-url.test.ts` (client pre-validation), plus a REAL
-  end-to-end clone of `github.com/octocat/Hello-World` through the
-  browser UI with verified workspace switch.
+## S6. Documentation professionalization (IMPLEMENTED)
 
-## Verification (this host; measured)
+- README: current product/architecture/installation/usage/capabilities
+  first; a v1.3.1 release section; the accumulated per-release tables
+  collapsed into a one-line-per-release history summary (full evidence
+  remains in `worklog.md`).
+- ARCHITECTURE: current subsystem ownership; historical release-label
+  narratives rewritten as current-state contracts.
+- agent.md: rewritten as a current-state-first engineering handoff (see
+  the file itself).
+- worklog: engineering evidence preserved; codename terminology
+  eliminated; historical `v1.x.yZ` labels rewritten to plain versions.
+- Historical `v1.x.yZ` labels across the entire codebase (95 files)
+  were rewritten to plain version identifiers — version/date/change
+  information preserved, only the removed codename suffix dropped.
 
-- Go: `go test -tags headless -count=1 ./...` PASS (full tree);
-  `go vet -tags headless ./...` clean; `gofmt` clean;
-  `GOOS=windows CGO_ENABLED=0 go build ./...` PASS (full Windows
-  cross-compile); focused `-race` gate on the concurrency-heavy
-  packages PASS.
-- Frontend: `npm ci`; `tsc --noEmit` clean; `oxlint` 0/0;
-  `node --test` 78/78 (68 prior + 10 new); `vite build` + `sync-web` OK.
-- Version: `node scripts/release-version.mjs --check` PASS (canonical
-  1.3.0 everywhere).
-- Runtime acceptance: real-binary malformed-path migration (boot 1
-  migrates + recovers config; boot 2 no-op); clean-startup log
-  inspection (exactly one fast-environment summary, zero per-call
-  snapshots, zero blank warnings); per-tab scroll validation in a real
-  browser; live GitHub clone + automatic workspace switch.
-- NOT RUN HERE: the Windows desktop (Wails/WebView2) build and native
-  installer packaging — this host is Linux; CI owns the Windows matrix.
+## S7. Verification performed (this release)
 
-## Known limitations
-
-- Cloning private repositories over HTTPS depends on the user's Git
-  credential manager; over SSH, on the user's loaded keys (GIT_TERMINAL_PROMPT=0
-  fails fast with a classified authentication error rather than hanging).
-- The clone progress percentage derives from git's `--progress` output;
-  repository phases without percentage lines advance the phase label but
-  hold the bar.
-- The Windows-specific runtime checks (§14 items 1–12 on Windows) were
-  validated on Linux (headless runtime + browser) and Windows
-  cross-compilation; a Windows host run is the remaining step CI owns.
+- `gofmt` clean across `./cmd ./internal ./scripts`.
+- `go build -tags headless ./...` OK; `go vet -tags headless ./...` clean.
+- `go test -tags headless -count=1 ./internal/...` — all packages pass
+  (0 FAIL).
+- `go test -race -tags headless -count=1` on the concurrency-heavy
+  packages (api, agent, sessions, contextplan, histref, runtime) — pass.
+- Frontend: `npm ci`, `npm run typecheck`, `npm run lint`,
+  `npm run test:units`, clean `npm run build` — all pass;
+  `verify-static-assets.mjs --dist` satisfied.
+- Native C++ engine: clean CMake configure + build + ctest (see final
+  report for the exact matrix on this host).
+- Stress suite: full run via `scripts/stress-main` (see final report).
+- `node scripts/release-version.mjs --check` consistent (canonical
+  `1.3.1`).
+- Repository-wide scans: zero codename matches; zero content-hash asset
+  filenames; zero stale generated files; ROADMAP.md blob SHA-1
+  unchanged before and after.

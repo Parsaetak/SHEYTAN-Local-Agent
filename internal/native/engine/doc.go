@@ -1,5 +1,5 @@
 // Package engine implements the Go side of the SHEYTAN Native AI Engine
-// (v1.1.5Z Phase 2).
+// (v1.1.5 Phase 2).
 //
 // # Architecture position
 //

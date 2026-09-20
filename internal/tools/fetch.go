@@ -26,7 +26,7 @@ type FetchTool struct {
 
 // NewFetchTool builds a fetch tool with its own bounded HTTP client.
 //
-// v1.1.4Z DNS-rebinding defense: the transport's DialContext resolves the
+// v1.1.4 DNS-rebinding defense: the transport's DialContext resolves the
 // hostname itself, validates every candidate address as globally routable,
 // and dials a VERIFIED IP. validateFetchURL already checks DNS before the
 // request, but the default dialer resolved the name a second time — a

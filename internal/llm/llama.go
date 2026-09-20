@@ -29,7 +29,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
 )
 
-// Engine lifecycle states (v1.1.3Z spec): the backend process state is
+// Engine lifecycle states (v1.1.3 spec): the backend process state is
 // authoritative and the UI may never invent any of these.
 //
 //	idle        fresh manager, nothing attempted yet
@@ -81,7 +81,7 @@ type EngineEvent struct {
 type LlamaServer struct {
 	// src is the live configuration source. Engine starts capture one
 	// consistent snapshot; health probes read the current value.
-	// (v1.1.4Z: replaced the shared mutable *Config which raced the HTTP
+	// (v1.1.4: replaced the shared mutable *Config which raced the HTTP
 	// config patcher.)
 	src     *config.Source
 	cmd     *exec.Cmd
@@ -131,7 +131,7 @@ type LlamaServer struct {
 	watchStop  chan struct{}
 	watchDone  chan struct{}
 
-	// startedAt is the time of the last successful boot (v1.1.5Z: the
+	// startedAt is the time of the last successful boot (v1.1.5: the
 	// measured uptime base for backend Metrics).
 	startedAt time.Time
 
@@ -294,7 +294,7 @@ func (s *LlamaServer) IsAlive() bool {
 // inference request. It is a no-op unless the engine is alive — remote
 // providers and adopted engines never report busy through this path.
 //
-// v1.1.4Z: the whole transition runs under one mutex acquisition. The
+// v1.1.4: the whole transition runs under one mutex acquisition. The
 // previous version checked aliveness, released the lock, then re-locked in
 // setState — a process death inside that window could be overwritten by a
 // stale busy/ready transition.
@@ -339,7 +339,7 @@ func (s *LlamaServer) IsRunning() bool {
 
 // ensureBinary makes sure the llama.cpp server binary exists and returns
 // its effective path. An empty configured LlamaBinPath is resolved to the
-// default location and persisted through the config source (v1.1.4Z: the
+// default location and persisted through the config source (v1.1.4: the
 // old code mutated the shared Config in place).
 func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
 	binPath := cfg.LlamaBinPath
@@ -464,7 +464,7 @@ func (s *LlamaServer) startLocked() error {
 
 	s.mu.Unlock()
 
-	// v1.1.4Z: one consistent snapshot for the whole boot. A concurrent
+	// v1.1.4: one consistent snapshot for the whole boot. A concurrent
 	// Settings PATCH can no longer produce a half-old, half-new launch.
 	cfg := s.src.Load()
 
@@ -930,7 +930,7 @@ func (s *LlamaServer) Pid() int {
 }
 
 // StartedAt returns the time of the last successful boot (zero before the
-// first boot). v1.1.5Z: measured uptime base for backend metrics.
+// first boot). v1.1.5: measured uptime base for backend metrics.
 func (s *LlamaServer) StartedAt() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -939,7 +939,7 @@ func (s *LlamaServer) StartedAt() time.Time {
 }
 
 // Restarts returns the auto-restart count of the current alive episode.
-// v1.1.5Z: measured value surfaced through backend metrics.
+// v1.1.5: measured value surfaced through backend metrics.
 func (s *LlamaServer) Restarts() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -949,7 +949,7 @@ func (s *LlamaServer) Restarts() int {
 
 // ProbeHealth performs a REAL active health check against the managed
 // llama.cpp /health endpoint (one bounded HTTP GET), unlike State()/
-// IsAlive() which only read the cached state machine. v1.1.5Z: extracted
+// IsAlive() which only read the cached state machine. v1.1.5: extracted
 // behind the backend contract so Health() is an honest probe for both
 // engines (the same endpoint waitReadySignaled polls during startup).
 func (s *LlamaServer) ProbeHealth(ctx context.Context) error {
@@ -1033,7 +1033,7 @@ func (s *LlamaServer) buildArgs(
 //	2 — --jinja + GPU, but no speed flags
 //	3 — bare: model, host/port, context, threads
 //
-// v1.1.4Z: the optional sampling knobs (min-p, repeat-last-n, presence and
+// v1.1.4: the optional sampling knobs (min-p, repeat-last-n, presence and
 // frequency penalty, mirostat tau/eta) are only emitted when the user set a
 // non-zero value, so default installs keep the exact launch contract the
 // stress suite pins while Settings sampling edits actually reach the engine.
@@ -1406,7 +1406,7 @@ func (s *LlamaServer) launchArgs(
 				diag.render(s.logBuf.lines()),
 			)
 
-			// v1.1.3Z bounded auto-recovery, v1.2.5 lifecycle-
+			// v1.1.3 bounded auto-recovery, v1.2.5 lifecycle-
 			// owned: the watchdog restarts the engine a bounded
 			// number of times with backoff so a crashed engine
 			// recovers transparently, while a fundamentally
@@ -2599,7 +2599,7 @@ func safeArchivePath(dir, name string) (string, error) {
 // engineDownloadTimeout bounds one engine-binary download. The previous
 // plain http.Get had no deadline: a stalled CDN connection could hang the
 // prewarm goroutine AND hold switchMu forever, blocking every later engine
-// start/restart (v1.1.4Z).
+// start/restart (v1.1.4).
 const engineDownloadTimeout = 10 * time.Minute
 
 // engineDownloadCapBytes bounds the downloaded archive size (2 GiB — the
@@ -3023,7 +3023,7 @@ func llamaBinaryName() string {
 }
 
 func llamaDownloadURL() (string, string, error) {
-	// v1.1.5Z repair: llama.cpp removed its prebuilt LINUX binaries
+	// v1.1.5 repair: llama.cpp removed its prebuilt LINUX binaries
 	// upstream (b10642 still ships the Windows asset but no ubuntu zip any
 	// more), so the pinned-tag URL 404s forever on Linux. Follow the
 	// updater's existing design instead of hardcoding the pinned tag:
@@ -3137,7 +3137,7 @@ func (s *LlamaServer) ListLoadedModels() ([]string, error) {
 		cfg.LlamaPort,
 	)
 
-	// v1.1.4Z: bounded request. The previous plain http.Get could hang an
+	// v1.1.4: bounded request. The previous plain http.Get could hang an
 	// HTTP handler forever when the engine stopped answering mid-poll.
 	client := &http.Client{Timeout: 5 * time.Second}
 

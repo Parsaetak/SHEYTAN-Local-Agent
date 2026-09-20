@@ -53,7 +53,7 @@ func TestNewRedditProviderDefaults(t *testing.T) {
 		)
 	}
 
-	if provider.UserAgent != "SHEYTAN-Local-Agent/Version-Zeta" {
+	if provider.UserAgent != DefaultUserAgent() {
 		t.Fatalf(
 			"unexpected User-Agent: %q",
 			provider.UserAgent,
@@ -209,7 +209,7 @@ func TestRedditProviderSearch(t *testing.T) {
 				)
 			}
 
-			if got := r.Header.Get("User-Agent"); got != "SHEYTAN-Local-Agent/Version-Zeta" {
+			if got := r.Header.Get("User-Agent"); got != DefaultUserAgent() {
 				t.Fatalf(
 					"unexpected User-Agent: %q",
 					got,
@@ -286,7 +286,7 @@ func TestRedditProviderSearch(t *testing.T) {
 		server.Client(),
 		server.URL,
 		token,
-		"SHEYTAN-Local-Agent/Version-Zeta",
+		DefaultUserAgent(),
 	)
 
 	response, err := provider.Search(
@@ -1741,7 +1741,7 @@ func TestRedditProviderSearchDefaultUserAgentIsStable(t *testing.T) {
 		) {
 			if got := r.Header.Get(
 				"User-Agent",
-			); got != "SHEYTAN-Local-Agent/Version-Zeta" {
+			); got != DefaultUserAgent() {
 				t.Fatalf(
 					"unexpected User-Agent: %q",
 					got,

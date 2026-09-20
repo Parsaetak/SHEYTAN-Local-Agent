@@ -44,7 +44,7 @@ func (d *dataset) RowsTest() int {
 // NumericColumnTest exposes the parse-once numeric column cache.
 func (d *dataset) NumericColumnTest(col int) []float64 { return d.numericColumn(col) }
 
-// fetchAllowPrivateTest (v1.1.4Z: now an atomic) relaxes the fetch tool's
+// fetchAllowPrivateTest (v1.1.4: now an atomic) relaxes the fetch tool's
 // SSRF guard so the release stress suite (package cmd) can exercise
 // HTML→text extraction against a loopback httptest server. It is false in
 // production; only the stress suite flips it, and it restores the previous
