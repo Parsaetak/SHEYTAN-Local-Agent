@@ -151,24 +151,37 @@ jobs:
       # v1.1.5Z Phase 1: the C++ native engine skeleton builds and its
       # dependency-free test suites pass on the same runner the Go build
       # uses. Ubuntu-24.04 images ship cmake (>= 3.28) and g++.
-      # v1.2.1: the engine build is cached on the full source hash of
-      # native/engine/** — a cache hit reuses the previous build tree
-      # (cmake reconfigures if anything is stale), so repeated CI runs pay
-      # the compile cost once per source revision. Reproducibility is
-      # unaffected: the key is the exact source hash, and ctest still runs.
-      - name: Cache native engine build
-        uses: actions/cache@v5
-        with:
-          path: native/engine/build
-          key: native-engine-${{ runner.os }}-${{ hashFiles('native/engine/**') }}
-
+      # v1.2.8.1 REPAIR (root cause of run 35464922587): the v1.2.1
+      # actions/cache step cached the ENTIRE native/engine/build tree —
+      # including CMakeCache.txt / CMakeFiles, which embed absolute paths.
+      # The cache key did not encode the runner workspace path, so a cache
+      # entry produced under one workspace casing (…/SHEYTAN-local-agent/…)
+      # was restored into another (…/SHEYTAN-Local-Agent/…) and cmake
+      # refused to configure: "current CMakeCache.txt directory … different
+      # from cached directory". A relocatable CMake build tree is NOT a
+      # safe cache artifact, so the cache step is removed entirely and
+      # every run configures from a clean build directory with `--fresh`.
+      # Compile cost is paid once per run; reproducibility is exact.
       - name: Native engine (C++) build and tests
         shell: bash
         run: |
           set -euo pipefail
 
           cmake --version
-          cmake -S native/engine -B native/engine/build
+
+          # v1.2.8.1 regression guard: never reuse a stale or path-mismatched
+          # cache. Wipe the build dir unconditionally, then configure with
+          # --fresh so cmake regenerates every cache entry from scratch.
+          rm -rf native/engine/build
+          cmake -S native/engine -B native/engine/build --fresh
+
+          # v1.2.8.1 regression guard: the freshly written CMakeCache.txt
+          # must record THIS runner workspace's absolute paths (correct
+          # letter case included). A path/case mismatch here is exactly the
+          # failure mode of run 35464922587.
+          grep -F "$(pwd)/native/engine/build" native/engine/build/CMakeCache.txt > /dev/null
+          grep -F "$(pwd)/native/engine" native/engine/build/CMakeCache.txt > /dev/null
+
           cmake --build native/engine/build
           ctest --test-dir native/engine/build --output-on-failure
 
@@ -900,19 +913,26 @@ jobs:
       # instead of skipping. The audit job builds and ctests the engine,
       # but on its own runner/workspace — without this step the boundary
       # tests never actually executed in any Go job.
-      # v1.2.1: same source-hash cache as the audit job.
-      - name: Cache native engine build
-        uses: actions/cache@v5
-        with:
-          path: native/engine/build
-          key: native-engine-${{ runner.os }}-${{ hashFiles('native/engine/**') }}
-
+      # v1.2.8.1 REPAIR (run 35464922587): the v1.2.1 source-hash cache of
+      # native/engine/build is REMOVED here as well (see the audit job for
+      # the full root-cause analysis). CMake build trees embed absolute
+      # paths and are not relocatable across workspaces; this job now
+      # always configures a clean build directory with --fresh and guards
+      # the recorded cache paths before compiling.
       - name: Native engine (C++) build for Go integration tests
         shell: bash
         run: |
           set -euo pipefail
 
-          cmake -S native/engine -B native/engine/build
+          cmake --version
+
+          # v1.2.8.1 regression guard: clean configure, no restored cache.
+          rm -rf native/engine/build
+          cmake -S native/engine -B native/engine/build --fresh
+
+          grep -F "$(pwd)/native/engine/build" native/engine/build/CMakeCache.txt > /dev/null
+          grep -F "$(pwd)/native/engine" native/engine/build/CMakeCache.txt > /dev/null
+
           cmake --build native/engine/build
           ctest --test-dir native/engine/build --output-on-failure
 

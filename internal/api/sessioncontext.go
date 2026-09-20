@@ -28,6 +28,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/contextplan"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 )
 
@@ -109,13 +110,16 @@ func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request, se
                         }
                 }
 
-                sess, err := s.store.Get(sessionID)
-                if err != nil {
-                        writeErr(w, http.StatusNotFound, err)
-                        return
-                }
-                sess.Context.ContextTokens = tokens
-                if err := s.store.UpdateContext(sessionID, sess.Context); err != nil {
+                // v1.2.8.1: the token policy is applied through the store's
+                // atomic context mutation — the previous Get-copy/Update-
+                // whole-context shape could silently revert a concurrent
+                // context update (history refs attach, attachment associate)
+                // that landed between the read and the write.
+                if err := s.store.UpdateContextFunc(sessionID, func(c *sessions.Context) (bool, error) {
+                        changed := c.ContextTokens != tokens
+                        c.ContextTokens = tokens
+                        return changed, nil
+                }); err != nil {
                         writeErr(w, http.StatusInternalServerError, err)
                         return
                 }

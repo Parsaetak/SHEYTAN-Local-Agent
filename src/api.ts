@@ -1428,6 +1428,10 @@ export const api = {
         // v1.2.8: attached cross-mode history references.
         historyRefs?: HistoryRef[];
       };
+      // v1.2.8.1: ATOMIC history-reference delta — replaces just the ref
+      // list server-side under the store lock (no whole-context PUT, so a
+      // stale read-modify-write can never revert concurrent updates).
+      historyRefs?: HistoryRef[];
     },
   ): Promise<Session> {
     return request<Session>(`/sessions/${encodeURIComponent(id)}`, {

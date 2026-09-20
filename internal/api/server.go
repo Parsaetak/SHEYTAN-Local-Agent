@@ -968,9 +968,10 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
                 r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
                 var body struct {
-                        Title   *string           `json:"title,omitempty"`
-                        Context *sessions.Context `json:"context,omitempty"`
-                        Model   *string           `json:"model,omitempty"`
+                        Title       *string           `json:"title,omitempty"`
+                        Context     *sessions.Context `json:"context,omitempty"`
+                        Model       *string           `json:"model,omitempty"`
+                        HistoryRefs *[]histref.Ref    `json:"historyRefs,omitempty"`
                 }
 
                 if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -986,7 +987,17 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
                 }
 
                 if body.Context != nil {
-                        if err := s.store.UpdateContext(id, *body.Context); err != nil {
+                        // v1.2.8.1: history references arriving through the
+                        // full-context PUT are VALIDATED server-side —
+                        // normalized (dedup + cap), self-references dropped,
+                        // same-mode references enforced against the store
+                        // index. The client picker is a convenience, never
+                        // the authority; this was previously a write-only
+                        // sink that accepted arbitrary reference lists.
+                        ctx := *body.Context
+                        ctx.HistoryRefs = s.validateHistoryRefs(id, s.store.ModeOf(id), ctx.HistoryRefs)
+
+                        if err := s.store.UpdateContext(id, ctx); err != nil {
                                 writeErr(w, http.StatusInternalServerError, err)
                                 return
                         }
@@ -994,6 +1005,27 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
                 if body.Model != nil {
                         if err := s.store.SetModel(id, *body.Model); err != nil {
+                                writeErr(w, http.StatusInternalServerError, err)
+                                return
+                        }
+                }
+
+                // v1.2.8.1: atomic history-reference delta. The picker's
+                // attach/detach sends ONLY the new ref list (after server-
+                // side validation) and the store applies it under its lock —
+                // no GET-modify-PUT of the whole context, so a concurrent
+                // token-policy or attachment update can never be silently
+                // reverted by a stale full-context write.
+                if body.HistoryRefs != nil {
+                        refs := s.validateHistoryRefs(id, s.store.ModeOf(id), *body.HistoryRefs)
+
+                        if err := s.store.UpdateContextFunc(id, func(c *sessions.Context) (bool, error) {
+                                changed := !equalHistoryRefs(c.HistoryRefs, refs)
+                                if changed {
+                                        c.HistoryRefs = refs
+                                }
+                                return changed, nil
+                        }); err != nil {
                                 writeErr(w, http.StatusInternalServerError, err)
                                 return
                         }
@@ -1214,43 +1246,37 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         // v1.2.8: resolve the attached history references. Self-references
         // are dropped (the active transcript is already here); unknown or
         // foreign ids are silently skipped by Resolve (never fabricated).
-        // The surviving refs persist on the session context so later turns
-        // keep retrieving them (bounded, deduplicated).
-        requestedRefs := histref.NormalizeRefs(body.HistoryRefs)
-        {
-                kept := make([]histref.Ref, 0, len(requestedRefs))
-                for _, ref := range requestedRefs {
-                        if ref.SessionID == sess.ID {
-                                continue
+        //
+        // v1.2.8.1: (a) The persisted session context is the FALLBACK
+        // authority — a request that omits historyRefs (regenerate, CLI,
+        // any client) runs with the SAME references the session already
+        // carries, so a regenerated answer can never silently lose the
+        // cross-mode context of the original run. Explicit request refs
+        // win: the union is body-first, deduplicated and capped by
+        // NormalizeRefs. (b) Cross-mode semantics are enforced SERVER-SIDE
+        // (never trusted from the picker): a reference whose SOURCE session
+        // — resolved from the store index, not from the client payload — is
+        // not in the opposite conversation space is dropped here, and dead
+        // references (source vanished) are pruned from the context.
+        refsUnion := make([]histref.Ref, 0, len(body.HistoryRefs)+len(sess.Context.HistoryRefs))
+        refsUnion = append(refsUnion, body.HistoryRefs...)
+        refsUnion = append(refsUnion, sess.Context.HistoryRefs...)
+        requestedRefs := s.validateHistoryRefs(sess.ID, sessions.NormalizeMode(sess.Mode), refsUnion)
+
+        // Persist the surviving references (bounded, deduplicated) ATOMICALLY
+        // so later turns keep retrieving them even when the client omits the
+        // refs. The store lock serializes this against every other context
+        // mutation (attachment association, token policy, picker PUT).
+        if !equalHistoryRefs(sess.Context.HistoryRefs, requestedRefs) {
+                if err := s.store.UpdateContextFunc(sess.ID, func(c *sessions.Context) (bool, error) {
+                        changed := !equalHistoryRefs(c.HistoryRefs, requestedRefs)
+                        if changed {
+                                c.HistoryRefs = requestedRefs
                         }
-                        kept = append(kept, ref)
+                        return changed, nil
+                }); err != nil {
+                        logging.Default().Warn("api", "persist history refs: %v", err)
                 }
-                requestedRefs = kept
-        }
-
-        if len(requestedRefs) > 0 {
-                merged := sess.Context.HistoryRefs
-
-                for _, ref := range requestedRefs {
-                        known := false
-
-                        for _, knownRef := range merged {
-                                if knownRef.SessionID == ref.SessionID {
-                                        known = true
-                                        break
-                                }
-                        }
-
-                        if !known {
-                                merged = append(merged, ref)
-                        }
-                }
-
-                if len(merged) > sessions.MaxHistoryRefs {
-                        merged = merged[len(merged)-sessions.MaxHistoryRefs:]
-                }
-
-                sess.Context.HistoryRefs = merged
         }
 
         // Regenerate: drop trailing assistant output so the previous user
@@ -1324,26 +1350,33 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         }
 
         // Persist attachment association on the session context so later turns
-        // keep the files reusable.
+        // keep the files reusable. v1.2.8.1: applied ATOMICALLY through the
+        // store's context mutation (no read-modify-write race with a
+        // concurrent picker attach or token-policy update).
         if len(attIDs) > 0 {
-                merged := sess.Context.AttachmentIDs
+                if err := s.store.UpdateContextFunc(sess.ID, func(c *sessions.Context) (bool, error) {
+                        changed := false
 
-                for _, id := range attIDs {
-                        known := false
+                        for _, id := range attIDs {
+                                known := false
 
-                        for _, knownID := range merged {
-                                if knownID == id {
-                                        known = true
-                                        break
+                                for _, knownID := range c.AttachmentIDs {
+                                        if knownID == id {
+                                                known = true
+                                                break
+                                        }
+                                }
+
+                                if !known {
+                                        c.AttachmentIDs = append(c.AttachmentIDs, id)
+                                        changed = true
                                 }
                         }
 
-                        if !known {
-                                merged = append(merged, id)
-                        }
+                        return changed, nil
+                }); err != nil {
+                        logging.Default().Warn("api", "persist attachment association: %v", err)
                 }
-
-                sess.Context.AttachmentIDs = merged
 
                 for _, id := range attIDs {
                         if s.stack != nil && s.stack.Attachments != nil {
@@ -1354,7 +1387,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
         // v1.1.4Z: a failed pre-run persistence was previously invisible —
         // the user message could silently vanish while the run continued.
-        if err := s.store.Save(sess); err != nil {
+        // v1.2.8.1: the save preserves the STORE's current context (fetched
+        // under the same lock) — the run's context deltas were applied
+        // atomically above; a whole-object Save from this (possibly stale)
+        // copy would silently revert them.
+        if err := s.store.SaveMessagesKeepContext(sess); err != nil {
                 logging.Default().Warn(
                         "api",
                         "persist session before run: %v",
@@ -1848,6 +1885,14 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                 )
 
                                 settle("error", "reply persistence failed: "+err.Error(), false, res.Text, res.Reasoning)
+
+                                // v1.2.8.1: the outcome registry records "error"
+                                // — the run must NOT roll the summary or write
+                                // the agent.md handoff (which the gate below
+                                // would still reach because resultOutcome stays
+                                // "done"). Return here; the deferred cleanup
+                                // and the settle sync.Once make this safe.
+                                return
                         }
                 }
 
@@ -1865,14 +1910,28 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         s.updateSessionSummaryRolling(sess, body.Message, res.Text, res.ToolsUsed)
                 }
 
-                // v1.2.8: mandatory agent.md handoff — a COMPLETED agent run
-                // with engineering evidence (files changed / commands /
-                // tests) updates <workspace>/agent.md so the NEXT agent can
-                // pick up the state without reconstructing this transcript.
-                // Never written for speculative or failed outcomes.
+                // v1.2.8.1: mandatory agent.md handoff — EVERY completed
+                // agent run updates <workspace>/agent.md so the NEXT agent
+                // can pick up the state without reconstructing this
+                // transcript. Evidence-free runs write an honest
+                // "No engineering changes were made." handoff (see
+                // HandoffFromTaskState). Never written for speculative or
+                // failed outcomes (outcome gate below; the persistence-
+                // failure path returns before reaching this point). A write
+                // FAILURE is surfaced as an error activity — the UI must
+                // never believe a handoff exists when it does not.
                 if sess.Mode == sessions.ModeAgent && resultOutcome == "done" && res.Task != nil {
-                        if handoffPath := s.writeAgentHandoff(sess, res.Task, resultOutcome); handoffPath != "" {
-                                publish(agent.Activity{
+                        if handoffPath, herr := s.writeAgentHandoff(sess, res.Task, resultOutcome); herr != nil {
+                                publish(stampRun(agent.Activity{
+                                        Type:    "error",
+                                        Caption: "agent.md handoff failed: " + herr.Error(),
+                                        Detail: map[string]any{
+                                                "sessionId": sess.ID,
+                                        },
+                                        Timestamp: time.Now(),
+                                }))
+                        } else if handoffPath != "" {
+                                publish(stampRun(agent.Activity{
                                         Type:    "handoff",
                                         Caption: "agent.md handoff updated for the next agent",
                                         Detail: map[string]any{
@@ -1880,7 +1939,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                                 "sessionId": sess.ID,
                                         },
                                         Timestamp: time.Now(),
-                                })
+                                }))
                         }
                 }
 
@@ -2059,6 +2118,13 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 // protocol level so half-open TCP sockets are detected and released.
 const wsPingInterval = 25 * time.Second
 
+// standbyRecheckInterval (v1.2.8.1) bounds how long a standby connection
+// can miss a wake signal — it re-checks the runs map itself. The wake
+// channel fires for runs that start AFTER the connection entered standby;
+// a run that replaced another one in the same instant (old hub closed,
+// wakeStandby fired before the new sc existed) is caught by this re-check.
+const standbyRecheckInterval = 2 * time.Second
+
 func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
         sessionID := r.URL.Query().Get("sessionId")
 
@@ -2197,6 +2263,16 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                                 "error":           snap.Error,
                         }
 
+                        // v1.2.8.1 REPAIR: the task state was folded into the
+                        // authoritative snapshot (runLive.latestTask) but the
+                        // hand-built wire frame never carried it — a socket
+                        // reconnecting mid-run restored the streamed text yet
+                        // lost the whole task panel. The frame now carries the
+                        // same task block the in-process snapshot holds.
+                        if snap.Task != nil {
+                                snapFrame["task"] = snap.Task
+                        }
+
                         if !snap.EndedAt.IsZero() {
                                 snapFrame["endedAt"] = snap.EndedAt
                         }
@@ -2273,6 +2349,23 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
                                 disconnected = false
                                 goto attached
 
+                        // v1.2.8.1: periodic runs-map re-check. Closes the
+                        // missed-wake race where a replacement run registered
+                        // BETWEEN the old hub's close and this connection
+                        // entering standby fired wakeStandby() before this sc
+                        // existed — the socket then parked through the ENTIRE
+                        // replacement run. The lifecycle gate (a terminal
+                        // entry falls through) is honored here too.
+                        case <-time.After(standbyRecheckInterval):
+                                s.runsMu.Lock()
+                                rsNow, active := s.runs[sessionID]
+                                s.runsMu.Unlock()
+
+                                if active && rsNow != nil && rsNow.live != nil && rsNow.live.snapshot().Running {
+                                        disconnected = false
+                                        goto attached
+                                }
+
                         case frame := <-sc.engineCh:
                                 // Idle connections still observe engine state
                                 // transitions (authoritative backend state).
@@ -2319,4 +2412,60 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 
 func errMethodNotAllowed() error {
         return fmt.Errorf("method not allowed")
+}
+
+// equalHistoryRefs (v1.2.8.1) compares two reference lists by value — the
+// persisted-context merge is skipped when nothing actually changed, so a
+// run never bumps the session's UpdatedAt (and never rewrites the file)
+// just because the same refs were sent again.
+func equalHistoryRefs(a, b []sessions.HistoryRef) bool {
+        if len(a) != len(b) {
+                return false
+        }
+        for i := range a {
+                if a[i].SessionID != b[i].SessionID || a[i].Mode != b[i].Mode ||
+                        a[i].SummaryVersion != b[i].SummaryVersion {
+                        return false
+                }
+                if len(a[i].Ranges) != len(b[i].Ranges) {
+                        return false
+                }
+                for j := range a[i].Ranges {
+                        if a[i].Ranges[j] != b[i].Ranges[j] {
+                                return false
+                        }
+                }
+        }
+        return true
+}
+
+// validateHistoryRefs (v1.2.8.1) applies the SERVER-SIDE cross-mode
+// contract to a reference list for one session: normalize (dedup + cap),
+// drop self-references, drop same-mode references (the source mode is
+// resolved from the store index — the client payload is never trusted)
+// and prune dead references (source session vanished). Shared by the run
+// path (body refs merged with the persisted context, body-first) and the
+// full-context PUT.
+func (s *Server) validateHistoryRefs(sessionID, activeMode string, refs []histref.Ref) []histref.Ref {
+        normalized := histref.NormalizeRefs(refs)
+
+        kept := make([]histref.Ref, 0, len(normalized))
+        for _, ref := range normalized {
+                if ref.SessionID == sessionID {
+                        continue
+                }
+
+                if srcMode := s.store.ModeOf(ref.SessionID); srcMode != "" && srcMode == activeMode {
+                        logging.Default().Info(
+                                "history",
+                                "dropped same-mode history reference %s from session %s (cross-mode only)",
+                                ref.SessionID, sessionID,
+                        )
+                        continue
+                }
+
+                kept = append(kept, ref)
+        }
+
+        return kept
 }

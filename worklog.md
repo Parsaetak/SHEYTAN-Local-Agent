@@ -2799,3 +2799,47 @@ Date: 2026-09-20. Basis: e2bbbb0a1a8ff5dc8feeea9dc8de0a2e309b7af8 (clean tree). 
 
 ### Clean-room proof
 Performed inside the working tree (the basis commit was a fresh clone; the v1.2.8 diff is the only delta). Full re-verification instructions for the maintainer: `go test ./internal/... -tags headless` + `npm ci && npm run test:units && npm run build`.
+
+# v1.2.8.1 — Deep Repair of v1.2.8 (CI root cause + functional audit + verification)
+
+Date: 2026-09-20. Basis: 1c2c43a47f7a696b81961ffbec1accbdc57ff18c (v1.2.8, clean tree). Repair label: v1.2.8.1 (canonical package version remains 1.2.8 — `scripts/release-version.mjs --check` clean). ROADMAP.md: byte-identical to the locked baseline (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650), verified before and after. Toolchain (ENVIRONMENTAL, this host): Go 1.27.1 linux/amd64, CMake 4.4.3, Node 24.21. NOTE correcting the v1.2.8 entry above: the "Go toolchain: 1.27.1" line there described the v1.2.8 development host (ENVIRONMENTAL); CI pins GO_VERSION "1.26" / NODE_VERSION "24" (build-desktop.yml) and go.mod requires go 1.26 — consistent, and CI's pins remain authoritative for CI claims.
+
+## What was repaired (all IMPLEMENTED + TESTED unless stated)
+
+### 1. CI root cause (Actions run 35464922587) — FIXED
+The audit and linux-integration jobs cached the ENTIRE native/engine/build tree (actions/cache, key `native-engine-${{ runner.os }}-{{hashFiles('native/engine/**')}}`). CMakeCache.txt/CMakeFiles embed absolute workspace paths; the key did not encode the workspace path, so an entry created under `.../SHEYTAN-local-agent/...` was restored into `.../SHEYTAN-Local-Agent/...` and cmake refused: "current CMakeCache.txt directory ... different from cached directory". Repair: cache steps removed from BOTH jobs; every run configures clean (`rm -rf native/engine/build; cmake -S native/engine -B native/engine/build --fresh`) and greps the fresh CMakeCache.txt for the CURRENT workspace path (regression guard).
+
+### 2. Chat/Agent mode separation + switching — FIXED
+v1.2.8 `setMode` resolved the target active session by filtering the CURRENT (previous-mode, single-mode) sessions array → always empty → nextActive always null → empty conversation, no socket, no context, no transcript on EVERY switch (the per-mode memory design was dead code). Now: per-mode memory is the switch authority (`resolveModeSwitchTarget` in mode-sessions.ts); switch loads the remembered transcript + reconnects the run transport; refreshSessions captures the mode before its fetch (stale-mode clobber impossible), re-validates the selection, and loads the conversation when it re-resolves a different id; `activeSessionByMode` persists to localStorage (one store subscription); startup loads the persisted space's transcript at init (v1.2.8 loaded none); zero-session spaces lazy-create on first send (documented but previously false); picker defaults to the OTHER space (`crossModePickerFilter`).
+
+### 3. Active-run mode switching — VERIFIED
+Backend run never cancelled by a mode switch (socket close ≠ abort; clientGone ≠ cancel). Returning to the Agent space now reconnects and recovers via the authoritative runLive + runId + sequence + run_snapshot + terminal registry (no duplicate content, no second run, no invented frontend authority).
+
+### 4. Cross-mode history references — FIXED + HARDENED
+Server-side enforcement via store index (`ModeOf`): same-mode refs, self-refs and dead refs dropped at run time AND at full-context PUT (shared `validateHistoryRefs`); regenerate parity: run path unions PERSISTED context refs body-first (NormalizeRefs dedup + cap 4) — regenerate/CLI turns keep the original refs; frontend regenerate() sends historyRefs too; provenance blocks FENCED with a per-run random `<<<HISTREF:id>>>` + untrusted-data header (prompt-injection hardening); staleness note when the source was re-summarized since attach; Mode hint preserved by NormalizeRefs; refs applied atomically (see 7).
+
+### 5. Context never-silently-exhausts — FIXED
+Adaptive history floor: the floor is bounded by the ACTUAL remaining budget (the v1.2.8 `max(remaining, 2048)` raise — in both allocation paths — promised tokens that do not exist on 2K/4K/8K windows and produced hard refusals with misleading attribution); WindowMessages dropped its artificial 256-token floor; TotalTokens() no longer counts dropped (Included=false) sections — designed graceful drops no longer poison Overflow() (system briefing still counts: it always travels); injected blocks reconciled by SURVIVAL after windowing (initial + escalation paths) — section tokens reflect the real prompt; new in-loop fit verification after compactToolResults refuses with the MEASURED reason instead of silently sending over-ceiling requests (pass-2 bounding reserve 12→64 tok — the marker overhead used to leave ~10 tok over); refusal gates report the measured section breakdown + history/budget; tool-result elision marker points at the session transcript (recoverable reference); regressions run real turns at 2K/4K/8K asserting engine-called AND wire request ≤ measured ceiling.
+
+### 6. Session summary + tool-result compaction — VERIFIED + HARDENED
+Four-layer architecture unchanged; rolling update verbatim+evict (no summarize-the-summarized); per-session RMW lock serializes load-base → merge → save (cancelled-run tail vs replacement-run settlement cannot interleave); objective refresh: a trivial opener ("hi") is superseded by a substantially longer later user message (once non-trivial, stable); summary existence checks are index/stat only — picker search no longer performs O(sessions × full transcript reads) on hot-cache miss.
+
+### 7. Read-modify-write races — FIXED
+New `Store.UpdateContextFunc(id, fn)`: load → mutate → save under ONE store lock; used by the run-path ref merge, attachment association, token-policy PUT, and the new atomic `historyRefs` PUT delta (picker attach/detach no longer does GET-whole-context→PUT); `Store.SaveMessagesKeepContext` persists transcript mutations while keeping the STORE's context (a stale whole-object Save can no longer revert concurrent context updates). Race-tested: concurrent ref-merge + token-policy writers both fully survive (`TestUpdateContextFuncAtomicMerge`, -race clean).
+
+### 8. agent.md handoff — FIXED (every completed run)
+Evidence gate REMOVED: EVERY completed agent-mode run updates agent.md; evidence-free runs write the honest "No engineering changes were made." handoff with truthful defaults (Current state / Remaining work / Recommended next action). Chat mode never writes it; lowercase `agent.md` only. Byte-for-byte preservation outside the markers (the v1.2.8 splice TrimRight/TrimLeft re-normalized boundary whitespace); durability: unique temp file + fsync + rename + dir sync + READ-BACK verification (a handoff is "completed" only when the file on disk provably carries the section); an UNREADABLE existing agent.md ABORTS instead of being clobbered (v1.2.8 treated any read error as "absent"); write failures surface as a stamped error activity. Also: reply-persistence failure now RETURNS after settling "error" — a failed run no longer rolls the summary or writes the handoff.
+
+### 9. Transport / paging / task state — FIXED
+run_snapshot wire frame now carries `task` (v1.2.8 folded it into the in-process snapshot but omitted it on the wire — reconnecting clients lost the task panel; wire-level test added); standby missed-wake race closed (2s runs-map re-check — a socket that entered standby while a replacement run was registering no longer parks through the whole run); frontend: isStaleRunEvent only advances the dedup watermark for frames attributable to the tracked run; olderLoading always clears (stale/failed page loads no longer wedge Load-earlier); run-finalisation reload preserves expanded older pages (within the 200-message page cap).
+
+### 10. Docs truthfulness
+UPDATE.md gains this repair's section (labels per the truth standard); README/ARCHITECTURE rows updated (handoff every-run + durability, wire task, adaptive floor, server-side cross-mode enforcement + fencing); the v1.2.8 CI claims ("NOT VERIFIED") remain accurate and untouched; the Go 1.27.1 line is annotated as ENVIRONMENTAL above.
+
+## Verification (this host; measured)
+- Go: `go test -tags headless -count=1 ./internal/...` PASS (full tree); `go test -race -tags headless` on internal/{api,agent,sessions,histref,contextplan} PASS; `go vet -tags headless` clean on edited packages (wails desktop shell not compiled here — no GTK4/webkitgtk; matches the v1.2.8 note).
+- Native: clean-room CMake configure (`--fresh`) + build + `ctest --test-dir native/engine/build --output-on-failure` PASS (CMake 4.4.3, g++ 13).
+- Frontend: `tsc --noEmit` clean; `oxlint` 0 warnings/0 errors; `node --test` 58/58 (54 prior + 4 new); `vite build` + `sync-web` OK (embedded frontend rebuilt).
+- Version: `node scripts/release-version.mjs --check` PASS (canonical 1.2.8; ZIP label v1.2.8.1).
+- ROADMAP.md: git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650 — UNCHANGED.
+- NOT YET VERIFIED: CI Actions rerun from this tree (no push); Windows/Linux desktop binaries.

@@ -1,3 +1,151 @@
+# UPDATE.md — v1.2.8.1 REPAIR of v1.2.8 (CI root cause + functional audit)
+
+**Release:** `v1.2.8.1` (repair label; canonical application version remains `1.2.8`)
+**Base:** `main @ 1c2c43a` (`v1.2.8`) · **Date:** 2026-09-20
+**Package:** `SHEYTAN-Local-Agent-v1.2.8.1-UPDATE.zip`
+**ROADMAP.md:** byte-identical to the locked baseline (git blob SHA-1
+`c7e2c1720eb5e97bd932c0d76100b8719193e650`) — verified before and after.
+
+This repair starts from the v1.2.8 tree and does three things: (1) fixes
+the ROOT CAUSE of the failed Actions run 35464922587, (2) audits and
+repairs the v1.2.8 functional surfaces the failed run never reached, and
+(3) documents everything with honest labels. Nothing was redesigned; the
+four-layer architecture (transcript / summary / retrieval / artifacts)
+and the authoritative run transport are unchanged.
+
+## R1. CI root cause — native engine CMake cache (FIXED, VERIFIED)
+
+- Run 35464922587 failed in "Native engine (C++) build and tests":
+  `CMakeCache.txt directory … native/engine/build is different from
+  cached directory … SHEYTAN-local-agent` — a workspace path-CASE
+  mismatch. The v1.2.1 workflow cached the ENTIRE `native/engine/build`
+  tree keyed only by the source hash; CMake build trees embed absolute
+  paths (CMakeCache.txt, CMakeFiles) and are NOT relocatable across
+  workspaces.
+- Fix: the `actions/cache` step is REMOVED from both the audit job and
+  the Linux integration job; every run now configures from a clean build
+  directory with `cmake -S native/engine -B native/engine/build --fresh`
+  and greps the freshly written CMakeCache.txt for the CURRENT workspace
+  path (regression guard proving a clean, path-valid configuration).
+- The version contract is untouched: `package.json` remains `1.2.8`;
+  `scripts/release-version.mjs --check` passes; v1.2.8.1 is the repair
+  label and the ZIP name only.
+
+## R2. Chat / Agent mode switching (FIXED — deterministic restore)
+
+- DEFECT (v1.2.8): `setMode` resolved the target mode's active session
+  by filtering the CURRENT `sessions` array — which is always the
+  PREVIOUS mode's list since v1.2.8 — so the target-mode subset was
+  always empty, `nextActive` was always `null`, and EVERY mode switch
+  landed on an empty conversation: no transcript load, no activity
+  socket, no context policy (the per-mode memory design was dead code).
+- Fix: the per-mode memory is the switch authority
+  (`resolveModeSwitchTarget`); the switch loads the remembered
+  transcript, reconnects the run transport (a live run in the space
+  replays its authoritative `run_snapshot`), and `refreshSessions` — now
+  mode-captured before its fetch — re-validates the selection and loads
+  the re-resolved conversation when the remembered session no longer
+  exists. The per-mode map persists to localStorage; startup loads the
+  persisted space's transcript at init (v1.2.8 loaded no transcript at
+  all until the first interaction).
+
+## R3. Active-run mode switching (VERIFIED + recovered)
+
+The backend run was never cancelled by a mode switch (the socket close
+sends no abort; clientGone does not cancel). With R2, returning to the
+Agent space reconnects the transport and the existing authoritative
+replay (runLive + runId + sequence + cumulative snapshot + terminal
+registry) recovers the run view without duplicating content or creating
+a second run.
+
+## R4. Cross-mode history references (FIXED + HARDENED)
+
+- Server-side enforcement (v1.2.8 trusted the client picker): references
+  are validated against the STORE index — same-mode references, self-
+  references and dead references are dropped, on both the run path and
+  the full-context PUT.
+- Regenerate parity: the run path unions the PERSISTED session-context
+  refs (body-first) — a regenerate (or any client) that omits refs runs
+  with the same references as the original turn; the frontend
+  `regenerate()` also sends `historyRefs` explicitly now.
+- Prompt-injection hardening: retrieved excerpts are wrapped in a
+  per-run random `<<<HISTREF:id>>>` fence with a standing header that
+  fence-bounded content is QUOTED, UNTRUSTED DATA — never instructions.
+- Staleness honesty: a block notes when the source was re-summarized
+  since the reference was attached.
+
+## R5. Context never silently exhausts (FIXED)
+
+- DEFECT (v1.2.8): a hard `MinHistoryTokens = 2048` floor promised
+  history tokens that do not exist on small effective contexts; the
+  windower filled the fictional budget and the final fit gate refused
+  the turn with a misleading reason. The floor is now ADAPTIVE — bounded
+  by the actual remaining budget; degradation proceeds (older history →
+  recall → cross-mode refs → attachment detail → old tool-result bodies)
+  before any refusal, and the current user request is never truncated.
+- DEFECT (v1.2.8): `TotalTokens()` counted DROPPED sections, so a
+  designed graceful drop (history-refs under pressure) poisoned
+  `Overflow()` and refused prompts that actually fit. Dropped sections
+  no longer count (the always-traveling system briefing still does).
+- New in-loop fit verification: after tool-result compaction, a request
+  that still exceeds the ceiling is refused with the MEASURED reason
+  (per-section breakdown, measured history vs budget) — never silently
+  sent. Regression tests run real turns at 2K/4K/8K and assert the wire
+  request stays inside the measured ceiling.
+
+## R6. agent.md handoff (FIXED — every completed run)
+
+- The v1.2.8 evidence gate skipped the handoff for no-change runs —
+  violating the product requirement that every completed Agent task
+  leaves a handoff. Now EVERY completed agent run updates agent.md; an
+  evidence-free run writes the honest handoff:
+  `No engineering changes were made.` with truthful defaults.
+- Durability: byte-for-byte preservation outside the markers (the v1.2.8
+  splice silently re-normalized boundary whitespace), unique temp file +
+  fsync + rename + directory sync, READ-BACK verification before the
+  handoff is reported, an unreadable existing agent.md ABORTS instead of
+  being clobbered, and failures surface as an error activity.
+
+## R7. Transport, paging, races, scalability (FIXED)
+
+- `run_snapshot` wire frame now carries the `task` block (v1.2.8 folded
+  it into the in-process snapshot but omitted it on the wire — a
+  reconnecting UI lost the task panel); wire-level test added.
+- Reply-persistence failure now RETURNS after settling "error" — the
+  failed run no longer rolls the summary or writes the handoff.
+- Standby missed-wake race: a socket that entered standby while a
+  replacement run was registering now re-checks the runs map every 2s.
+- Read-modify-write races: ALL session-context mutations (history refs,
+  attachment association, token policy) serialize through the store's
+  new atomic `UpdateContextFunc`; transcript saves use
+  `SaveMessagesKeepContext` so a stale whole-object save cannot revert a
+  concurrent context update. Race-tested with concurrent writers.
+- Summary settle path serialized per session (cancelled-run tail vs
+  replacement run can no longer interleave the rolling merge).
+- Search scalability: summary existence checks are index/stat only — a
+  picker search no longer performs O(sessions × full transcript reads)
+  when the hot cache misses.
+- Frontend paging: `olderLoading` can no longer wedge the Load-earlier
+  button; run-finalisation reload preserves expanded older pages (within
+  the backend's 200-message page cap).
+
+## R8. Verification (labels per the documentation truth standard)
+
+- VERIFIED on the repair host (Go 1.27.1 linux/amd64, CMake 4.4.3,
+  Node 24.21): full headless Go suite; `go test -race` on
+  internal/{api,agent,sessions,histref,contextplan}; `go vet -tags
+  headless` on edited packages; native engine clean `--fresh` configure
+  + build + ctest; frontend typecheck/lint/58 unit tests/production
+  build + embedded sync; `release-version.mjs --check`.
+- NOT YET VERIFIED: CI Actions rerun from this tree (nothing was
+  pushed); Windows and Linux desktop binaries.
+- ENVIRONMENTAL: the v1.2.8 worklog's "Go toolchain: 1.27.1" describes
+  the DEVELOPMENT host; CI pins `GO_VERSION: "1.26"` / `NODE_VERSION:
+  "24"` and `go.mod` requires `go 1.26` — both are consistent (1.27.1 ≥
+  1.26); the workflow pins remain authoritative for CI.
+
+---
+
 # UPDATE.md — v1.2.8 SHEYTAN-LA Professional Chat + Agent Workspaces, Mode-Separated Histories, Cross-Mode References, Durable Summaries, Context Layers, Agent Handoff
 
 **Release:** `v1.2.8` (codename Zeta) · **Base:** `main @ e2bbbb0` (`v1.2.7`)

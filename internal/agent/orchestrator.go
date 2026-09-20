@@ -816,17 +816,21 @@ func (o *Orchestrator) RunDetailed(
                 overflow := plan.Overflow()
                 overflowPrevented = true
 
+                // v1.2.8.1: report the MEASURED section breakdown — the
+                // refusal names what actually does not fit, not a guess.
+                breakdown := measuredSectionBreakdown(plan)
+
                 logging.Default().Warn(
                         "agent",
-                        "context budget impossible: fixed sections exceed usable window by ~%d tok (effective ctx %d) — no engine call",
-                        overflow, effCtx.Effective,
+                        "context budget impossible: fixed sections exceed usable window by ~%d tok (effective ctx %d; %s) — no engine call",
+                        overflow, effCtx.Effective, breakdown,
                 )
 
                 onActivity(Activity{
                         Type: "error",
                         Caption: fmt.Sprintf(
-                                "Context budget impossible: even after automatic reduction, system + tool definitions need ~%d tokens more than fit (effective context %d). Raise the context size in Settings → Model or use a model with a larger window.",
-                                overflow, effCtx.Effective,
+                                "Context budget impossible: even after automatic reduction the required sections (%s) need ~%d tokens more than fit (effective context %d). Raise the context size in Settings → Model or use a model with a larger window.",
+                                breakdown, overflow, effCtx.Effective,
                         ),
                         Timestamp: time.Now(),
                 })
@@ -839,35 +843,33 @@ func (o *Orchestrator) RunDetailed(
 
         // The plan kept the optional blocks: inject them in priority order
         // (project card → skills → recall), all in the cache-friendly
-        // position right before the fresh turn. injectedNow accumulates the
-        // measured token cost of everything we (re-)inject so the history
-        // section below measures ONLY history — no double counting.
-        injectedNow := 0
+        // position right before the fresh turn. v1.2.8.1: the injected
+        // blocks are tracked as MESSAGES per plan section so the post-
+        // windowing measurement can reconcile what the history windower
+        // actually kept (it may elide injected blocks when the current
+        // turn alone fills the budget) — section tokens then reflect the
+        // real prompt instead of the injection intent.
+        preWindowRecallBlocks := []llm.Message{} // card, skills, recall, staged attachment chunks
+        preWindowRefBlocks := []llm.Message{}     // cross-mode history-reference blocks
 
         card, skillBlk, recallBlk, cardOn, skillsOn, recallOn := composer.Injectables()
 
         if cardOn {
-                messages = insertBeforeLastUser(
-                        messages,
-                        llm.Message{Role: "system", Content: card},
-                )
-                injectedNow += chunking.EstimateTokens(card)
+                cardMsg := llm.Message{Role: "system", Content: card}
+                messages = insertBeforeLastUser(messages, cardMsg)
+                preWindowRecallBlocks = append(preWindowRecallBlocks, cardMsg)
         }
 
         if skillsOn {
-                messages = insertBeforeLastUser(
-                        messages,
-                        llm.Message{Role: "system", Content: skillBlk},
-                )
-                injectedNow += chunking.EstimateTokens(skillBlk)
+                skillMsg := llm.Message{Role: "system", Content: skillBlk}
+                messages = insertBeforeLastUser(messages, skillMsg)
+                preWindowRecallBlocks = append(preWindowRecallBlocks, skillMsg)
         }
 
         if recallOn {
-                messages = insertBeforeLastUser(
-                        messages,
-                        llm.Message{Role: "system", Content: recallBlk},
-                )
-                injectedNow += chunking.EstimateTokens(recallBlk)
+                recallMsg := llm.Message{Role: "system", Content: recallBlk}
+                messages = insertBeforeLastUser(messages, recallMsg)
+                preWindowRecallBlocks = append(preWindowRecallBlocks, recallMsg)
 
                 result.Recalled = strings.Count(recallBlk, "user asked:")
                 plan.Recalled = result.Recalled
@@ -885,7 +887,7 @@ func (o *Orchestrator) RunDetailed(
         if len(stagedBlocksMsgs) > 0 {
                 for _, blk := range stagedBlocksMsgs {
                         messages = insertBeforeLastUser(messages, blk)
-                        injectedNow += chunking.EstimateTokens(blk.Content)
+                        preWindowRecallBlocks = append(preWindowRecallBlocks, blk)
                 }
         }
 
@@ -908,7 +910,7 @@ func (o *Orchestrator) RunDetailed(
         if len(histRefMsgs) > 0 && planSectionIncluded(plan, contextplan.SectionHistoryRefs) {
                 for _, blk := range histRefMsgs {
                         messages = insertBeforeLastUser(messages, blk)
-                        injectedNow += chunking.EstimateTokens(blk.Content)
+                        preWindowRefBlocks = append(preWindowRefBlocks, blk)
                 }
                 plan.SetSectionTokens(contextplan.SectionHistoryRefs, histRefTokens)
         }
@@ -963,7 +965,16 @@ func (o *Orchestrator) RunDetailed(
         // the system prefix and the injected blocks already have their own
         // sections (the v1.1.3 double-count made the total exceed the real
         // prompt and is fatal under the Phase 7 fit gate).
-        historyTokens = chunking.EstimateMessagesTokens(windowed) - injectedNow
+        //
+        // v1.2.8.1: the injected blocks are reconciled by SURVIVAL. The
+        // windower may elide injected blocks when the current turn alone
+        // fills the budget; subtracting the injection INTENT (the previous
+        // `injectedNow`) regardless of survival mis-counted the prompt in
+        // both directions. Section tokens now carry exactly what travels.
+        survivedRecall := survivedBlockTokens(windowed, preWindowRecallBlocks)
+        survivedRefs := survivedBlockTokens(windowed, preWindowRefBlocks)
+
+        historyTokens = chunking.EstimateMessagesTokens(windowed) - survivedRecall - survivedRefs
         if historyTokens < 0 {
                 historyTokens = 0
         }
@@ -972,6 +983,8 @@ func (o *Orchestrator) RunDetailed(
                 contextplan.SectionHistory,
                 historyTokens,
         )
+        plan.SetSectionTokens(contextplan.SectionRecall, survivedRecall)
+        plan.SetSectionTokens(contextplan.SectionHistoryRefs, survivedRefs)
 
         // v1.1.5Z Phase 3: record the MEASURED prompt size (bytes actually
         // carried by the assembled messages) on the plan — the context report
@@ -1065,17 +1078,25 @@ func (o *Orchestrator) RunDetailed(
                 overflow := plan.Overflow()
                 overflowPrevented = true
 
+                // v1.2.8.1: the refusal carries the exact measured split —
+                // history vs fixed sections — so the reason is never
+                // misattributed to the current turn when the fixed set is
+                // the problem (or vice versa).
+                breakdown := measuredSectionBreakdown(plan)
+
                 logging.Default().Warn(
                         "agent",
-                        "context fit violation after assembly: ~%d tok over the ceiling — refusing the engine call",
-                        overflow,
+                        "context fit violation after assembly: ~%d tok over the ceiling (effective ctx %d; %s; history %d/%d tok) — refusing the engine call",
+                        overflow, effCtx.Effective, breakdown,
+                        plan.SectionTokens(contextplan.SectionHistory), plan.HistoryBudget,
                 )
 
                 onActivity(Activity{
                         Type: "error",
                         Caption: fmt.Sprintf(
-                                "Current conversation turn needs ~%d tokens more than the context budget allows (effective context %d). Start a new session or reduce attachments.",
-                                overflow, effCtx.Effective,
+                                "This turn needs ~%d tokens more than the context budget allows (effective context %d; %s; history %d tok after compaction). Start a new session or reduce attachments.",
+                                overflow, effCtx.Effective, breakdown,
+                                plan.SectionTokens(contextplan.SectionHistory),
                         ),
                         Timestamp: time.Now(),
                 })
@@ -1238,6 +1259,37 @@ func (o *Orchestrator) RunDetailed(
                                         elidedTools),
                                 Timestamp: time.Now(),
                         })
+                }
+
+                // v1.2.8.1 in-loop fit verification: tool-result compaction
+                // only removes tool bodies. Growth from long assistant
+                // turns, tool-call arguments, tier-escalation enrichment or
+                // an oversized current turn can still leave the request
+                // over the ceiling — refuse with the measured reason instead
+                // of silently sending an over-ceiling request (the
+                // pre-windowing gate cannot see mid-turn growth).
+                if over := chunking.EstimateMessagesTokens(messages) - plan.PromptCeiling(); over > 0 {
+                        overflowPrevented = true
+
+                        logging.Default().Warn(
+                                "agent",
+                                "in-loop context fit violation: ~%d tok over the ceiling after tool-result compaction (effective ctx %d) — refusing the engine call",
+                                over, effCtx.Effective,
+                        )
+
+                        onActivity(Activity{
+                                Type: "error",
+                                Caption: fmt.Sprintf(
+                                        "Context budget exhausted mid-turn: even after compacting tool results the request needs ~%d tokens more than fit (effective context %d). Start a new session.",
+                                        over, effCtx.Effective,
+                                ),
+                                Timestamp: time.Now(),
+                        })
+
+                        result.ContextUsage = peakUsage
+                        return result, fmt.Errorf(
+                                "context fit violation: in-loop request exceeds effective context %d by ~%d tokens after tool-result compaction",
+                                effCtx.Effective, over)
                 }
 
                 // 1.1.6: the wire request carries the SAME effective
@@ -2051,19 +2103,26 @@ func (o *Orchestrator) RunDetailed(
                                         }
                                 }
 
+                                // v1.2.8.1: escalation-injected blocks are
+                                // added AFTER re-windowing (outside the
+                                // windower's reach), so they always travel —
+                                // accumulate them separately and reconcile
+                                // the re-windowed blocks by survival.
+                                postWindowRecallTokens := 0
+
                                 if up.card != "" {
                                         messages = insertBeforeLastUser(messages, llm.Message{Role: "system", Content: up.card})
-                                        injectedNow += chunking.EstimateTokens(up.card)
+                                        postWindowRecallTokens += chunking.EstimateTokens(up.card)
                                 }
 
                                 if up.skills != "" {
                                         messages = insertBeforeLastUser(messages, llm.Message{Role: "system", Content: up.skills})
-                                        injectedNow += chunking.EstimateTokens(up.skills)
+                                        postWindowRecallTokens += chunking.EstimateTokens(up.skills)
                                 }
 
                                 if up.recall != "" {
                                         messages = insertBeforeLastUser(messages, llm.Message{Role: "system", Content: up.recall})
-                                        injectedNow += chunking.EstimateTokens(up.recall)
+                                        postWindowRecallTokens += chunking.EstimateTokens(up.recall)
 
                                         if n := strings.Count(up.recall, "user asked:"); n > 0 {
                                                 result.Recalled += n
@@ -2076,11 +2135,19 @@ func (o *Orchestrator) RunDetailed(
                                         result.Elided = elided2
                                 }
 
-                                historyTokens := chunking.EstimateMessagesTokens(windowed2) - injectedNow
+                                // v1.2.8.1 survival reconciliation (same
+                                // rule as the initial windowing): measure
+                                // what the re-window actually kept.
+                                survivedRecall2 := survivedBlockTokens(windowed2, preWindowRecallBlocks)
+                                survivedRefs2 := survivedBlockTokens(windowed2, preWindowRefBlocks)
+
+                                historyTokens := chunking.EstimateMessagesTokens(windowed2) - survivedRecall2 - survivedRefs2
                                 if historyTokens < 0 {
                                         historyTokens = 0
                                 }
                                 plan.SetSectionTokens(contextplan.SectionHistory, historyTokens)
+                                plan.SetSectionTokens(contextplan.SectionRecall, survivedRecall2+postWindowRecallTokens)
+                                plan.SetSectionTokens(contextplan.SectionHistoryRefs, survivedRefs2)
                                 plan.SetPromptBytes(int64(measureMessagesBytes(messages)))
 
                                 tokensRemovedNow = historyTokensBefore - chunking.EstimateMessagesTokens(windowed2)
@@ -2218,6 +2285,64 @@ func measureMessagesBytes(messages []llm.Message) int {
         }
 
         return total
+}
+
+// survivedBlockTokens (v1.2.8.1) sums the token cost of the injected
+// blocks that are still present in msgs (matched by role + exact
+// content). The history windower can elide injected blocks when the
+// current turn alone fills the budget; honest section accounting must
+// measure what actually survived, not the injection intent.
+func survivedBlockTokens(msgs []llm.Message, blocks []llm.Message) int {
+        if len(blocks) == 0 {
+                return 0
+        }
+
+        present := make(map[string]struct{}, len(msgs))
+        for i := range msgs {
+                present[msgs[i].Role+"\x00"+msgs[i].Content] = struct{}{}
+        }
+
+        total := 0
+        for _, b := range blocks {
+                if _, ok := present[b.Role+"\x00"+b.Content]; ok {
+                        total += chunking.EstimateTokens(b.Content)
+                }
+        }
+        return total
+}
+
+// measuredSectionBreakdown (v1.2.8.1) renders the measured token cost of
+// the prompt sections that actually travel (system, tools, summary,
+// recall, history-refs) as a compact "system 412 · tools 1180" style
+// breakdown for refusal gates — the refusal names what does not fit.
+func measuredSectionBreakdown(p contextplan.Plan) string {
+        order := []string{
+                contextplan.SectionSystem,
+                contextplan.SectionTools,
+                contextplan.SectionSummary,
+                contextplan.SectionRecall,
+                contextplan.SectionHistoryRefs,
+                contextplan.SectionAttachments,
+        }
+
+        parts := make([]string, 0, len(order))
+        for _, name := range order {
+                for _, s := range p.Sections {
+                        if s.Name != name || s.Tokens <= 0 {
+                                continue
+                        }
+                        if !s.Included && s.Name != contextplan.SectionSystem {
+                                continue
+                        }
+                        parts = append(parts, fmt.Sprintf("%s %d", s.Name, s.Tokens))
+                        break
+                }
+        }
+
+        if len(parts) == 0 {
+                return "no fixed sections"
+        }
+        return strings.Join(parts, " · ")
 }
 
 // historyBudgetFor was removed in v1.1.3Z: the context plan (contextplan
@@ -2645,7 +2770,7 @@ func compactToolResults(messages []llm.Message, ceiling int) (int, int) {
 
                 old := chunking.EstimateMessagesTokens([]llm.Message{messages[i]})
                 messages[i].Content = fmt.Sprintf(
-                        "[tool result elided under context pressure — original %d tokens; re-run the tool if the result is needed]",
+                        "[tool result elided under context pressure — original %d tokens; the full result remains in the session transcript; re-run the tool if the result is needed]",
                         old)
                 freed := old - chunking.EstimateMessagesTokens([]llm.Message{messages[i]})
                 total -= freed
@@ -2658,7 +2783,11 @@ func compactToolResults(messages []llm.Message, ceiling int) (int, int) {
                 !strings.HasPrefix(messages[lastTool].Content, "[tool result elided") {
                 old := chunking.EstimateMessagesTokens([]llm.Message{messages[lastTool]})
                 others := total - old
-                room := ceiling - others - 12
+                // v1.2.8.1: the reserve must cover the bounded-marker text
+                // itself (~20 tok) plus estimator noise — the previous 12
+                // left the bounded prompt ~10 tokens OVER the ceiling and
+                // the strict in-loop fit gate caught it.
+                room := ceiling - others - 64
                 if room < 100 {
                         room = 100
                 }
@@ -2800,39 +2929,39 @@ func contextPlanStatus(tokensCompressed, elided, recalled, adjustments, sessionP
 // stable system prefix, so it survives history windowing and keeps the
 // engine's prompt cache warm.
 func insertAfterSystemPrefix(
-	messages []llm.Message,
-	msg llm.Message,
+        messages []llm.Message,
+        msg llm.Message,
 ) []llm.Message {
-	prefixLen := 0
-	for prefixLen < len(messages) && messages[prefixLen].Role == "system" {
-		prefixLen++
-	}
+        prefixLen := 0
+        for prefixLen < len(messages) && messages[prefixLen].Role == "system" {
+                prefixLen++
+        }
 
-	out := make([]llm.Message, 0, len(messages)+1)
-	out = append(out, messages[:prefixLen]...)
-	out = append(out, msg)
-	out = append(out, messages[prefixLen:]...)
-	return out
+        out := make([]llm.Message, 0, len(messages)+1)
+        out = append(out, messages[:prefixLen]...)
+        out = append(out, msg)
+        out = append(out, messages[prefixLen:]...)
+        return out
 }
 
 // planSectionIncluded reports whether Assemble kept the named section
 // (Included flag — Tokens alone are also set for refused sections).
 func planSectionIncluded(p contextplan.Plan, name string) bool {
-	for i := range p.Sections {
-		if p.Sections[i].Name == name {
-			return p.Sections[i].Included
-		}
-	}
-	return false
+        for i := range p.Sections {
+                if p.Sections[i].Name == name {
+                        return p.Sections[i].Included
+                }
+        }
+        return false
 }
 
 // taskStepCaption renders the one-line caption for a `task` activity.
 func taskStepCaption(t TaskState) string {
-	if t.CurrentStep != "" {
-		return t.CurrentStep
-	}
-	if t.Verification != "" {
-		return "Verified: " + t.Verification
-	}
-	return "Working — task state updated"
+        if t.CurrentStep != "" {
+                return t.CurrentStep
+        }
+        if t.Verification != "" {
+                return "Verified: " + t.Verification
+        }
+        return "Working — task state updated"
 }

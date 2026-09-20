@@ -235,10 +235,21 @@ func (p *Plan) SetPromptBytes(b int64) {
 // TotalTokens sums the measured PROMPT sections (Phase 7: the output
 // reserve is accounted separately — it is not prompt content, so it must
 // not be double-counted against the prompt ceiling).
+//
+// v1.2.8.1: sections the planner DROPPED (Included=false) are no longer
+// counted. A dropped section is not part of the prompt — every injection
+// point gates on Included — so counting its measured tokens poisoned
+// Overflow() and converted designed graceful drops (history-refs and the
+// summary under pressure) into hard turn refusals. The system briefing is
+// the one exception: splitSystemPrefix always carries it, even when the
+// planner marks it refused, so its tokens still count.
 func (p Plan) TotalTokens() int {
         total := 0
         for _, s := range p.Sections {
                 if s.Name == SectionReserve {
+                        continue
+                }
+                if !s.Included && s.Name != SectionSystem {
                         continue
                 }
                 total += s.Tokens
@@ -340,9 +351,19 @@ type Input struct {
 
 // Assemble computes the plan: allocates budgets per section with priority
 // fallbacks, and returns the history budget to window the conversation
-// with. History always receives at least MinHistoryTokens (default 2048)
-// even under pressure — dropping the user's current turn is never
-// acceptable; instead the plan reports the overflow.
+// with.
+//
+// v1.2.8.1: the history floor (MinHistoryTokens, default 2048) is a
+// PREFERENCE bounded by what actually remains — not a fixed promise. The
+// v1.2.8 unconditional raise (`historyBudget = max(remaining, 2048)`)
+// allocated tokens that do not exist on small effective contexts (2K/4K):
+// the windower filled the fictional budget, and the final fit gate then
+// refused the turn with a misleading reason. Now, when the fixed sections
+// leave less room than the floor, history gets what is left (possibly only
+// the current turn — the windower never drops the fresh user request), the
+// optional sections (recall / history-refs / attachments) are dropped
+// first, and only a genuinely un-fittable request is refused, with the
+// exact measured reason.
 func Assemble(in Input) Plan {
         budget := NewBudget(in.NumCtx, in.MaxOutputTokens)
 
@@ -434,6 +455,9 @@ func Assemble(in Input) Plan {
         // window. Optional blocks (recall, attachments) do NOT inflate this
         // floor — under pressure they are dropped, not force-fitted.
         historyBudget := usable - used
+        if historyBudget < 0 {
+                historyBudget = 0
+        }
 
         if in.MaxHistoryShare > 0 && in.MaxHistoryShare < 1 {
                 shareCap := int(float64(usable) * in.MaxHistoryShare)
@@ -442,9 +466,11 @@ func Assemble(in Input) Plan {
                 }
         }
 
-        if historyBudget < minHistory {
-                historyBudget = minHistory
-        }
+        // v1.2.8.1 adaptive floor: never promise history more tokens than
+        // the remaining budget can honor. When the floor cannot be met,
+        // historyBudget stays at the real remainder (>= 0); the optional
+        // sections below see avail = historyBudget - minHistory <= 0 and
+        // drop themselves in priority order.
 
         sections = append(sections, Section{
                 Name:     SectionHistory,
@@ -557,9 +583,13 @@ func Assemble(in Input) Plan {
                 if attOK {
                         remaining -= in.AttachmentTokens
                 }
-                if remaining < minHistory {
-                        remaining = minHistory
+                if remaining < 0 {
+                        remaining = 0
                 }
+                // v1.2.8.1: no artificial floor raise here either — same
+                // adaptive-floor rule as the primary allocation above. (When
+                // any optional section was included, the avail chain already
+                // guarantees remaining >= minHistory.)
 
                 // v1.2.5: the tier share cap binds the recomputed budget too.
                 if in.MaxHistoryShare > 0 && in.MaxHistoryShare < 1 {

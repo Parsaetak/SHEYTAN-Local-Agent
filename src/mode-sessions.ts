@@ -57,6 +57,36 @@ export function resolveActiveForMode(
 }
 
 /**
+ * resolveModeSwitchTarget (v1.2.8.1) returns the active session id for the
+ * TARGET mode when switching: the PER-MODE remembered selection.
+ *
+ * v1.2.8 REGRESSION NOTE: setMode resolved this against the CURRENT
+ * (still previous-mode) `sessions` array. Since v1.2.8 that array is
+ * single-mode, so the target-mode subset was always empty and the switch
+ * ALWAYS landed on null — no transcript load, no activity socket, no
+ * context policy: the deterministic empty-conversation-after-switch bug.
+ * The per-mode memory is the synchronous authority; refreshSessions()
+ * re-validates it asynchronously (and loads the re-resolved conversation
+ * when the remembered session no longer exists).
+ */
+export function resolveModeSwitchTarget(
+  remembered: Record<WorkspaceMode, string | null>,
+  mode: WorkspaceMode,
+): string | null {
+  return remembered[mode] ?? null;
+}
+
+/**
+ * crossModePickerFilter (v1.2.8.1) returns the history picker's default
+ * filter for a workspace mode: the OTHER space. Cross-mode references are
+ * the picker's purpose, and the backend rejects same-mode references
+ * outright (server-side enforcement, v1.2.8.1).
+ */
+export function crossModePickerFilter(mode: WorkspaceMode): WorkspaceMode {
+  return mode === "chat" ? "agent" : "chat";
+}
+
+/**
  * rememberActiveForMode records the selection into the per-mode map
  * (immutable update).
  */

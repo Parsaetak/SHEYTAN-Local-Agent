@@ -27,8 +27,9 @@ import {
 } from "./history-ref";
 import { parseEndedAt } from "./run-recovery";
 import {
+  crossModePickerFilter,
   resolveActiveForMode,
-  sessionMode,
+  resolveModeSwitchTarget,
 } from "./mode-sessions";
 import { activityWebSocketURL } from "./config";
 import {
@@ -79,6 +80,47 @@ function persistWorkspaceMode(mode: WorkspaceMode): void {
     window.localStorage.setItem(MODE_STORAGE_KEY, mode);
   } catch {
     // Storage can be unavailable (private mode) — mode stays in memory.
+  }
+}
+
+// v1.2.8.1: the PER-MODE active session selection persists like the mode
+// itself. v1.2.8 kept activeSessionByMode memory-only, so a reload landed
+// on the newest session of the startup space instead of the conversation
+// the user had actually selected (and the other space's selection was
+// forgotten entirely).
+const ACTIVE_SESSIONS_STORAGE_KEY = "sheytan.activeSessionByMode";
+
+function initialActiveSessionByMode(): Record<WorkspaceMode, string | null> {
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_SESSIONS_STORAGE_KEY);
+
+    if (!raw) {
+      return { chat: null, agent: null };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<
+      Record<WorkspaceMode, string | null>
+    >;
+
+    return {
+      chat: typeof parsed.chat === "string" ? parsed.chat : null,
+      agent: typeof parsed.agent === "string" ? parsed.agent : null,
+    };
+  } catch {
+    return { chat: null, agent: null };
+  }
+}
+
+function persistActiveSessionByMode(
+  map: Record<WorkspaceMode, string | null>,
+): void {
+  try {
+    window.localStorage.setItem(
+      ACTIVE_SESSIONS_STORAGE_KEY,
+      JSON.stringify(map),
+    );
+  } catch {
+    // in-memory only
   }
 }
 
@@ -456,8 +498,15 @@ function isStaleRunEvent(payload: Record<string, unknown>): boolean {
     return true;
   }
 
-  if (seq > 0) {
-    lastRunSeq = seq;
+  // v1.2.8.1: only frames attributable to the tracked run (or arriving
+  // while no run is bound yet) advance the dedup watermark. The previous
+  // unconditional bump let a foreign frame WITHOUT a runId raise the
+  // watermark and silently drop legitimate later frames of the tracked
+  // run.
+  if (seq > 0 && frameRunId) {
+    if (!activeRunId || frameRunId === activeRunId) {
+      lastRunSeq = seq;
+    }
   }
 
   return false;
@@ -1527,6 +1576,12 @@ function handleConversationEvent(event: ActivityEvent): void {
   }
 }
 
+// v1.2.8.1: boot-time mode + per-mode selections, resolved ONCE so the
+// initial state (active session of the startup space) and the persisted
+// map agree.
+const bootMode = initialWorkspaceMode();
+const bootSessions = initialActiveSessionByMode();
+
 export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   app: null,
   sysinfo: null,
@@ -1536,7 +1591,8 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   tools: [],
 
   sessions: [],
-  activeSessionId: null,
+  // (activeSessionId is initialized from the persisted per-mode map at
+  // the mode block below — v1.2.8.1.)
 
   connection: "idle",
   loading: false,
@@ -1659,19 +1715,30 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   },
 
   refreshSessions: async () => {
+    // v1.2.8.1: capture the mode BEFORE the await — a refresh started in
+    // one mode must never land after a mode switch and overwrite the new
+    // space's list/selection with the old mode's sessions.
+    const mode = get().mode;
+
     try {
       // v1.2.8: the sidebar shows ONE conversation space. The full list is
       // still reachable through the history picker (cross-mode search).
-      const sessions = await api.sessions(get().mode);
+      const sessions = await api.sessions(mode);
 
-      const current = get().activeSessionId;
+      const after = get();
+
+      if (after.mode !== mode) {
+        return; // the user switched modes while this fetch was in flight
+      }
+
+      const previous = after.activeSessionId;
 
       // The remembered selection only survives when it still exists IN
       // THIS mode's space (never silently switched to another space).
       const activeSessionId = resolveActiveForMode(
         sessions,
-        get().mode,
-        current,
+        mode,
+        previous,
       );
 
       set((state) => ({
@@ -1679,9 +1746,23 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         activeSessionId,
         activeSessionByMode: {
           ...state.activeSessionByMode,
-          [state.mode]: activeSessionId,
+          [mode]: activeSessionId,
         },
       }));
+
+      // v1.2.8.1: when the re-resolution CHANGED the active id (remembered
+      // session deleted, or first entry into a space with no memory), the
+      // conversation follows the new selection — the UI must never show an
+      // empty conversation merely because the session list refreshed
+      // asynchronously.
+      if (activeSessionId && activeSessionId !== previous) {
+        if (activityConsumers > 0) {
+          get().connectActivity();
+        }
+
+        void get().loadSession(activeSessionId);
+        void get().refreshSessionContext();
+      }
     } catch (error) {
       set({
         error:
@@ -1870,7 +1951,20 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       // v1.2.8: LAZY HISTORY PAGING — load the newest page instead of the
       // whole transcript. Older pages fetch on demand (loadOlderMessages);
       // the authoritative full session remains on the backend.
-      const page = await api.sessionMessagesPage(id);
+      //
+      // v1.2.8.1: when reloading the session the user is ALREADY reading
+      // (e.g. run finalisation reloads after `done`), the fetched page
+      // covers everything currently visible so the older pages the user
+      // expanded are not silently collapsed back to the newest page.
+      // The backend page cap (200) bounds the request.
+      const prev = useRuntimeStore.getState();
+      const preservePages =
+        prev.activeSessionId === id && prev.messages.length > 60;
+      const limit = preservePages
+        ? Math.min(200, Math.max(60, prev.messages.length + 1))
+        : 60;
+
+      const page = await api.sessionMessagesPage(id, undefined, limit);
 
       // Only apply if the session is still the active one.
       if (useRuntimeStore.getState().activeSessionId !== id) {
@@ -2132,6 +2226,17 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   },
 
   run: async (message) => {
+    // v1.2.8.1: a session is created LAZILY on the first message when the
+    // current space has none (the documented v1.2.8 behavior — the
+    // composer previously threw "No active session." instead).
+    if (!get().activeSessionId) {
+      try {
+        await get().createSession();
+      } catch {
+        // fall through to the explicit error below when creation fails
+      }
+    }
+
     const sessionId = get().activeSessionId;
 
     if (!sessionId) {
@@ -2289,6 +2394,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       runNote: null,
       liveStatus: null,
       tierEscalations: [],
+      // v1.2.8.1: a regenerated run is a FRESH timeline — same parity as
+      // run(); the previous run's task panel must not linger.
+      agentTask: null,
     });
 
     try {
@@ -2303,6 +2411,15 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           : {}),
         ...(state.toolPolicyMode === "manual"
           ? { toolMode: "manual", toolAllow: state.toolAllowlist }
+          : {}),
+        // v1.2.8.1 REPAIR: the regenerated turn runs with the SAME
+        // cross-mode history references as the original run. The payload
+        // previously omitted historyRefs entirely and the backend had no
+        // fallback, so regeneration silently lost every attached history
+        // context. (The backend now also falls back to the persisted
+        // session context — this is the explicit belt to that brace.)
+        ...(state.historyRefs.length > 0
+          ? { historyRefs: state.historyRefs }
           : {}),
       });
 
@@ -2739,20 +2856,27 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   // display flag over ONE shared transcript; two spaces that share one
   // active conversation are NOT two histories. Now:
   //   - the current mode's active session is remembered in
-  //     activeSessionByMode (never lost);
-  //   - the OTHER mode's remembered session becomes active (or its newest,
-  //     or none — a fresh one is created lazily on first message);
+  //     activeSessionByMode (never lost, persisted across reloads);
+  //   - v1.2.8.1: the OTHER mode's remembered session IS the active one
+  //     (resolved by setMode from the per-mode memory — never from the
+  //     stale session list of the previous mode), and its transcript is
+  //     loaded immediately; a fresh session is created lazily on the
+  //     first message when the space has none;
   //   - the run timeline resets for the newly active session: the backend
   //     run of the previous session (if any) KEEPS RUNNING server-side and
   //     reconnecting to it later replays its authoritative snapshot —
   //     switching the visible space never restarts or cancels a run.
-  mode: initialWorkspaceMode(),
-  activeSessionByMode: { chat: null, agent: null },
+  mode: bootMode,
+  activeSessionId: bootSessions[bootMode],
+  activeSessionByMode: bootSessions,
   historyRefs: [],
   historyPickerOpen: false,
   historyHits: [],
   historySearchLoading: false,
-  historySearchMode: "all",
+  // v1.2.8.1: the cross-mode picker defaults to the OTHER space — the
+  // whole point of the picker is attaching history from the other mode;
+  // the backend now rejects same-mode references outright.
+  historySearchMode: crossModePickerFilter(bootMode),
   agentTask: null,
   olderHasMore: false,
   olderLoading: false,
@@ -2783,16 +2907,21 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     persistWorkspaceMode(mode);
 
-    const nextActive = resolveActiveForMode(
-      state.sessions.filter((s) => sessionMode(s) === mode),
-      mode,
-      remembered[mode],
-    );
+    // v1.2.8.1 REPAIR (the v1.2.8 empty-conversation regression): the
+    // target mode's active session is the PER-MODE MEMORY, not a filter
+    // over the current `sessions` array. Since v1.2.8 the list is always
+    // single-mode (the CURRENT mode's), so the old filter produced an
+    // empty subset for the TARGET mode and nextActive was ALWAYS null —
+    // no transcript load, no activity socket, no context policy. The
+    // remembered id is validated against the (refreshed) list
+    // asynchronously; refreshSessions re-resolves and loads if the
+    // remembered session no longer exists.
+    const nextActive = resolveModeSwitchTarget(remembered, mode);
 
     set({
       mode,
       activeSessionId: nextActive,
-      activeSessionByMode: { ...remembered, [mode]: nextActive },
+      activeSessionByMode: remembered,
       error: null,
       activity: [],
       messages: [],
@@ -2810,12 +2939,17 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       olderNextBefore: null,
       sessionContext: null,
       sessionContextError: null,
+      // v1.2.8.1: the picker retargets the new OTHER space.
+      historySearchMode: crossModePickerFilter(mode),
     });
 
-    // Load the target space's list and the remembered conversation.
+    // Load the target space's list (it also re-validates the selection).
     void get().refreshSessions();
 
     if (nextActive) {
+      // v1.2.8.1: reconnect the run transport for the RETURNED session —
+      // a live run in this space replays its authoritative snapshot here
+      // (the backend run was never cancelled by the mode switch).
       if (activityConsumers > 0) {
         get().connectActivity();
       }
@@ -2838,18 +2972,13 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     set({ historyRefs: merged, historyPickerOpen: false });
 
     // Persist on the session context (mirrors the staged attachment ids):
-    // the references survive reloads and travel with later turns. The PUT
-    // replaces the WHOLE context, so the fresh context is read first — a
-    // partial write would wipe the other fields.
+    // the references survive reloads and travel with later turns.
+    // v1.2.8.1: the delta goes through the dedicated `historyRefs` PUT
+    // field, applied ATOMICALLY server-side under the store lock — the
+    // previous GET-whole-context-modify-PUT could silently revert a
+    // concurrent context update (token policy, attachment association).
     try {
-      const detail = await api.sessionDetail(sessionId);
-
-      await api.updateSession(sessionId, {
-        context: {
-          ...detail.context,
-          historyRefs: merged,
-        },
-      });
+      await api.updateSession(sessionId, { historyRefs: merged });
     } catch (error) {
       set({
         error:
@@ -2872,16 +3001,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     set({ historyRefs: next });
 
-    // Read-modify-write of the FULL context (see attachHistoryRefs).
+    // v1.2.8.1: atomic `historyRefs` delta (see attachHistoryRefs).
     try {
-      const detail = await api.sessionDetail(sessionId);
-
-      await api.updateSession(sessionId, {
-        context: {
-          ...detail.context,
-          historyRefs: next,
-        },
-      });
+      await api.updateSession(sessionId, { historyRefs: next });
     } catch (error) {
       set({
         error:
@@ -2955,6 +3077,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       // Only apply if the session is still the active one (a switch must
       // never splice pages of another conversation).
       if (useRuntimeStore.getState().activeSessionId !== sessionId) {
+        // v1.2.8.1: ALWAYS clear the loading flag — the previous early
+        // return leaked `olderLoading: true`, which permanently disabled
+        // the "Load earlier" button (also for the session the user
+        // switched TO, since the flag is store-global).
+        set({ olderLoading: false });
         return;
       }
 
@@ -2968,9 +3095,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         olderLoading: false,
       }));
     } catch {
-      if (useRuntimeStore.getState().activeSessionId === sessionId) {
-        set({ olderLoading: false });
-      }
+      // v1.2.8.1: clear unconditionally — a failed page load for a session
+      // the user already left must not wedge the NEW session's button.
+      set({ olderLoading: false });
     }
   },
 
@@ -3001,3 +3128,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 export function getRuntimeState(): RuntimeState {
   return useRuntimeStore.getState();
 }
+
+// v1.2.8.1: the per-mode active-session map persists on every change
+// (mode switches, selections, creations, deletions, re-resolutions) — one
+// subscription instead of a persist call at every mutation site.
+useRuntimeStore.subscribe((state, prevState) => {
+  if (state.activeSessionByMode !== prevState.activeSessionByMode) {
+    persistActiveSessionByMode(state.activeSessionByMode);
+  }
+});

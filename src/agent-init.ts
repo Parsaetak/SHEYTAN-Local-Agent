@@ -54,7 +54,10 @@ async function initializeAgentOnce(): Promise<void> {
       sessions = [session];
     }
 
-    const current = useRuntimeStore.getState().activeSessionId;
+    const current =
+      useRuntimeStore.getState().activeSessionId ??
+      useRuntimeStore.getState().activeSessionByMode[mode] ??
+      null;
 
     const activeSessionId = resolveActiveInSpace(sessions, mode, current);
 
@@ -68,6 +71,16 @@ async function initializeAgentOnce(): Promise<void> {
       },
       loading: false,
     });
+
+    // v1.2.8.1 REPAIR: the startup space's transcript is loaded NOW. The
+    // v1.2.8 initialization resolved the active session but never fetched
+    // its messages — the conversation area stayed empty until the first
+    // user interaction (send / click a different session) finally called
+    // loadSession.
+    if (activeSessionId) {
+      void useRuntimeStore.getState().loadSession(activeSessionId);
+      void useRuntimeStore.getState().refreshSessionContext();
+    }
 
     void useRuntimeStore.getState().refreshModels();
   } catch (error) {

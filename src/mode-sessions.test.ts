@@ -75,3 +75,60 @@ test("sessionTitleLine falls back for untitled sessions", () => {
   assert.equal(sessionTitleLine("", "s123456abcdef"), "Untitled s123456a");
   assert.equal(sessionTitleLine(undefined, "s123456abcdef"), "Untitled s123456a");
 });
+
+// ---------------------------------------------------------------------------
+// v1.2.8.1 regressions: mode-switch target authority + cross-mode picker
+// filter. These pin the repair of the deterministic
+// empty-conversation-after-switch bug (the v1.2.8 setMode resolved the
+// target mode's active session against the PREVIOUS mode's single-mode
+// session list — always empty — so nextActive was always null).
+// ---------------------------------------------------------------------------
+
+import {
+  crossModePickerFilter,
+  resolveModeSwitchTarget,
+} from "./mode-sessions.ts";
+
+test("resolveModeSwitchTarget: the per-mode memory is the switch authority", () => {
+  const remembered: Record<string, string | null> = {
+    chat: "chat-a",
+    agent: "agent-b",
+  };
+
+  assert.equal(resolveModeSwitchTarget(remembered, "agent"), "agent-b");
+  assert.equal(resolveModeSwitchTarget(remembered, "chat"), "chat-a");
+});
+
+test("resolveModeSwitchTarget: switching with NO memory in the target mode resolves to null (refreshSessions re-resolves asynchronously)", () => {
+  const remembered: Record<string, string | null> = {
+    chat: "chat-a",
+    agent: null,
+  };
+
+  // The CURRENT session list is intentionally NOT an input — that was the
+  // v1.2.8 bug. A null target resolves to null synchronously and
+  // refreshSessions() promotes the newest session of the space afterwards.
+  assert.equal(resolveModeSwitchTarget(remembered, "agent"), null);
+});
+
+test("resolveModeSwitchTarget: round trip Chat A → Agent A → Chat keeps Chat A", () => {
+  let remembered: Record<string, string | null> = {
+    chat: "chat-a",
+    agent: null,
+  };
+
+  // Chat → Agent (remember chat-a, take agent memory: null)
+  const agentTarget = resolveModeSwitchTarget(remembered, "agent");
+  assert.equal(agentTarget, null);
+
+  // Agent space creates/uses agent-a
+  remembered = { ...remembered, agent: "agent-a" };
+
+  // Agent → Chat (remember agent-a, take chat memory)
+  assert.equal(resolveModeSwitchTarget(remembered, "chat"), "chat-a");
+});
+
+test("crossModePickerFilter: the picker defaults to the OTHER space", () => {
+  assert.equal(crossModePickerFilter("chat"), "agent");
+  assert.equal(crossModePickerFilter("agent"), "chat");
+});

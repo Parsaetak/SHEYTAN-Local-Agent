@@ -970,6 +970,73 @@ func (s *Store) UpdateContext(id string, ctx Context) error {
         return s.saveLocked(sess)
 }
 
+// SaveMessagesKeepContext (v1.2.8.1) persists the session's transcript
+// mutations (user message, regenerate trim, title) while preserving the
+// CURRENT stored context: a whole-object Save built from a caller's stale
+// copy would silently revert context mutations (history refs, attachment
+// associations, token policy) that landed concurrently. The context is
+// fetched and re-attached under the SAME store lock that performs the
+// save — the store remains the single serialization point.
+func (s *Store) SaveMessagesKeepContext(sess *Session) error {
+        if sess == nil {
+                return fmt.Errorf("session is nil")
+        }
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        s.loadIndexLocked()
+        cur, err := s.fetchLocked(sess.ID)
+        if err != nil {
+                return err
+        }
+        merged := copySession(sess)
+        merged.Context = cur.Context
+        merged.UpdatedAt = time.Now().UTC()
+        return s.saveLocked(merged)
+}
+
+// UpdateContextFunc (v1.2.8.1) applies fn to the session context UNDER the
+// store lock — the single serialization point for every read-modify-write
+// on the session context (history refs, attachments, context-token
+// policy). The previous API shape (Get a copy → mutate → UpdateContext
+// whole-object) let two concurrent mutations silently overwrite each
+// other; here the load, mutate and save are one atomic step, so
+// concurrent updates merge instead of racing. fn reports whether it
+// changed anything — a no-op call never bumps UpdatedAt and never
+// rewrites the file.
+func (s *Store) UpdateContextFunc(id string, fn func(c *Context) (changed bool, err error)) error {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        s.loadIndexLocked()
+        sess, err := s.fetchLocked(id)
+        if err != nil {
+                return err
+        }
+        changed, err := fn(&sess.Context)
+        if err != nil {
+                return err
+        }
+        if !changed {
+                return nil
+        }
+        sess.UpdatedAt = time.Now().UTC()
+        return s.saveLocked(sess)
+}
+
+// ModeOf (v1.2.8.1) returns the session's conversation mode from the
+// in-memory index — NO transcript read. It is the server-side authority
+// for cross-mode reference enforcement (the client-provided mode is never
+// trusted). Unknown or vanished sessions return "" — callers decide
+// whether that means "drop" or "skip quietly".
+func (s *Store) ModeOf(id string) string {
+        if id == "" {
+                return ""
+        }
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        s.loadIndexLocked()
+        return s.modeFromIndexLocked(id)
+}
+
 // SetModel records the model the session runs with.
 func (s *Store) SetModel(id, model string) error {
         s.mu.Lock()

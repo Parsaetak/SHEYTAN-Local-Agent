@@ -24,6 +24,7 @@ package sessions
 
 import (
         "encoding/json"
+        "fmt"
         "os"
         "regexp"
         "sort"
@@ -80,8 +81,8 @@ func (s *Store) SaveSummary(sum *SessionSummary) error {
         s.mu.Lock()
         defer s.mu.Unlock()
         s.loadIndexLocked()
-        if _, err := s.fetchLocked(sum.SessionID); err != nil {
-                return err
+        if !s.existsLocked(sum.SessionID) {
+                return fmt.Errorf("session %s not found", sum.SessionID)
         }
         if err := os.MkdirAll(s.dir, 0o755); err != nil {
                 return err
@@ -95,14 +96,56 @@ func (s *Store) SaveSummary(sum *SessionSummary) error {
 
 // Summary loads the session's summary sidecar (nil, nil when none exists
 // yet — a summary is created by the first settled turn, never fabricated).
+//
+// v1.2.8.1: the existence check no longer loads the transcript. The old
+// fetchLocked-based check performed a full session read + JSON parse per
+// checked session once the hot cache missed — O(sessions × full
+// transcripts) per picker search, exactly the scalability trap the search
+// contract forbids. Existence is now an index/stat check.
 func (s *Store) Summary(id string) (*SessionSummary, error) {
         s.mu.Lock()
         defer s.mu.Unlock()
         s.loadIndexLocked()
-        if _, err := s.fetchLocked(id); err != nil {
-                return nil, err
+        if !s.existsLocked(id) {
+                return nil, fmt.Errorf("session %s not found", id)
         }
         return s.summaryLocked(id), nil
+}
+
+// existsLocked (v1.2.8.1) reports whether the session exists WITHOUT
+// loading its transcript: index membership, the pending set, or a file
+// stat. Caller holds mu.
+func (s *Store) existsLocked(id string) bool {
+        if id == "" {
+                return false
+        }
+        if _, ok := s.pending[id]; ok {
+                return true
+        }
+        for _, st := range s.index {
+                if st.ID == id {
+                        return true
+                }
+        }
+        if fi, err := os.Stat(s.path(id)); err == nil && !fi.IsDir() {
+                return true
+        }
+        return false
+}
+
+// modeFromIndexLocked resolves the session mode from the in-memory index
+// (pending set first) without any transcript read. "" = unknown. Caller
+// holds mu.
+func (s *Store) modeFromIndexLocked(id string) string {
+        if p, ok := s.pending[id]; ok && p != nil {
+                return NormalizeMode(p.Mode)
+        }
+        for _, st := range s.index {
+                if st.ID == id {
+                        return NormalizeMode(st.Mode)
+                }
+        }
+        return ""
 }
 
 // summaryLocked reads the sidecar; missing file = no summary yet.
@@ -123,18 +166,19 @@ func (s *Store) summaryLocked(id string) *SessionSummary {
 // injection and picker previews. A fresh session with no summary yields
 // a Version-0 shell carrying only id/mode — the renderer emits an empty
 // string for it, so nothing fabricated ever reaches the prompt.
+// v1.2.8.1: resolved WITHOUT loading the transcript (index mode + stat
+// existence check).
 func (s *Store) SummaryForRun(id string) (*SessionSummary, error) {
         s.mu.Lock()
         defer s.mu.Unlock()
         s.loadIndexLocked()
-        sess, err := s.fetchLocked(id)
-        if err != nil {
-                return nil, err
+        mode := s.modeFromIndexLocked(id)
+        if mode == "" && !s.existsLocked(id) {
+                return nil, fmt.Errorf("session %s not found", id)
         }
         if sum := s.summaryLocked(id); sum != nil {
                 return sum, nil
         }
-        mode := sess.Mode
         if mode == "" {
                 mode = DefaultMode
         }
@@ -160,8 +204,16 @@ func UpdateSummaryFromTurn(base *SessionSummary, sessionID, mode, userMsg, assis
         assistantMsg = clipRunes(assistantMsg, maxSummaryCurrentTurn)
 
         // Objective: the first user request of the session, recorded once.
+        // v1.2.8.1: EXCEPT for a trivial opener — a session that begins with
+        // "hi" / "ok" must not carry that as its objective forever. A later
+        // user message at least twice as long supersedes a trivial
+        // objective (once non-trivial, the objective is stable again).
         if strings.TrimSpace(sum.Objective) == "" {
                 sum.Objective = clipRunes(firstMeaningfulLine(userMsg), maxSummaryObjective)
+        } else if len([]rune(strings.TrimSpace(sum.Objective))) <= 8 {
+                if cand := firstMeaningfulLine(userMsg); len([]rune(cand)) >= 2*len([]rune(sum.Objective)) {
+                        sum.Objective = clipRunes(cand, maxSummaryObjective)
+                }
         }
 
         sum.ImportantUserConstraints = mergeSummaryItems(

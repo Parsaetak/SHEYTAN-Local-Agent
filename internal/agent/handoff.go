@@ -1,13 +1,16 @@
-// handoff.go — v1.2.8 mandatory Agent.md handoff.
+// handoff.go — v1.2.8 mandatory agent.md handoff (strengthened in
+// v1.2.8.1).
 //
 // The repository already carries agent.md as the canonical engineering
 // handoff document (lowercase — Windows filesystems may treat agent.md and
 // Agent.md as the SAME path, so the exact filename `agent.md` is a
 // constant here and must never be "normalized" into another case).
 //
-// At the end of every completed Agent task that produced engineering
-// evidence, the runtime updates the workspace's agent.md with a clearly
-// separated DYNAMIC section:
+// v1.2.8.1 product contract: EVERY completed Agent-mode run updates the
+// workspace's agent.md — including runs with NO engineering evidence (no
+// files changed, no commands, no tests). Such runs write an honest
+// "No engineering changes were made." handoff instead of being skipped.
+// Chat mode never writes agent.md. The dynamic section:
 //
 //      <!-- sheytan:handoff:begin -->
 //      # Latest Agent Handoff
@@ -17,14 +20,18 @@
 // Everything OUTSIDE the marker block is preserved byte-for-byte: stable
 // engineering instructions the file already carries are never rewritten by
 // the runtime. The new section replaces any previous one (the latest
-// handoff is the authoritative one) and is written only AFTER the actual
-// task outcome is known — factual, bounded, no private chain-of-thought,
-// no speculative success claims, no fabricated metrics.
+// handoff is the authoritative one). The write is durable (tmp + fsync +
+// rename + directory sync), verified by reading the file back, and only
+// reported as completed after that verification succeeds — failures are
+// returned to the caller, never swallowed. Content is factual, bounded, no
+// private chain-of-thought, no speculative success claims, no fabricated
+// metrics.
 package agent
 
 import (
         "fmt"
         "os"
+        "path/filepath"
         "strings"
 )
 
@@ -101,55 +108,141 @@ func RenderHandoff(h Handoff) string {
 
 // WriteHandoffFile updates path (an agent.md) with the rendered handoff:
 //   - file absent      → created with a minimal stable header + the section;
-//   - file without the section → section appended at the end;
-//   - file with the section → ONLY the section is replaced; everything
-//     outside the markers is preserved byte-for-byte.
+//   - file without the section → section appended after the exact existing
+//     bytes (only separator newlines are ADDED — existing bytes are never
+//     rewritten);
+//   - file with the section → ONLY the marker-bounded region is replaced;
+//     everything outside the markers is preserved byte-for-byte.
 //
-// The write is atomic (tmp + rename) like every other durable artifact.
+// v1.2.8.1 durability contract: the file is read fresh (an UNREADABLE
+// existing file aborts — the previous behavior treated any read error as
+// "absent" and could clobber existing content), written to a unique temp
+// file in the same directory, fsynced, renamed, and read back to verify
+// the section actually landed. Only then does the write report success.
 func WriteHandoffFile(path string, h Handoff) error {
         if strings.TrimSpace(path) == "" {
                 return fmt.Errorf("handoff: empty path")
         }
 
+        section := RenderHandoff(h)
+
         var existing string
         if data, err := os.ReadFile(path); err == nil {
                 existing = string(data)
+        } else if !os.IsNotExist(err) {
+                // v1.2.8.1: an existing-but-unreadable agent.md (locked,
+                // permission denied) must NEVER be silently replaced —
+                // abort so the caller surfaces the real failure.
+                return fmt.Errorf("handoff: read %s: %w", path, err)
         }
 
-        updated := spliceHandoff(existing, RenderHandoff(h))
+        updated := spliceHandoff(existing, section)
 
-        tmp := path + ".tmp"
-        if err := os.WriteFile(tmp, []byte(updated), 0o644); err != nil {
-                return err
+        dir := filepath.Dir(path)
+
+        tmp, err := os.CreateTemp(dir, ".agent.md-*.tmp")
+        if err != nil {
+                return fmt.Errorf("handoff: temp file: %w", err)
         }
-        return os.Rename(tmp, path)
+
+        tmpName := tmp.Name()
+        defer os.Remove(tmpName) // no-op after a successful rename
+
+        if _, err := tmp.WriteString(updated); err != nil {
+                tmp.Close()
+                return fmt.Errorf("handoff: write temp: %w", err)
+        }
+        if err := tmp.Sync(); err != nil {
+                tmp.Close()
+                return fmt.Errorf("handoff: fsync temp: %w", err)
+        }
+        if err := tmp.Close(); err != nil {
+                return fmt.Errorf("handoff: close temp: %w", err)
+        }
+
+        if err := os.Chmod(tmpName, 0o644); err != nil {
+                return fmt.Errorf("handoff: chmod temp: %w", err)
+        }
+
+        if err := os.Rename(tmpName, path); err != nil {
+                return fmt.Errorf("handoff: rename: %w", err)
+        }
+
+        // Directory sync best-effort: makes the rename itself durable where
+        // the platform supports directory fsync (Linux); a refusal here
+        // (Windows) does not invalidate the verified file content.
+        if d, err := os.Open(dir); err == nil {
+                _ = d.Sync()
+                _ = d.Close()
+        }
+
+        // v1.2.8.1 read-back verification: the handoff is only "completed"
+        // when the file on disk actually carries the section we wrote.
+        verified, err := os.ReadFile(path)
+        if err != nil {
+                return fmt.Errorf("handoff: read-back verify: %w", err)
+        }
+        if !verifyHandoffContent(string(verified), section) {
+                return fmt.Errorf("handoff: read-back verification failed — section not intact in %s", path)
+        }
+
+        return nil
+}
+
+// verifyHandoffContent checks that content carries exactly one complete
+// marker pair and the exact section between the markers (the section's
+// trailing newline after the end marker is not part of the comparison —
+// it belongs to whatever follows the markers in the file).
+func verifyHandoffContent(content, section string) bool {
+        begin := strings.Index(content, HandoffBeginMarker)
+        end := strings.Index(content, HandoffEndMarker)
+        if begin < 0 || end <= begin {
+                return false
+        }
+        if strings.Index(content[begin+1:], HandoffBeginMarker) >= 0 {
+                return false // more than one begin marker
+        }
+        got := content[begin : end+len(HandoffEndMarker)]
+        return got == strings.TrimSuffix(section, "\n")
 }
 
 // spliceHandoff replaces the marker-bounded section in existing (or
-// appends it) while preserving everything outside the markers.
+// appends it) while preserving everything outside the markers BYTE-FOR-
+// BYTE (v1.2.8.1: no whitespace re-normalization at the boundaries — the
+// previous TrimRight/TrimLeft silently rewrote the file's own spacing).
 func spliceHandoff(existing, section string) string {
         begin := strings.Index(existing, HandoffBeginMarker)
         end := strings.Index(existing, HandoffEndMarker)
 
         if begin >= 0 && end > begin {
-                before := existing[:begin]
-                after := existing[end+len(HandoffEndMarker):]
-                after = strings.TrimLeft(after, "\n")
-                return strings.TrimRight(before, "\n") + "\n\n" + section + "\n" + after
+                before := existing[:begin]                            // exact bytes before the section
+                after := existing[end+len(HandoffEndMarker):]         // exact bytes after the section
+                return before + section + after
         }
 
         // No COMPLETE section present. A dangling begin marker without an
         // end marker (a torn write) is STRIPPED — the fresh section
-        // supersedes it, so exactly one marker pair ever remains.
+        // supersedes it, so exactly one marker pair ever remains. The
+        // bytes before the torn marker are preserved exactly.
         if begin >= 0 {
                 existing = existing[:begin]
         }
 
-        if strings.TrimSpace(existing) == "" {
+        if existing == "" {
                 return handoffFileHeader() + "\n" + section
         }
 
-        return strings.TrimRight(existing, "\n") + "\n\n" + section
+        // Append: original bytes untouched; only ADD separator newlines when
+        // the existing content does not already end on its own line.
+        sep := ""
+        if !strings.HasSuffix(existing, "\n\n") {
+                if strings.HasSuffix(existing, "\n") {
+                        sep = "\n"
+                } else {
+                        sep = "\n\n"
+                }
+        }
+        return existing + sep + section
 }
 
 func handoffFileHeader() string {
@@ -162,6 +255,10 @@ func handoffFileHeader() string {
 // state + verification verdict + the persistence facts the API layer
 // observed. Values are passed through verbatim — no re-derivation, no
 // fabrication.
+//
+// v1.2.8.1: evidence-free runs get HONEST defaults instead of empty
+// sections — "No engineering changes were made." — so every completed
+// Agent run leaves a usable, truthful handoff for the next agent.
 func HandoffFromTaskState(t TaskState, verificationSummary, outcome string) Handoff {
         h := Handoff{
                 Task:         t.Goal,
@@ -190,11 +287,27 @@ func HandoffFromTaskState(t TaskState, verificationSummary, outcome string) Hand
                 h.TestsAndVer = append(h.TestsAndVer, "verification: "+verificationSummary)
         }
         if outcome != "" {
-                h.ChangesMade = append([]string{"run outcome: " + outcome}, h.ChangesMade...)
+                h.ChangesMade = append(h.ChangesMade, "run outcome: "+outcome)
         }
         if len(t.Repairs) > 0 {
                 h.ChangesMade = append(h.ChangesMade, t.Repairs...)
         }
+
+        noEvidence := len(t.FilesChanged) == 0 && len(t.CommandsRun) == 0 &&
+                len(t.TestsRun) == 0 && len(t.Repairs) == 0 && len(t.Artifacts) == 0
+        if noEvidence {
+                h.ChangesMade = append(h.ChangesMade, "No engineering changes were made.")
+                if h.CurrentState == "" {
+                        h.CurrentState = "The run completed without file, command or test activity."
+                }
+                if h.NextAction == "" {
+                        h.NextAction = "Review the session transcript for context before starting new work."
+                }
+                if len(h.Remaining) == 0 {
+                        h.Remaining = []string{"None recorded."}
+                }
+        }
+
         // "Do not redo": the settled artifacts (files already written, tests
         // already passing) — the next agent must not repeat completed work.
         h.DoNotRedo = append(h.DoNotRedo, t.FilesChanged...)

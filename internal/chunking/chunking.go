@@ -414,8 +414,13 @@ func ComposeWithImages(text string, attachments []string, budgetBytes int) (comp
 // (every iteration of every agent turn). It is now one backward token pass
 // plus exactly ONE slice copy at the end.
 func WindowMessages(history []llm.Message, budgetTokens int) ([]llm.Message, int) {
-        if budgetTokens < 256 {
-                budgetTokens = 256
+        // v1.2.8.1: no artificial 256-token floor. When the caller's real
+        // remainder is smaller than the floor, raising it here overfilled
+        // the window and turned recoverable pressure into a hard refusal.
+        // A budget below the current turn's cost keeps the current turn
+        // verbatim and elides everything before it (the branch below).
+        if budgetTokens < 0 {
+                budgetTokens = 0
         }
         if len(history) == 0 {
                 return history, 0
