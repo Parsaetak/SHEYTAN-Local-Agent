@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.2.9
+Current release:  v1.3.0
 Codename:         Zeta
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
@@ -70,6 +70,21 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.3.0 — Runtime Path Correctness, Clean Logging, Universal Scrolling, Professional Settings, GitHub Cloning
+
+**v1.3.0 is a runtime-correctness and workflow release: the malformed `%LOCALAPPDATA%` runtime paths are eliminated at the source (NSIS installer fixed, one authoritative path resolver, automatic migration of malformed v1.2.9 trees), startup logging is clean (no repeated fast-snapshot spam, no blank warnings), every workspace tab scrolls through one explicit layout contract, Settings is restructured into eight user-outcome sections with engine internals automated or moved to Advanced, and a first-class Clone GitHub Repository workflow lands end-to-end with automatic workspace switching.**
+
+| Area | Change | Status |
+|---|---|---|
+| **Runtime path correctness** | ONE authoritative path resolver (`internal/config/paths.go`): environment references expand once, unresolved `%TOKEN%` values are rejected to the canonical root, every derived directory (models/sessions/logs/workspace) anchors there; the NSIS installer writes an expanded absolute data path instead of a REG_EXPAND_SZ token | IMPLEMENTED, TESTED (unit + real-binary acceptance) |
+| **Malformed-root migration** | v1.2.9 trees (`<root>\%LOCALAPPDATA%\SHEYTAN-LA`, doubled SHEYTAN-LA nesting) fold into the canonical root: models/sessions move first (renamed or hash-verified), collisions keep the newer file, a recovered config.json is re-loaded, the source tree is removed only after every entry is accounted for; idempotent and restart-safe | IMPLEMENTED, TESTED (unit + real-binary acceptance) |
+| **Clean logging** | `fastSnapshot()` is a silent read/cache event; ONE concise "fast environment ready" summary per process; the deep probe logs its one measurement; WARN/ERROR records are never blank (call-site context injected by the log manager); the scheduled updater's blank `WARN [updater]` root cause fixed | IMPLEMENTED, TESTED |
+| **Universal scrolling** | One layout contract: `.workspace > .view-transition` is a shrinkable flex column; System/Workspace/Research/Settings own a single vertical scroll viewport; Agent and Coding Lab keep their internal IDE-style scroll regions; short windows and 100–150% scaling resolve through the same chain | IMPLEMENTED, TESTED (browser-validated per tab, short-window validated) |
+| **Settings restructure** | Eight sections — General, Models, Performance (Quiet/Balanced/Maximum + measured facts), Agent & Tools, Network, Updates, Diagnostics (read-only), Advanced; the MM projector is "Automatically managed" (no raw path fields in normal UI); engine host/port/paths/flags, cache tuning, batch/thread controls and storage limits are Advanced-only; legacy config fields remain loadable/savable | IMPLEMENTED, TESTED (structure + persistence regressions, browser-validated) |
+| **Settings save safety** | `llm` patches deep-merge field-by-field (partial posture/preset patches no longer zero sampling fields); posture applies write the real top-level `ubatchSize`; hardware facts load on Diagnostics too | IMPLEMENTED, TESTED |
+| **GitHub cloning** | `POST/GET /api/workspace/clone[/status|/cancel]`: structured git execution via the validated proc seam (no shell, explicit argv, tree-kill cancellation, bounded output, exit-code validation), classified actionable errors, verified checkout, automatic workspace switch through the exact `/api/workspace/switch` sequence; Workspace tab gains the full Clone workflow UI (URL, destination, branch, progress, cancel, result) | IMPLEMENTED, TESTED (unit + real end-to-end clone + auto-switch) |
+| **Automation-first controls** | GPU offload, flash attention, KV quant, projector pairing and context recommendations are automatic/measured; the UI labels Automatic / Recommended / Measured explicitly and never claims "optimal" without measurement | IMPLEMENTED |
 
 ## v1.2.9 — Stabilization, Security & Repository Cleanup
 

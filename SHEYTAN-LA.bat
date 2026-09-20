@@ -1,5 +1,5 @@
 @echo off
-REM SHEYTAN-LA v1.2.9 (SHEYTAN Local Agent) launcher
+REM SHEYTAN-LA v1.3.0 (SHEYTAN Local Agent) launcher
 REM
 REM Double-click to launch the native desktop GUI.
 REM (c) 2024-2026 Parsaetak. All rights reserved.

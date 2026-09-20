@@ -533,6 +533,12 @@ func checkAndApply(ctx context.Context, cfg *config.Config, eng Engine, force bo
 	}
 	msg, err = UpdateEngine(ctx, cfg, eng, latest)
 	if err != nil {
+		// v1.3.0: an error must always reach the log WITH its message —
+		// UpdateEngine's download failure path returns ("", err) and
+		// the scheduled loop then logged a bare "WARN [updater]".
+		if strings.TrimSpace(msg) == "" {
+			msg = "engine update failed: " + err.Error()
+		}
 		return msg, false, err
 	}
 	logging.Default().Info("updater", "%s", msg)
@@ -577,6 +583,12 @@ func RunScheduled(ctx context.Context, src *config.Source, eng Engine, notify fu
 			src.Store(&mutable)
 
 			if err != nil {
+				// v1.3.0: never emit a blank WARN. checkAndApply occasionally
+				// returns ("", err) (UpdateEngine's error path), which used to
+				// produce the empty "WARN [updater]" lines in v1.2.9 logs.
+				if strings.TrimSpace(msg) == "" {
+					msg = err.Error()
+				}
 				logging.Default().Warn("updater", "%s", msg)
 			} else if updated {
 				logging.Default().Info("updater", "%s", msg)

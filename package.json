@@ -1,6 +1,6 @@
 {
   "name": "sheytan-local-agent",
-  "version": "1.2.9",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,7 +17,7 @@
     "lint": "oxlint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:units": "node --test src/run-phase.test.ts src/stream-accumulator.test.ts src/run-events.test.ts src/resources.test.ts src/mode-sessions.test.ts src/history-ref.test.ts src/parse-ended-at.test.ts"
+    "test:units": "node --test src/run-phase.test.ts src/stream-accumulator.test.ts src/run-events.test.ts src/resources.test.ts src/mode-sessions.test.ts src/history-ref.test.ts src/parse-ended-at.test.ts src/scroll-contract.test.ts src/settings-sections.test.ts src/clone-url.test.ts"
   },
   "dependencies": {
     "react": "19.2.8",

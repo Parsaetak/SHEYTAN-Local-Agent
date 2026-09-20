@@ -1,17 +1,9 @@
-/* v1.1.6 §15: Settings owns the app-level scroll container.
-   Previously NO scroll container existed — every ancestor clips
-   (overflow: hidden), so tall settings content was unreachable on
-   short windows. The page now scrolls with wheel, trackpad, keyboard
-   and a visible scrollbar, with a stable sticky toolbar. */
-.view-transition:has(> .settings-page) {
-  display: flex;
-  flex-direction: column;
-
-  min-height: 0;
-
-  overflow: hidden;
-}
-
+/* v1.3.0: the app-level scroll container is now the GENERAL contract
+   (.workspace > .view-transition in styles.css makes every view a
+   shrinkable flex column). The former :has(> .settings-page) special
+   case is subsumed — Settings participates in the same layout rule as
+   System/Workspace/Research/Lab/Agent. The settings-page below remains
+   the scroll viewport for this surface. */
 .settings-page {
   flex: 1 1 auto;
   min-height: 0;
@@ -183,12 +175,6 @@
 }
 
 .inline-toggle input,
-.tool-row input {
-  width: 17px;
-  height: 17px;
-  accent-color: var(--accent, #ff3b30);
-}
-
 .preset-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -231,43 +217,6 @@
 .preset-card span {
   color: var(--text-secondary, #8b8b8b);
   font-size: 12px;
-  line-height: 1.4;
-}
-
-.tool-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 420px;
-  overflow: auto;
-}
-
-.tool-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 11px 12px;
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.07));
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.012);
-}
-
-.tool-row span {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.tool-row strong {
-  color: var(--text-primary, #eeeeee);
-  font-size: 13px;
-}
-
-.tool-row small {
-  color: var(--text-secondary, #818181);
-  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -860,4 +809,34 @@
   .settings-tabs {
     top: 0;
   }
+}
+
+/* v1.3.0: read-only path display + inline action (Models folder button,
+   default workspace display). Implementation paths are SHOWN, not
+   edited, outside Advanced. */
+.settings-inline-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-value-path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  max-width: 100%;
+
+  padding: 8px 10px;
+
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm, 8px);
+
+  background: var(--panel-soft, rgba(127, 127, 127, 0.08));
+
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim, #9aa4b2);
 }

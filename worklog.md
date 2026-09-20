@@ -2843,3 +2843,38 @@ UPDATE.md gains this repair's section (labels per the truth standard); README/AR
 - Version: `node scripts/release-version.mjs --check` PASS (canonical 1.2.8; ZIP label v1.2.8.1).
 - ROADMAP.md: git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650 — UNCHANGED.
 - NOT YET VERIFIED: CI Actions rerun from this tree (no push); Windows/Linux desktop binaries.
+
+---
+Release: v1.3.0 (from v1.2.9 @ 24aa79b)
+
+## v1.3.0 — Runtime paths, logging, scrolling, Settings, GitHub cloning
+
+### 1. Runtime path correctness — FIXED (root cause, not symptom)
+NSIS wrote SHEYTAN_DATA_DIR as REG_EXPAND_SZ "%LOCALAPPDATA%\SHEYTAN-LA" — machine env values expand before per-user vars exist, so the app got the LITERAL token, joined it as a relative path and created <root>\%LOCALAPPDATA%\SHEYTAN-LA\models on real disks. Fixed at the source (installer writes an expanded absolute REG_SZ) AND in the runtime: internal/config/paths.go is the single authoritative resolver (expand once; reject unresolved tokens to the canonical app root; relative values anchor at the exe root, never the CWD; models/sessions/logs/workspace derive from the canonical root). Load-time normalization means no subsystem can observe a raw "%...%" path; every rejection is reported through PathNotes and logged once logging is live.
+
+### 2. Malformed-root migration — NEW
+internal/config/migrate.go folds v1.2.9 malformed trees into the canonical root: rename-when-free / hash-verified-copy otherwise; newer file wins collisions on either side; recovered config.json is re-loaded (config.legacy.json preserved when both exist); source tree removed only after every entry is accounted for; idempotent + restart-safe (interrupted runs complete on next boot). Real-binary acceptance run: synthetic malformed install → models/sessions/config migrated, token tree gone, v1.3.0 boots on the recovered config, second boot is a no-op, no literal token anywhere in paths/config/logs (log lines render [TOKEN] so the diagnostic survives without the literal).
+
+### 3. Clean logging — FIXED
+fastSnapshot() logged INFO on every call (environment endpoint, System panel, perf poll, engine checks — dozens of identical "fast snapshot in 0 ms" lines per session). Now: reads are silent; ONE "fast environment ready" summary per process; deep probe keeps its one measurement; per-source probe lines are DEBUG. The blank "WARN [updater]" (UpdateEngine returns ("", err) → "%s" with empty msg) fixed at both call sites, and the log manager upgrades any blank WARN/ERROR with the emitting call site — an empty warning is structurally impossible.
+
+### 4. Universal scrolling — FIXED
+.view-transition was a plain block under four overflow:hidden ancestors → content-height flex basis overflowed .workspace invisibly (System tab unscrollable; tall Workspace/Research/Lab clipped). ONE contract now: .workspace > .view-transition is a shrinkable flex column; System/Workspace/Research/Settings own one vertical scroll viewport; Agent/Lab keep their internal IDE-style regions (conversation stream, task list, lab detail) which now engage correctly. Browser-validated every tab (tall injected content + programmatic scrollTop + composer pinned) and re-validated at 480px window height; the per-tab :has() special case deleted. src/scroll-contract.test.ts pins the contract in the shipped CSS.
+
+### 5. Settings restructured — 8 user-outcome sections
+General / Models / Performance (Quiet-Balanced-Maximum + measured facts) / Agent & Tools / Network / Updates / Diagnostics (read-only) / Advanced. MM projector: "Automatically managed" status in Models (detected→matched→loaded→verified backend pipeline already existed — the UI finally trusts it); projector override + engine host/port/bin/flags + cache/batch/thread tuning + sandbox caps + storage limits are Advanced-only; legacy fields still load/save (tests pin that ordinary saves cannot erase them). Fixed on the way: llm patches deep-merge server-side (shallow replace zeroed sampling fields on posture/preset applies), posture apply writes the REAL top-level ubatchSize (llm.ubatchSize was a phantom no-op), hardware facts load on Diagnostics too, reduce-motion accessibility switch (class-based twin of the OS media query).
+
+### 6. GitHub cloning — first-class
+internal/gitclone (URL validation incl. SSH; destination validation; structured execution through internal/proc — explicit argv, no shell, tree-kill cancel, bounded output, timeout, GIT_TERMINAL_PROMPT=0; rev-parse verification; classified failures) + internal/api/clone.go (start/status/cancel endpoints on the Download-Manager job pattern; auto-switch reuses the EXACT workspace-switch sequence via the extracted switchWorkspaceRoot) + Workspace-tab Clone card (URL/destination/branch, progress, cancel, classified errors with git output, HEAD evidence, switched-workspace result). Real end-to-end: cloned octocat/Hello-World through the browser, workspace auto-switched, failure path classified honestly.
+
+### 7. Cleanup
+Dead CSS removed (level-switch block, tool-list/tool-row rules, the :has() special case); dead SHEYTAN_DATA_DIR raw passthrough branches replaced by the resolver; version bumped through the single-source gate (package.json → config.go/build-config/SIGNATURE via release-version.mjs); README/UPDATE/docs updated per convention.
+
+## Verification (this host)
+- go test -tags headless -count=1 ./... PASS; go vet -tags headless clean; gofmt clean; GOOS=windows CGO_ENABLED=0 go build ./... PASS; focused go test -race gate PASS.
+- npm ci; tsc --noEmit clean; oxlint 0/0; node --test 78/78 (68 prior + 10 new: scroll-contract, settings-sections, clone-url + backend paths/migrate/logging/blankwarn/gitclone/clone-api/config-patch suites); vite build + sync-web OK.
+- node scripts/release-version.mjs --check PASS (1.3.0 everywhere).
+- Runtime acceptance on the real binary: malformed-path migration (boot1 migrate+recover, boot2 no-op), clean startup log (one summary, zero spam, zero blank WARNs), per-tab browser scroll validation incl. 480px, live GitHub clone + auto-switch.
+- Native engine: clean-room CMake configure+build+ctest (see final report for the exact result on this host).
+- ROADMAP.md: git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650 — UNCHANGED before and after.
+- NOT RUN HERE: Windows desktop (Wails/WebView2) build and NSIS packaging — Linux host; CI owns the Windows matrix.

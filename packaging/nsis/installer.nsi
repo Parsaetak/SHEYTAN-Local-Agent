@@ -49,9 +49,11 @@
 ;   - installs the APPLICATION ONLY (exe + license + readme); models are
 ;     NEVER bundled and NEVER deleted;
 ;   - per-machine install to $PROGRAMFILES64\SHEYTAN-LA;
-;   - user data dir (%LOCALAPPDATA%\SHEYTAN-LA) is declared via the
-;     SHEYTAN_DATA_DIR environment variable — the app's own portable
-;     DataDir override, so existing config machinery reads it unchanged;
+;   - user data dir (<LocalAppData>\SHEYTAN-LA) is declared via the
+;     SHEYTAN_DATA_DIR environment variable — written as an EXPANDED
+;     absolute path at install time (v1.3.0: never a raw %LOCALAPPDATA%
+;     token) — the app's own portable DataDir override, so existing
+;     config machinery reads it unchanged;
 ;   - AppUserModelID Parsaetak.SHEYTAN-LA registered under HKCU classes so
 ;     taskbar/notifications resolve the identity;
 ;   - version-aware upgrades, clean uninstall, user data untouched;
@@ -218,7 +220,20 @@ upgrade_replaced:
 
   ; User data location — the app's documented SHEYTAN_DATA_DIR override.
   ; Existing installs keep their data; the directory is created on first run.
-  WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "SHEYTAN_DATA_DIR" "%LOCALAPPDATA%\SHEYTAN-LA"
+  ;
+  ; v1.3.0 DEFECT FIX: this used to be
+  ;   WriteRegExpandStr ... "SHEYTAN_DATA_DIR" "%LOCALAPPDATA%\SHEYTAN-LA"
+  ; A REG_EXPAND_SZ value in the MACHINE environment is expanded BEFORE
+  ; per-user variables (LOCALAPPDATA) exist, so the application received
+  ; the LITERAL string "%LOCALAPPDATA%\SHEYTAN-LA" — not an absolute
+  ; path — and joined it into malformed trees like
+  ; <root>\%LOCALAPPDATA%\SHEYTAN-LA\models. The fix: NSIS expands
+  ; $LOCALAPPDATA at INSTALL time (the real path of the installing user)
+  ; and writes a plain REG_SZ absolute path. No %-tokens can ever reach
+  ; the application environment again. (The Go side additionally expands
+  ; or rejects any token that somehow survives — internal/config/paths.go
+  ; — and migrates trees the v1.2.9 layout already created.)
+  WriteRegStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "SHEYTAN_DATA_DIR" "$LOCALAPPDATA\SHEYTAN-LA"
 
   ; Windows application identity (AppUserModelID) — notifications and
   ; taskbar grouping resolve to SHEYTAN-LA.

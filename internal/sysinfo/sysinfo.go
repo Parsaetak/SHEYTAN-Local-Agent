@@ -151,6 +151,22 @@ var (
 	probeCache *SysInfo
 )
 
+// fastReadyOnce (v1.3.0) guarantees the fast-environment summary is
+// logged EXACTLY once per process. fastSnapshot() itself is silent — it
+// is a cache/read event requested by many UI surfaces (environment
+// endpoint, system panel, perf poll, engine checks); a measurement event
+// (the one-time ready summary, the one-time deep probe) is the only
+// thing that belongs in the log. The v1.2.9 defect: fastSnapshot logged
+// INFO on EVERY call, so a single UI session produced dozens of
+// identical "fast snapshot in 0 ms" lines.
+var fastReadyOnce sync.Once
+
+// resetFastLogForTest clears the one-shot fast-environment summary state
+// (tests only).
+func resetFastLogForTest() {
+	fastReadyOnce = sync.Once{}
+}
+
 // deepProbeFn is the seam the startup test uses to prove New()/ProbeFast
 // never invoke (or wait for) the deep probe: the test swaps it with a
 // slow stub and resets the sync.Once. Production always runs probeUncached.
@@ -235,6 +251,11 @@ func storeDeep(info *SysInfo) {
 // fastSnapshot assembles the always-cheap facts. No process spawn on
 // Windows (in-process Win32 APIs); /proc reads on Linux; sysctl on darwin
 // is acceptable but falls back to runtime values when it fails.
+//
+// v1.3.0: this function is a READ/CACHE event and is silent by design
+// (see fastReadyOnce above). The single startup summary — the
+// measurement event — is emitted once, the first time the fast
+// environment is actually assembled.
 func fastSnapshot() *SysInfo {
 	started := time.Now()
 
@@ -261,12 +282,15 @@ func fastSnapshot() *SysInfo {
 	info.Disk = fastDisk(".")
 	info.Recommended = recommend(info)
 
-	logging.Default().Info(
-		"sysinfo",
-		"fast snapshot in %d ms (os=%s arch=%s ramMB=%d)",
-		time.Since(started).Milliseconds(),
-		info.OS, info.Arch, info.RAM.TotalBytes>>20,
-	)
+	// v1.3.0: ONE concise summary per process — not one line per UI poll.
+	fastReadyOnce.Do(func() {
+		logging.Default().Info(
+			"sysinfo",
+			"fast environment ready (os=%s arch=%s ramMB=%d, assembled in %d ms)",
+			info.OS, info.Arch, info.RAM.TotalBytes>>20,
+			time.Since(started).Milliseconds(),
+		)
+	})
 
 	return info
 }
@@ -379,7 +403,7 @@ func probeUncached() *SysInfo {
 		}
 	}
 
-	logging.Default().Info(
+	logging.Default().Debug(
 		"sysinfo",
 		"cpu probe in %d ms",
 		time.Since(cpuStarted).Milliseconds(),
@@ -389,7 +413,7 @@ func probeUncached() *SysInfo {
 	gpuStarted := time.Now()
 	info.GPU = append(info.GPU, probeGPUs()...)
 
-	logging.Default().Info(
+	logging.Default().Debug(
 		"sysinfo",
 		"gpu probe in %d ms (devices=%d)",
 		time.Since(gpuStarted).Milliseconds(), len(info.GPU),
@@ -403,7 +427,7 @@ func probeUncached() *SysInfo {
 	info.WSL2 = detectWSL2()
 	info.Docker = detectDocker()
 
-	logging.Default().Info(
+	logging.Default().Debug(
 		"sysinfo",
 		"environment probe in %d ms (wsl2=%t docker=%t)",
 		time.Since(envStarted).Milliseconds(), info.WSL2, info.Docker,
@@ -415,7 +439,7 @@ func probeUncached() *SysInfo {
 
 	logging.Default().Info(
 		"sysinfo",
-		"deep probe completed in %d ms (sources: %s; v1.2.5 baseline on the target Windows machine: 5399 ms)",
+		"deep probe completed in %d ms (sources: %s)",
 		info.DeepProbeMs,
 		strings.Join(probeSources, ", "),
 	)

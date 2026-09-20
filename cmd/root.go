@@ -19,9 +19,13 @@ func RunWithDefaultFn(defaultFn func() int) int {
 		fmt.Fprintln(os.Stderr, "config load:", err)
 		return 1
 	}
-	_ = cfg.EnsureDirs()
 
 	// Boot the log catcher (app.log, tools.jsonl, llm.jsonl, crashes/).
+	// v1.3.0: logging boots BEFORE directory creation and BEFORE the
+	// malformed-root migration, so every migration decision is recorded
+	// with full context — and a path problem found during Load is
+	// reported through PathNotes instead of vanishing into the pre-logger
+	// void.
 	mgr, err := logging.New(cfg.LogsDir())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "log catcher:", err)
@@ -35,6 +39,44 @@ func RunWithDefaultFn(defaultFn func() int) int {
 	// entries (e.g. v0.8.0) previously mixed indistinguishably with the
 	// current run. Everything above a banner is verifiably historical.
 	logging.Default().SessionBanner(brand.FullName, config.AppVersion)
+
+	// v1.3.0: one place reports every path normalization the loader had
+	// to perform (rejected "%TOKEN%" values, canonical-root fallbacks).
+	for _, note := range config.TakePathNotes(cfg) {
+		logging.Default().Warn("paths", "%s", note)
+	}
+
+	// v1.3.0: fold v1.2.9 malformed runtime trees
+	// (<root>\%LOCALAPPDATA%\SHEYTAN-LA, doubled SHEYTAN-LA nesting)
+	// into the canonical root — models/sessions first, verified, then the
+	// source tree removed. Restart-safe: an interrupted pass is retried
+	// on the next boot.
+	report, migrateErr := config.MigrateMalformedRoots(cfg)
+	if migrateErr != nil {
+		logging.Default().Error("paths", "runtime root migration incomplete (will retry on next start): %v", migrateErr)
+	}
+	for _, line := range config.LogMigrationNotes(nil, report) {
+		logging.Default().Info("paths", "%s", line)
+	}
+
+	// A config.json recovered from a malformed tree: re-Load so the
+	// recovered settings (model, sessions, research) actually drive this
+	// run — with the same normalization guarantees.
+	if report != nil && report.ReloadConfig {
+		if reloaded, rerr := config.Load(configPath()); rerr == nil {
+			cfg = reloaded
+			for _, note := range config.TakePathNotes(cfg) {
+				logging.Default().Warn("paths", "%s", note)
+			}
+			logging.Default().Info("paths", "configuration recovered from a malformed runtime root and re-loaded")
+		} else {
+			logging.Default().Warn("paths", "recovered configuration could not be re-loaded: %v (defaults remain active)", rerr)
+		}
+	}
+
+	if err := cfg.EnsureDirs(); err != nil {
+		logging.Default().Error("boot", "ensure dirs: %v", err)
+	}
 
 	logging.Default().Info(
 		"boot",

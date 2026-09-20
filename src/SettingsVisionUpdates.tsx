@@ -27,17 +27,24 @@ import { visionBadge } from "./vision";
 
 type SaveFn = (patch: Record<string, unknown>) => Promise<void>;
 
-const POSTURES: { id: string; label: string; description: string; task: string }[] = [
+const POSTURES: {
+  id: string;
+  label: string;
+  description: string;
+  task: string;
+}[] = [
   {
     id: "quiet",
     label: "Quiet",
-    description: "Cool and silent — half the cores, smaller context, projector on CPU.",
+    description:
+      "Cool and silent — half the cores, smaller context, projector on CPU.",
     task: "low-power",
   },
   {
     id: "balanced",
     label: "Balanced",
-    description: "The everyday posture — recommended context, GPU when available.",
+    description:
+      "The everyday posture — recommended context, GPU when available.",
     task: "chat",
   },
   {
@@ -97,8 +104,11 @@ export function SimplePerformanceCard({
               numCtx: r.context,
               numThread: r.threads,
               numGpu: r.gpuLayers,
-              ubatchSize: r.ubatchSize,
             },
+            // v1.3.0 fix: ubatchSize is a TOP-LEVEL config field
+            // (--ubatch-size); the v1.2.9 apply wrote it under llm where
+            // no such field exists — a silent no-op.
+            ubatchSize: r.ubatchSize,
             gpuAutoOffload: r.gpuAutoOffload,
             flashAttention: r.flashAttention,
             kvCacheQuant: r.kvCacheQuant,
@@ -192,8 +202,8 @@ export function SimplePerformanceCard({
       ) : null}
 
       <span className="runtime-hint">
-        Predicted, never measured — Live metrics below verifies the effect
-        after the engine restarts.
+        Predicted, never measured — Live metrics below verifies the effect after
+        the engine restarts.
       </span>
     </section>
   );
@@ -300,7 +310,22 @@ export function TaskProfileCard({
   );
 }
 
-export function VisionCard({ config }: { config: RuntimeConfig }) {
+// VisionCard renders the vision surface in ONE of two variants
+// (v1.3.0 settings restructure):
+//
+//   variant="status"  (Models tab) — user-facing capability view:
+//     "Vision ✓ Available — Projector: Automatically managed", the
+//     detected-projector evidence, and the enable toggle. NO raw path
+//     fields, no projector file pickers.
+//   variant="control" (Advanced tab) — the explicit projector override
+//     select + GPU offload control for experts.
+export function VisionCard({
+  config,
+  variant = "status",
+}: {
+  config: RuntimeConfig;
+  variant?: "status" | "control";
+}) {
   const models = useRuntimeStore((state) => state.models);
   const refreshModels = useRuntimeStore((state) => state.refreshModels);
   const [saving, setSaving] = useState(false);
@@ -338,10 +363,18 @@ export function VisionCard({ config }: { config: RuntimeConfig }) {
       <section className="settings-card">
         <div className="settings-card-heading">
           <div>
-            <span className="eyebrow">VISION ENGINE</span>
-            <h3>Multimodal runtime</h3>
+            <span className="eyebrow">
+              {variant === "control" ? "VISION — ADVANCED" : "VISION"}
+            </span>
+            <h3>
+              {variant === "control"
+                ? "Multimodal runtime"
+                : "Vision capability"}
+            </h3>
           </div>
-          <span className={`settings-chip chip-${vision.tone === "good" ? "good" : vision.tone === "bad" ? "bad" : "warn"}`}>
+          <span
+            className={`settings-chip chip-${vision.tone === "good" ? "good" : vision.tone === "bad" ? "bad" : "warn"}`}
+          >
             {vision.symbol} {vision.label}
           </span>
         </div>
@@ -359,47 +392,61 @@ export function VisionCard({ config }: { config: RuntimeConfig }) {
             <span>Enable vision</span>
           </label>
 
-          <label className="settings-field">
-            <span>Projector</span>
-            <select
-              value={projectorChoice}
-              onChange={(event) => {
-                setProjectorChoice(event.target.value);
-                void saveVision({ visionMmproj: event.target.value });
-              }}
-              disabled={saving}
-            >
-              <option value="">Automatic (pair by model family)</option>
-              {(models?.local ?? [])
-                .filter((m) => m.mmprojName)
-                .map((m) => (
-                  <option key={m.mmprojPath} value={m.mmprojName}>
-                    {m.mmprojName}
-                  </option>
-                ))}
-            </select>
-          </label>
+          {variant === "status" ? (
+            <div className="session-detail">
+              <span>Projector</span>
+              <strong>Automatically managed</strong>
+              <span className="runtime-hint">
+                The mmproj projector is detected, matched to the model family,
+                loaded and verified automatically — no path configuration
+                needed.
+              </span>
+            </div>
+          ) : (
+            <>
+              <label className="settings-field">
+                <span>Projector override</span>
+                <select
+                  value={projectorChoice}
+                  onChange={(event) => {
+                    setProjectorChoice(event.target.value);
+                    void saveVision({ visionMmproj: event.target.value });
+                  }}
+                  disabled={saving}
+                >
+                  <option value="">Automatic (pair by model family)</option>
+                  {(models?.local ?? [])
+                    .filter((m) => m.mmprojName)
+                    .map((m) => (
+                      <option key={m.mmprojPath} value={m.mmprojName}>
+                        {m.mmprojName}
+                      </option>
+                    ))}
+                </select>
+              </label>
 
-          <label className="settings-field">
-            <span>Projector GPU offload</span>
-            <select
-              value={config.visionMmprojOffload || "auto"}
-              onChange={(event) =>
-                void saveVision({ visionMmprojOffload: event.target.value })
-              }
-              disabled={saving}
-            >
-              <option value="auto">Automatic (recommended)</option>
-              <option value="on">On</option>
-              <option value="off">Off (CPU projector)</option>
-            </select>
-          </label>
+              <label className="settings-field">
+                <span>Projector GPU offload</span>
+                <select
+                  value={config.visionMmprojOffload || "auto"}
+                  onChange={(event) =>
+                    void saveVision({ visionMmprojOffload: event.target.value })
+                  }
+                  disabled={saving}
+                >
+                  <option value="auto">Automatic (recommended)</option>
+                  <option value="on">On</option>
+                  <option value="off">Off (CPU projector)</option>
+                </select>
+              </label>
+            </>
+          )}
         </div>
 
         <span className="runtime-hint">
-          Image handling: max 4 images per message, 2048 px per side,
-          re-encoded to fit a 6 MB budget — enforced by the backend vision
-          package (constants, not tunables).
+          Image handling: max 4 images per message, 2048 px per side, re-encoded
+          to fit a 6 MB budget — enforced by the backend vision package
+          (constants, not tunables).
         </span>
       </section>
 
@@ -407,7 +454,9 @@ export function VisionCard({ config }: { config: RuntimeConfig }) {
         <div className="settings-card-heading">
           <div>
             <span className="eyebrow">DETECTED PROJECTOR</span>
-            <h3>{serving?.mmprojName ?? "None paired with the serving model"}</h3>
+            <h3>
+              {serving?.mmprojName ?? "None paired with the serving model"}
+            </h3>
           </div>
         </div>
 
@@ -436,8 +485,8 @@ export function VisionCard({ config }: { config: RuntimeConfig }) {
           </div>
         ) : (
           <span className="runtime-hint">
-            {vision.title} — place the model family's mmproj file in the
-            models folder and restart the engine.
+            {vision.title} — place the model family's mmproj file in the models
+            folder and restart the engine.
           </span>
         )}
       </section>
@@ -564,7 +613,11 @@ export function UpdatesCard() {
 
         <div className="session-detail">
           <span>Checked</span>
-          <strong>{status?.checkedAt ? new Date(status.checkedAt).toLocaleString() : "\u2014"}</strong>
+          <strong>
+            {status?.checkedAt
+              ? new Date(status.checkedAt).toLocaleString()
+              : "\u2014"}
+          </strong>
         </div>
       </div>
 
@@ -573,8 +626,7 @@ export function UpdatesCard() {
       {status?.stagedPath ? (
         <span className="runtime-hint">
           Verified artifact staged at <code>{status.stagedPath}</code> — run it
-          to apply the update. Models, sessions and configuration are
-          preserved.
+          to apply the update. Models, sessions and configuration are preserved.
         </span>
       ) : null}
 
@@ -617,8 +669,8 @@ export function UpdatesCard() {
       <span className="runtime-hint">
         Updates are verified against the release manifest's SHA-256 before
         staging. Downloads stream to disk, resume when interrupted, and never
-        stage a byte that fails verification. This build never applies an
-        update silently and never touches your models.
+        stage a byte that fails verification. This build never applies an update
+        silently and never touches your models.
       </span>
     </section>
   );

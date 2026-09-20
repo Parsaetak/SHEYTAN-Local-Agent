@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type ChangeEvent,
-} from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 
 import {
   api,
@@ -15,10 +10,7 @@ import {
   type SysInfo,
   type ToolInfo,
 } from "./api";
-import {
-  ensure as ensureResource,
-  reset as resetResource,
-} from "./resources";
+import { ensure as ensureResource, reset as resetResource } from "./resources";
 import { useResource } from "./useResource";
 
 import { FieldLabel } from "./settings-shared";
@@ -38,36 +30,36 @@ import {
   UpdatesCard,
   VisionCard,
 } from "./SettingsVisionUpdates";
+import { SETTINGS_SECTIONS, type SettingsSectionId } from "./settings-sections";
+
+// v1.3.0: the section registry (settings-sections.ts) is the single
+// source of truth — rendering here and the structure regression tests
+// both consume it.
 
 type SaveState = "idle" | "loading" | "saved" | "error";
 
-// v1.1.7: Settings is organised into scannable sections instead of one
-// long page. Every section keeps the same card system, theme tokens and
-// scrolling behaviour as before.
-type SettingsTab =
-  | "general"
-  | "models"
-  | "performance"
-  | "vision"
-  | "generation"
-  | "tools"
-  | "network"
-  | "updates"
-  | "logs"
-  | "advanced";
+// v1.3.0 SETTINGS RESTRUCTURE — users choose outcomes; SHEYTAN chooses
+// implementation details. Eight coherent sections replace the ten
+// v1.2.9 tabs that exposed llama.cpp internals (engine host/port,
+// projector paths, batch/thread knobs) to ordinary users:
+//
+//   General        startup, workspace, interaction, accessibility
+//   Models         current model, available models, vision capability
+//   Performance    Quiet/Balanced/Maximum + measured context/metrics
+//   Agent & Tools  tools, permissions, thinking, sandbox posture
+//   Network        research + remote provider
+//   Updates        check, policy, version
+//   Diagnostics    read-only health, hardware, logs, network
+//   Advanced       the ONLY home for expert controls
+//
+// The technical fields still exist in the backend config (backward
+// compatible — legacy files load and save unchanged); they are simply
+// no longer ordinary user controls.
+type SettingsTab = SettingsSectionId;
 
-const TABS: { id: SettingsTab; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "models", label: "Models" },
-  { id: "performance", label: "Performance" },
-  { id: "vision", label: "Vision" },
-  { id: "generation", label: "Generation" },
-  { id: "tools", label: "Tools" },
-  { id: "network", label: "Network" },
-  { id: "updates", label: "Updates" },
-  { id: "logs", label: "Logs" },
-  { id: "advanced", label: "Advanced" },
-];
+const TABS: { id: SettingsTab; label: string }[] = SETTINGS_SECTIONS.map(
+  (section) => ({ id: section.id, label: section.label }),
+);
 
 // Engine-affecting top-level keys: saving any of these restarts the local
 // engine so the option ACTUALLY takes effect (v1.1.7 — the previous list
@@ -125,7 +117,7 @@ function SettingsPanel() {
   const modelsResource = useResource<ModelsResponse>(
     "models",
     (signal) => api.models(signal),
-    { enabled: activeTab === "models" },
+    { enabled: activeTab === "models" || activeTab === "advanced" },
   );
   const presetsResource = useResource<Preset[]>("presets", (signal) =>
     api.presets(signal),
@@ -136,7 +128,15 @@ function SettingsPanel() {
   const sysinfoResource = useResource<SysInfo>(
     "sysinfo",
     (signal) => api.sysinfo(signal),
-    { enabled: activeTab === "performance" },
+    // v1.3.0 fix: the hardware card serves Diagnostics (and Advanced)
+    // too — the v1.2.9 gate only fetched it on Performance, so the
+    // hardware card showed "unavailable" everywhere else.
+    {
+      enabled:
+        activeTab === "performance" ||
+        activeTab === "diagnostics" ||
+        activeTab === "advanced",
+    },
   );
 
   // The config the panel edits: the shared cache's server truth, with
@@ -163,6 +163,28 @@ function SettingsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [restartAfterSave, setRestartAfterSave] = useState(true);
 
+  // v1.3.0: reduce-motion user preference — mirrors the OS-level
+  // prefers-reduced-motion with an explicit per-application switch.
+  // Applied as a class on the document root; motion.css carries the
+  // equivalent animation-collapse rules for both the media query and
+  // this class.
+  const [reduceMotion, setReduceMotion] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("shtn:reduce-motion") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("shtn:reduce-motion", reduceMotion ? "1" : "0");
+    } catch {
+      // storage unavailable — the toggle stays session-scoped
+    }
+    document.documentElement.classList.toggle("reduce-motion", reduceMotion);
+  }, [reduceMotion]);
+
   // The save button unlocks the moment the config lands — one slow
   // background resource (models/tools/sysinfo) can no longer lock the
   // whole panel (the v1.2.5 symptom: "Settings still feels slow").
@@ -172,9 +194,7 @@ function SettingsPanel() {
     }
 
     if (configResource.state === "error") {
-      setError(
-        configResource.error ?? "Unable to load runtime settings.",
-      );
+      setError(configResource.error ?? "Unable to load runtime settings.");
       setSaveState("error");
     }
   }, [configResource.state, configResource.error]);
@@ -202,11 +222,21 @@ function SettingsPanel() {
         ensureResource("tools", (signal) => api.tools(signal), {
           force: true,
         }),
-        ...(activeTab === "models"
-          ? [ensureResource("models", (signal) => api.models(signal), { force: true })]
+        ...(activeTab === "models" || activeTab === "advanced"
+          ? [
+              ensureResource("models", (signal) => api.models(signal), {
+                force: true,
+              }),
+            ]
           : []),
-        ...(activeTab === "performance"
-          ? [ensureResource("sysinfo", (signal) => api.sysinfo(signal), { force: true })]
+        ...(activeTab === "performance" ||
+        activeTab === "diagnostics" ||
+        activeTab === "advanced"
+          ? [
+              ensureResource("sysinfo", (signal) => api.sysinfo(signal), {
+                force: true,
+              }),
+            ]
           : []),
       ]);
 
@@ -220,10 +250,10 @@ function SettingsPanel() {
   }
 
   // v1.1.7: lightweight live-metrics polling — ONLY while the Performance
-  // tab is visible, at a human cadence (3 s), so the app stays quiet
-  // everywhere else.
+  // or Diagnostics tab is visible, at a human cadence (3 s), so the app
+  // stays quiet everywhere else.
   useEffect(() => {
-    if (activeTab !== "performance") {
+    if (activeTab !== "performance" && activeTab !== "diagnostics") {
       return;
     }
 
@@ -338,7 +368,9 @@ function SettingsPanel() {
       ...(typeof preset.repeat_penalty === "number"
         ? { repeatPenalty: preset.repeat_penalty }
         : {}),
-      ...(typeof preset.mirostat === "number" ? { mirostat: preset.mirostat } : {}),
+      ...(typeof preset.mirostat === "number"
+        ? { mirostat: preset.mirostat }
+        : {}),
       ...(typeof preset.num_ctx === "number" ? { numCtx: preset.num_ctx } : {}),
       preset: preset.id,
     };
@@ -385,9 +417,7 @@ function SettingsPanel() {
     key: K,
     value: RuntimeConfig[K],
   ) {
-    setConfig((current) =>
-      current ? { ...current, [key]: value } : current,
-    );
+    setConfig((current) => (current ? { ...current, [key]: value } : current));
   }
 
   const currentPreset = useMemo(
@@ -431,8 +461,8 @@ function SettingsPanel() {
           <span className="eyebrow">RUNTIME CONTROL</span>
           <h2>Configure SHEYTAN</h2>
           <p>
-            Models, inference, agent behavior, tools, browser automation,
-            Coding Lab, research, and performance.
+            Models, inference, agent behavior, tools, browser automation, Coding
+            Lab, research, and performance.
           </p>
         </div>
 
@@ -479,11 +509,7 @@ function SettingsPanel() {
         </div>
       ) : null}
 
-      {error ? (
-        <div className="settings-status error">
-          {error}
-        </div>
-      ) : null}
+      {error ? <div className="settings-status error">{error}</div> : null}
 
       <div className="settings-grid">
         {/* ======================================================== */}
@@ -510,7 +536,9 @@ function SettingsPanel() {
                   />
                   <select
                     value={config.provider}
-                    onChange={(event) => void selectProvider(event.target.value)}
+                    onChange={(event) =>
+                      void selectProvider(event.target.value)
+                    }
                   >
                     <option value="local">Local GGUF / llama.cpp</option>
                     <option value="remote">Remote OpenAI-compatible API</option>
@@ -533,7 +561,9 @@ function SettingsPanel() {
                         {model.name}
                         {model.serving
                           ? ` — currently serving${
-                              servingBackend === "native" ? " (native engine)" : " (llama.cpp)"
+                              servingBackend === "native"
+                                ? " (native engine)"
+                                : " (llama.cpp)"
                             }`
                           : ""}
                       </option>
@@ -542,87 +572,43 @@ function SettingsPanel() {
                 </label>
 
                 <label className="settings-field">
-                  <span>LLM base URL</span>
-                  <input
-                    value={config.llmBaseUrl}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              llmBaseUrl: event.target.value,
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() => void save({ llmBaseUrl: config.llmBaseUrl })}
-                  />
-                </label>
-
-                <label className="settings-field">
-                  <span>Models directory</span>
-                  <input
-                    value={config.modelsDir}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              modelsDir: event.target.value,
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() => void save({ modelsDir: config.modelsDir })}
-                  />
-                </label>
-
-                <label className="settings-field">
-                  <span>Remote base URL</span>
-                  <input
-                    value={config.remoteBaseUrl}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              remoteBaseUrl: event.target.value,
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({ remoteBaseUrl: config.remoteBaseUrl })
-                    }
-                    disabled={config.provider !== "remote"}
-                  />
-                </label>
-
-                <label className="settings-field">
-                  <span>Remote model</span>
-                  <input
-                    value={config.remoteModel}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              remoteModel: event.target.value,
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() => void save({ remoteModel: config.remoteModel })}
-                    disabled={config.provider !== "remote"}
-                  />
+                  <span>Models folder</span>
+                  <div className="settings-inline-action">
+                    <code
+                      className="settings-value-path"
+                      title={config.modelsDir}
+                    >
+                      {config.modelsDir}
+                    </code>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() =>
+                        void api.openModelsFolder().catch(() => undefined)
+                      }
+                    >
+                      Open folder
+                    </button>
+                  </div>
+                  <span className="runtime-hint">
+                    Drop GGUF model files here — they are discovered
+                    automatically on the next start. The folder location itself
+                    is managed automatically (changeable in Advanced).
+                  </span>
                 </label>
 
                 <div className="settings-note">
-                  Remote API keys remain redacted by the backend and are not
-                  rendered into the UI.
+                  Remote (OpenAI-compatible) endpoints are configured in the
+                  Network tab.
                 </div>
               </div>
             </section>
+
+            {/* v1.3.0: the Vision tab folds into Models as a capability
+                status — "Projector: Automatically managed", evidence
+                only, no raw path fields. The expert override lives in
+                Advanced. */}
+            <VisionCard config={config} variant="status" />
           </>
         ) : null}
 
@@ -631,8 +617,157 @@ function SettingsPanel() {
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>
+                  <span className="eyebrow">STARTUP</span>
+                  <h3>Startup &amp; workspace</h3>
+                </div>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="inline-toggle">
+                  <FieldLabel
+                    name="Start the local engine automatically"
+                    tip="With this on, SHEYTAN launches its local inference engine whenever a model is needed — no manual engine management."
+                  />
+                  <input
+                    type="checkbox"
+                    checked={config.llamaAutoStart}
+                    onChange={(event) => {
+                      const value = event.target.checked;
+
+                      setConfig((current) =>
+                        current
+                          ? { ...current, llamaAutoStart: value }
+                          : current,
+                      );
+
+                      void save({ llamaAutoStart: value });
+                    }}
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <span>Default workspace</span>
+                  <div className="settings-inline-action">
+                    <code
+                      className="settings-value-path"
+                      title={config.workspaceRoot || ""}
+                    >
+                      {config.workspaceRoot || "Managed automatically"}
+                    </code>
+                  </div>
+                  <span className="runtime-hint">
+                    The folder your agent, files and git tools work in. Change
+                    it from the Workspace tab (or clone a GitHub repository —
+                    the workspace switches automatically).
+                  </span>
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">INTERACTION</span>
+                  <h3>Response pacing</h3>
+                </div>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="inline-toggle">
+                  <input
+                    type="checkbox"
+                    checked={config.smoothStream}
+                    onChange={(event) => {
+                      const value = event.target.checked;
+
+                      setConfig((current) =>
+                        current ? { ...current, smoothStream: value } : current,
+                      );
+
+                      void save({ smoothStream: value });
+                    }}
+                  />
+                  <span>Smooth token streaming</span>
+                </label>
+
+                <label className="settings-field">
+                  <span>Target FPS</span>
+                  <input
+                    type="number"
+                    min="30"
+                    max="240"
+                    value={config.targetFps}
+                    onChange={(event) => {
+                      const value = numberValue(event);
+
+                      setConfig((current) =>
+                        current ? { ...current, targetFps: value } : current,
+                      );
+                    }}
+                    onBlur={() => void save({ targetFps: config.targetFps })}
+                  />
+                </label>
+
+                <label className="inline-toggle">
+                  <input
+                    type="checkbox"
+                    checked={config.showPerfHud}
+                    onChange={(event) => {
+                      const value = event.target.checked;
+
+                      setConfig((current) =>
+                        current ? { ...current, showPerfHud: value } : current,
+                      );
+
+                      void save({ showPerfHud: value });
+                    }}
+                  />
+                  <span>Performance HUD (frame timing, dev tool)</span>
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">ACCESSIBILITY</span>
+                  <h3>Motion</h3>
+                </div>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="inline-toggle">
+                  <FieldLabel
+                    name="Reduce motion"
+                    tip="Cuts interface animations to the minimum. This also follows your operating system's reduced-motion setting automatically."
+                  />
+                  <input
+                    type="checkbox"
+                    checked={reduceMotion}
+                    onChange={(event) => {
+                      setReduceMotion(event.target.checked);
+                    }}
+                  />
+                </label>
+                <span className="runtime-hint">
+                  Animations follow the OS-level reduced-motion preference
+                  automatically; this switch forces it for SHEYTAN only.
+                </span>
+              </div>
+            </section>
+          </>
+        ) : null}
+
+        {/* ======================================================== */}
+        {/* AGENT & TOOLS — behavior, tool access, sandbox posture */}
+        {/* ======================================================== */}
+        {activeTab === "agent" ? (
+          <>
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
                   <span className="eyebrow">AGENT</span>
-                  <h3>Behavior</h3>
+                  <h3>Behavior &amp; reliability</h3>
                 </div>
               </div>
 
@@ -651,15 +786,22 @@ function SettingsPanel() {
                       const value = numberValue(event);
 
                       setConfig((current) =>
-                        current ? { ...current, maxIterations: value } : current,
+                        current
+                          ? { ...current, maxIterations: value }
+                          : current,
                       );
                     }}
-                    onBlur={() => void save({ maxIterations: config.maxIterations })}
+                    onBlur={() =>
+                      void save({ maxIterations: config.maxIterations })
+                    }
                   />
                 </label>
 
                 <label className="settings-field">
-                  <span>Recall Top K</span>
+                  <FieldLabel
+                    name="Recall Top K"
+                    tip="How many past memories the agent may pull into a task. Higher recall helps long projects; lower keeps the context tight."
+                  />
                   <input
                     type="number"
                     min="0"
@@ -704,7 +846,9 @@ function SettingsPanel() {
                       const value = event.target.checked;
 
                       setConfig((current) =>
-                        current ? { ...current, parallelTools: value } : current,
+                        current
+                          ? { ...current, parallelTools: value }
+                          : current,
                       );
 
                       void save({ parallelTools: value });
@@ -721,7 +865,9 @@ function SettingsPanel() {
                       const value = event.target.checked;
 
                       setConfig((current) =>
-                        current ? { ...current, recallEnabled: value } : current,
+                        current
+                          ? { ...current, recallEnabled: value }
+                          : current,
                       );
 
                       void save({ recallEnabled: value });
@@ -751,133 +897,55 @@ function SettingsPanel() {
               </div>
             </section>
 
-            <section className="settings-card">
+            <section className="settings-card settings-card-wide">
               <div className="settings-card-heading">
                 <div>
-                  <span className="eyebrow">BROWSER</span>
-                  <h3>Automation</h3>
+                  <span className="eyebrow">TOOLS</span>
+                  <h3>Tool access</h3>
                 </div>
+                <span className="settings-card-value">
+                  {effectiveTools.size} / {tools.length}
+                </span>
               </div>
 
-              <div className="settings-form-grid">
-                <label className="settings-field">
-                  <span>Browser executable</span>
-                  <input
-                    value={config.browserExecutablePath}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              browserExecutablePath: event.target.value,
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({
-                        browserExecutablePath: config.browserExecutablePath,
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="settings-field">
-                  <span>Slow-mo (ms)</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={config.browserSlowMoMs}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              browserSlowMoMs: numberValue(event),
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({ browserSlowMoMs: config.browserSlowMoMs })
-                    }
-                  />
-                </label>
-
-                <label className="inline-toggle">
-                  <input
-                    type="checkbox"
-                    checked={config.browserHeadless}
-                    onChange={(event) => {
-                      const value = event.target.checked;
-
-                      setConfig((current) =>
-                        current ? { ...current, browserHeadless: value } : current,
-                      );
-
-                      void save({ browserHeadless: value });
-                    }}
-                  />
-                  <span>Headless browser</span>
-                </label>
+              <div className="control-tool-list">
+                {tools.map((tool) => (
+                  <label
+                    key={tool.name}
+                    className="inline-toggle control-tool-toggle"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={effectiveTools.has(tool.name)}
+                      onChange={(event) => {
+                        void toggleTool(tool.name, event.target.checked);
+                      }}
+                    />
+                    <span title={tool.description}>{tool.name}</span>
+                  </label>
+                ))}
               </div>
-            </section>
-
-            <section className="settings-card">
-              <div className="settings-card-heading">
-                <div>
-                  <span className="eyebrow">VISION</span>
-                  <h3>Multimodal</h3>
-                </div>
-              </div>
-
-              <div className="settings-form-grid">
-                <label className="inline-toggle">
-                  <input
-                    type="checkbox"
-                    checked={config.visionEnabled}
-                    onChange={(event) => {
-                      const value = event.target.checked;
-
-                      setConfig((current) =>
-                        current ? { ...current, visionEnabled: value } : current,
-                      );
-
-                      void save({ visionEnabled: value });
-                    }}
-                  />
-                  <span>Enable vision</span>
-                </label>
-
-                <label className="settings-field">
-                  <span>MM projector</span>
-                  <input
-                    value={config.visionMmproj}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? { ...current, visionMmproj: event.target.value }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({ visionMmproj: config.visionMmproj })
-                    }
-                  />
-                </label>
-              </div>
+              <span className="runtime-hint">
+                Unchecking a tool removes it from the agent's abilities
+                immediately — no restart required.
+              </span>
             </section>
 
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>
                   <span className="eyebrow">SANDBOX</span>
-                  <h3>Execution</h3>
+                  <h3>Execution sandbox</h3>
                 </div>
+                <span className="settings-chip chip-good">fail closed</span>
               </div>
 
               <div className="settings-form-grid">
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="Sandbox agent-generated code"
+                    tip="Model-spawned processes run with memory and CPU caps. When off, generated code runs unsandboxed — only turn this off for trusted, isolated workflows."
+                  />
                   <input
                     type="checkbox"
                     checked={config.sandboxEnabled}
@@ -885,48 +953,19 @@ function SettingsPanel() {
                       const value = event.target.checked;
 
                       setConfig((current) =>
-                        current ? { ...current, sandboxEnabled: value } : current,
+                        current
+                          ? { ...current, sandboxEnabled: value }
+                          : current,
                       );
 
                       void save({ sandboxEnabled: value });
                     }}
                   />
-                  <span>Enable sandbox</span>
                 </label>
-
-                <label className="settings-field">
-                  <span>Memory limit</span>
-                  <input
-                    value={config.sandboxMemory}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? { ...current, sandboxMemory: event.target.value }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({ sandboxMemory: config.sandboxMemory })
-                    }
-                  />
-                </label>
-
-                <label className="settings-field">
-                  <span>CPU limit</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={config.sandboxCPU}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? { ...current, sandboxCPU: numberValue(event) }
-                          : current,
-                      )
-                    }
-                    onBlur={() => void save({ sandboxCPU: config.sandboxCPU })}
-                  />
-                </label>
+                <span className="runtime-hint">
+                  Resource limits are managed automatically (tunable in
+                  Advanced).
+                </span>
               </div>
             </section>
 
@@ -940,6 +979,10 @@ function SettingsPanel() {
 
               <div className="settings-form-grid">
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="Enable Coding Lab"
+                    tip="Isolated workspaces where the agent can build, run and verify code end-to-end."
+                  />
                   <input
                     type="checkbox"
                     checked={config.labEnabled}
@@ -953,10 +996,13 @@ function SettingsPanel() {
                       void save({ labEnabled: value });
                     }}
                   />
-                  <span>Enable Coding Lab</span>
                 </label>
 
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="Keep lab workspaces"
+                    tip="Preserve lab workspaces between runs so you can inspect what the agent built. When off, they are cleaned up after verification."
+                  />
                   <input
                     type="checkbox"
                     checked={config.labKeepWorkspaces}
@@ -972,10 +1018,13 @@ function SettingsPanel() {
                       void save({ labKeepWorkspaces: value });
                     }}
                   />
-                  <span>Keep completed workspaces</span>
                 </label>
 
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="Allow network in lab"
+                    tip="Permit network access inside Coding Lab commands (dependency installs, package downloads). Off by default — the lab is isolated."
+                  />
                   <input
                     type="checkbox"
                     checked={config.labAllowNetwork}
@@ -991,86 +1040,36 @@ function SettingsPanel() {
                       void save({ labAllowNetwork: value });
                     }}
                   />
-                  <span>Allow laboratory network</span>
-                </label>
-
-                <label className="settings-field">
-                  <span>Workspace root</span>
-                  <input
-                    value={config.labWorkspaceRoot}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? { ...current, labWorkspaceRoot: event.target.value }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({ labWorkspaceRoot: config.labWorkspaceRoot })
-                    }
-                  />
-                </label>
-
-                <label className="settings-field">
-                  <span>Command timeout (sec)</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={config.labCommandTimeoutSec}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              labCommandTimeoutSec: numberValue(event),
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({
-                        labCommandTimeoutSec: config.labCommandTimeoutSec,
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="settings-field">
-                  <span>Lab iterations</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={config.labMaxIterations}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              labMaxIterations: numberValue(event),
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({
-                        labMaxIterations: config.labMaxIterations,
-                      })
-                    }
-                  />
                 </label>
               </div>
             </section>
+          </>
+        ) : null}
 
+        {/* ======================================================== */}
+        {/* NETWORK / RESEARCH */}
+        {/* ======================================================== */}
+        {activeTab === "network" ? (
+          <>
             <section className="settings-card settings-card-wide">
               <div className="settings-card-heading">
                 <div>
                   <span className="eyebrow">RESEARCH</span>
                   <h3>External intelligence</h3>
                 </div>
+                <span className="settings-card-value">
+                  {config.researchEnabled
+                    ? config.researchBackend || "auto"
+                    : "off"}
+                </span>
               </div>
 
               <div className="settings-form-grid">
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="Enable research"
+                    tip="Lets the agent search and cite external sources when a task needs evidence beyond the local machine."
+                  />
                   <input
                     type="checkbox"
                     checked={config.researchEnabled}
@@ -1086,13 +1085,12 @@ function SettingsPanel() {
                       void save({ researchEnabled: value });
                     }}
                   />
-                  <span>Enable research</span>
                 </label>
 
                 <label className="settings-field">
-                  <span>Backend</span>
+                  <span>Search provider</span>
                   <select
-                    value={config.researchBackend}
+                    value={config.researchBackend || "auto"}
                     onChange={(event) => {
                       const value = event.target.value;
 
@@ -1106,15 +1104,18 @@ function SettingsPanel() {
                     }}
                   >
                     <option value="auto">Automatic</option>
-                    <option value="searxng">SearXNG</option>
                     <option value="duckduckgo">DuckDuckGo</option>
+                    <option value="searxng">SearXNG (self-hosted)</option>
                   </select>
                 </label>
 
                 <label className="settings-field">
-                  <span>SearXNG URL</span>
+                  <FieldLabel
+                    name="SearXNG URL"
+                    tip="Your self-hosted SearXNG instance, used when the provider is set to SearXNG."
+                  />
                   <input
-                    value={config.researchSearxngUrl}
+                    value={config.researchSearxngUrl ?? ""}
                     onChange={(event) =>
                       setConfig((current) =>
                         current
@@ -1130,26 +1131,26 @@ function SettingsPanel() {
                         researchSearxngUrl: config.researchSearxngUrl,
                       })
                     }
+                    disabled={(config.researchBackend || "auto") !== "searxng"}
                   />
                 </label>
 
                 <label className="settings-field">
-                  <span>Maximum results</span>
+                  <span>Results per search</span>
                   <input
                     type="number"
                     min="1"
                     max="100"
                     value={config.researchMaxResults}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      const value = numberValue(event);
+
                       setConfig((current) =>
                         current
-                          ? {
-                              ...current,
-                              researchMaxResults: numberValue(event),
-                            }
+                          ? { ...current, researchMaxResults: value }
                           : current,
-                      )
-                    }
+                      );
+                    }}
                     onBlur={() =>
                       void save({
                         researchMaxResults: config.researchMaxResults,
@@ -1158,31 +1159,11 @@ function SettingsPanel() {
                   />
                 </label>
 
-                <label className="settings-field">
-                  <span>Timeout (sec)</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={config.researchTimeoutSec}
-                    onChange={(event) =>
-                      setConfig((current) =>
-                        current
-                          ? {
-                              ...current,
-                              researchTimeoutSec: numberValue(event),
-                            }
-                          : current,
-                      )
-                    }
-                    onBlur={() =>
-                      void save({
-                        researchTimeoutSec: config.researchTimeoutSec,
-                      })
-                    }
-                  />
-                </label>
-
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="GitHub research"
+                    tip="Search GitHub issues and pull requests for engineering evidence."
+                  />
                   <input
                     type="checkbox"
                     checked={config.researchGitHub}
@@ -1190,16 +1171,21 @@ function SettingsPanel() {
                       const value = event.target.checked;
 
                       setConfig((current) =>
-                        current ? { ...current, researchGitHub: value } : current,
+                        current
+                          ? { ...current, researchGitHub: value }
+                          : current,
                       );
 
                       void save({ researchGitHub: value });
                     }}
                   />
-                  <span>GitHub research</span>
                 </label>
 
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="Reddit research"
+                    tip="Search Reddit for community experience and practical answers."
+                  />
                   <input
                     type="checkbox"
                     checked={config.researchReddit}
@@ -1207,16 +1193,21 @@ function SettingsPanel() {
                       const value = event.target.checked;
 
                       setConfig((current) =>
-                        current ? { ...current, researchReddit: value } : current,
+                        current
+                          ? { ...current, researchReddit: value }
+                          : current,
                       );
 
                       void save({ researchReddit: value });
                     }}
                   />
-                  <span>Reddit research</span>
                 </label>
 
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="General web research"
+                    tip="Fetch and cite ordinary web pages."
+                  />
                   <input
                     type="checkbox"
                     checked={config.researchWeb}
@@ -1230,20 +1221,228 @@ function SettingsPanel() {
                       void save({ researchWeb: value });
                     }}
                   />
-                  <span>General web research</span>
                 </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">REMOTE PROVIDER</span>
+                  <h3>OpenAI-compatible endpoint</h3>
+                </div>
+                <span className="settings-card-value">{config.provider}</span>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Remote base URL"
+                    tip="An OpenAI-compatible chat endpoint, used when the provider is set to Remote in the Models tab."
+                  />
+                  <input
+                    value={config.remoteBaseUrl}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, remoteBaseUrl: event.target.value }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ remoteBaseUrl: config.remoteBaseUrl })
+                    }
+                    disabled={config.provider !== "remote"}
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <span>Remote model</span>
+                  <input
+                    value={config.remoteModel}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, remoteModel: event.target.value }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ remoteModel: config.remoteModel })
+                    }
+                    disabled={config.provider !== "remote"}
+                  />
+                </label>
+
+                <div className="settings-note">
+                  API keys stay on the machine: they are stored in the local
+                  config and redacted from every UI response.
+                </div>
               </div>
             </section>
           </>
         ) : null}
 
-        {/* v1.1.9: Advanced collects host/diagnostic detail and highly
-            technical engine options that do not need to sit in the
-            middle of everyday settings. Nothing was removed — the
-            llama.cpp engine card moved here from Performance so the
-            performance tab reads as measure → recommend → verify. */}
+        {/* ======================================================== */}
+        {/* UPDATES */}
+        {/* ======================================================== */}
+        {activeTab === "updates" ? (
+          <>
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">POLICY</span>
+                  <h3>Automatic updates</h3>
+                </div>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Check for updates"
+                    tip="How often SHEYTAN checks for engine and application updates in the background. Checks never install anything by themselves."
+                  />
+                  <select
+                    value={config.updateSchedule || "daily"}
+                    onChange={(event) => {
+                      const value = event.target.value;
+
+                      setConfig((current) =>
+                        current
+                          ? { ...current, updateSchedule: value }
+                          : current,
+                      );
+
+                      void save({ updateSchedule: value });
+                    }}
+                  >
+                    <option value="daily">Daily (recommended)</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="off">Off</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <UpdatesCard />
+          </>
+        ) : null}
+
+        {/* ======================================================== */}
+        {/* DIAGNOSTICS — read-only: hardware, network, logs */}
+        {/* ======================================================== */}
+        {activeTab === "diagnostics" ? (
+          <>
+            <section className="settings-card settings-card-wide">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">HARDWARE</span>
+                  <h3>System profile</h3>
+                </div>
+                <span className="settings-chip chip-good">measured</span>
+              </div>
+
+              {sysinfo ? (
+                <div className="env-grid">
+                  <div className="session-detail">
+                    <span>CPU</span>
+                    <strong title={sysinfo.cpu.name}>
+                      {sysinfo.cpu.name !== "Unknown"
+                        ? sysinfo.cpu.name
+                        : `${sysinfo.cpu.logicalCores} logical cores`}
+                    </strong>
+                  </div>
+                  <div className="session-detail">
+                    <span>Memory</span>
+                    <strong>
+                      {(sysinfo.ram.totalBytes / 1024 ** 3).toFixed(1)} GB
+                    </strong>
+                  </div>
+                  <div className="session-detail">
+                    <span>Storage free</span>
+                    <strong>
+                      {(sysinfo.disk.freeBytes / 1024 ** 3).toFixed(1)} GB
+                    </strong>
+                  </div>
+                  <div className="session-detail">
+                    <span>OS</span>
+                    <strong>{sysinfo.osDisplay || sysinfo.os}</strong>
+                  </div>
+                  <div className="session-detail">
+                    <span>Recommended context</span>
+                    <strong>
+                      {sysinfo.recommended.numCtx.toLocaleString()}
+                    </strong>
+                  </div>
+                </div>
+              ) : (
+                <span className="runtime-hint">
+                  Hardware information is being measured…
+                </span>
+              )}
+
+              {sysinfo?.recommended.warnings?.length ? (
+                <div className="settings-note">
+                  {sysinfo.recommended.warnings.join(" · ")}
+                </div>
+              ) : null}
+            </section>
+
+            <NetworkCard />
+            <LogsCard />
+          </>
+        ) : null}
+
+        {/* ======================================================== */}
+        {/* PERFORMANCE: postures → recommended → context → measured */}
+        {/* ======================================================== */}
+        {activeTab === "performance" ? (
+          <>
+            <SimplePerformanceCard config={config} save={save} />
+            <TaskProfileCard config={config} save={save} />
+
+            <EngineProfileCard perf={perf} />
+
+            <RecommendedCard config={config} perf={perf} save={save} />
+
+            <ContextCard
+              config={config}
+              perf={perf}
+              save={save}
+              updateLocalLLM={updateLocalLLM}
+              updateConfigLocal={updateConfigLocal}
+            />
+
+            <LiveMetricsCard
+              perf={perf}
+              baseline={baseline}
+              clearBaseline={() => setBaseline(null)}
+            />
+          </>
+        ) : null}
+
+        {/* ======================================================== */}
+        {/* ADVANCED — the only home for expert controls */}
+        {/* ======================================================== */}
         {activeTab === "advanced" ? (
           <>
+            <section className="settings-card settings-card-wide">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">ADVANCED</span>
+                  <h3>Expert controls</h3>
+                </div>
+              </div>
+              <span className="runtime-hint">
+                Everything here is a genuine expert control: raw engine flags,
+                storage limits, resource caps and path overrides. Ordinary use
+                never requires this tab — SHEYTAN measures and picks these
+                values automatically (Automatic / Recommended / Measured are
+                labeled as such where they apply).
+              </span>
+            </section>
+
             <EngineCard
               config={config}
               perf={perf}
@@ -1252,136 +1451,38 @@ function SettingsPanel() {
               updateConfigLocal={updateConfigLocal}
             />
 
-            <section className="settings-card">
-              <div className="settings-card-heading">
-                <div>
-                  <span className="eyebrow">HARDWARE</span>
-                  <h3>System profile</h3>
-                </div>
-              </div>
-
-              {sysinfo ? (
-                <div className="hardware-grid">
-                  <div>
-                    <span>CPU</span>
-                    <strong>{sysinfo.cpu.name}</strong>
-                  </div>
-
-                  <div>
-                    <span>Threads</span>
-                    <strong>{sysinfo.cpu.logicalCores}</strong>
-                  </div>
-
-                  <div>
-                    <span>RAM</span>
-                    <strong>
-                      {(sysinfo.ram.totalBytes / 1024 / 1024 / 1024).toFixed(1)} GB
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>Disk free</span>
-                    <strong>
-                      {(sysinfo.disk.freeBytes / 1024 / 1024 / 1024).toFixed(1)} GB
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>Recommended context</span>
-                    <strong>{sysinfo.recommended.numCtx}</strong>
-                  </div>
-
-                  <div>
-                    <span>Recommended batch</span>
-                    <strong>{sysinfo.recommended.numBatch}</strong>
-                  </div>
-                </div>
-              ) : (
-                <span className="settings-note">Hardware information unavailable.</span>
-              )}
-
-              {sysinfo?.recommended.warnings?.length ? (
-                <div className="hardware-warnings">
-                  {sysinfo.recommended.warnings.map((warning) => (
-                    <div key={warning}>{warning}</div>
-                  ))}
-                </div>
-              ) : null}
-            </section>
-          </>
-        ) : null}
-
-        {/* ======================================================== */}
-        {/* PERFORMANCE: Engine profile → Recommended → Context → */}
-        {/* Live Metrics (v1.1.9: advanced engine tuning → Advanced) */}
-        {/* ======================================================== */}
-        {activeTab === "performance" ? (
-          <PerformanceLevel config={config} save={save} perf={perf} baseline={baseline} clearBaseline={() => setBaseline(null)} updateLocalLLM={updateLocalLLM} updateConfigLocal={updateConfigLocal} />
-        ) : null}
-
-        {/* ======================================================== */}
-        {/* VISION */}
-        {/* ======================================================== */}
-        {activeTab === "vision" && config ? (
-          <VisionCard config={config} />
-        ) : null}
-
-        {/* ======================================================== */}
-        {/* UPDATES */}
-        {/* ======================================================== */}
-        {activeTab === "updates" ? <UpdatesCard /> : null}
-
-        {/* ======================================================== */}
-        {/* GENERATION */}
-        {/* ======================================================== */}
-        {activeTab === "generation" ? (
-          <>
-            <section className="settings-card settings-card-wide">
-              <div className="settings-card-heading">
-                <div>
-                  <span className="eyebrow">PRESETS</span>
-                  <h3>Generation profile</h3>
-                </div>
-                <span className="settings-card-value">
-                  {currentPreset?.label ?? currentPreset?.name ?? config.llm.preset}
-                </span>
-              </div>
-
-              <div className="preset-grid">
-                {presets.map((preset) => {
-                  const label = preset.label ?? preset.name ?? preset.id;
-
-                  return (
-                    <button
-                      type="button"
-                      key={preset.id}
-                      className={`preset-card ${
-                        preset.id === config.llm.preset ? "active" : ""
-                      }`}
-                      onClick={() => void applyPreset(preset)}
-                    >
-                      <strong>{label}</strong>
-                      <span>{preset.description ?? "Runtime preset"}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+            <VisionCard config={config} variant="control" />
 
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>
-                  <span className="eyebrow">SAMPLING</span>
-                  <h3>Generation</h3>
+                  <span className="eyebrow">GENERATION</span>
+                  <h3>Sampling</h3>
                 </div>
+                {currentPreset ? (
+                  <span className="settings-card-value">
+                    preset: {currentPreset.id}
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="preset-row">
+                {presets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`preset-card ${config.llm.preset === preset.id ? "active" : ""}`}
+                    onClick={() => void applyPreset(preset)}
+                  >
+                    <strong>{preset.label || preset.id}</strong>
+                    <span>{preset.description}</span>
+                  </button>
+                ))}
               </div>
 
               <div className="settings-form-grid">
                 <label className="settings-field">
-                  <FieldLabel
-                    name="Temperature"
-                    tip="How creative the model may be. Low is precise and predictable; high is varied and sometimes erratic. 0.7 suits most work."
-                  />
+                  <span>Temperature</span>
                   <input
                     type="number"
                     min="0"
@@ -1396,10 +1497,7 @@ function SettingsPanel() {
                 </label>
 
                 <label className="settings-field">
-                  <FieldLabel
-                    name="Top P"
-                    tip="Keeps only the most likely words whose probabilities add up to this share. Lower = safer wording."
-                  />
+                  <span>Top P</span>
                   <input
                     type="number"
                     min="0"
@@ -1418,7 +1516,6 @@ function SettingsPanel() {
                   <input
                     type="number"
                     min="0"
-                    step="1"
                     value={config.llm.topK}
                     onChange={(event) =>
                       updateLocalLLM("topK", numberValue(event))
@@ -1434,7 +1531,7 @@ function SettingsPanel() {
                     min="0"
                     max="1"
                     step="0.01"
-                    value={config.llm.minP}
+                    value={config.llm.minP ?? 0}
                     onChange={(event) =>
                       updateLocalLLM("minP", numberValue(event))
                     }
@@ -1443,13 +1540,10 @@ function SettingsPanel() {
                 </label>
 
                 <label className="settings-field">
-                  <FieldLabel
-                    name="Max tokens"
-                    tip="The longest single reply the model may produce. Higher allows long answers; it does not make short answers faster."
-                  />
+                  <span>Max tokens</span>
                   <input
                     type="number"
-                    min="1"
+                    min="128"
                     step="128"
                     value={config.llm.maxTokens}
                     onChange={(event) =>
@@ -1475,10 +1569,9 @@ function SettingsPanel() {
                 </label>
 
                 <label className="settings-field">
-                  <span>Seed</span>
+                  <span>Seed (0 = random)</span>
                   <input
                     type="number"
-                    step="1"
                     value={config.llm.seed}
                     onChange={(event) =>
                       updateLocalLLM("seed", numberValue(event))
@@ -1492,255 +1585,530 @@ function SettingsPanel() {
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>
-                  <span className="eyebrow">INTERFACE</span>
-                  <h3>Runtime pacing</h3>
+                  <span className="eyebrow">ENGINE ENDPOINTS</span>
+                  <h3>Paths &amp; endpoints</h3>
                 </div>
+                <span className="settings-chip chip-warn">
+                  managed by default
+                </span>
               </div>
 
               <div className="settings-form-grid">
                 <label className="settings-field">
-                  <span>Target FPS</span>
+                  <FieldLabel
+                    name="LLM base URL"
+                    tip="Overrides the local engine endpoint for an external, self-managed OpenAI-compatible server. Empty = follow the managed engine."
+                  />
+                  <input
+                    value={config.llmBaseUrl ?? ""}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, llmBaseUrl: event.target.value }
+                          : current,
+                      )
+                    }
+                    onBlur={() => void save({ llmBaseUrl: config.llmBaseUrl })}
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Models directory"
+                    tip="Where GGUF model files are discovered. Changing it relocates model discovery; existing models are not moved."
+                  />
+                  <input
+                    value={config.modelsDir}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, modelsDir: event.target.value }
+                          : current,
+                      )
+                    }
+                    onBlur={() => void save({ modelsDir: config.modelsDir })}
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">SANDBOX RESOURCES</span>
+                  <h3>Resource caps</h3>
+                </div>
+                <span className="settings-chip chip-warn">advanced</span>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Sandbox memory"
+                    tip="Memory cap for sandboxed agent-generated processes, e.g. 512m or 1g."
+                  />
+                  <input
+                    value={config.sandboxMemory}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, sandboxMemory: event.target.value }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ sandboxMemory: config.sandboxMemory })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Sandbox CPU"
+                    tip="CPU percentage cap for sandboxed processes (1-100)."
+                  />
                   <input
                     type="number"
-                    min="30"
-                    max="240"
-                    value={config.targetFps}
-                    onChange={(event) => {
-                      const value = numberValue(event);
-
+                    min="1"
+                    max="100"
+                    value={config.sandboxCPU}
+                    onChange={(event) =>
                       setConfig((current) =>
-                        current ? { ...current, targetFps: value } : current,
-                      );
-                    }}
-                    onBlur={() => void save({ targetFps: config.targetFps })}
+                        current
+                          ? { ...current, sandboxCPU: numberValue(event) }
+                          : current,
+                      )
+                    }
+                    onBlur={() => void save({ sandboxCPU: config.sandboxCPU })}
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">STORAGE</span>
+                  <h3>Limits &amp; retention</h3>
+                </div>
+                <span className="settings-chip chip-warn">advanced</span>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Workspace budget"
+                    tip="Maximum workspace size in MB before the agent is warned about the budget."
+                  />
+                  <input
+                    type="number"
+                    min="16"
+                    value={config.maxWorkspaceMb}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, maxWorkspaceMb: numberValue(event) }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ maxWorkspaceMb: config.maxWorkspaceMb })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Sessions kept"
+                    tip="How many sessions are retained before the oldest are archived away."
+                  />
+                  <input
+                    type="number"
+                    min="10"
+                    value={config.maxSessionsKept}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, maxSessionsKept: numberValue(event) }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ maxSessionsKept: config.maxSessionsKept })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Log budget"
+                    tip="Maximum size of the application log before rotation trims it."
+                  />
+                  <input
+                    type="number"
+                    min="5"
+                    value={config.maxLogMb}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, maxLogMb: numberValue(event) }
+                          : current,
+                      )
+                    }
+                    onBlur={() => void save({ maxLogMb: config.maxLogMb })}
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">AGENT LIMITS</span>
+                  <h3>Timeouts &amp; budgets</h3>
+                </div>
+                <span className="settings-chip chip-warn">advanced</span>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Run timeout (minutes)"
+                    tip="Maximum wall time for one agent turn (0 = unbounded)."
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    max="1440"
+                    value={config.runTimeoutMinutes ?? 60}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              runTimeoutMinutes: numberValue(event),
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ runTimeoutMinutes: config.runTimeoutMinutes })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Attachment budget (KB)"
+                    tip="Per-message budget for images and file attachments."
+                  />
+                  <input
+                    type="number"
+                    min="64"
+                    value={config.attachmentsBudgetKb}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              attachmentsBudgetKb: numberValue(event),
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({
+                        attachmentsBudgetKb: config.attachmentsBudgetKb,
+                      })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Multi-agent depth"
+                    tip="How deep the orchestrator may spawn sub-agents."
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    max="8"
+                    value={config.multiAgentDepth}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, multiAgentDepth: numberValue(event) }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ multiAgentDepth: config.multiAgentDepth })
+                    }
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">CODING LAB</span>
+                  <h3>Lab internals</h3>
+                </div>
+                <span className="settings-chip chip-warn">advanced</span>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Lab workspace root"
+                    tip="Where Coding Lab creates its isolated task workspaces."
+                  />
+                  <input
+                    value={config.labWorkspaceRoot}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? { ...current, labWorkspaceRoot: event.target.value }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ labWorkspaceRoot: config.labWorkspaceRoot })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Command timeout (seconds)"
+                    tip="Maximum runtime for ONE lab command before it is killed."
+                  />
+                  <input
+                    type="number"
+                    min="5"
+                    value={config.labCommandTimeoutSec}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              labCommandTimeoutSec: numberValue(event),
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({
+                        labCommandTimeoutSec: config.labCommandTimeoutSec,
+                      })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Lab max iterations"
+                    tip="How many build/verify/repair cycles one lab task may take."
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    value={config.labMaxIterations}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              labMaxIterations: numberValue(event),
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ labMaxIterations: config.labMaxIterations })
+                    }
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">RESEARCH</span>
+                  <h3>Research internals</h3>
+                </div>
+                <span className="settings-chip chip-warn">advanced</span>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Request timeout (seconds)"
+                    tip="Maximum time for one research HTTP operation."
+                  />
+                  <input
+                    type="number"
+                    min="5"
+                    value={config.researchTimeoutSec}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              researchTimeoutSec: numberValue(event),
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({
+                        researchTimeoutSec: config.researchTimeoutSec,
+                      })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Cache lifetime (minutes)"
+                    tip="How long research results are reused before refreshing."
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    value={config.researchCacheTtlMin}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              researchCacheTtlMin: numberValue(event),
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({
+                        researchCacheTtlMin: config.researchCacheTtlMin,
+                      })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="User agent"
+                    tip="Identifier research requests present to websites."
+                  />
+                  <input
+                    value={config.researchUserAgent ?? ""}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              researchUserAgent: event.target.value,
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ researchUserAgent: config.researchUserAgent })
+                    }
+                  />
+                </label>
+              </div>
+            </section>
+
+            <section className="settings-card">
+              <div className="settings-card-heading">
+                <div>
+                  <span className="eyebrow">BROWSER</span>
+                  <h3>Automation</h3>
+                </div>
+                <span className="settings-chip chip-warn">advanced</span>
+              </div>
+
+              <div className="settings-form-grid">
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Browser executable"
+                    tip="Path to a Chrome/Edge binary the browser tools drive. Empty = automatic discovery."
+                  />
+                  <input
+                    value={config.browserExecutablePath ?? ""}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              browserExecutablePath: event.target.value,
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({
+                        browserExecutablePath: config.browserExecutablePath,
+                      })
+                    }
+                  />
+                </label>
+
+                <label className="settings-field">
+                  <FieldLabel
+                    name="Slow motion (ms)"
+                    tip="Per-action delay for watchable browser automation runs."
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    value={config.browserSlowMoMs}
+                    onChange={(event) =>
+                      setConfig((current) =>
+                        current
+                          ? {
+                              ...current,
+                              browserSlowMoMs: numberValue(event),
+                            }
+                          : current,
+                      )
+                    }
+                    onBlur={() =>
+                      void save({ browserSlowMoMs: config.browserSlowMoMs })
+                    }
                   />
                 </label>
 
                 <label className="inline-toggle">
+                  <FieldLabel
+                    name="Headless browser"
+                    tip="Run automation without a visible browser window."
+                  />
                   <input
                     type="checkbox"
-                    checked={config.smoothStream}
+                    checked={config.browserHeadless}
                     onChange={(event) => {
                       const value = event.target.checked;
 
                       setConfig((current) =>
-                        current ? { ...current, smoothStream: value } : current,
+                        current
+                          ? { ...current, browserHeadless: value }
+                          : current,
                       );
 
-                      void save({ smoothStream: value });
+                      void save({ browserHeadless: value });
                     }}
                   />
-                  <span>Smooth token streaming</span>
-                </label>
-
-                <label className="inline-toggle">
-                  <input
-                    type="checkbox"
-                    checked={config.showPerfHud}
-                    onChange={(event) => {
-                      const value = event.target.checked;
-
-                      setConfig((current) =>
-                        current ? { ...current, showPerfHud: value } : current,
-                      );
-
-                      void save({ showPerfHud: value });
-                    }}
-                  />
-                  <span>Performance HUD (frame timing, dev tool)</span>
                 </label>
               </div>
             </section>
           </>
         ) : null}
-
-        {/* ======================================================== */}
-        {/* TOOLS — concise one-line descriptions; the full */}
-        {/* operational specs drive the model itself. */}
-        {/* ======================================================== */}
-        {activeTab === "tools" ? (
-          <section className="settings-card settings-card-wide">
-            <div className="settings-card-heading">
-              <div>
-                <span className="eyebrow">TOOLS</span>
-                <h3>Tool access</h3>
-              </div>
-              <span className="settings-card-value">{tools.length}</span>
-            </div>
-
-            <div className="tool-list">
-              {tools.map((tool) => {
-                const enabled = effectiveTools.has(tool.name);
-
-                return (
-                  <label key={tool.name} className="tool-row">
-                    <span>
-                      <strong>{tool.name}</strong>
-                      <small>
-                        {tool.description ?? "Agent tool"}
-                        {tool.detail ? (
-                          <span
-                            className="settings-tip tool-detail-tip"
-                            data-tip="Full operational documentation is embedded in the agent's tool spec — hover disabled on purpose to keep this list scannable."
-                            tabIndex={0}
-                            aria-label="Detailed documentation available in the agent tool spec"
-                          >
-                            ?
-                          </span>
-                        ) : null}
-                      </small>
-                    </span>
-
-                    <input
-                      type="checkbox"
-                      checked={enabled}
-                      onChange={(event) =>
-                        void toggleTool(tool.name, event.target.checked)
-                      }
-                    />
-                  </label>
-                );
-              })}
-            </div>
-
-            <span className="settings-note">
-              Each line is the short label; the complete tool documentation
-              still travels with the agent's own tool specifications.
-            </span>
-          </section>
-        ) : null}
-
-        {/* ======================================================== */}
-        {/* NETWORK */}
-        {/* ======================================================== */}
-        {activeTab === "network" ? <NetworkCard /> : null}
-
-        {/* ======================================================== */}
-        {/* LOGS / DIAGNOSTICS */}
-        {/* ======================================================== */}
-        {activeTab === "logs" ? <LogsCard /> : null}
       </div>
     </div>
-  );
-}
-
-// v1.2.0 — three settings LEVELS for the Performance tab. Simple exposes
-// postures, not knobs; Performance keeps the measure → recommend → verify
-// cards; Advanced points at the raw engine controls (Advanced tab — one
-// location, no duplication). The choice persists per device.
-type PerfLevel = "simple" | "performance" | "advanced";
-
-const PERF_LEVEL_KEY = "shtn:perf-level";
-
-type SaveFn2 = (patch: Record<string, unknown>) => Promise<void>;
-
-function PerformanceLevel({
-  config,
-  save,
-  perf,
-  baseline,
-  clearBaseline,
-  updateLocalLLM,
-  updateConfigLocal,
-}: {
-  config: RuntimeConfig | null;
-  save: SaveFn2;
-  perf: PerfSnapshot | null;
-  baseline: PerfBaseline | null;
-  clearBaseline: () => void;
-  updateLocalLLM: <K extends keyof LLMConfig>(
-    key: K,
-    value: LLMConfig[K],
-  ) => void;
-  updateConfigLocal: <K extends keyof RuntimeConfig>(
-    key: K,
-    value: RuntimeConfig[K],
-  ) => void;
-}) {
-  const [level, setLevel] = useState<PerfLevel>(() => {
-    const stored = localStorage.getItem(PERF_LEVEL_KEY);
-    return stored === "simple" || stored === "advanced" ? stored : "performance";
-  });
-
-  const select = (next: PerfLevel) => {
-    setLevel(next);
-    localStorage.setItem(PERF_LEVEL_KEY, next);
-  };
-
-  return (
-    <>
-      <div className="level-switch" role="tablist" aria-label="Settings level">
-        {(
-          [
-            ["simple", "Simple"],
-            ["performance", "Performance"],
-            ["advanced", "Advanced"],
-          ] as [PerfLevel, string][]
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={`level-switch-button${level === id ? " active" : ""}`}
-            onClick={() => select(id)}
-            role="tab"
-            aria-selected={level === id}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {level === "simple" && config ? (
-        <>
-          <SimplePerformanceCard config={config} save={save} />
-          <TaskProfileCard config={config} save={save} />
-        </>
-      ) : null}
-
-      {level === "performance" ? (
-        <>
-          <EngineProfileCard perf={perf} />
-
-          {config ? (
-            <RecommendedCard config={config} perf={perf} save={save} />
-          ) : null}
-
-          {config ? (
-            <ContextCard
-              config={config}
-              perf={perf}
-              save={save}
-              updateLocalLLM={updateLocalLLM}
-              updateConfigLocal={updateConfigLocal}
-            />
-          ) : null}
-
-          <LiveMetricsCard
-            perf={perf}
-            baseline={baseline}
-            clearBaseline={clearBaseline}
-          />
-        </>
-      ) : null}
-
-      {level === "advanced" ? (
-        <section className="settings-card settings-card-wide">
-          <div className="settings-card-heading">
-            <div>
-              <span className="eyebrow">ADVANCED</span>
-              <h3>Raw engine controls</h3>
-            </div>
-          </div>
-
-          <span className="runtime-hint">
-            Threads, batch sizes, KV quantisation, flash attention, mlock and
-            the llama.cpp binary live in the Advanced tab — every option there
-            is adapter-verified against the actual engine build before it
-            reaches the launch arguments.
-          </span>
-        </section>
-      ) : null}
-    </>
   );
 }
 

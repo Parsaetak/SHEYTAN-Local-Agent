@@ -17,7 +17,7 @@ import (
 
 const (
 	AppName     = "SHEYTAN-Local-Agent"
-	AppVersion  = "1.2.9"
+	AppVersion  = "1.3.0"
 	AppCodename = "Zeta"
 )
 
@@ -85,6 +85,14 @@ type Config struct {
 	DataDir     string `json:"dataDir" yaml:"dataDir"`
 	ModelsDir   string `json:"modelsDir" yaml:"modelsDir"`
 	SessionsDir string `json:"sessionsDir" yaml:"sessionsDir"`
+
+	// PathNotes (v1.3.0) carries the normalization/migration reports
+	// produced by Load — every rejected literal "%TOKEN%" path, every
+	// fallback to the canonical root. It is transient (never
+	// serialized, never persisted): the command layer drains it into
+	// the log catcher once logging is live, because Load can run
+	// before the log manager boots.
+	PathNotes []string `json:"-" yaml:"-"`
 
 	// HTTP/API server.
 	Host string `json:"host" yaml:"host"`
@@ -320,11 +328,16 @@ func AppRoot() string {
 
 // Default returns Version Zeta defaults.
 func Default() *Config {
-	dataDir := AppRoot()
+	// v1.3.0: the canonical data root comes from the single authoritative
+	// resolver (internal/config/paths.go). A SHEYTAN_DATA_DIR override is
+	// expanded ONCE here; an override that still contains a literal
+	// environment token (the v1.2.9 "%LOCALAPPDATA%" defect) is REJECTED
+	// in favor of the portable application root — the raw token can never
+	// reach runtime state or the filesystem.
+	dataDir, fallback, reason := ResolveRoot()
 
-	if v := os.Getenv("SHEYTAN_DATA_DIR"); v != "" {
-		dataDir = v
-	}
+	_ = fallback // callers that need the reason use ResolveRoot directly.
+	_ = reason
 
 	return &Config{
 		DataDir:     dataDir,
@@ -450,6 +463,10 @@ func Load(path string) (*Config, error) {
 				data = migrated
 			} else {
 				applyEnv(cfg)
+				// v1.3.0: the fresh-install path normalizes too —
+				// an environment override must never reach
+				// runtime state unexpanded.
+				cfg.PathNotes = normalizeRuntimePaths(cfg)
 				return cfg, nil
 			}
 		} else {
@@ -488,6 +505,16 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyEnv(cfg)
+
+	// v1.3.0: the LAST step of Load is the authoritative path
+	// normalization (internal/config/paths.go). Every path field that
+	// arrives from disk or environment carrying a literal environment
+	// reference ("%LOCALAPPDATA%\SHEYTAN-LA") is expanded once — or
+	// rejected and re-derived from the canonical root when the token
+	// cannot resolve. No subsystem below this point can ever observe a
+	// raw "%...%" path. The reports are surfaced to the caller via
+	// PathNotes so they are logged once logging is live.
+	cfg.PathNotes = normalizeRuntimePaths(cfg)
 	return cfg, nil
 }
 
@@ -617,10 +644,18 @@ func applyEnv(cfg *Config) {
 		cfg.Model = v
 	}
 	if v := os.Getenv("SHEYTAN_DATA_DIR"); v != "" {
-		cfg.DataDir = v
-		cfg.ModelsDir = filepath.Join(v, "models")
-		cfg.SessionsDir = filepath.Join(v, "sessions")
-		cfg.LabWorkspaceRoot = filepath.Join(v, "lab", "workspaces")
+		// v1.3.0: expand environment references ONCE and refuse to pass
+		// the raw token through (the v1.2.9 defect made DataDir a literal
+		// "%LOCALAPPDATA%\SHEYTAN-LA" string, which later joined into
+		// <root>\%LOCALAPPDATA%\SHEYTAN-LA\models). Unresolvable tokens
+		// are dropped here; normalizeRuntimePaths re-derives everything.
+		expanded := ExpandEnvPath(strings.TrimSpace(v))
+		if !HasEnvToken(expanded) {
+			cfg.DataDir = AbsAgainstAppRoot(expanded)
+			cfg.ModelsDir = filepath.Join(cfg.DataDir, "models")
+			cfg.SessionsDir = filepath.Join(cfg.DataDir, "sessions")
+			cfg.LabWorkspaceRoot = filepath.Join(cfg.DataDir, "lab", "workspaces")
+		}
 	}
 	if v := os.Getenv("SHEYTAN_PROVIDER"); v != "" {
 		cfg.Provider = strings.ToLower(v)

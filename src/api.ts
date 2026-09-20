@@ -54,6 +54,9 @@ export interface SysInfo {
   wsl2: boolean;
   docker: boolean;
   recommended: SysInfoRecommended;
+  // v1.3.0: measured OS identity (build-derived display label).
+  osBuild?: number;
+  osDisplay?: string;
 }
 
 export interface Preset {
@@ -362,6 +365,10 @@ export interface RuntimeConfig {
   modelsDir: string;
   sessionsDir: string;
 
+  // v1.3.0: the active project workspace (empty = managed default).
+  // Reported by the backend; switched through the Workspace surface.
+  workspaceRoot?: string;
+
   host: string;
   port: number;
 
@@ -611,10 +618,7 @@ export interface LabCommandResult {
 }
 
 export type LabVerificationStatus =
-  | "passed"
-  | "failed"
-  | "canceled"
-  | "skipped";
+  "passed" | "failed" | "canceled" | "skipped";
 
 export interface LabVerificationResult {
   name: string;
@@ -641,12 +645,7 @@ export interface LabVerificationSummary {
 }
 
 export type LabTaskStatus =
-  | "pending"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "canceled"
-  | "blocked";
+  "pending" | "running" | "succeeded" | "failed" | "canceled" | "blocked";
 
 export interface LabTaskSnapshot {
   id: string;
@@ -1046,6 +1045,34 @@ export interface WorkspaceSwitchResult {
   changed?: string[];
 }
 
+// v1.3.0: GitHub clone progress/result (server-driven; the UI polls at
+// ~1.2 s while state === "running").
+export type CloneState = "idle" | "running" | "succeeded" | "failed" | "canceled";
+
+export interface CloneStatus {
+  state: CloneState;
+  phase?: "validating" | "cloning" | "verifying";
+  url?: string;
+  repoName?: string;
+  owner?: string;
+  branch?: string;
+  ssh?: boolean;
+  destination?: string;
+  percent?: number;
+  message?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number;
+  head?: string;
+  outputTail?: string[];
+  errorKind?: string;
+  errorMessage?: string;
+  // Server-side post-clone actions:
+  switched?: boolean;
+  switchNote?: string;
+  summary?: WorkspaceSummary;
+}
+
 export interface LogEntry {
   index: number;
   time: string;
@@ -1061,11 +1088,7 @@ export interface LogsResponse {
 }
 
 export type NetDiagState =
-  | "Excellent"
-  | "Good"
-  | "Unstable"
-  | "Slow"
-  | "Offline";
+  "Excellent" | "Good" | "Unstable" | "Slow" | "Offline";
 
 export interface NetDiagResult {
   state: NetDiagState;
@@ -1199,13 +1222,15 @@ export const api = {
     });
   },
 
-  llama(
-    action: "start" | "stop" | "cancel-download",
-  ): Promise<unknown> {
-    return request<unknown>("/llama", {
-      method: "POST",
-      body: JSON.stringify({ action }),
-    }, action === "cancel-download" ? 15_000 : LONG_OPERATION_TIMEOUT_MS);
+  llama(action: "start" | "stop" | "cancel-download"): Promise<unknown> {
+    return request<unknown>(
+      "/llama",
+      {
+        method: "POST",
+        body: JSON.stringify({ action }),
+      },
+      action === "cancel-download" ? 15_000 : LONG_OPERATION_TIMEOUT_MS,
+    );
   },
 
   sessions(mode?: string): Promise<Session[]> {
@@ -1237,11 +1262,7 @@ export const api = {
 
   // v1.2.8: picker search over titles + rolling summaries. mode "chat" |
   // "agent" browses ONE space; undefined browses all (cross-mode picker).
-  historySearch(
-    q: string,
-    mode?: string,
-    limit = 8,
-  ): Promise<HistoryHit[]> {
+  historySearch(q: string, mode?: string, limit = 8): Promise<HistoryHit[]> {
     const params = new URLSearchParams();
     if (q.trim() !== "") {
       params.set("q", q);
@@ -1330,10 +1351,7 @@ export const api = {
     return request("/attachments");
   },
 
-  uploadAttachments(
-    sessionId: string,
-    files: File[],
-  ): Promise<UploadResponse> {
+  uploadAttachments(sessionId: string, files: File[]): Promise<UploadResponse> {
     const form = new FormData();
 
     for (const file of files) {
@@ -1346,11 +1364,14 @@ export const api = {
       controller.abort();
     }, uploadTimeoutMs);
 
-    return fetch(`${API_BASE}/attachments?sessionId=${encodeURIComponent(sessionId)}`, {
-      method: "POST",
-      body: form,
-      signal: controller.signal,
-    })
+    return fetch(
+      `${API_BASE}/attachments?sessionId=${encodeURIComponent(sessionId)}`,
+      {
+        method: "POST",
+        body: form,
+        signal: controller.signal,
+      },
+    )
       .then(async (response) => {
         if (!response.ok) {
           const text = await response.text();
@@ -1452,7 +1473,9 @@ export const api = {
   },
 
   // v1.2.4: reveal the workspace root in the OS file manager / terminal.
-  workspaceReveal(target: "files" | "terminal" = "files"): Promise<{ ok: boolean; path: string }> {
+  workspaceReveal(
+    target: "files" | "terminal" = "files",
+  ): Promise<{ ok: boolean; path: string }> {
     return request("/workspace/reveal", {
       method: "POST",
       body: JSON.stringify({ target }),
@@ -1465,6 +1488,36 @@ export const api = {
     return request("/workspace/switch", {
       method: "POST",
       body: JSON.stringify({ path }),
+    });
+  },
+
+  // v1.3.0: first-class GitHub clone workflow. POST returns immediately
+  // with the first status snapshot (the clone runs server-side, tree-
+  // killable, bounded); the UI polls cloneStatus at ~1.2 s until a
+  // terminal state, exactly like the app-update download flow.
+  cloneStart(input: {
+    url: string;
+    destination?: string;
+    branch?: string;
+    openAfter?: boolean;
+  }): Promise<CloneStatus> {
+    return request<CloneStatus>(
+      "/workspace/clone",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      30_000,
+    );
+  },
+
+  cloneStatus(): Promise<CloneStatus> {
+    return request<CloneStatus>("/workspace/clone/status");
+  },
+
+  cloneCancel(): Promise<{ ok: boolean; canceling: boolean }> {
+    return request("/workspace/clone/cancel", {
+      method: "POST",
     });
   },
 
@@ -1512,7 +1565,11 @@ export const api = {
   },
 
   updateCheck(): Promise<AppUpdateStatus> {
-    return request<AppUpdateStatus>("/update/check", { method: "POST" }, 60_000);
+    return request<AppUpdateStatus>(
+      "/update/check",
+      { method: "POST" },
+      60_000,
+    );
   },
 
   updateDownload(): Promise<AppUpdateStatus> {
@@ -1534,9 +1591,7 @@ export const api = {
   },
 
   labTask(id: string): Promise<LabTaskSessionSnapshot> {
-    return request<LabTaskSessionSnapshot>(
-      `/lab/${encodeURIComponent(id)}`,
-    );
+    return request<LabTaskSessionSnapshot>(`/lab/${encodeURIComponent(id)}`);
   },
 
   labAction(payload: Record<string, unknown>): Promise<LabActionResponse> {
@@ -1571,3 +1626,6 @@ export const api = {
   },
 };
 
+// v1.3.0: re-exported for convenience (the implementation lives in
+// clone-url.ts — a pure, node:test-importable module).
+export { parseGitHubUrl } from "./clone-url";

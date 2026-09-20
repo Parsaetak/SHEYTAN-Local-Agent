@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -180,9 +181,28 @@ func (m *Manager) log(level, category, format string, args ...interface{}) {
 	if !m.Enabled() {
 		return
 	}
+
+	message := fmt.Sprintf(format, args...)
+
+	// v1.3.0: a WARN/ERROR with no actionable context is a defect in the
+	// CALLER, not just noise — the v1.2.9 runtime log carried lines like
+	// "WARN  [updater]" with nothing after them, which is undiscoverable
+	// later. Instead of emitting the blank line, attach the emitting code
+	// location so the record stays actionable. (Call sites are ALSO fixed
+	// to always carry a message — this guard is defense in depth, not a
+	// license to log empty warnings.)
+	if (level == "WARN" || level == "ERROR") && strings.TrimSpace(message) == "" {
+		if _, file, line, ok := runtime.Caller(2); ok {
+			message = fmt.Sprintf("(no detail provided) raised at %s:%d — fix the call site to include context",
+				filepath.Base(file), line)
+		} else {
+			message = "(no detail provided) — fix the call site to include context"
+		}
+	}
+
 	line := fmt.Sprintf("%s %-5s [%s] %s",
 		time.Now().Format("2006-01-02 15:04:05.000"), level, category,
-		fmt.Sprintf(format, args...))
+		message)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.appF == nil {

@@ -23,6 +23,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/gitclone"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/histref"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
@@ -85,6 +86,13 @@ type Server struct {
 	appUpdateJob     atomic.Pointer[downloader.Job]
 	appUpdateStaging atomic.Bool
 	appUpdateCancel  atomic.Pointer[context.CancelFunc]
+
+	// v1.3.0 GitHub clone job state — the same single-slot pattern as the
+	// app-update staging above: one clone at a time, live status through
+	// the atomic envelope, cancellation through the stored job.
+	cloneJob     atomic.Pointer[gitclone.Job]
+	cloneRunning atomic.Bool
+	cloneStatus  atomic.Pointer[cloneStatusEnvelope]
 
 	// active runs: sessionID → runState
 	runsMu sync.Mutex
@@ -408,6 +416,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/workspace", s.handleWorkspace)
 	mux.HandleFunc("/api/workspace/reveal", s.handleWorkspaceReveal)
 	mux.HandleFunc("/api/workspace/switch", s.handleWorkspaceSwitch)
+
+	// v1.3.0: first-class GitHub clone workflow (start/status/cancel,
+	// auto-switch on success — see clone.go).
+	mux.HandleFunc("/api/workspace/clone", s.handleCloneStart)
+	mux.HandleFunc("/api/workspace/clone/status", s.handleCloneStatus)
+	mux.HandleFunc("/api/workspace/clone/cancel", s.handleCloneCancel)
 
 	// v1.1.7: compact live performance, in-app logs and connection
 	// diagnostics — read-only surfaces over existing infrastructure.
@@ -1094,6 +1108,21 @@ func (s *Server) mergeConfigPatch(data []byte) (*config.Config, error) {
 			}
 		}
 
+		// v1.3.0: "llm" is merged FIELD-BY-FIELD, not replaced wholesale.
+		// The v1.2.9 behavior replaced the whole LLMOptions object, so a
+		// partial llm patch (preset apply, posture apply, System apply —
+		// all of which send only the fields they change) silently zeroed
+		// every unspecified sampling field (temperature→0, topP→0…).
+		// Deep-merging here keeps every partial patch additive.
+		if key == "llm" {
+			mergedLLM, err := mergeLLMPatch(current["llm"], value)
+			if err != nil {
+				return nil, fmt.Errorf("patch llm: %w", err)
+			}
+			current["llm"] = mergedLLM
+			continue
+		}
+
 		current[key] = value
 	}
 
@@ -1109,6 +1138,40 @@ func (s *Server) mergeConfigPatch(data []byte) (*config.Config, error) {
 
 	s.src.Store(&updated)
 	return &updated, nil
+}
+
+// mergeLLMPatch merges a partial llm object into the current one:
+// present keys from the patch win, absent keys keep their current
+// values. Either side being absent degrades to the v1.2.9 wholesale
+// replacement (safe: nothing to preserve).
+func mergeLLMPatch(currentRaw, patchRaw json.RawMessage) (json.RawMessage, error) {
+	if len(patchRaw) == 0 || string(patchRaw) == "null" {
+		return currentRaw, nil
+	}
+
+	var patchObj map[string]json.RawMessage
+	if err := json.Unmarshal(patchRaw, &patchObj); err != nil {
+		return nil, err
+	}
+	if patchObj == nil {
+		return currentRaw, nil
+	}
+
+	var currentObj map[string]json.RawMessage
+	if len(currentRaw) > 0 && string(currentRaw) != "null" {
+		if err := json.Unmarshal(currentRaw, &currentObj); err != nil {
+			return nil, err
+		}
+	}
+	if currentObj == nil {
+		currentObj = map[string]json.RawMessage{}
+	}
+
+	for k, v := range patchObj {
+		currentObj[k] = v
+	}
+
+	return json.Marshal(currentObj)
 }
 
 // handleConfig patches the live configuration through the copy-on-write

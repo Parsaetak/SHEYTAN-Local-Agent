@@ -739,6 +739,38 @@ textarea:focus-visible {
   overflow: hidden;
 }
 
+/* v1.3.0 SCROLL CONTRACT — every workspace tab scrolls.
+   The v1.2.9 layout chained four overflow:hidden ancestors
+   (body → .app-shell → .app-body → .workspace) and left
+   .view-transition a plain block whose flex-basis content height
+   (min-height:auto) overflowed .workspace invisibly — the System tab
+   (and tall Workspace/Research/Lab content) was clipped with NO
+   scrollable viewport anywhere. The fix establishes ONE layout rule
+   for every view: the view wrapper becomes a shrinkable flex column,
+   and each tab's panel owns its scroll viewport:
+
+     simple surfaces (System, Workspace, Research, Settings)
+       → the panel itself is the single vertical scroll viewport;
+     IDE-style surfaces (Agent, Coding Lab)
+       → the panel keeps overflow:hidden and its INTERNAL regions
+         (conversation stream, task list, lab detail) scroll — those
+         declarations already existed and light up as soon as the
+         wrapper stops overflowing.
+
+   Mouse wheel, trackpad, scrollbar, keyboard (arrow/Page keys while
+   focus is inside — every panel contains focusable controls) and
+   100–150% Windows scaling all resolve through the same chain. */
+.workspace > .view-transition {
+  display: flex;
+  flex-direction: column;
+
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+
+  overflow: hidden;
+}
+
 .workspace-header {
   flex: 0 0 auto;
 
@@ -1453,10 +1485,10 @@ textarea:focus-visible {
   min-width: 0;
   min-height: 0;
 
+  flex: 1 1 auto;
+
   display: flex;
   flex-direction: column;
-
-  height: 100%;
 
   overflow: hidden;
 
@@ -2457,8 +2489,14 @@ textarea:focus-visible {
 }
 
 @keyframes cursor-blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
 }
 
 .message-attachments {
@@ -3374,7 +3412,9 @@ body::before {
   text-transform: uppercase;
 
   opacity: 0;
-  transition: opacity var(--dur-2, 120ms) ease, color var(--dur-2, 120ms) ease;
+  transition:
+    opacity var(--dur-2, 120ms) ease,
+    color var(--dur-2, 120ms) ease;
 }
 
 .message-row:hover .copy-button,
@@ -3545,39 +3585,9 @@ body::before {
   gap: 8px;
 }
 
-/* --- Level switch (Simple / Performance / Advanced) --------------------- */
-.level-switch {
-  display: inline-flex;
-  gap: 2px;
-
-  margin-bottom: 14px;
-  padding: 3px;
-
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.level-switch-button {
-  padding: 6px 16px;
-
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.level-switch-button:hover {
-  color: var(--text-primary);
-}
-
-.level-switch-button.active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--text-primary);
-}
+/* v1.3.0: the Simple/Performance/Advanced level switch was removed with
+   the settings restructure (the Performance tab now composes its cards
+   directly) — its CSS is dead and deleted. */
 
 /* --- Posture & profile cards -------------------------------------------- */
 .posture-grid,
@@ -3604,7 +3614,9 @@ body::before {
   color: var(--text-secondary);
   text-align: left;
 
-  transition: border-color var(--dur-2, 120ms) ease, transform var(--dur-2, 120ms) ease;
+  transition:
+    border-color var(--dur-2, 120ms) ease,
+    transform var(--dur-2, 120ms) ease;
 }
 
 .posture-card strong,
@@ -3636,10 +3648,24 @@ body::before {
 }
 
 /* --- Environment Centre -------------------------------------------------- */
+/* v1.3.0 scroll contract: the System panel is a simple information
+   surface — ONE main vertical scroll viewport (see the
+   .workspace > .view-transition rule above). */
 .system-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+
   display: flex;
   flex-direction: column;
   gap: 14px;
+
+  padding: 14px 16px 18px;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .env-grid {
@@ -3862,8 +3888,15 @@ body::before {
 }
 
 @keyframes generation-pulse {
-  0%, 100% { opacity: 0.35; transform: scale(0.85); }
-  50% { opacity: 1; transform: scale(1.1); }
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
 }
 
 .generation-elapsed {
@@ -3932,9 +3965,15 @@ body::before {
   letter-spacing: 0.12em;
 }
 
-.run-outcome.tone-complete .run-outcome-label { color: var(--green); }
-.run-outcome.tone-error .run-outcome-label { color: var(--red-hot); }
-.run-outcome.tone-aborted .run-outcome-label { color: var(--yellow); }
+.run-outcome.tone-complete .run-outcome-label {
+  color: var(--green);
+}
+.run-outcome.tone-error .run-outcome-label {
+  color: var(--red-hot);
+}
+.run-outcome.tone-aborted .run-outcome-label {
+  color: var(--yellow);
+}
 
 .run-outcome-note {
   overflow: hidden;
@@ -4057,7 +4096,8 @@ body::before {
   color: var(--text-muted);
   padding: 3px 8px;
   border-radius: 999px;
-  transition: color var(--dur-2) var(--ease-snap),
+  transition:
+    color var(--dur-2) var(--ease-snap),
     background var(--dur-2) var(--ease-snap);
 }
 
@@ -4073,7 +4113,8 @@ body::before {
   height: 6px;
   border-radius: 50%;
   background: var(--line);
-  transition: background var(--dur-2) var(--ease-snap),
+  transition:
+    background var(--dur-2) var(--ease-snap),
     box-shadow var(--dur-2) var(--ease-snap);
 }
 
@@ -4123,11 +4164,7 @@ body::before {
 .dl-bar {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    var(--red-deep),
-    var(--red-hot)
-  );
+  background: linear-gradient(90deg, var(--red-deep), var(--red-hot));
   transition: width var(--dur-3) var(--ease-snap);
 }
 
@@ -4212,10 +4249,21 @@ body::before {
 /* ------------------------------------------------------------------ */
 
 .workspace-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+
   display: flex;
   flex-direction: column;
   gap: var(--space-4, 16px);
   max-width: 880px;
+
+  padding: 14px 16px 18px;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .wb-card {
@@ -4269,15 +4317,23 @@ body::before {
 
 .wb-chip.skeleton {
   color: transparent;
-  background:
-    linear-gradient(90deg, var(--panel-light) 25%, var(--surface-elevated) 50%, var(--panel-light) 75%);
+  background: linear-gradient(
+    90deg,
+    var(--panel-light) 25%,
+    var(--surface-elevated) 50%,
+    var(--panel-light) 75%
+  );
   background-size: 200% 100%;
   animation: wb-shimmer 1.2s linear infinite;
 }
 
 @keyframes wb-shimmer {
-  from { background-position: 200% 0; }
-  to { background-position: -200% 0; }
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
 }
 
 .wb-summary-path {
@@ -4345,7 +4401,9 @@ body::before {
   cursor: pointer;
   background: var(--panel-light);
   color: var(--text-soft);
-  transition: border-color 120ms ease, color 120ms ease;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
 .wb-chip-btn:hover {
@@ -4527,7 +4585,10 @@ body::before {
   font-weight: 500;
   padding: 5px 12px;
   cursor: pointer;
-  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    background 150ms ease;
   white-space: nowrap;
 }
 
@@ -5080,4 +5141,133 @@ body::before {
   font-size: 11px;
   opacity: 0.6;
   max-width: 65%;
+}
+
+/* -------------------------------------------------------------------------- */
+/* v1.3.0 — Clone GitHub repository (Workspace)                               */
+/* -------------------------------------------------------------------------- */
+
+.wb-clone-card {
+  border-left: 3px solid var(--accent, #7c5cff);
+}
+
+.wb-clone-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-clone-form label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim, #9aa4b2);
+}
+
+.wb-clone-form input {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--panel-soft, rgba(127, 127, 127, 0.06));
+  color: var(--text);
+  font-size: 13px;
+}
+
+.wb-clone-form input:focus {
+  outline: 1px solid var(--accent, #7c5cff);
+}
+
+.wb-clone-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.wb-clone-error {
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 99, 99, 0.35);
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(255, 32, 32, 0.06);
+  font-size: 12px;
+}
+
+.wb-clone-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-clone-statusline {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.wb-clone-repo {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.wb-clone-phase {
+  color: var(--text-dim, #9aa4b2);
+}
+
+.wb-clone-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.wb-clone-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim, #9aa4b2);
+}
+
+.wb-clone-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-clone-ok {
+  padding: 10px 12px;
+  border: 1px solid rgba(77, 208, 151, 0.35);
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(77, 208, 151, 0.07);
+}
+
+.wb-clone-fail {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 99, 99, 0.35);
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(255, 32, 32, 0.06);
+  font-size: 12.5px;
+}
+
+.wb-clone-output summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-dim, #9aa4b2);
+  margin-bottom: 6px;
+}
+
+.wb-clone-output pre {
+  max-height: 180px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
 }

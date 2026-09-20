@@ -30,9 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/projectintel"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
 )
 
 // maxRecentFiles bounds the "recent files" scan of the workspace root.
@@ -307,31 +305,19 @@ func (s *Server) handleWorkspaceSwitch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Single atomic rebind for every tool that resolves through BaseDir
-	// (shell, files, git, codeExec resolve per call — no held handles).
-	tools.SetBaseDir(abs)
-
-	// Re-observe the new project (bounded walk, cached card).
-	if s.stack != nil && s.stack.Intel != nil {
-		if _, err := s.stack.Intel.Observe(abs); err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
-
-	// Persist: root + recent list. One copy-on-write mutation, one save.
-	s.src.Update(func(c *config.Config) {
-		c.WorkspaceRoot = abs
-		c.PushRecentWorkspace(abs)
-	})
-	if cfg := s.src.Load(); cfg.ConfigPath() != "" {
-		_ = config.Save(cfg.ConfigPath(), cfg)
+	// Single atomic rebind + observe + persist — the EXACT sequence the
+	// v1.3.0 clone completion reuses (switchWorkspaceRoot in clone.go).
+	previous := s.src.Load().EffectiveWorkspaceRoot()
+	summary, err := s.switchWorkspaceRoot(abs)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
 	}
 
 	writeJSON(w, map[string]any{
 		"ok":       true,
-		"previous": s.src.Load().EffectiveWorkspaceRoot(),
-		"summary":  s.buildWorkspaceSummary(),
+		"previous": previous,
+		"summary":  summary,
 		"changed":  []string{"agent working directory", "project intelligence", "config.workspaceRoot", "recentWorkspaces"},
 	})
 }

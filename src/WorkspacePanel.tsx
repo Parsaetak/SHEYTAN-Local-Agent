@@ -1,15 +1,28 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   api,
+  type CloneStatus,
   type WorkspaceSummary as WorkspaceSummaryData,
 } from "./api";
+import { parseGitHubUrl } from "./clone-url";
 import { useRuntimeStore } from "./store";
 
 // v1.2.4: the Workspace panel — the whole work environment in one glance:
 // Project → files → active task → model → runtime → current state, plus
 // the quick actions. Technical controls (change root, terminal) stay
 // secondary; the state summary and the common actions lead.
+//
+// v1.3.0 adds the first-class CLONE GITHUB REPOSITORY workflow:
+//
+//   Enter repository URL → choose destination → validate → clone →
+//   verify → open as active workspace (automatic switch)
+//
+// The flow mirrors the app-update "Download Manager" contract: POST
+// starts the job server-side (structured git execution, tree-kill
+// cancellation, bounded output), the UI polls status at 1.2 s and can
+// cancel at any time. On success the workspace switches automatically
+// — no manual path editing for the common workflow.
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -38,6 +51,303 @@ function WorkspaceLoading() {
   );
 }
 
+// cloneErrorMessage renders the classified, actionable error — never
+// raw shell noise as the only explanation (the git output tail rides
+// along under "details").
+function cloneErrorMessage(status: CloneStatus): string {
+  if (status.errorMessage) return status.errorMessage;
+  switch (status.errorKind) {
+    case "git-unavailable":
+      return "Git is not installed on this machine. Install it from https://git-scm.com/download and try again.";
+    case "invalid-url":
+      return "That does not look like a GitHub repository URL.";
+    case "destination-exists":
+      return "The destination folder already exists and is not empty — choose a different location.";
+    default:
+      return "The clone failed. See the output below for git's own diagnostics.";
+  }
+}
+
+function CloneCard({
+  onSwitched,
+}: {
+  onSwitched: (summary: WorkspaceSummaryData) => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [destination, setDestination] = useState("");
+  const [branch, setBranch] = useState("");
+  const [showOptions, setShowOptions] = useState(false);
+  const [status, setStatus] = useState<CloneStatus | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const pollRef = useRef<number | null>(null);
+
+  const running = status?.state === "running";
+
+  const parsed = useMemo(() => parseGitHubUrl(url), [url]);
+
+  // Stop polling on unmount.
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+    };
+  }, []);
+
+  // Poll while the clone runs (1.2 s — same cadence as the update flow).
+  useEffect(() => {
+    if (!running) {
+      if (pollRef.current) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      return;
+    }
+
+    pollRef.current = window.setInterval(() => {
+      void api
+        .cloneStatus()
+        .then((next) => {
+          setStatus(next);
+          if (next.state !== "running" && next.summary && next.switched) {
+            onSwitched(next.summary);
+          }
+        })
+        .catch(() => {
+          // transient — keep the last honest view
+        });
+    }, 1200);
+
+    return () => {
+      if (pollRef.current) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [running, onSwitched]);
+
+  async function startClone() {
+    setFormError(null);
+
+    const trimmed = url.trim();
+    if (!trimmed) {
+      setFormError("Enter a GitHub repository URL first.");
+      return;
+    }
+
+    // Instant client-side feedback; the backend remains the authority.
+    if (!parseGitHubUrl(trimmed)) {
+      setFormError(
+        "That does not look like a GitHub URL — use https://github.com/owner/repository or git@github.com:owner/repository.git",
+      );
+      return;
+    }
+
+    setStarting(true);
+    try {
+      const initial = await api.cloneStart({
+        url: trimmed,
+        destination: destination.trim() || undefined,
+        branch: branch.trim() || undefined,
+      });
+      setStatus(initial);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "The clone could not be started.";
+      setFormError(message);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function cancelClone() {
+    try {
+      await api.cloneCancel();
+    } catch {
+      // status polling reflects the outcome either way
+    }
+  }
+
+  function reset() {
+    setStatus(null);
+    setUrl("");
+    setDestination("");
+    setBranch("");
+    setShowOptions(false);
+  }
+
+  return (
+    <div className="wb-card wb-clone-card">
+      <div className="wb-card-title">Clone GitHub repository</div>
+
+      {running ? (
+        <div className="wb-clone-progress">
+          <div className="wb-clone-statusline">
+            <span className="wb-clone-repo">
+              {status?.owner
+                ? `${status.owner}/${status.repoName}`
+                : status?.url}
+            </span>
+            <span className="wb-clone-phase">
+              {status?.phase === "verifying"
+                ? "Verifying repository…"
+                : status?.phase === "cloning"
+                  ? `Cloning ${status?.percent ?? 0}%`
+                  : "Validating…"}
+            </span>
+          </div>
+          <div
+            className="dl-track"
+            role="progressbar"
+            aria-valuenow={status?.percent ?? 0}
+          >
+            <div
+              className="dl-bar"
+              style={{ width: `${Math.max(2, status?.percent ?? 0)}%` }}
+            />
+          </div>
+          <div className="wb-clone-meta">
+            <span title={status?.destination}>{status?.destination}</span>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => void cancelClone()}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : status && status.state === "succeeded" ? (
+        <div className="wb-clone-result wb-clone-ok">
+          <div>
+            <strong>
+              Cloned {status.owner}/{status.repoName}
+            </strong>
+            {status.head ? (
+              <span className="wb-muted"> at {status.head.slice(0, 12)}</span>
+            ) : null}
+          </div>
+          <div className="wb-muted" title={status.destination}>
+            {status.switched
+              ? `Workspace switched → ${status.destination}`
+              : status.switchNote || status.destination}
+          </div>
+          <div className="wb-clone-actions">
+            {status.switched ? null : (
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() =>
+                  status.destination && void onSwitchedTo(status.destination)
+                }
+              >
+                Open as workspace
+              </button>
+            )}
+            <button type="button" className="btn btn-sm" onClick={reset}>
+              Clone another
+            </button>
+          </div>
+        </div>
+      ) : status &&
+        (status.state === "failed" || status.state === "canceled") ? (
+        <div className="wb-clone-result wb-clone-fail">
+          <div>
+            <strong>
+              {status.state === "canceled" ? "Clone canceled" : "Clone failed"}
+            </strong>
+          </div>
+          <div>{cloneErrorMessage(status)}</div>
+          {status.outputTail && status.outputTail.length > 0 ? (
+            <details className="wb-clone-output">
+              <summary>git output</summary>
+              <pre>{status.outputTail.join("\n")}</pre>
+            </details>
+          ) : null}
+          <div className="wb-clone-actions">
+            <button type="button" className="btn btn-sm" onClick={reset}>
+              Try again
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form
+          className="wb-clone-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void startClone();
+          }}
+        >
+          <label htmlFor="wb-clone-url">Repository URL</label>
+          <input
+            id="wb-clone-url"
+            type="text"
+            value={url}
+            placeholder="https://github.com/owner/repository"
+            onChange={(event) => setUrl(event.target.value)}
+            spellCheck={false}
+            autoFocus
+          />
+
+          {showOptions ? (
+            <>
+              <label htmlFor="wb-clone-dest">Destination (optional)</label>
+              <input
+                id="wb-clone-dest"
+                type="text"
+                value={destination}
+                placeholder={
+                  parsed
+                    ? `default: workspace/${parsed.repo}`
+                    : "default: the SHEYTAN workspace folder"
+                }
+                onChange={(event) => setDestination(event.target.value)}
+                spellCheck={false}
+              />
+              <label htmlFor="wb-clone-branch">Branch (optional)</label>
+              <input
+                id="wb-clone-branch"
+                type="text"
+                value={branch}
+                placeholder="default branch"
+                onChange={(event) => setBranch(event.target.value)}
+                spellCheck={false}
+              />
+            </>
+          ) : null}
+
+          {formError ? <div className="wb-clone-error">{formError}</div> : null}
+
+          <div className="wb-clone-actions">
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={starting || !url.trim()}
+            >
+              {starting ? "Starting…" : "Clone"}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setShowOptions((v) => !v)}
+            >
+              {showOptions ? "Hide options" : "Destination & branch…"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+
+  async function onSwitchedTo(path: string) {
+    try {
+      const result = await api.workspaceSwitch(path);
+      onSwitched(result.summary);
+    } catch {
+      // The switch failure surfaces through the workspace summary refresh.
+    }
+  }
+}
+
 function WorkspacePanel() {
   const [summary, setSummary] = useState<WorkspaceSummaryData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,7 +367,9 @@ function WorkspacePanel() {
       const data = await api.workspace();
       setSummary(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load workspace.");
+      setError(
+        err instanceof Error ? err.message : "Failed to load workspace.",
+      );
     } finally {
       setLoading(false);
     }
@@ -110,12 +422,20 @@ function WorkspacePanel() {
     }
   }
 
+  // v1.3.0: the clone flow hands the post-clone workspace summary back
+  // through this callback (clone → verified → switched → summary).
+  const onCloneSwitched = useCallback((next: WorkspaceSummaryData) => {
+    setSummary(next);
+    setActionNote(`Workspace switched → ${next.root} (cloned repository)`);
+  }, []);
+
   const summaryLine = useMemo(() => {
     if (!summary) return [];
     const chips: { label: string; value: string }[] = [
       {
         label: "Project",
-        value: summary.root.split(/[\\/]/).filter(Boolean).pop() ?? summary.root,
+        value:
+          summary.root.split(/[\\/]/).filter(Boolean).pop() ?? summary.root,
       },
       {
         label: "Files",
@@ -158,7 +478,11 @@ function WorkspacePanel() {
       {error ? (
         <div className="error-banner" role="alert">
           <span>{error}</span>
-          <button type="button" className="btn btn-sm" onClick={() => void refresh()}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => void refresh()}
+          >
             Retry
           </button>
         </div>
@@ -175,7 +499,11 @@ function WorkspacePanel() {
         <div className="wb-card-title">Current environment</div>
         <div className="wb-summary-line">
           {summaryLine.map((chip) => (
-            <span className="wb-chip" key={chip.label} title={`${chip.label}: ${chip.value}`}>
+            <span
+              className="wb-chip"
+              key={chip.label}
+              title={`${chip.label}: ${chip.value}`}
+            >
               <span className="wb-chip-label">{chip.label}</span>
               <span className="wb-chip-value">{chip.value}</span>
             </span>
@@ -288,13 +616,17 @@ function WorkspacePanel() {
         ) : null}
       </div>
 
+      {/* v1.3.0: first-class GitHub clone workflow */}
+      <CloneCard onSwitched={onCloneSwitched} />
+
       {/* Project health */}
       <div className="wb-grid">
         <div className="wb-card">
           <div className="wb-card-title">Project health</div>
           {summary?.project && Object.keys(summary.project).length > 1 ? (
             <dl className="wb-facts">
-              {summary.project.languages && summary.project.languages.length > 0 ? (
+              {summary.project.languages &&
+              summary.project.languages.length > 0 ? (
                 <div className="wb-fact">
                   <dt>Languages</dt>
                   <dd>{summary.project.languages.join(", ")}</dd>
@@ -328,7 +660,8 @@ function WorkspacePanel() {
                   <dd>{summary.project.lessons.length} recorded</dd>
                 </div>
               ) : null}
-              {summary.project.conventions && summary.project.conventions.length > 0 ? (
+              {summary.project.conventions &&
+              summary.project.conventions.length > 0 ? (
                 <div className="wb-fact">
                   <dt>Conventions</dt>
                   <dd>{summary.project.conventions.length} recorded</dd>
@@ -365,9 +698,7 @@ function WorkspacePanel() {
               ))}
             </ul>
           ) : (
-            <p className="wb-muted">
-              No files in this workspace yet.
-            </p>
+            <p className="wb-muted">No files in this workspace yet.</p>
           )}
         </div>
       </div>

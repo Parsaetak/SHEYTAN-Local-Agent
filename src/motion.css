@@ -16,19 +16,19 @@
 
 :root {
   /* 120Hz frame-quantized duration ladder (1 frame = 8.333ms) */
-  --dur-1: 41.66ms;  /* 5 frames  — micro feedback */
-  --dur-2: 83.33ms;  /* 10 frames — quick state change */
-  --dur-3: 125ms;    /* 15 frames — hover / press */
+  --dur-1: 41.66ms; /* 5 frames  — micro feedback */
+  --dur-2: 83.33ms; /* 10 frames — quick state change */
+  --dur-3: 125ms; /* 15 frames — hover / press */
   --dur-4: 183.33ms; /* 22 frames — panel entrance */
-  --dur-5: 250ms;    /* 30 frames — view transition */
+  --dur-5: 250ms; /* 30 frames — view transition */
   --dur-6: 333.33ms; /* 40 frames — hero / emphasis */
-  --dur-7: 500ms;    /* 60 frames — ambient loops */
+  --dur-7: 500ms; /* 60 frames — ambient loops */
 
   /* Spring easing curves — velocity-continuous, no robotic linear steps */
-  --ease-snap: cubic-bezier(0.22, 1, 0.36, 1);        /* fast settle, no overshoot */
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);   /* overshoot ~6% */
-  --ease-emph: cubic-bezier(0.16, 1, 0.3, 1);         /* expo-out, long glide */
-  --ease-inout-soft: cubic-bezier(0.65, 0, 0.35, 1);  /* symmetric, calm */
+  --ease-snap: cubic-bezier(0.22, 1, 0.36, 1); /* fast settle, no overshoot */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* overshoot ~6% */
+  --ease-emph: cubic-bezier(0.16, 1, 0.3, 1); /* expo-out, long glide */
+  --ease-inout-soft: cubic-bezier(0.65, 0, 0.35, 1); /* symmetric, calm */
 
   /* Compositing hints — applied only while elements actually animate */
   --layer-boost: translateZ(0);
@@ -216,9 +216,7 @@
    Each child delays by one 3-frame step, capped so long lists stay snappy. */
 .m-stagger > * {
   animation: m-fade-up var(--dur-4) var(--ease-emph) both;
-  animation-delay: calc(
-    min(var(--stagger-index, 0), 11) * 25ms
-  );
+  animation-delay: calc(min(var(--stagger-index, 0), 11) * 25ms);
 }
 
 /* --------------------------------------------------------------------------
@@ -460,6 +458,26 @@ select {
   }
 }
 
+/* v1.3.0: the user-facing "Reduce motion" switch (General →
+   Accessibility) mirrors the OS-level preference with an explicit
+   per-application class — identical collapse rules. */
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+html.reduce-motion .m-progress-track::after,
+html.reduce-motion .m-skeleton::after,
+html.reduce-motion .m-spinner,
+html.reduce-motion .m-status-dot,
+html.reduce-motion .panel-loading-mark {
+  animation: none !important;
+}
+
 /* ==========================================================================
    v1.1.2Z — Component motion integration
    Entrance choreography for every major panel surface, expressed purely in
@@ -481,10 +499,18 @@ select {
   animation: m-scale-in var(--dur-4) var(--ease-spring) both;
 }
 
-.runtime-grid .metric-card:nth-child(1) { animation-delay: 0ms; }
-.runtime-grid .metric-card:nth-child(2) { animation-delay: 33ms; }
-.runtime-grid .metric-card:nth-child(3) { animation-delay: 66ms; }
-.runtime-grid .metric-card:nth-child(4) { animation-delay: 99ms; }
+.runtime-grid .metric-card:nth-child(1) {
+  animation-delay: 0ms;
+}
+.runtime-grid .metric-card:nth-child(2) {
+  animation-delay: 33ms;
+}
+.runtime-grid .metric-card:nth-child(3) {
+  animation-delay: 66ms;
+}
+.runtime-grid .metric-card:nth-child(4) {
+  animation-delay: 99ms;
+}
 
 .metric-card {
   transition:
@@ -501,10 +527,18 @@ select {
   animation: m-fade-up var(--dur-4) var(--ease-emph) both;
 }
 
-.runtime-section:nth-child(2) { animation-delay: 40ms; }
-.runtime-section:nth-child(3) { animation-delay: 80ms; }
-.runtime-section:nth-child(4) { animation-delay: 120ms; }
-.runtime-section:nth-child(5) { animation-delay: 160ms; }
+.runtime-section:nth-child(2) {
+  animation-delay: 40ms;
+}
+.runtime-section:nth-child(3) {
+  animation-delay: 80ms;
+}
+.runtime-section:nth-child(4) {
+  animation-delay: 120ms;
+}
+.runtime-section:nth-child(5) {
+  animation-delay: 160ms;
+}
 
 /* Engine status block breathing state while the llama.cpp engine runs */
 .engine-status {
@@ -526,22 +560,42 @@ select {
   animation: m-fade-up var(--dur-4) var(--ease-emph) both;
 }
 
-.settings-grid > *:nth-child(1) { animation-delay: 0ms; }
-.settings-grid > *:nth-child(2) { animation-delay: 33ms; }
-.settings-grid > *:nth-child(3) { animation-delay: 66ms; }
-.settings-grid > *:nth-child(4) { animation-delay: 99ms; }
-.settings-grid > *:nth-child(5) { animation-delay: 132ms; }
-.settings-grid > *:nth-child(6) { animation-delay: 165ms; }
-.settings-grid > *:nth-child(n + 7) { animation-delay: 198ms; }
+.settings-grid > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.settings-grid > *:nth-child(2) {
+  animation-delay: 33ms;
+}
+.settings-grid > *:nth-child(3) {
+  animation-delay: 66ms;
+}
+.settings-grid > *:nth-child(4) {
+  animation-delay: 99ms;
+}
+.settings-grid > *:nth-child(5) {
+  animation-delay: 132ms;
+}
+.settings-grid > *:nth-child(6) {
+  animation-delay: 165ms;
+}
+.settings-grid > *:nth-child(n + 7) {
+  animation-delay: 198ms;
+}
 
 /* Coding Lab: metric cards + workspace details cascade */
 .lab-metrics .lab-metric {
   animation: m-scale-in var(--dur-4) var(--ease-spring) both;
 }
 
-.lab-metrics .lab-metric:nth-child(2) { animation-delay: 33ms; }
-.lab-metrics .lab-metric:nth-child(3) { animation-delay: 66ms; }
-.lab-metrics .lab-metric:nth-child(4) { animation-delay: 99ms; }
+.lab-metrics .lab-metric:nth-child(2) {
+  animation-delay: 33ms;
+}
+.lab-metrics .lab-metric:nth-child(3) {
+  animation-delay: 66ms;
+}
+.lab-metrics .lab-metric:nth-child(4) {
+  animation-delay: 99ms;
+}
 
 .lab-workspace,
 .lab-detail-row {
