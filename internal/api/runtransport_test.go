@@ -71,7 +71,7 @@ func slowStreamEngine(t *testing.T, chunks []string, interval time.Duration) *ht
 // and POST /api/run hands back the authoritative runId.
 func TestAttachAckIsFirstFrameAndPostReturnsRunId(t *testing.T) {
 	engine := remoteFakeEngine(t, "hi there.")
-	server := newRemoteServer(t, engine.URL)
+	srv, server := newRemoteServer(t, engine.URL)
 	sessionID := createSessionForRun(t, server)
 
 	conn := dialActivityWS(t, server, sessionID)
@@ -131,7 +131,7 @@ func TestAttachAckIsFirstFrameAndPostReturnsRunId(t *testing.T) {
 
 	// v1.2.8: the settle tail also writes the rolling summary sidecar —
 	// wait for it deterministically before the TempDir cleanup.
-	if !waitForSummarySettled(t, server, sessionID) {
+	if !waitForRunSettled(t, srv, sessionID) {
 		t.Fatal("the settle tail (summary sidecar) never completed")
 	}
 
@@ -145,7 +145,7 @@ func TestAttachAckIsFirstFrameAndPostReturnsRunId(t *testing.T) {
 func TestMidRunAttachReceivesSnapshotAndContinues(t *testing.T) {
 	chunks := []string{"Hello", " ", "from", " ", "the", " ", "replay", "test"}
 	engine := slowStreamEngine(t, chunks, 60*time.Millisecond)
-	server := newRemoteServer(t, engine.URL)
+	srv, server := newRemoteServer(t, engine.URL)
 	sessionID := createSessionForRun(t, server)
 
 	// Socket A: the original connection.
@@ -240,7 +240,7 @@ func TestMidRunAttachReceivesSnapshotAndContinues(t *testing.T) {
 		t.Fatal("the run never persisted its reply")
 	}
 
-	if !waitForSummarySettled(t, server, sessionID) {
+	if !waitForRunSettled(t, srv, sessionID) {
 		t.Fatal("the settle tail (summary sidecar) never completed")
 	}
 }
@@ -253,7 +253,7 @@ func TestRunEventsCarryMonotonicSequence(t *testing.T) {
 	// AFTER completion is a different contract — see the terminal
 	// branch below).
 	engine := slowStreamEngine(t, []string{"a", "b", "c"}, 80*time.Millisecond)
-	server := newRemoteServer(t, engine.URL)
+	srv, server := newRemoteServer(t, engine.URL)
 	sessionID := createSessionForRun(t, server)
 
 	runResp, err := http.Post(
@@ -343,7 +343,7 @@ func TestRunEventsCarryMonotonicSequence(t *testing.T) {
 		t.Fatal("the run never persisted its reply")
 	}
 
-	if !waitForSummarySettled(t, server, sessionID) {
+	if !waitForRunSettled(t, srv, sessionID) {
 		t.Fatal("the settle tail (summary sidecar) never completed")
 	}
 }
@@ -353,7 +353,7 @@ func TestRunEventsCarryMonotonicSequence(t *testing.T) {
 // server's forwarding loop drops them before they reach the wire.
 func TestStaleRunEventsFilteredByServer(t *testing.T) {
 	engine := remoteFakeEngine(t, "first run answer.")
-	server := newRemoteServer(t, engine.URL)
+	_, server := newRemoteServer(t, engine.URL)
 	sessionID := createSessionForRun(t, server)
 
 	// Run 1 completes fully.
@@ -399,7 +399,7 @@ func TestStaleRunEventsFilteredByServer(t *testing.T) {
 // reply text — not a bare idle marker.
 func TestTerminalSnapshotReplaysPersistedReply(t *testing.T) {
 	engine := remoteFakeEngine(t, "2+2 is 4.")
-	server := newRemoteServer(t, engine.URL)
+	_, server := newRemoteServer(t, engine.URL)
 	sessionID := createSessionForRun(t, server)
 
 	// Attach BEFORE the run so the socket is in standby when it starts —

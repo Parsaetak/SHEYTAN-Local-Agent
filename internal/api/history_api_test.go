@@ -64,7 +64,7 @@ func listSessions(t *testing.T, server *httptest.Server, mode string) []map[stri
 // anything.
 func TestSessionsModeSeparation(t *testing.T) {
 	engine := remoteFakeEngine(t, "ok.")
-	server := newRemoteServer(t, engine.URL)
+	_, server := newRemoteServer(t, engine.URL)
 
 	chat := createSessionWithMode(t, server, "chat")
 	agentSess := createSessionWithMode(t, server, "agent")
@@ -100,7 +100,7 @@ func TestSessionsModeSeparation(t *testing.T) {
 // and the hit shape (id/mode/title/msgCount).
 func TestHistorySearchEndpoint(t *testing.T) {
 	engine := remoteFakeEngine(t, "ok.")
-	server := newRemoteServer(t, engine.URL)
+	_, server := newRemoteServer(t, engine.URL)
 
 	chat := createSessionWithMode(t, server, "chat")
 	agentSess := createSessionWithMode(t, server, "agent")
@@ -164,7 +164,7 @@ func TestHistorySearchEndpoint(t *testing.T) {
 // API serves once UpdateSummaryFromTurn has run through the store.
 func TestSessionSummaryEndpoint(t *testing.T) {
 	engine := remoteFakeEngine(t, "ok.")
-	server := newRemoteServer(t, engine.URL)
+	_, server := newRemoteServer(t, engine.URL)
 
 	sess := createSessionWithMode(t, server, "chat")
 	id := sess["id"].(string)
@@ -294,7 +294,7 @@ func TestSessionMessagesPaging(t *testing.T) {
 // prunes dead references (source session not in the store).
 func TestSessionContextUpdateKeepsHistoryRefs(t *testing.T) {
 	engine := remoteFakeEngine(t, "ok.")
-	server := newRemoteServer(t, engine.URL)
+	_, server := newRemoteServer(t, engine.URL)
 
 	// The referenced CHAT source session (the target below is an AGENT
 	// session — cross-mode is enforced server-side).
@@ -340,7 +340,7 @@ func TestSessionContextUpdateKeepsHistoryRefs(t *testing.T) {
 // validation (and its removal persists via the atomic delta path).
 func TestDeadHistoryReferencePruned(t *testing.T) {
 	engine := remoteFakeEngine(t, "ok.")
-	server := newRemoteServer(t, engine.URL)
+	_, server := newRemoteServer(t, engine.URL)
 
 	src := createSessionWithMode(t, server, "chat")
 	srcID := src["id"].(string)

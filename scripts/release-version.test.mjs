@@ -90,6 +90,19 @@ const GOOD_WORKFLOW = [
   "      - run: node scripts/release-version.mjs",
   "      - run: node scripts/release-version.mjs --check",
   "      - run: identity=$(node scripts/release-version.mjs --env)",
+  "  release:",
+  "    if: startsWith(github.ref, 'refs/tags/v')",
+  "    steps:",
+  "      - name: Verify release tag",
+  "        shell: bash",
+  "        run: |",
+  "          set -euo pipefail",
+  "          test \"${GITHUB_REF_NAME}\" = \"v${APP_VERSION}\"",
+  "      - name: Publish GitHub Release",
+  "        uses: softprops/action-gh-release@v3",
+  "        with:",
+  "          tag_name: ${{ github.ref_name }}",
+  "          name: ${{ env.APP_VERSION }}",
   "",
 ].join("\n");
 
@@ -482,3 +495,85 @@ test("repair is a no-op on an already-consistent tree", () => {
   assert.equal(repairDrift(root, report), 0);
 });
 
+
+// ---------------------------------------------------------------------------
+// 5b. v1.3.3 version-only tag/release identity contract.
+// ---------------------------------------------------------------------------
+
+test("release title must be the plain canonical version (version-only identity)", () => {
+  // The pre-v1.3.3 shape: title derived from the tag with a product prefix.
+  const wf = GOOD_WORKFLOW.replace(
+    "name: ${{ env.APP_VERSION }}",
+    "name: SHEYTAN-LA ${{ github.ref_name }}",
+  );
+  const v = workflowContractViolations(wf);
+  assert.equal(v.length, 2, JSON.stringify(v));
+  assert.ok(
+    v.some((x) => x.includes("version-only identity")),
+    "the tag/product-derived title must be named a banned shape",
+  );
+  assert.ok(
+    v.some((x) => x.includes("required release-identity fragment")),
+    "the missing version-only title fragment must be reported",
+  );
+});
+
+test("release title must not carry a codename suffix", () => {
+  const wf = GOOD_WORKFLOW.replace(
+    "name: ${{ env.APP_VERSION }}",
+    "name: ${{ env.APP_VERSION }}-Zeta",
+  );
+  const v = workflowContractViolations(wf);
+  assert.equal(v.length, 1, JSON.stringify(v));
+  assert.ok(v[0].includes("codename"));
+});
+
+test("codename fragments anywhere in the workflow are banned", () => {
+  const shapes = [
+    "      - run: echo \"Shipping Zeta build\"\n",
+    "  # release codename: Zeta\n",
+    "      - run: echo v1.3.3-Zeta\n",
+  ];
+  for (const shape of shapes) {
+    const v = workflowContractViolations(GOOD_WORKFLOW + shape);
+    assert.equal(v.length, 1, shape.trim());
+    assert.ok(v[0].includes("Zeta"), shape.trim());
+    assert.ok(v[0].includes("codename"), shape.trim());
+  }
+});
+
+test("a second release-identity variable is banned (APP_VERSION_FULL stays dead)", () => {
+  const wf = GOOD_WORKFLOW + "      - run: echo ${{ env.APP_VERSION_FULL }}\n";
+  const v = workflowContractViolations(wf);
+  assert.equal(v.length, 1, JSON.stringify(v));
+  assert.ok(v[0].includes("second release-identity variable"));
+});
+
+test("the tag-equals-version verification step is required", () => {
+  const wf = GOOD_WORKFLOW.replace(
+    'test "${GITHUB_REF_NAME}" = "v${APP_VERSION}"',
+    'test "${GITHUB_REF_NAME}" = "v1.3.2"',
+  );
+  const v = workflowContractViolations(wf);
+  assert.equal(v.length, 1, JSON.stringify(v));
+  assert.ok(v[0].includes("verify the pushed tag"));
+});
+
+test("the published release must carry the pushed tag itself", () => {
+  const wf = GOOD_WORKFLOW.replace(
+    "tag_name: ${{ github.ref_name }}",
+    "tag_name: v1.3.2",
+  );
+  const v = workflowContractViolations(wf);
+  assert.equal(v.length, 1, JSON.stringify(v));
+  assert.ok(v[0].includes("pushed tag"));
+});
+
+test("the real repository workflow satisfies the full v1.3.3 contract", () => {
+  const repoRoot = join(scriptDir, "..");
+  const wf = readFileSync(
+    join(repoRoot, ".github", "workflows", "build-desktop.yml"),
+    "utf8",
+  );
+  assert.deepEqual(workflowContractViolations(wf), []);
+});

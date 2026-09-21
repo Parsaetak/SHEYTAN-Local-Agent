@@ -14,6 +14,12 @@
 #include <string>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <direct.h>
 #include <windows.h>
 #define S_MKDIR(p) _mkdir(p)
@@ -749,6 +755,10 @@ static bool run_host_generate_test(const std::string& fixture_path,
                                    std::vector<std::string>& frames_out,
                                    const std::string& extra_frames = "") {
     using namespace hostgen;
+
+    // fixture_path documents the fixture dependency of every caller; the
+    // model path itself is embedded in the scripted frames.
+    (void)fixture_path;
 
     ShtnPipe req_pipe[2];
     ShtnPipe resp_pipe[2];

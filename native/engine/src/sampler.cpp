@@ -112,11 +112,9 @@ void apply_top_p(float* logits, uint32_t vocab_size, float top_p,
     // Walk the sorted list, accumulating prob, until we hit top_p.
     double cum = 0.0;
     std::vector<bool> keep(vocab_size, false);
-    uint32_t kept = 0;
     for (uint32_t i = 0; i < vocab_size; ++i) {
         cum += idx[i].val;
         keep[idx[i].id] = true;
-        ++kept;
         if (cum >= top_p) {
             break;
         }

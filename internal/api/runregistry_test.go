@@ -64,8 +64,11 @@ func remoteFakeEngine(t *testing.T, reply string) *httptest.Server {
 	return server
 }
 
-// newRemoteServer builds a full API server against the fake remote engine.
-func newRemoteServer(t *testing.T, engineURL string) *httptest.Server {
+// newRemoteServer builds a full API server against the fake remote
+// engine. v1.3.3: returns the *Server handle as well so tests can poll
+// the outcome registry — the deterministic settlement barrier (see
+// waitForRunSettled).
+func newRemoteServer(t *testing.T, engineURL string) (*Server, *httptest.Server) {
 	t.Helper()
 
 	cfg := config.Default()
@@ -95,7 +98,7 @@ func newRemoteServer(t *testing.T, engineURL string) *httptest.Server {
 	server := httptest.NewServer(srv.Handler())
 	t.Cleanup(server.Close)
 
-	return server
+	return srv, server
 }
 
 func createSessionForRun(t *testing.T, server *httptest.Server) string {
@@ -190,31 +193,91 @@ func waitForReplyPersisted(t *testing.T, server *httptest.Server, sessionID stri
 	return false
 }
 
-// waitForSummarySettled waits for the v1.2.8 settle-tail to finish: the
-// rolling summary sidecar (written AFTER the reply persists) reaches
-// version >= 1. This is the deterministic synchronization point that keeps
-// t.TempDir cleanup from racing the run goroutine's durable writes.
-func waitForSummarySettled(t *testing.T, server *httptest.Server, sessionID string) bool {
+// waitForRunSettled is the DETERMINISTIC SETTLEMENT BARRIER (v1.3.3).
+//
+// PROBLEM: the previous barrier waited for the rolling summary to reach
+// version >= 1 — but production writes the summary (durable step 1)
+// BEFORE the agent.md handoff (durable step 2), recall indexing and the
+// continuum rollover, and records the terminal outcome only after ALL
+// of them. A test that stops waiting at the summary therefore observes
+// a run whose settle-tail is still in flight: on a slow/loaded CI runner
+// the poll can land in the summary→handoff window and read a missing
+// agent.md (the v1.3.2 CI failure "agent.md handoff missing" — a real
+// race, not a flaky assertion).
+//
+// FIX: settle on the TERMINAL OUTCOME itself. The v1.2.9 durable
+// completion ordering guarantees the bounded outcome registry records
+// the run's terminal outcome only AFTER every required durable artifact
+// (rolled summary, agent.md handoff, recall index, continuum rollover)
+// is on disk — so observing the terminal outcome IS observing complete
+// settlement. Summary completion alone is never a settlement proxy
+// again; the artifact assertions after this barrier verify the files
+// directly.
+func waitForRunSettled(t *testing.T, srv *Server, sessionID string) bool {
 	t.Helper()
 
 	deadline := time.Now().Add(30 * time.Second)
 
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(server.URL + "/api/sessions/" + sessionID + "/summary")
-		if err == nil {
-			var got struct {
-				Version int `json:"version"`
+		if rec, ok := srv.outcomes.latest(sessionID); ok && rec.Outcome != "" {
+			return true
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	return false
+}
+
+// waitForRunSettledFor is the repeated-settlement companion of the
+// barrier: it waits for the run with the EXACT runId to record its
+// terminal outcome. A session that fires sequential runs leaves the
+// previous run's terminal record in the registry — waiting for "any
+// terminal outcome" would cross the barrier on the STALE record while
+// the new run's settle-tail is still in flight. Keying on runId makes
+// the barrier precise for every settlement after the first.
+func waitForRunSettledFor(t *testing.T, srv *Server, sessionID, runID string) bool {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		if rec, ok := srv.outcomes.latest(sessionID); ok && rec.RunID == runID && rec.Outcome != "" {
+			return true
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	return false
+}
+
+// waitForRunOutcome waits for the run's terminal outcome to equal the
+// exact wanted value (or any of wanted) — the v1.3.3 honesty companion:
+// tests that pin WHICH terminal state a run settles into (e.g. a
+// mandatory-handoff failure must settle "error", never "done") use this
+// instead of accepting any terminal record.
+func waitForRunOutcome(t *testing.T, srv *Server, sessionID string, want ...string) bool {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		if rec, ok := srv.outcomes.latest(sessionID); ok {
+			for _, w := range want {
+				if rec.Outcome == w {
+					return true
+				}
 			}
 
-			err = json.NewDecoder(resp.Body).Decode(&got)
-			resp.Body.Close()
-
-			if err == nil && got.Version >= 1 {
-				return true
+			// A terminal record that contradicts every wanted value is
+			// an immediate, honest failure — do not spin to the deadline.
+			if rec.Outcome != "" {
+				return false
 			}
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	return false
@@ -226,7 +289,7 @@ func waitForSummarySettled(t *testing.T, server *httptest.Server, sessionID stri
 // finalise (previously: a bare idle sentinel the grace guard dropped).
 func TestLateAttachSocketReceivesRunOutcome(t *testing.T) {
 	engine := remoteFakeEngine(t, "2+2 is 4.")
-	server := newRemoteServer(t, engine.URL)
+	srv, server := newRemoteServer(t, engine.URL)
 	sessionID := createSessionForRun(t, server)
 
 	// Fire the run and WAIT for it to fully settle before attaching.
@@ -246,7 +309,7 @@ func TestLateAttachSocketReceivesRunOutcome(t *testing.T) {
 
 	// v1.2.8: wait for the settle tail (summary sidecar) before the
 	// registry assertions — deterministic, not a guessed beat.
-	if !waitForSummarySettled(t, server, sessionID) {
+	if !waitForRunSettled(t, srv, sessionID) {
 		t.Fatal("the settle tail (summary sidecar) never completed")
 	}
 
@@ -299,7 +362,7 @@ func TestLateAttachSocketReceivesRunOutcome(t *testing.T) {
 // carries the SAME runId and the run ends with a done frame.
 func TestActivitiesCarryRunIdAndDoneAttachesMidRun(t *testing.T) {
 	engine := remoteFakeEngine(t, "Hello!")
-	server := newRemoteServer(t, engine.URL)
+	srv, server := newRemoteServer(t, engine.URL)
 	sessionID := createSessionForRun(t, server)
 
 	runResp, err := http.Post(
@@ -370,7 +433,7 @@ func TestActivitiesCarryRunIdAndDoneAttachesMidRun(t *testing.T) {
 		t.Fatal("the run never persisted its reply")
 	}
 
-	if !waitForSummarySettled(t, server, sessionID) {
+	if !waitForRunSettled(t, srv, sessionID) {
 		t.Fatal("the settle tail (summary sidecar) never completed")
 	}
 

@@ -3068,3 +3068,21 @@ Dead CSS removed (level-switch block, tool-list/tool-row rules, the :has() speci
 - Native engine: clean-room CMake configure+build+ctest (see final report for the exact result on this host).
 - ROADMAP.md: git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650 — UNCHANGED before and after.
 - NOT RUN HERE: Windows desktop (Wails/WebView2) build and NSIS packaging — Linux host; CI owns the Windows matrix.
+
+---
+Task ID: v1.3.3-release
+Agent: SHEYTAN-LA release agent (v1.3.3 deep repair)
+Task: Root-fix the v1.3.2 CI failures (run 35552680611): Linux settlement race, Windows native-engine compilation, release-title identity; native deep audit; permanent version-only release identity; clean-room verification and packaging.
+
+Work Log:
+- Reproduced the settlement race by inspection (summary written before agent.md; the barrier stopped at the summary) and the Windows hardware.cpp failure class on a real MinGW-w64 SDK (missing <vector>/<intrin.h>); proved the min/max macro collision token-level.
+- Fixed the settlement barrier: terminal-outcome based waitForRunSettled/For/Outcome helpers; migrated every settlement-waiting test; newRemoteServer exposes the handle.
+- Fixed mandatory-handoff honesty in server.go: handoff attempted for every completed agent run; write failure demotes resultOutcome to "error" with the concrete cause; ordering unchanged.
+- Root-fixed hardware.cpp (explicit <vector>/<cstdlib>/<intrin.h>, NOMINMAX, (std::min)) and guarded the three windows.h test files; eliminated the remaining 8 engine warnings.
+- Hardened the IPC read loop against abandoned-stream straggler bursts (drop-if-full when the consumer left; backpressure preserved for live consumers).
+- Release identity: title = plain APP_VERSION; tag==v${APP_VERSION} gate kept and publication re-verification extended to the title; workflow contract gained required+ banned fragments (product+tag title, Zeta, APP_VERSION_FULL); 7 new regression tests (28 total); canonical version synced to 1.3.3; stale alias doc rows corrected.
+- Validation: gofmt/vet clean; 46/46 headless Go packages; race gate; settlement 20x -race; native lifecycle 10x; Linux clean-room ctest 12/12; Windows full-engine cross-build 13/13 PE binaries zero warnings; frontend gate fully green (78 units, 28 release tests, build, verify:web).
+- Docs: README v1.3.3 section, UPDATE.md rewritten, agent.md handoff replaced, worklog appended. ROADMAP.md untouched.
+
+Stage Summary:
+- v1.3.3 complete on this host; deliverable SHEYTAN-Local-Agent-v1.3.3-UPDATE.zip (clean-room build from the final tree). Windows MSVC/CTest/installer/publication owned by CI; the Windows native path is compilable and verified via cross-build.

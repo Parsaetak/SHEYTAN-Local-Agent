@@ -1588,7 +1588,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: SHEYTAN-LA ${{ github.ref_name }}
+          # v1.3.3 version-only release identity: the title is the PLAIN
+          # canonical version ("1.3.3"), never the tag, never a product
+          # prefix, never a codename. The tag itself stays "v1.3.3".
+          name: ${{ env.APP_VERSION }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
@@ -1609,7 +1612,7 @@ jobs:
             gh release view \
               "${GITHUB_REF_NAME}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --json tagName,isDraft,isPrerelease,assets
+              --json tagName,name,isDraft,isPrerelease,assets
           )"
 
           echo "$payload"
@@ -1621,11 +1624,13 @@ jobs:
           echo "$payload" |
             jq -e \
               --arg tag "${GITHUB_REF_NAME}" \
+              --arg version "${APP_VERSION}" \
               --arg windows "$windows_asset" \
               --arg linux "$linux_asset" \
               --arg installer "$installer_asset" \
               '
                 .tagName == $tag and
+                .name == $version and
                 .isDraft == false and
                 .isPrerelease == false and
                 ([.assets[].name] | index($windows)) != null and
@@ -1636,4 +1641,4 @@ jobs:
               ' \
             >/dev/null
 
-          echo "${GITHUB_REF_NAME} release asset verification passed."
+          echo "${GITHUB_REF_NAME} release asset + version-only title verification passed."

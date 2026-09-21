@@ -143,6 +143,63 @@ export const bannedWorkflowFragments = [
     reason:
       "bash reimplementation of the SIGNATURE check; use release-version.mjs --check",
   },
+  {
+    // v1.3.3 version-only release identity: the GitHub Release title is
+    // the PLAIN canonical version, never the tag or a product prefix.
+    fragment: "name: SHEYTAN-LA ${{",
+    reason:
+      "release title derives from the tag/product name instead of the " +
+      "plain canonical version — the title must be `name: ${{ env.APP_VERSION }}` " +
+      "(version-only identity, v1.3.3 contract)",
+  },
+  {
+    // v1.3.3: no codename may appear anywhere in the workflow.
+    fragment: "Zeta",
+    reason:
+      "codename fragment in the workflow — release identity is version-only " +
+      "(no codename, no release suffix, v1.3.3 contract)",
+  },
+  {
+    // v1.3.3: exactly ONE identity variable; the retired alias must stay
+    // dead in the workflow too (outputs, envs, steps).
+    fragment: "APP_VERSION_FULL",
+    reason:
+      "second release-identity variable in the workflow — --env emits exactly " +
+      "APP_VERSION and no consumer may reintroduce the retired alias " +
+      "(v1.3.3 contract)",
+  },
+];
+
+/**
+ * Required workflow fragments — the v1.3.3 version-only tag/release
+ * contract, enforced structurally so a future edit cannot silently
+ * regress the release identity:
+ *   - the GitHub Release title is the PLAIN canonical version
+ *     (`name: ${{ env.APP_VERSION }}` → "1.3.3"), not the tag, not a
+ *     product prefix, not a codename;
+ *   - the release job verifies the pushed tag equals v${APP_VERSION}
+ *     before anything is published;
+ *   - the published release is re-verified with the tag AND the
+ *     version-only title.
+ */
+export const requiredWorkflowFragments = [
+  {
+    fragment: "name: ${{ env.APP_VERSION }}",
+    reason:
+      "GitHub Release title must be the plain canonical version " +
+      "(version-only identity)",
+  },
+  {
+    fragment: 'test "${GITHUB_REF_NAME}" = "v${APP_VERSION}"',
+    reason:
+      "release job must verify the pushed tag equals v${APP_VERSION} " +
+      "before publishing",
+  },
+  {
+    fragment: "tag_name: ${{ github.ref_name }}",
+    reason:
+      "the published release must carry the pushed tag itself",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -226,6 +283,15 @@ export function workflowContractViolations(content) {
         `${requiredCheckInvocations} (every build job — audit, windows, ` +
         `linux — must run 'node scripts/release-version.mjs --check').`,
     );
+  }
+
+  for (const { fragment, reason } of requiredWorkflowFragments) {
+    if (!content.includes(fragment)) {
+      violations.push(
+        `.github/workflows/build-desktop.yml: required release-identity ` +
+          `fragment ${JSON.stringify(fragment)} is missing — ${reason}.`,
+      );
+    }
   }
 
   for (const { fragment, reason } of bannedWorkflowFragments) {

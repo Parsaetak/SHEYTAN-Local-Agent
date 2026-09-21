@@ -121,7 +121,7 @@ func TestAgentRunSettlesWithSummaryAndHandoff(t *testing.T) {
 		t.Fatal("the agent run never persisted its reply")
 	}
 
-	if !waitForSummarySettled(t, server, id) {
+	if !waitForRunSettled(t, srv, id) {
 		t.Fatal("the rolling summary never settled")
 	}
 

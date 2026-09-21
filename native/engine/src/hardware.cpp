@@ -1,17 +1,41 @@
 // hardware.cpp — platform hardware detection implementation.
+//
+// v1.3.3 Windows compile hygiene (the CI compiler failure): every header
+// this translation unit actually uses is included EXPLICITLY — nothing
+// relies on transitive includes that happen to hold on one platform or
+// toolchain and silently break on another:
+//   * <vector>     — std::vector for the GLPI processor info (previously
+//                    pulled transitively; missing on MSVC).
+//   * <cstdlib>    — std::strtod / std::strtoll (previously transitive).
+//   * <intrin.h>   — __cpuid on MSVC/MinGW (previously transitive via
+//                    windows.h on some SDK versions only).
+//   * NOMINMAX     — windows.h must never define the min/max macros:
+//                    WIN32_LEAN_AND_MEAN does NOT suppress them, and the
+//                    macro expands even after "::" — `std::min(a, b)`
+//                    became `std::(((a)<(b))?(a):(b)))` and failed to
+//                    compile. gguf.cpp already carried this guard; this
+//                    file did not.
 
 #include "hardware.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <psapi.h>
+#include <intrin.h> // __cpuid
 #elif defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/mach_host.h>
@@ -67,7 +91,10 @@ void copy_str(char* dst, size_t cap, const std::string& src) {
     if (cap == 0) {
         return;
     }
-    const size_t n = std::min(cap - 1, src.size());
+    // Parenthesized (std::min): immune to any min macro that a consumer's
+    // include order may still have defined (defense in depth on top of
+    // NOMINMAX above).
+    const size_t n = (std::min)(cap - 1, src.size());
     std::memcpy(dst, src.data(), n);
     dst[n] = '\0';
 }

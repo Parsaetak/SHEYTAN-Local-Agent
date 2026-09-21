@@ -1995,11 +1995,33 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// failed outcomes (the resultOutcome gate). A write
 		// FAILURE is surfaced as an error activity — the UI must
 		// never believe a handoff exists when it does not.
+		// v1.3.3: the write is attempted for EVERY completed agent
+		// run — a nil task state is reported by writeAgentHandoff as
+		// a real failure instead of silently skipping the mandatory
+		// artifact (the previous res.Task != nil gate could settle
+		// "done" with no handoff attempt at all).
 		handoffWriteErr := error(nil)
 		handoffPath := ""
 
-		if sess.Mode == sessions.ModeAgent && resultOutcome == "done" && res.Task != nil {
+		if sess.Mode == sessions.ModeAgent && resultOutcome == "done" {
 			handoffPath, handoffWriteErr = s.writeAgentHandoff(sess, res.Task, resultOutcome)
+		}
+
+		// v1.3.3 MANDATORY-HANDOFF HONESTY. For a completed Agent run
+		// the agent.md handoff is REQUIRED durable state, not
+		// best-effort decoration. A handoff that failed to write means
+		// the run did NOT durably complete: settling "done" here would
+		// publish a falsely successful terminal result while the next
+		// agent starts without its handoff. Demote the terminal
+		// outcome to "error" — the same honest class as a
+		// reply-persistence failure — and carry the concrete cause in
+		// the terminal caption; the post-terminal error activity below
+		// still surfaces the write failure to the UI. The successful
+		// ordering (summary → handoff → recall → continuum → terminal
+		// publication) is unchanged.
+		if handoffWriteErr != nil {
+			resultOutcome = "error"
+			terminalCaption = "agent.md handoff failed: " + handoffWriteErr.Error()
 		}
 
 		// Durable step 3 — index the completed exchange into

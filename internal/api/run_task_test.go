@@ -73,7 +73,7 @@ func TestTaskStateRidesRunSnapshot(t *testing.T) {
 		t.Fatal("the run never persisted its reply")
 	}
 
-	if !waitForSummarySettled(t, server, sessionID) {
+	if !waitForRunSettled(t, srv, sessionID) {
 		t.Fatal("the settle tail (summary sidecar) never completed")
 	}
 }

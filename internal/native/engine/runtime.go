@@ -912,11 +912,22 @@ func (c *ipcConn) dispatch(resp *Response) {
 
 	if !resp.IsFinal() && p.events != nil {
 		// Streaming event frame: delivered to the consumer's event
-		// channel. Bounded buffer; a full channel blocks the read loop
-		// (backpressure — the consumer must drain; abandoned consumers
-		// switch to drain-only mode so the loop can never wedge). The
-		// channel is never closed (see ipcPending lifecycle rules).
-		p.events <- resp
+		// channel. While the consumer still wants events (deliver), a
+		// full channel blocks the read loop — intentional backpressure,
+		// the consumer must drain. Once the consumer has ABANDONED the
+		// stream (deliver=false: caller gone or callback failed), the
+		// frame is dropped when the buffer is full instead of blocking:
+		// a straggler burst larger than the 256-frame buffer can no
+		// longer wedge the read loop ahead of the cancelled final frame
+		// (v1.3.3 — the "no wedged engine state" invariant).
+		if p.deliver.Load() {
+			p.events <- resp
+		} else {
+			select {
+			case p.events <- resp:
+			default:
+			}
+		}
 		return
 	}
 

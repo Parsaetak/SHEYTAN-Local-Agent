@@ -520,7 +520,7 @@ int main() {
             b.push_back(static_cast<uint8_t>(v >> 16));
             b.push_back(static_cast<uint8_t>(v >> 24));
         };
-        auto put64 = [&b, &put32](uint64_t v) {
+        auto put64 = [&put32](uint64_t v) {
             put32(static_cast<uint32_t>(v & 0xFFFFFFFFu));
             put32(static_cast<uint32_t>(v >> 32));
         };
@@ -539,6 +539,14 @@ int main() {
             put32(4);
             put32(v);
         };
+        // GGUF F32 (type 6) — writes real float metadata (rms eps).
+        auto kv_f32 = [&](const std::string& k, float v) {
+            putstr(k);
+            put32(6);
+            uint32_t bits = 0;
+            std::memcpy(&bits, &v, sizeof(bits));
+            put32(bits);
+        };
 
         b.insert(b.end(), {'G', 'G', 'U', 'F'});
         put32(3);
@@ -551,7 +559,7 @@ int main() {
         kv_u32("qwen2.attention.head_count", 1);
         kv_u32("qwen2.attention.head_count_kv", 1);
         kv_u32("qwen2.feed_forward_length", 8);
-        kv_u32("qwen2.attention.layer_norm_rms_eps", 1e-5f);
+        kv_f32("qwen2.attention.layer_norm_rms_eps", 1e-5f);
         kv_u32("qwen2.rope.freq_base", 10000);
         kv_u32("qwen2.vocab_size", 8);
         kv_str("general.name", "not-llama");

@@ -1,180 +1,246 @@
-# UPDATE.md — v1.3.2 Release Repair + Native Engine Execution Hardening
+# UPDATE.md — v1.3.3 Deep Repair: Settlement Determinism, Native Windows Build, Version-Only Release Identity
 
-**Release:** `v1.3.2` (canonical application version; single version
+**Release:** `v1.3.3` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 95b86ca` (`v1.3.1`) · **Date:** 2026-09-21
-**Package:** `SHEYTAN-Local-Agent-v1.3.2-UPDATE.zip`
+**Base:** `main @ dfce793` (`v1.3.2`) · **Date:** 2026-09-21
+**Package:** `SHEYTAN-Local-Agent-v1.3.3-UPDATE.zip`
 **ROADMAP.md:** byte-identical to the locked baseline (git blob SHA-1
 `c7e2c1720eb5e97bd932c0d76100b8719193e650`) — verified before and after
 all work.
 
-This release root-fixes the Windows CI failure of run `35542000811`,
-collapses release-metadata verification into ONE canonical cross-platform
-validator, removes the redundant `APP_VERSION_FULL` identity alias, and
-hardens native engine execution as a first-class release objective:
-observable engine selection (no silent fallback), a pinned native
-execution test contract (deterministic startup, model-path failures,
-shutdown-during-generation, orphan-process prevention), real native
-execution coverage in the Windows pipeline, and a contract-driven rewrite
-of the stable-asset verifier. No working architecture was changed.
+This release root-fixes the three failure classes of Actions run
+`35552680611` and hardens the release identity permanently:
+
+1. the Linux settlement race (summary completion used as a proxy for
+   complete agent settlement while production writes the summary BEFORE
+   the agent.md handoff);
+2. the Windows native-engine compilation failure (transitive includes
+   and a `windows.h` min/max macro collision in `hardware.cpp`);
+3. the release-title identity drift (the GitHub Release title derived
+   from the tag with a product prefix instead of the plain canonical
+   version).
+
+No working architecture was changed.
 
 ---
 
-## S1. Root fix: one canonical release-metadata gate (IMPLEMENTED, TESTED)
+## S1. Deterministic settlement barrier (ROOT FIX, TESTED)
 
-- **Root cause of CI run 35542000811** (reproduced and verified): the
-  Windows job's "Verify release metadata" step built the pattern
-  `AppVersion\s*=\s*"<version>"` and passed it to PowerShell's
-  `Select-String -SimpleMatch`, which treats regex escapes as LITERAL
-  text — the pattern could never match `config.go`'s real content
-  (`AppVersion = "1.3.1"`), so the Windows job failed at that step on
-  every run while Linux passed (its grep semantics matched the regex).
-- `scripts/release-version.mjs` is now the single canonical
-  release-metadata authority. Its logic is exported as pure functions and
-  the CLI operates from the working directory; modes: sync (default),
-  `--check` (verify only, GitHub-Actions annotations), `--env` (emits
-  exactly `APP_VERSION=<version>` — machine-readable only).
-- The three per-shell reimplementations are gone: the audit job's bash
-  greps, the Windows `Select-String` block, and the Linux job's bash
-  greps all became `node scripts/release-version.mjs --check`. Shell
-  steps now only orchestrate the validator.
-- The validator's own **workflow contract** enforces the architecture in
-  both directions: every build job (audit, windows, linux) must invoke
-  the canonical check, and banned fragments fail the gate if a per-shell
-  reimplementation ever reappears — including the exact
-  regex-escapes-in-PowerShell pattern class that broke run 35542000811
-  and the four bash grep reimplementation spellings.
-- `APP_VERSION_FULL` is REMOVED throughout (audit outputs, job envs,
-  release job env, `--env` emission, comments). The v1.3.2 audit found
-  no consumer that distinguished it from `APP_VERSION` — it was a pure
-  alias and a second identity variable with zero semantic value.
-- Semver validation is stricter: leading-zero components (`1.03.2`) are
-  rejected, exactly `MAJOR.MINOR.PATCH` passes.
+### The failure
 
-## S2. Release-metadata regression suite (IMPLEMENTED, ALL TESTS PASS)
+`TestAgentRunSettlesWithSummaryAndHandoff` failed on CI with "agent.md
+handoff missing". The test barrier (`waitForSummarySettled`) returned as
+soon as the rolling summary sidecar reached version >= 1 — but production
+writes the summary (durable step 1) BEFORE the agent.md handoff (durable
+step 2), recall indexing, the continuum rollover and only then records
+the terminal outcome. A test that stops waiting at the summary observes
+a run whose settle-tail is still in flight: on a loaded CI runner the
+poll can land in the summary→handoff window and read a missing agent.md.
+A real race, not a flaky assertion.
 
-- New `scripts/release-version.test.mjs` (21 tests, wired as
-  `npm run test:release`, run by every CI build job): valid/invalid
-  semver shapes (suffixes, wildcards, whitespace, leading zeros),
-  drift detection on every derived surface, missing-marker reporting,
-  whitespace/gofmt-alignment variation, CRLF line endings (Windows
-  checkouts) including byte-preserving repair, `--env` identity
-  emission (exactly one variable; the retired alias must stay dead),
-  workflow-contract violations (missing `--env` derivation, too few
-  `--check` invocations, the 35542000811 pattern class, bash grep
-  reimpls), and patch-to-patch version changes (1.3.1 → 1.3.2 repair
-  across all surfaces, downgrade drift detection, alignment-preserving
-  splice).
+### The fix
 
-## S3. Observable native engine selection — no silent fallback (IMPLEMENTED, TESTED)
+Settlement now waits on the TERMINAL OUTCOME itself:
 
-- New `llm.GenerationFallbackReporter` interface +
-  `SelectGenerationBackendDetailed` returning a `BackendDecision`
-  (serving backend + the reason a native selection fell back).
-  `SelectGenerationBackend` remains the routing shorthand over the same
-  single policy.
-- The native `engine.Backend` implements
-  `GenerationFallbackReason()`, distinguishing the three infrastructure
-  classes instead of a generic "not capable": engine not running (with
-  state + detail), running without a model loaded, and model loaded but
-  not natively executable (the engine's own verdict).
-- `runtime.Stack.streamGeneration` records and logs the reason whenever
-  the user's explicit native selection is routed to llama.cpp
-  (`recordNativeFallback` / `Stack.NativeFallback()`), and `/api/engine`
-  exposes `fallbackReason` + `fallbackCount` in the native status block
-  for the UI. The llama.cpp fallback remains the documented behavior —
-  it is simply never a SILENT one anymore.
-- Stale Phase-1-era comments corrected in `internal/llm/backend.go`,
-  `internal/api/engine.go`, and the integration tests (generation has
-  been REAL since Phase 5); `TestBackendGenerationNotImplemented`
-  renamed to `TestBackendGenerationLifecycleGuard` to match its actual
-  Phase-5 semantics.
+- `waitForRunSettled(t, srv, sessionID)` polls the bounded outcome
+  registry. The v1.2.9 durable-completion ordering guarantees the
+  terminal outcome is recorded only AFTER every required durable
+  artifact is on disk — so observing the terminal outcome IS observing
+  complete settlement. Summary completion is never a proxy again.
+- `waitForRunSettledFor(t, srv, sessionID, runID)` keys the barrier on
+  the EXACT run id — repeated settlement (sequential runs in one
+  session) cannot cross the barrier on a stale terminal record.
+- `waitForRunOutcome(t, srv, sessionID, want...)` pins WHICH terminal
+  state a run settles into and fails fast on a contradicting record.
+- Every settlement-waiting test in the package was migrated
+  (runregistry, runtransport, run_settlement, run_crossmode, run_task);
+  `newRemoteServer` now returns the `*Server` handle so tests can poll
+  the registry through the same observable production writes.
 
-## S4. Native execution test contract (IMPLEMENTED, ALL TESTS PASS)
+### Regression coverage
 
-New `internal/native/engine/execution_contract_test.go` pins the
-execution properties beyond compilation, complementing the existing
-Phase 4/5/7 real-host suites (real inference, streaming, cancellation,
-lane recycling, context overflow — all retained):
+- `TestSettlementBarrierWaitsForBothSummaryAndHandoff`: three sequential
+  agent runs in ONE session; after every barrier crossing BOTH required
+  artifacts (summary version >= N, agent.md with the handoff section)
+  are verified on disk immediately — no post-barrier grace, no sleeps.
+- The original test now verifies both summary AND agent.md after the
+  barrier.
+- 20 consecutive iterations of the four settlement tests under
+  `-race`: PASS.
 
-- executable discovery: `DefaultHostPath` override + platform-suffixed
-  default (`{dataDir}/bin/shtn-engine-host[.exe]`), `Available()`
-  tracking the resolved path exactly;
-- deterministic startup: protocol-mismatch handshake rejection fails
-  closed with the mismatch diagnostic (no surviving process) and the
-  engine stays retryable;
-- bounded boot: a host that never answers the handshake is torn down
-  deterministically by the caller's context (new fake-host `hang`
-  mode) — no hang, no orphan;
-- invalid/missing model path (real C++ host): clean rejection, model
-  concern walks to `failed`, the ENGINE stays healthy, and a valid load
-  recovers — infrastructure failures never convert to engine failures;
-- shutdown during active generation (real host): Stop aborts the
-  in-flight generation without wedging, the host process is fully
-  terminated (signal-0 probe on Unix), and the engine restarts cleanly;
-- orphan prevention: repeated start/stop cycles leave no host process
-  behind (pid cleared + signal-0 probe after every stop);
-- fallback-reason observability across engine states.
+## S2. Mandatory-handoff honesty (ROOT FIX, TESTED)
 
-## S5. Windows pipeline reaches native execution (IMPLEMENTED)
+### The failure mode
 
-- The Windows job now builds and ctests the native C++ engine BEFORE the
-  Go tests (clean `--fresh` configure, Release build, `ctest -C
-  Release`, multi-config staging of `shtn-engine-host.exe` at the path
-  the Go tests resolve) — so the `TestRealCppHost*` integration suites
-  execute against the REAL engine on Windows instead of skipping. The
-  Go↔C++ boundary is subprocess IPC (no cgo), so this needs no toolchain
-  change.
-- With the metadata gate fixed (S1), the Windows pipeline now reaches
-  its complete downstream stages: native engine build + ctest, real
-  native execution in the Go suites, executable build + smoke probe,
-  portable ZIP, NSIS installer, and both verification steps.
+Production could write the summary, fail the agent.md handoff, and still
+`settle(resultOutcome, ...)` with `resultOutcome == "done"` — a falsely
+successful terminal result while the next agent starts without its
+handoff. This violated the documented durable-completion invariant.
 
-## S6. Contract-driven stable-asset verifier (IMPLEMENTED, TESTED)
+### The fix
 
-- `scripts/verify-static-assets.mjs` now DERIVES the contract instead of
-  guessing at name shapes:
-  - **build-config contract**: `vite.config.ts` must declare exactly
-    `assets/[name].js` (entries + chunks) and `assets/[name][extname]`
-    (assets), with no hash tokens — a content hash can only enter a
-    filename through these patterns, so asserting them asserts the whole
-    no-hash property;
-  - **reachability**: every file under `web/static` must be reachable
-    from `index.html` through real reference edges (html src/href, JS
-    import specifiers including dynamic imports and the
-    `__vite__mapDeps` dependency arrays, CSS `url(...)`). A planted
-    stale/hashed file is unreachable by construction and fails.
-- The old heuristic (rejecting any name with a hyphen + 6+ chars
-  containing a digit) is GONE: it could false-reject legitimate
-  deterministic names carrying version digits. Verified by a dedicated
-  negative/positive case suite: planted hashed file rejected, referenced
-  version-digit name accepted, unreferenced foreign file rejected,
-  missing referenced asset rejected, vite.config hash regression
-  rejected, disabled code splitting rejected, pristine tree passes.
-- The dynamic-import requirement is retained WITH its justification:
-  the application is intentionally code-split (the entry lazy-loads the
-  UI panels; per-panel stable filenames are part of the contract), so
-  zero dynamic imports means splitting was silently disabled.
-- `web/static` exactly mirrors a clean `dist` (unchanged `--dist`
-  mirror rule); deterministic filenames and the dist → static
-  synchronization contract are preserved.
+For a completed Agent run the agent.md handoff is REQUIRED durable
+state, not best-effort decoration:
 
-## S7. Verification performed (this release)
+- the write is attempted for EVERY completed agent run (`resultOutcome
+  == "done"` + agent mode) — a nil task state is reported by
+  `writeAgentHandoff` as a real failure instead of silently skipping
+  the mandatory artifact;
+- a write failure demotes the terminal outcome to `"error"` — the same
+  honest class as a reply-persistence failure — with the concrete cause
+  in the terminal caption; the post-terminal error activity still
+  surfaces the failure to the live stream; the reply and the summary
+  are preserved (the run's content is not lost — only its terminal
+  status is honest);
+- the successful ordering (summary → handoff → recall → continuum →
+  terminal publication) is unchanged.
 
-Evidence-backed results from the v1.3.2 working tree (see the release
-report for the full list): frontend `npm ci` + `typecheck` + `lint` +
-`test:units` + clean `build` + `verify:web --dist` + the new
-`test:release` suite; Go suites across `./internal/...` (headless) and
-`./...`, race detector on the concurrency-heavy packages, `go vet`;
-native engine clean `--fresh` configure, full build, 12/12 ctest, and
-the complete Go↔C++ real-host suite (including the new execution
-contract); the stress suite including the release-surface gate;
-`release-version.mjs` sync + `--check` + `--env` consistent at canonical
-1.3.2; ROADMAP.md verified byte-identical before and after.
+### Regression coverage
 
-Windows and Linux release PACKAGES are produced by the GitHub Actions
-pipeline (the Windows runner is required for the Windows build); the
-workflow changes in this release are validated structurally (YAML
-validity, canonical check invocations, stress-gate contract fragments)
-and by the release-metadata regression suite.
+- `TestMandatoryHandoffFailureCannotMasqueradeAsDone`: deterministic
+  failure injection (workspace root is a regular FILE →
+  `os.CreateTemp` fails with ENOTDIR on every platform — no timing, no
+  permission lottery); asserts outcome == "error", caption carries the
+  concrete cause, reply persisted, summary present, handoff genuinely
+  absent.
+- `TestHandoffFailureSurfacesErrorActivity`: a connected activity
+  WebSocket actually RECEIVES the live error frame with the concrete
+  failure; the session keeps the assistant reply.
+
+## S3. Windows native-engine compilation (ROOT FIX, VERIFIED)
+
+### The failure
+
+`native/engine/src/hardware.cpp` failed to compile for Windows:
+`std::vector` used with no `<vector>` include (transitive on some
+toolchains only), `__cpuid` with no `<intrin.h>`, and `std::min` exposed
+to the `windows.h` min/max macro collision (`WIN32_LEAN_AND_MEAN` does
+NOT suppress the macros; a function-like macro expands even after `::`).
+
+### The fix
+
+- every header the translation unit actually uses is included
+  EXPLICITLY: `<vector>`, `<cstdlib>` (strtod/strtoll), `<intrin.h>`
+  (`__cpuid`, Windows-only);
+- `NOMINMAX` + `WIN32_LEAN_AND_MEAN`, both idempotently guarded, before
+  `<windows.h>` (the pattern `gguf.cpp` already carried);
+- the `std::min` call is parenthesized — `(std::min)` — immune to any
+  macro a consumer's include order may still define;
+- the three test files that include `windows.h` (test_gguf, test_model,
+  test_host) carry the same guards;
+- Linux/macOS behavior unchanged (verified: the Linux build is
+  byte-identical in behavior; 12/12 CTest pass).
+
+### Verification performed on this host
+
+- REPRODUCED: the pre-fix `hardware.cpp` compiled against a real
+  Windows SDK (MinGW-w64, `x86_64-windows-gnu`) fails with exactly the
+  CI error class (`no member named 'vector' in namespace 'std'`;
+  `use of undeclared identifier '__cpuid'`).
+- FIXED: the patched file compiles clean.
+- The min/max collision mode was proven token-level (the macro shape
+  MSVC's windows.h defines breaks unparenthesized `std::min`; the
+  parenthesized form compiles and runs) — MSVC itself runs on CI.
+- CLEAN full-engine Windows cross-build: `shtn-engine-host.exe` + all
+  12 CTest executables build as PE32+ x86-64 with
+  `-Wall -Wextra -Wpedantic` and ZERO project warnings (the 8 pre-existing
+  warnings — 1 production in sampler.cpp, 7 in tests — are eliminated).
+- Linux clean-room: `rm -rf build && cmake --fresh && cmake --build &&
+  ctest` → 12/12 PASS.
+- Real application-path execution: the complete Go↔C++ host suite
+  (lifecycle, handshake, health, hardware, metrics, model lifecycle,
+  missing-model path, orphan prevention, stop-during-generation,
+  tokenizer/KV/scheduler, end-to-end generation, cancellation) passes
+  against the real host binary — 10 consecutive iterations.
+
+## S4. Native engine deep audit (HARDENING, TESTED)
+
+The complete path (Go runtime → engine selection → native host
+discovery → process start → handshake → model load → generation →
+streaming → cancellation → shutdown → restart → cleanup) was audited.
+The architecture is sound (bounded restarts with backoff, fail-closed
+handshake, teardown paths, no silent fallback). One real defect fixed:
+
+- the IPC read loop could BLOCK forever dispatching an event frame to an
+  ABANDONED stream whose 256-frame buffer was full (a straggler burst
+  larger than the buffer wedges the loop ahead of the cancelled final
+  frame — a wedged engine requiring restart). Abandoned streams now
+  drop-if-full instead of blocking; live consumers keep full
+  backpressure semantics.
+
+Quality cleanup: 8 compiler warnings eliminated (unused `kept` counter
+in `sampler.cpp`; dead variables/captures in test_forward/test_model/
+test_host/test_generate; the test_generate rms-eps fixture now writes a
+real GGUF F32 (type 6) value instead of a float truncated to u32 0).
+
+## S5. Version-only release identity (PERMANENT, TESTED)
+
+From v1.3.3 onward the release identity is VERSION ONLY:
+
+- tag: `v1.3.3`; release title: `1.3.3` — the plain canonical version,
+  never the tag, never a product prefix, never a codename, never a
+  suffix;
+- the release job verifies the pushed tag equals `v${APP_VERSION}`
+  before anything is published, and re-verifies the PUBLISHED release
+  carries both the exact tag AND the exact version-only title;
+- the workflow contract structurally enforces the identity: REQUIRED
+  fragments (the version-only title spelling, the tag-equals-version
+  gate, the tag-from-ref publication) and BANNED fragments (the
+  pre-v1.3.3 product+tag title, any `Zeta` codename fragment,
+  `APP_VERSION_FULL`);
+- the canonical version 1.3.3 is synchronized across package.json →
+  internal/config/config.go (`AppVersion = "1.3.3"`) → build/config.yml
+  (`productVersion: "1.3.3"`) → SIGNATURE (`SHEYTAN-Local-Agent v1.3.3`)
+  by `release-version.mjs` (sync mode verified, `--check` passes);
+- stale identity assumptions corrected: ARCHITECTURE.md and README rows
+  claiming the `APP_VERSION_FULL` alias still exists now document its
+  permanent removal. No `-Z` / `-Zeta` / codename / release-suffix
+  reference survives in any active surface.
+
+Artifact filenames stay versioned normally
+(`SHEYTAN-LA-v1.3.3-windows-x64.zip`,
+`SHEYTAN-LA-v1.3.3-windows-x64-installer.exe`,
+`SHEYTAN-Local-Agent-Linux-x64-v1.3.3.zip`) — the release TITLE is the
+only identity surface that is the bare version.
+
+## S6. Verification performed (this release, this host)
+
+- **Go:** `gofmt -l .` clean; `go vet -tags headless ./internal/...
+  ./cmd/...` clean; `go test -tags headless -count=1 ./internal/...` →
+  46/46 packages PASS (including the real C++ host integration suite,
+  19.6 s); race gate on the concurrency-heavy packages
+  (api/agent/sessions/contextplan/histref/runtime) PASS; settlement
+  tests 20x under `-race` PASS; native lifecycle tests 10x PASS.
+- **Frontend:** `npm ci`; `npm run typecheck` clean; `npm run lint`
+  0/0; `npm run test:units` 78/78; `npm run test:release` 28/28;
+  `npm run build` + `sync:web` OK; `npm run verify:web -- --dist`
+  satisfied.
+- **Native Linux:** clean-room CMake (`--fresh`) configure + build +
+  ctest → 12/12 PASS.
+- **Native Windows:** full-engine cross-build (host + 12 test
+  executables) as PE32+ with zero project warnings; the MSVC + Windows
+  CTest execution is owned by the GitHub Windows runner (the pipeline
+  builds, ctests and stages the host before the Go integration suites
+  run — unchanged from v1.3.2 and now compilable).
+- **Release:** `node scripts/release-version.mjs` (sync) repaired all
+  three derived surfaces to 1.3.3; `--check` passes; `--env` emits
+  exactly `APP_VERSION=1.3.3`; the 28-test regression suite (7 new
+  version-only identity tests) passes, including a live audit of the
+  real workflow file.
+- **Repository:** no `APP_VERSION_FULL` reference in any active surface
+  (the release script's own historical comment and the removal tests
+  intentionally document the dead alias); ROADMAP.md git blob SHA-1
+  `c7e2c1720eb5e97bd932c0d76100b8719193e650` unchanged before and after.
+
+## S7. Environmental limits (honest scope)
+
+- The Wails desktop shell needs GTK4/WebKitGTK-6.0 development packages
+  (not installable on this host) — the headless build tag is the
+  documented verification path and is what CI runs in the audit job.
+- The Windows MSVC build, NSIS installer and GitHub Release publication
+  execute on the GitHub runners; on this host the Windows native code
+  path was verified by a full MinGW-w64 cross-build (real Windows SDK
+  headers) plus token-level proof of the macro-collision fix, and the
+  workflow changes are enforced by the contract tests that run in every
+  CI job.

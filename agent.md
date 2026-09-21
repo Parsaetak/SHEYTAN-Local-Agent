@@ -10,56 +10,53 @@ Branch: `main`
 # Latest Agent Handoff
 
 ## Task
-SHEYTAN-LA v1.3.2 (release repair + native engine execution hardening): root-fix the Windows CI release-metadata failure of GitHub Actions run 35542000811, make `scripts/release-version.mjs` the ONE canonical cross-platform release-metadata authority (shell steps only orchestrate it), remove the redundant `APP_VERSION_FULL` alias, make native engine selection observable (no silent llama.cpp fallback), pin a native execution test contract (deterministic startup, bounded boots, model-path failures, shutdown-during-generation, orphan prevention), bring real native execution into the Windows pipeline, and rewrite the stable-asset verifier contract-driven — without changing working architecture.
+SHEYTAN-LA v1.3.3 (deep repair / native engine / release cleanup): root-fix the v1.3.2 CI failures of Actions run 35552680611 — the Linux settlement race ("agent.md handoff missing"), the Windows native-engine compilation failure in hardware.cpp, and the release-title identity drift — plus a native-engine deep audit and the permanent version-only release identity (tag v1.3.3, title 1.3.3, no prefix/codename/suffix, ever).
 
 ## Objective
-v1.3.2 must make the release pipeline verifiably correct on BOTH platforms and native engine execution provably real through the application path: one release-metadata validator everywhere, one identity variable, every native-selection fallback inspectable in logs and `/api/engine`, no orphaned host processes, no wedged generations, and the frontend deterministic-filename contract intact — while ROADMAP.md stays byte-identical (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650, verified unchanged before and after).
+v1.3.3 must make settlement deterministic (the barrier waits for the run's TERMINAL outcome, never summary completion), make a mandatory-handoff failure unable to masquerade as successful completion, make the Windows native engine compile cleanly, keep native execution real through the application path (no orphans, no wedged state, no silent fallback), and lock the version-only release identity structurally — while ROADMAP.md stays byte-identical (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650, verified before and after).
 
 ## Current state
-All v1.3.2 work is IMPLEMENTED and TESTED on this host: the canonical `release-version.mjs --check` passes at 1.3.2; the 21-test release-metadata regression suite passes (`npm run test:release`, wired into every CI build job); Go headless suites pass across `./internal/...` and `./...`, race passes on the concurrency-heavy packages, `go vet` is clean; the native C++ engine configures/builds/ctests clean (12/12) and the complete Go↔C++ real-host suite passes including the new execution-contract tests (discovery, protocol mismatch, bounded hang teardown, missing model path, stop-during-generation, orphan prevention, fallback-reason states); the stress suite passes with the release-surface gate reading the reworked workflow; the clean frontend rebuild satisfies the contract-driven `verify-static-assets.mjs --dist` and the 7-case negative/positive suite proves its checks.
+All v1.3.3 work is IMPLEMENTED and VERIFIED on this host: gofmt/vet clean; 46/46 headless Go packages pass (incl. the real C++ host integration suite); race gate passes; settlement tests 20x under -race pass; native Linux clean-room ctest 12/12; full-engine Windows cross-build (host + 12 tests) with zero project warnings; frontend gate fully green (typecheck/lint/78 units/28 release tests/build/verify:web); release metadata synced to 1.3.3 and --check passes; the workflow satisfies the enforced version-only contract.
 
 ## Changes made
-- **Release gate**: `scripts/release-version.mjs` rewritten as the canonical authority (exported pure functions; CLI operates on the working directory; `--env` emits exactly `APP_VERSION`; workflow contract requires `--check` in every build job and BANS per-shell reimplementations — including the regex-escapes-in-PowerShell class that broke run 35542000811 and the bash grep reimplementation spellings). New `scripts/release-version.test.mjs` (21 tests) wired as `npm run test:release` and run by audit/Windows/Linux jobs.
-- **Workflow**: the audit job's bash greps, the Windows `Select-String -SimpleMatch` block (THE root cause) and the Linux job's bash greps all replaced with `node scripts/release-version.mjs --check`; `APP_VERSION_FULL` removed from outputs/envs everywhere; the Windows job gains a native C++ build + ctest step and multi-config staging of `shtn-engine-host.exe` so the Go `TestRealCppHost*` suites execute for real on Windows.
-- **Observable selection**: `llm.GenerationFallbackReporter` + `SelectGenerationBackendDetailed`/`BackendDecision`; native `Backend.GenerationFallbackReason()` distinguishes not-running / no-model / not-executable; `runtime.Stack.streamGeneration` logs and records the reason (`NativeFallback()`); `/api/engine` native snapshot exposes `fallbackReason`/`fallbackCount`.
-- **Execution contract**: new `internal/native/engine/execution_contract_test.go` + fake-host `hang` mode; stale Phase-1 comments corrected in `llm/backend.go`, `api/engine.go`, integration tests; `TestBackendGenerationNotImplemented` renamed `TestBackendGenerationLifecycleGuard`.
-- **Asset verifier**: `verify-static-assets.mjs` rewritten contract-driven — vite output-pattern assertion (no hash tokens) + full reachability closure (html refs, JS imports incl. `__vite__mapDeps` arrays, css url()); the hyphen+digit name heuristic (which could false-reject deterministic names with version digits) is gone; the dynamic-import requirement retained with its justification (intentional code splitting).
-- **Docs/version**: canonical version bumped to 1.3.2 (package.json → config.go / config.yml / SIGNATURE via the script); UPDATE.md rewritten for v1.3.2; README current-release + v1.3.2 section; this handoff; worklog.
+- Settlement barrier (internal/api): waitForRunSettled / waitForRunSettledFor (runId-keyed, repeated-settlement-safe) / waitForRunOutcome poll the bounded outcome registry — the terminal record the v1.2.9 durable ordering writes only AFTER all durable artifacts; all settlement-waiting tests migrated; newRemoteServer returns the *Server handle.
+- Mandatory-handoff honesty (internal/api/server.go): every completed Agent run attempts the handoff (nil task = real failure, not a silent skip); a write failure demotes resultOutcome to "error" with the concrete cause in the terminal caption; reply/summary/live error activity preserved; successful ordering unchanged.
+- Windows native root-fix (native/engine/src/hardware.cpp): explicit <vector>/<cstdlib>/<intrin.h>; NOMINMAX + WIN32_LEAN_AND_MEAN guarded before windows.h; (std::min) parenthesized; the three windows.h test files carry the same guards.
+- Engine hardening (internal/native/engine/runtime.go): the IPC read loop drops event frames for ABANDONED streams instead of blocking on a full buffer (a >256-frame straggler burst could wedge the connection ahead of the cancelled final frame); backpressure for live consumers unchanged.
+- Native quality: 8 compiler warnings eliminated (sampler.cpp kept-counter; test_forward/test_model/test_host/test_generate dead vars/captures; test_generate rms-eps now a real GGUF F32 type-6 value).
+- Version-only identity: GitHub Release title is the plain canonical version (name: ${{ env.APP_VERSION }}); publication re-verification asserts tag AND title; release-version.mjs contract gains REQUIRED fragments (version-only title, tag==v${APP_VERSION} gate, tag-from-ref) and BANNED fragments (product+tag title, Zeta, APP_VERSION_FULL); 7 new regression tests (28 total); canonical 1.3.3 synced across package.json/config.go/build-config.yml/SIGNATURE; stale APP_VERSION_FULL doc rows corrected (ARCHITECTURE.md, README.md).
 
 ## Files changed
-- scripts/release-version.mjs, scripts/release-version.test.mjs (NEW), scripts/verify-static-assets.mjs, package.json
+- internal/api/{server.go, runregistry_test.go, run_settlement_test.go, run_settlement_v133_test.go (NEW), runtransport_test.go, run_crossmode_test.go, run_task_test.go, history_api_test.go}
+- internal/native/engine/runtime.go
+- native/engine/src/{hardware.cpp, sampler.cpp}, native/engine/tests/{test_gguf.cpp, test_model.cpp, test_host.cpp, test_forward.cpp, test_generate.cpp}
+- scripts/{release-version.mjs, release-version.test.mjs}, package.json, internal/config/config.go, build/config.yml, SIGNATURE
 - .github/workflows/build-desktop.yml
-- internal/llm/backend.go (+ backend_test.go), internal/native/engine/{backend.go,engine_test.go,cpp_integration_test.go,execution_contract_test.go (NEW)}
-- internal/runtime/runtime.go, internal/api/engine.go, internal/config/config.go, build/config.yml, SIGNATURE
 - README.md, UPDATE.md, agent.md, worklog.md
 
 ## Tests and verification
-- Release metadata: `node scripts/release-version.mjs` (sync), `--check`, `--env` all consistent at 1.3.2; `npm run test:release` 21/21.
-- Go: `gofmt` clean; `go vet ./...` clean (headless); `go test -tags headless -count=1 ./internal/...` and `go test ./... -run Test` 0 FAIL; race on the concurrency-heavy packages PASS.
-- Native: clean `--fresh` CMake configure + full build; ctest 12/12; the complete engine package suite (real host) PASS including the new execution-contract tests.
-- Frontend: `npm ci`, `typecheck`, `lint`, `test:units`, clean `build`; `verify:web --dist` satisfied; the verifier's negative/positive case suite 7/7.
-- Stress: full suite pass (the release-surface gate validates the reworked workflow).
-- Repository scans: no `APP_VERSION_FULL` references; ROADMAP.md blob SHA-1 unchanged.
+- Go: gofmt clean; go vet -tags headless clean; go test -tags headless -count=1 ./internal/... 46/46 PASS; race on api/agent/sessions/contextplan/histref/runtime PASS; settlement 20x -race PASS; native lifecycle 10x PASS.
+- Native: Linux clean-room cmake --fresh + build + ctest 12/12; Windows full-engine MinGW-w64 cross-build (host + 12 CTest executables, PE32+, -Wall -Wextra -Wpedantic, ZERO project warnings); the pre-fix hardware.cpp REPRODUCES the CI failure class on the same toolchain and the fixed file compiles clean.
+- Frontend: npm ci; typecheck; lint 0/0; test:units 78/78; test:release 28/28; build + sync:web; verify:web --dist satisfied.
+- Release: release-version.mjs sync/check/env all consistent at 1.3.3; workflow satisfies the full v1.3.3 contract (live audit test).
+- Repository scans: no codename/suffix reference in any active surface; ROADMAP.md blob SHA unchanged.
 
 ## Failures / blockers
-- None open. Known environmental limits: the Wails desktop shell needs GTK4/WebKitGTK (not installed on this host — headless tag verified instead); the Windows build/NSIS/installer execution requires the GitHub Windows runner (pipeline changes validated structurally: YAML validity, canonical-check invocations, stress-gate contract fragments, and by running the same native/Go suites locally on Linux).
+- None open. Known environmental limits: Wails desktop shell needs GTK4/WebKitGTK (headless tag is the documented verification path); MSVC build/installer/publication execute on the GitHub Windows runner (the Windows native code path verified here via real-SDK cross-build + token-level macro-collision proof).
 
 ## Remaining work
-- CI Actions rerun from a push of this tree (maintainer-side; the tag `v1.3.2` triggers the release job).
-- Optional future (roadmap, do not start now): native engine packaging into the portable ZIPs (roadmap "Native engine" priority 5).
+- CI Actions rerun from a push of this tree (maintainer-side; tag v1.3.3 triggers the release job with the version-only title).
+- Optional future (roadmap, do not start now): native engine packaging into the portable ZIPs.
 
 ## Recommended next action
-Commit this tree, tag `v1.3.2`, push; CI will run the full matrix — canonical identity derivation + check in every job, native C++ build/ctest + real-host Go integration on Windows AND Linux, frontend contracts, packaging, installer, release verification.
+Commit this tree, tag v1.3.3, push; CI runs the full matrix — settlement determinism and handoff honesty on Linux, the now-compilable native engine build + 12 CTest executables + real-host Go integration on Windows, the enforced version-only release identity, packaging, installer and release verification.
 
 ## Do not redo
-- Do NOT reintroduce per-shell release-metadata matching (grep/Select-String) in the workflow — `release-version.mjs --check`'s contract fails the build on any of the banned fragments.
-- Do NOT reintroduce `APP_VERSION_FULL` (or any second identity variable); `--env` emits exactly `APP_VERSION`.
-- Do NOT make the native→llama.cpp fallback silent again: a native selection that cannot serve MUST record its reason (`GenerationFallbackReason` → logs + `/api/engine`).
-- Do NOT revert the Vite stable-filename output patterns or hand-edit `web/static`; the contract is enforced by `verify-static-assets.mjs` (config assertion + reachability) in CI.
-- Do NOT cache `native/engine/build` (CMake build trees are not relocatable; `--fresh` always).
-- Do NOT hand-edit `SIGNATURE`'s version line — `release-version.mjs` owns it (or regenerate via `scripts/gen-signature.go`).
-- Cross-mode references are server-validated DATA (fenced, provenance-labeled); never trust the client payload.
-- ROADMAP.md is byte-locked (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650) — never touch it.
+- Do NOT use summary completion as a settlement proxy — the barrier is the run's TERMINAL outcome in the bounded registry (waitForRunSettled / waitForRunSettledFor for sequential runs).
+- Do NOT let a mandatory-handoff failure settle "done" — the v1.3.3 honesty demotion (resultOutcome → "error") is pinned by TestMandatoryHandoffFailureCannotMasqueradeAsDone.
+- Do NOT rely on transitive includes or unguarded windows.h in the native engine: explicit includes + NOMINMAX + parenthesized (std::min) are the permanent pattern (see hardware.cpp's header comment).
+- Do NOT reintroduce a product-prefixed/tag-derived release title, a codename fragment (Zeta) or a second identity variable (APP_VERSION_FULL) — the release-version.mjs workflow contract fails the build on every one.
+- Do NOT make the native→llama.cpp fallback silent; do NOT cache native/engine/build (--fresh always); do NOT hand-edit SIGNATURE's version line.
 <!-- sheytan:handoff:end -->
 
 Current release: `v1.3.2` — release repair + native engine execution

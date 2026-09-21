@@ -103,6 +103,7 @@ int main() {
 
     const auto& hyper_ref = ref.at("hyper");
     const auto& prompt_ref = ref.at("prompt");
+    CHECK(!hyper_ref.empty()); // the reference must actually carry the hyper block
 
     // --- unit: rms_norm against a hand-computed reference -----------------
     {
@@ -301,7 +302,6 @@ int main() {
         opts.reserved = 0;
 
         std::string got_text;
-        uint32_t got_token = 0xFFFFFFFFu;
 
         auto emit = [](void* user, const shtn_generation_chunk* chunk) -> int32_t {
             auto* sink = static_cast<std::pair<std::string, uint32_t>*>(user);

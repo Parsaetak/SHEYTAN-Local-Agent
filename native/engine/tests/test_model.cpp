@@ -15,6 +15,12 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <direct.h>
 #include <windows.h>
 #define S_MKDIR(p) _mkdir(p)
@@ -369,7 +375,7 @@ int main() {
 
         std::vector<std::thread> workers;
         for (int i = 0; i < 4; ++i) {
-            workers.emplace_back([&e, &dir, &tiny]() {
+            workers.emplace_back([&e]() {
                 for (int round = 0; round < 50; ++round) {
                     shtn_model_info mi{};
                     shtn_memory_plan mp{};

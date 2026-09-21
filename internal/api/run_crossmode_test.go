@@ -123,7 +123,7 @@ func TestChatRunRetrievesAgentHistoryPinsProvenance(t *testing.T) {
 	}
 	runResp.Body.Close()
 
-	if !waitForSummarySettled(t, server, chatID) {
+	if !waitForRunSettled(t, srv, chatID) {
 		t.Fatal("the chat run never settled its summary")
 	}
 
@@ -171,7 +171,7 @@ func TestChatRunRetrievesAgentHistoryPinsProvenance(t *testing.T) {
 // TestSelfReferenceIgnored pins that a session cannot attach ITSELF.
 func TestSelfReferenceIgnored(t *testing.T) {
 	engine, cap := newCapturingEngine(t)
-	_, server := newRemoteServerWithHandle(t, engine.URL)
+	srv, server := newRemoteServerWithHandle(t, engine.URL)
 
 	created := createSessionWithMode(t, server, "agent")
 	id := created["id"].(string)
@@ -187,7 +187,7 @@ func TestSelfReferenceIgnored(t *testing.T) {
 	}
 	runResp.Body.Close()
 
-	if !waitForSummarySettled(t, server, id) {
+	if !waitForRunSettled(t, srv, id) {
 		t.Fatal("run never settled")
 	}
 
@@ -256,7 +256,7 @@ func TestRegenerateKeepsHistoryReferences(t *testing.T) {
 	}
 	runResp.Body.Close()
 
-	if !waitForSummarySettled(t, server, chatID) {
+	if !waitForRunSettled(t, srv, chatID) {
 		t.Fatal("the chat run never settled its summary")
 	}
 
@@ -355,7 +355,7 @@ func TestSameModeReferenceDroppedServerSide(t *testing.T) {
 	}
 	runResp.Body.Close()
 
-	if !waitForSummarySettled(t, server, agentID) {
+	if !waitForRunSettled(t, srv, agentID) {
 		t.Fatal("run never settled")
 	}
 
@@ -559,7 +559,7 @@ func TestRunSnapshotWireFrameCarriesTask(t *testing.T) {
 	if !waitForReplyPersisted(t, server, sessionID) {
 		t.Fatal("the run never persisted its reply")
 	}
-	if !waitForSummarySettled(t, server, sessionID) {
+	if !waitForRunSettled(t, srv, sessionID) {
 		t.Fatal("the settle tail (summary sidecar) never completed")
 	}
 }
