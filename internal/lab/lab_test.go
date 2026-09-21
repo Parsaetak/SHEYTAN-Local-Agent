@@ -122,8 +122,20 @@ func TestWorkspacePathForCanonicalSpelling(t *testing.T) {
 
 	// The manager root must be canonicalized to the real path so every
 	// derived workspace shares one representation.
-	if manager.Root != real {
-		t.Fatalf("manager root = %q, want canonical %q", manager.Root, real)
+	//
+	// v1.3.5: the EXPECTED side is canonicalized too. On Windows CI the
+	// temp root arrives through an 8.3 short name (RUNNER~1); comparing
+	// the canonical manager root against the raw t.TempDir() spelling
+	// compared two representations of the SAME directory and failed
+	// ("manager root = C:\Users\runneradmin\..., want canonical =
+	// C:\Users\RUNNER~1\..."). Canonical-to-canonical keeps the
+	// contract and drops the spelling accident.
+	wantRoot, wantRootErr := canonicalPath(real)
+	if wantRootErr != nil {
+		t.Fatalf("canonicalize expected root: %v", wantRootErr)
+	}
+	if manager.Root != wantRoot {
+		t.Fatalf("manager root = %q, want canonical %q", manager.Root, wantRoot)
 	}
 
 	workspace := &Workspace{
@@ -143,7 +155,11 @@ func TestWorkspacePathForCanonicalSpelling(t *testing.T) {
 		t.Fatalf("PathFor with non-canonical workspace spelling: %v", err)
 	}
 
-	want, wantErr := filepath.Abs(filepath.Join(real, "canonical-test", "nested", "file.txt"))
+	// Canonical-to-canonical comparison: the expected side resolves
+	// through the same nearest-existing-ancestor rule the production
+	// path checks use, so an 8.3 / symlink spelling of the temp root
+	// cannot make two equal paths compare unequal.
+	want, wantErr := canonicalPath(filepath.Join(real, "canonical-test", "nested", "file.txt"))
 	if wantErr != nil {
 		t.Fatal(wantErr)
 	}

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -188,25 +189,90 @@ func renderToolReport(root string, report SearchReport) string {
 // relWithinRoot normalizes a user/model-supplied file reference to the
 // workspace-relative slash form, refusing any path that escapes the
 // root (path safety is non-negotiable for a model-facing surface).
+//
+// v1.3.5: the classification is CROSS-PLATFORM by design. The previous
+// implementation leaned on filepath.IsAbs of the running platform, so on
+// Windows a POSIX-rooted input such as /etc/passwd (IsAbs there is
+// false) slipped through Clean/ToSlash and was accepted as an ordinary
+// relative filename — a real escape on a model-facing tool. The rules
+// now are:
+//
+//   - separators are unified FIRST so every check sees one syntax, and
+//     the result is always the workspace-relative slash form;
+//   - ANY rooted form is rejected — POSIX absolute (/etc/passwd),
+//     Windows rooted (\foo, \foo\bar) and UNC (\\server\share,
+//     //server/share) all start with a slash after unification;
+//   - ANY Windows volume form is rejected (C:/x, C:\x, C:x, D:/secret)
+//     regardless of the running platform — a drive-qualified path is
+//     never an ordinary relative filename;
+//   - a host-absolute path in the RUNNING platform's own syntax may
+//     still point INSIDE the workspace (the model saw absolute paths
+//     earlier): it is relativized against the root and then subjected
+//     to the same traversal checks;
+//   - lexical traversal is rejected after normalization (..\ and ../
+//     are equivalent, foo/../../secret collapses to ../secret and is
+//     refused).
 func relWithinRoot(root, p string) (string, error) {
 	p = strings.TrimSpace(p)
 	if p == "" {
 		return "", nil
 	}
 
+	outside := func() (string, error) {
+		return "", fmt.Errorf("repo_search: path %q is outside the workspace", p)
+	}
+
+	// Unified slash form: one syntax for every classification below.
+	unified := strings.ReplaceAll(p, "\\", "/")
+
+	// Host-absolute paths in the running platform's own syntax may
+	// still point inside the workspace (the model saw absolute paths
+	// earlier): relativize against the root, then subject the result
+	// to the traversal checks below. This covers POSIX-absolute input
+	// on Unix and drive/UNC input on Windows.
 	if filepath.IsAbs(p) {
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
-			return "", fmt.Errorf("repo_search: path %q is outside the workspace", p)
+			return outside()
 		}
-		p = rel
+		unified = strings.ReplaceAll(rel, "\\", "/")
+	} else {
+		// Host-relative per IsAbs — but the FOREIGN syntaxes the
+		// host cannot see must still be refused:
+		//   - Windows volume forms ("C:/x", "C:x", "D:\secret"):
+		//     drive-qualified paths are rooted at a volume, and
+		//     "C:x" is drive-relative (rooted at the drive's own
+		//     cwd) — never a workspace-relative filename;
+		//   - rooted forms with a leading slash once separators
+		//     are unified: POSIX-absolute input on Windows
+		//     ("/etc/passwd", "//server/share") and Windows
+		//     drive-less rooted input ("\foo", "\foo\bar") both
+		//     land here with IsAbs reporting false.
+		if isWindowsVolumePath(unified) || strings.HasPrefix(unified, "/") {
+			return outside()
+		}
 	}
 
-	p = filepath.ToSlash(filepath.Clean(p))
-	if p == ".." || strings.HasPrefix(p, "../") || filepath.IsAbs(p) {
+	cleaned := path.Clean(unified)
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") || cleaned == "/" {
 		return "", fmt.Errorf("repo_search: path escapes the workspace root")
 	}
-	return p, nil
+
+	return cleaned, nil
+}
+
+// isWindowsVolumePath reports whether a unified (slash-separated) path
+// carries a Windows volume prefix: "C:/x", "C:\\x", "C:x", "d:/secret".
+// A single ASCII letter followed by a colon is a volume reference on
+// Windows; the model-facing boundary refuses it on every platform
+// instead of mistaking it for an ordinary relative filename.
+func isWindowsVolumePath(unified string) bool {
+	if len(unified) < 2 || unified[1] != ':' {
+		return false
+	}
+
+	c := unified[0]
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,12 @@
 // clone_api_test.go — v1.3.0 regression tests for the GitHub clone HTTP
-// surface. The fake git binary is injected through the SHEYTAN_GIT_BINARY
-// seam (the same seam gitclone.DefaultGitBinary reads).
+// surface. The fake git executable is injected through the
+// SHEYTAN_GIT_BINARY seam (the same seam gitclone.DefaultGitBinary
+// reads).
+//
+// v1.3.5: the fake git is the TEST BINARY ITSELF re-executed through
+// the shared internal/testfakes helper — a real executable on Windows
+// and Unix — replacing the POSIX shell scripts that could not run on
+// the Windows release pipeline.
 package api
 
 import (
@@ -13,35 +19,38 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/testfakes"
 )
 
-func fakeAPISuccessGit(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	git := filepath.Join(dir, "fake-git")
-	script := `#!/bin/sh
-case "$1" in
-  clone)
-    echo "Cloning into 'dest'..." >&2
-    echo "Receiving objects:  50% (13/26)" >&2
-    echo "Receiving objects: 100% (26/26), done." >&2
-    DEST=""
-    for arg in "$@"; do DEST="$arg"; done
-    mkdir -p "$DEST/.git"
-    echo "readme" > "$DEST/README.md"
-    exit 0
-    ;;
-  -C)
-    echo "0123456789abcdef0123456789abcdef01234567"
-    exit 0
-    ;;
-esac
-exit 1
-`
-	if err := os.WriteFile(git, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+// TestMain arms the re-exec helper: when the clone machinery spawns
+// this test binary as the fake git, the helper runs the scripted
+// behavior instead of the test suite.
+func TestMain(m *testing.M) {
+	if testfakes.RunFakeGit(os.Args[1:]) {
+		return // the helper ran and ended the process
 	}
-	return git
+	os.Exit(m.Run())
+}
+
+// fakeGitBinary returns the fake git executable path for the scripted
+// mode: the test binary itself plus the mode variable (inherited by the
+// spawned clone process through the parent environment, restored
+// automatically by t.Setenv).
+func fakeGitBinary(t *testing.T, mode string) string {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("test binary path: %v", err)
+	}
+
+	t.Setenv(testfakes.GitModeEnv, mode)
+	return exe
+}
+
+func fakeAPISuccessGit(t *testing.T) string {
+	return fakeGitBinary(t, "success")
 }
 
 func postClone(t *testing.T, srv *httptest.Server, body string) (int, map[string]any) {
@@ -212,16 +221,7 @@ func TestCloneEndpointDestinationCollision(t *testing.T) {
 }
 
 func TestCloneEndpointFailedCloneReportsClassifiedError(t *testing.T) {
-	dir := t.TempDir()
-	git := filepath.Join(dir, "fake-git")
-	script := `#!/bin/sh
-echo "fatal: repository 'https://github.com/owner/repository.git/' not found" >&2
-exit 128
-`
-	if err := os.WriteFile(git, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SHEYTAN_GIT_BINARY", git)
+	t.Setenv("SHEYTAN_GIT_BINARY", fakeGitBinary(t, "not-found"))
 
 	server, cfg := newTestServer(t)
 
@@ -244,18 +244,9 @@ exit 128
 }
 
 func TestCloneEndpointCancel(t *testing.T) {
-	dir := t.TempDir()
-	git := filepath.Join(dir, "fake-git")
-	script := `#!/bin/sh
-echo "Cloning into 'dest'..." >&2
-echo "Receiving objects:  10% (1/26)" >&2
-sleep 30
-exit 0
-`
-	if err := os.WriteFile(git, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SHEYTAN_GIT_BINARY", git)
+	// A fake git that genuinely stays alive mid-clone until the real
+	// cancellation path terminates the process tree.
+	t.Setenv("SHEYTAN_GIT_BINARY", fakeGitBinary(t, "hang"))
 
 	server, cfg := newTestServer(t)
 

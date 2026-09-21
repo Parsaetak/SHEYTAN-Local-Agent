@@ -22,6 +22,14 @@ import (
 // a stand-in llama-server that serves /health on the requested port. This
 // is the only portable way to test the REAL spawn → health → ready path
 // without shipping an actual llama.cpp binary into CI.
+//
+// v1.3.5: TestMain also answers the CAPABILITY-PROBE invocations
+// (`--help`, `--list-devices`) so timingmarks_test.go can drive
+// parseHelpCaps / EnumerateEngineDevices against a real executable.
+// The --help dispatch is deliberately ARGV-based: the production probe
+// runs the engine under a sanitized environment (sanitizedHelpEnv strips
+// every custom variable), so a mode marker CANNOT be used there — the
+// help text must be self-describing from the argv alone.
 func TestMain(m *testing.M) {
 	if os.Getenv("SHEYTAN_FAKE_LLAMA") == "1" {
 		runFakeLlamaServer()
@@ -29,7 +37,65 @@ func TestMain(m *testing.M) {
 		return
 	}
 
+	// Capability-probe dispatch. `go test` never starts this binary
+	// with one of these as the first flag, so the normal test run is
+	// unaffected.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--help":
+			runFakeEngineHelpProbe()
+
+			return
+		case "--list-devices":
+			runFakeEngineDeviceProbe()
+
+			return
+		}
+	}
+
 	os.Exit(m.Run())
+}
+
+// fakeEngineHelpText is the canonical --help contract the probe parses:
+// every option the capability profile tracks is present, in the shape a
+// modern llama.cpp build prints (tri-state --flash-attn included).
+const fakeEngineHelpText = `usage: llama-server [options]
+
+  -h, --help            show this help message and exit
+  --device DEVICE       select the device for inference
+  --flash-attn [on|off|auto]  enable/disable Flash Attention
+  --cache-reuse N       minimize KV-cache re-computation
+  --jinja               use the jinja template engine for chat
+  --no-webui            disable the built-in web UI
+  --ubatch-size N       logical maximum batch size
+  --threads-batch N     number of threads used during batch generation
+`
+
+// runFakeEngineHelpProbe answers `<engine> --help`. No environment is
+// required on purpose: the production probe sanitizes the child
+// environment, so the output is fixed by the argv.
+func runFakeEngineHelpProbe() {
+	fmt.Print(fakeEngineHelpText)
+}
+
+// runFakeEngineDeviceProbe answers `<engine> --list-devices`. The
+// enumeration invocation passes the parent environment through, so the
+// scripted variant is selected by SHEYTAN_FAKE_ENGINE_DEVICES; with no
+// marker the DEFAULT variant (two devices) still works — the probe
+// never depends exclusively on a custom environment variable.
+func runFakeEngineDeviceProbe() {
+	switch os.Getenv("SHEYTAN_FAKE_ENGINE_DEVICES") {
+	case "one":
+		fmt.Print("Available devices:\n" +
+			"  Vulkan0: Intel(R) Arc(TM) A770M Graphics (8192 MiB)\n")
+	case "unknown":
+		fmt.Fprintln(os.Stderr, "error: unknown argument --list-devices")
+		os.Exit(1)
+	default: // "two" and unset
+		fmt.Print("Available devices:\n" +
+			"  Vulkan0: Intel(R) Graphics (2048 MiB)\n" +
+			"  Vulkan1: Intel(R) Arc(TM) A770M Graphics (16384 MiB)\n")
+	}
 }
 
 // runFakeLlamaServer serves /health (200) and optionally /v1/chat/completions
@@ -451,13 +517,13 @@ var _ = exec.Command
 // v1.2.5 engine lifecycle contract tests (watchdog ownership + honest
 // exit classification). These pin the invariants from the repair brief:
 //
-//	1. unexpected exit triggers restart          (bounded recovery)
-//	2. deliberate stop does not restart          (no false crash)
-//	3. stop during backoff cancels the restart   (cancelable watchdog)
-//	4. repeated crashes exhaust the budget       (terminal failed)
-//	5. stale restart cannot resurrect an engine  (generation guard)
-//	6. budget resets only after a stable episode (crash loops terminate)
-//	7. shutdown leaves no watchdog goroutine     (deterministic ownership)
+//      1. unexpected exit triggers restart          (bounded recovery)
+//      2. deliberate stop does not restart          (no false crash)
+//      3. stop during backoff cancels the restart   (cancelable watchdog)
+//      4. repeated crashes exhaust the budget       (terminal failed)
+//      5. stale restart cannot resurrect an engine  (generation guard)
+//      6. budget resets only after a stable episode (crash loops terminate)
+//      7. shutdown leaves no watchdog goroutine     (deterministic ownership)
 // ---------------------------------------------------------------------------
 
 // waitForState drains the subscription channel until one of the wanted

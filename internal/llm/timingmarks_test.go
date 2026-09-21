@@ -21,7 +21,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -93,28 +92,38 @@ func TestStreamOnceEmitsTransportMarks(t *testing.T) {
 	}
 }
 
-// fakeEngineScript writes an executable script emulating llama-server
-// behaviour for --list-devices / --help and returns its path.
-func fakeEngineScript(t *testing.T, output string) string {
+// fakeEngineBinary returns the fake engine executable path (this test
+// binary, re-executed via the TestMain dispatch in llama_test.go).
+// The --help probe is argv-triggered so it keeps working under the
+// sanitized probe environment; the --list-devices variant is selected
+// by SHEYTAN_FAKE_ENGINE_DEVICES (the enumeration invocation passes the
+// parent environment through).
+func fakeEngineBinary(t *testing.T, deviceMode string) string {
 	t.Helper()
 
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "llama-server")
-
-	script := "#!/bin/sh\ncat << 'EOF'\n" + output + "\nEOF\n"
-
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake engine: %v", err)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("test binary path: %v", err)
 	}
 
-	return bin
+	if deviceMode != "" {
+		t.Setenv("SHEYTAN_FAKE_ENGINE_DEVICES", deviceMode)
+	}
+
+	// The engine binary path keys the per-binary enumeration cache
+	// (a 24h TTL map); every test here shares ONE binary, so the
+	// cache must start empty or a previous test's enumeration would
+	// leak into the next scenario.
+	resetEngineDeviceCacheForTests()
+
+	return exe
 }
 
 // TestDeviceFlagCapabilityParses pins the capability detection for the
 // --device flag (help-parse against a real fake binary + conservative tag
 // fallback).
 func TestDeviceFlagCapabilityParses(t *testing.T) {
-	bin := fakeEngineScript(t, "usage: llama-server\n  --device DEVICE   select device\n  --flash-attn [on|off|auto]\n  --cache-reuse N\n  --jinja\n  --no-webui\n")
+	bin := fakeEngineBinary(t, "") // --help is argv-triggered: no env mode needed
 
 	caps := parseHelpCaps(bin, "b4600")
 	if caps == nil {
@@ -139,7 +148,7 @@ func TestDeviceFlagCapabilityParses(t *testing.T) {
 // an iGPU and a discrete Arc resolves to the Arc (most memory), and the
 // selection is the engine's OWN device name.
 func TestDeterministicDeviceSelectsBestEnumerated(t *testing.T) {
-	bin := fakeEngineScript(t, "Available devices:\n  Vulkan0: Intel(R) Graphics (2048 MiB)\n  Vulkan1: Intel(R) Arc(TM) A770M Graphics (16384 MiB)")
+	bin := fakeEngineBinary(t, "two")
 
 	devices, supported, err := EnumerateEngineDevices(bin)
 	if err != nil || !supported {
@@ -170,7 +179,7 @@ func TestDeterministicDeviceSelectsBestEnumerated(t *testing.T) {
 // no enumeration support → NO inferred device name is ever passed.
 func TestDeterministicDeviceFailsClosedWithoutEnumeration(t *testing.T) {
 	// A binary that rejects --list-devices (the unknown-argument error).
-	bin := fakeEngineScript(t, "error: unknown argument --list-devices")
+	bin := fakeEngineBinary(t, "unknown")
 
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
@@ -194,7 +203,7 @@ func TestDeterministicDeviceFailsClosedWithoutEnumeration(t *testing.T) {
 // caps reporting --device support and an enumerated device, the launch
 // args carry --device <name>; without caps support they never do.
 func TestLaunchArgsCarryDeviceWhenSupported(t *testing.T) {
-	bin := fakeEngineScript(t, "Available devices:\n  Vulkan0: Intel(R) Arc(TM) A770M Graphics (8192 MiB)")
+	bin := fakeEngineBinary(t, "one")
 
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
@@ -252,4 +261,14 @@ func TestLaunchArgsCarryDeviceWhenSupported(t *testing.T) {
 	}
 }
 
-var _ = strings.TrimSpace
+// resetEngineDeviceCacheForTests clears the package-private per-binary
+// enumeration cache (24h TTL, keyed by the engine binary path). The
+// fake engine IS the test binary here, so every scenario would
+// otherwise share one cache entry and a previous test's enumeration
+// result would leak into the next. Same-package white-box access keeps
+// the production code free of test hooks.
+func resetEngineDeviceCacheForTests() {
+	deviceMu.Lock()
+	deviceCache = map[string]deviceCacheEntry{}
+	deviceMu.Unlock()
+}

@@ -106,22 +106,22 @@ const goModFixture = "module example.com/fixture\n\ngo 1.26\n"
 const mainGoFixture = `package main
 
 import (
-	"fmt"
+        "fmt"
 
-	"example.com/fixture/internal/util"
+        "example.com/fixture/internal/util"
 )
 
 // Runner drives the fixture.
 type Runner struct{}
 
 func (r Runner) Run(name string) error {
-	fmt.Println(name)
-	return nil
+        fmt.Println(name)
+        return nil
 }
 
 func main() {
-	var r Runner
-	_ = r.Run(util.Helper())
+        var r Runner
+        _ = r.Run(util.Helper())
 }
 `
 
@@ -131,7 +131,7 @@ const utilGoFixture = `package util
 const Version = "1.0"
 
 func Helper() string {
-	return Version
+        return Version
 }
 `
 
@@ -140,9 +140,9 @@ const utilGoTestFixture = `package util
 import "testing"
 
 func TestHelper(t *testing.T) {
-	if Helper() == "" {
-		t.Fatal("empty")
-	}
+        if Helper() == "" {
+                t.Fatal("empty")
+        }
 }
 `
 
@@ -913,6 +913,78 @@ func TestRelWithinRootRejectsEscape(t *testing.T) {
 	rel, err = relWithinRoot(root, "./a/b.go")
 	if err != nil || rel != "a/b.go" {
 		t.Errorf("relative path not normalized: %q %v", rel, err)
+	}
+}
+
+// TestRelWithinRootCrossPlatformMatrix is the v1.3.5 table-driven
+// regression suite for the model-facing path boundary. Every rejection
+// case must be refused on EVERY platform (the previous implementation
+// accepted /etc/passwd on Windows, where filepath.IsAbs cannot see a
+// POSIX-rooted path); every acceptance case must normalize to the
+// workspace-relative slash form.
+func TestRelWithinRootCrossPlatformMatrix(t *testing.T) {
+	root := t.TempDir()
+
+	rejected := []struct {
+		name string
+		in   string
+	}{
+		{"traversal dotdot slash", "../secret"},
+		{"traversal dotdot backslash", "..\\secret"},
+		{"traversal nested slash", "foo/../../secret"},
+		{"traversal nested backslash", "foo\\..\\..\\secret"},
+		{"POSIX absolute passwd", "/etc/passwd"},
+		{"POSIX absolute other", "/foo/bar"},
+		{"Windows drive backslash", `C:\Windows\System32`},
+		{"Windows drive slash", "C:/Windows/System32"},
+		{"Windows drive other volume", `D:\secret`},
+		{"Windows drive-relative", "C:secret"},
+		{"Windows rooted backslash", "\\foo"},
+		{"Windows rooted backslash nested", "\\foo\\bar"},
+		{"UNC backslash", `\\server\share\secret`},
+		{"UNC slash", "//server/share/secret"},
+		{"root itself", "/"},
+	}
+
+	for _, tc := range rejected {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			if rel, err := relWithinRoot(root, tc.in); err == nil {
+				t.Fatalf("path %q accepted as %q — rooted/volume/traversal forms must be refused on every platform", tc.in, rel)
+			}
+		})
+	}
+
+	accepted := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain relative", "internal/api.go", "internal/api.go"},
+		{"backslash relative", "src\\main.go", "src/main.go"},
+		{"explicit current dir", "./internal/repoindex/tool.go", "internal/repoindex/tool.go"},
+		{"nested relative", "a/b/c.go", "a/b/c.go"},
+		{"inner traversal stays inside", "foo/../bar.go", "bar.go"},
+		{"absolute inside root", root + "/sub/file.go", "sub/file.go"},
+		{"empty means no constraint", "", ""},
+	}
+
+	for _, tc := range accepted {
+		t.Run("accept/"+tc.name, func(t *testing.T) {
+			rel, err := relWithinRoot(root, tc.in)
+			if err != nil {
+				t.Fatalf("path %q rejected: %v", tc.in, err)
+			}
+			if rel != tc.want {
+				t.Fatalf("path %q normalized to %q, want %q", tc.in, rel, tc.want)
+			}
+		})
+	}
+
+	// Absolute-outside on the host platform: relative computation
+	// succeeds but lands outside the root, so the traversal check is
+	// what refuses it.
+	if _, err := relWithinRoot(root, root+"/../sibling.go"); err == nil {
+		t.Fatal("absolute sibling escape accepted")
 	}
 }
 

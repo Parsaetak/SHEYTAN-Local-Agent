@@ -33,7 +33,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -72,7 +71,12 @@ func TestDefaultHostPathDiscovery(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(want, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	// A binary at the default location makes the engine available.
+	// The marker is a plain cross-platform placeholder — Available()
+	// is a filesystem-existence check, so the payload must carry no
+	// platform-specific executable assumption (the pre-v1.3.5 shell
+	// script here was meaningless on Windows).
+	if err := os.WriteFile(want, []byte("SHEYTAN placeholder — availability marker, never executed\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,10 +225,17 @@ func TestRealCppHostMissingModelPath(t *testing.T) {
 
 // --- 6-7. shutdown during generation + orphan prevention (real host) --------
 
-// processGone verifies the host process is actually dead: on Unix a signal-0
-// probe to the exact pid must fail (the process was reaped, not merely
-// forgotten by the supervisor). On Windows the reaped-pid check is
-// approximated by the supervisor's own bookkeeping (pid 0 + stopped state).
+// processGone verifies the host process is actually dead. The verdict is
+// PLATFORM-NATIVE and lives in build-tagged files so no unsupported API
+// ever compiles on the wrong platform (the v1.3.5 Windows failure:
+// syscall.Kill is undefined there even behind a runtime.GOOS branch):
+//
+//   - Unix (process_liveness_unix_test.go): a bounded signal-0 probe to
+//     the exact pid must fail — the process was reaped, not merely
+//     forgotten by the supervisor's bookkeeping.
+//   - Windows (process_liveness_windows_test.go): a bounded
+//     OpenProcess/exit-code probe — a real kernel check, not a no-op,
+//     so the orphan contract stays meaningful on Windows.
 func processGone(t *testing.T, label string, pid int) {
 	t.Helper()
 
@@ -232,19 +243,7 @@ func processGone(t *testing.T, label string, pid int) {
 		t.Fatalf("%s: invalid pid %d for the liveness probe", label, pid)
 	}
 
-	if runtime.GOOS == "windows" {
-		return // no POSIX signal-0 probe on Windows
-	}
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
-			return // ESRCH: the process is gone
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-
-	t.Fatalf("%s: pid %d still responds to signal 0 after stop — orphaned host process", label, pid)
+	platformProcessGone(t, label, pid)
 }
 
 // TestRealCppHostOrphanPrevention: repeated start/stop cycles must never

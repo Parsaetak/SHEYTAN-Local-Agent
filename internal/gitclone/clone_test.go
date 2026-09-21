@@ -1,10 +1,17 @@
 // clone_test.go — v1.3.0 regression tests for the GitHub clone workflow.
 //
-// The tests inject a FAKE git binary (shell script) through
-// Options.GitBinary, so every contract — URL validation, destination
-// collision, git-unavailable, cancellation, failed clone, successful
-// clone — is exercised against the REAL process machinery
-// (proc.CommandContext, tree-kill, bounded capture) without the network.
+// The tests inject a FAKE git executable through Options.GitBinary so
+// every contract — URL validation, destination collision,
+// git-unavailable, cancellation, failed clone, successful clone — is
+// exercised against the REAL process machinery (proc.CommandContext,
+// tree-kill, bounded capture) without the network.
+//
+// v1.3.5: the fake git is no longer a POSIX shell script (which is not
+// an executable on Windows and stalled the Windows release pipeline).
+// The fixture is the TEST BINARY ITSELF, re-executed as a helper via
+// internal/testfakes (one reusable cross-platform mechanism for every
+// package): a real executable on Windows and Unix, dispatched on a
+// mode variable and the production argv.
 package gitclone
 
 import (
@@ -13,60 +20,41 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/testfakes"
 )
 
-// writeFakeGit writes a shell script that behaves like git for the
-// scripted scenario and returns its path.
-func writeFakeGit(t *testing.T, body string) string {
+// TestMain arms the re-exec helper: when the production process
+// machinery spawns this test binary as the fake git, the helper runs
+// the scripted behavior instead of the test suite.
+func TestMain(m *testing.M) {
+	if testfakes.RunFakeGit(os.Args[1:]) {
+		return // the helper ran and ended the process
+	}
+	os.Exit(m.Run())
+}
+
+// fakeGit returns the fake git executable path for the scripted mode.
+// The executable is the test binary itself — a real executable on every
+// supported platform — and the mode travels through the spawn
+// environment (gitEnv() passes the parent environment through), with
+// automatic restore via t.Setenv.
+func fakeGit(t *testing.T, mode string) string {
 	t.Helper()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "fake-git")
-
-	script := "#!/bin/sh\n" + body
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("test binary path: %v", err)
 	}
-	return path
+
+	t.Setenv(testfakes.GitModeEnv, mode)
+	return exe
 }
 
 // fakeSuccessGit clones by creating the destination with a .git dir and
 // a worktree file, emitting realistic --progress lines on stderr.
 func fakeSuccessGit(t *testing.T) string {
-	return writeFakeGit(t, `
-case "$1" in
-  clone)
-    echo "Cloning into 'dest'..." >&2
-    echo "remote: Enumerating objects: 26, done." >&2
-    echo "Receiving objects:  50% (13/26)" >&2
-    sleep 0.05
-    echo "Receiving objects: 100% (26/26), done." >&2
-    echo "Resolving deltas: 100% (10/10), done." >&2
-    DEST=""
-    # last argument is the destination
-    for arg in "$@"; do DEST="$arg"; done
-    mkdir -p "$DEST/.git"
-    echo "readme" > "$DEST/README.md"
-    echo "ref: refs/heads/main" > "$DEST/.git/HEAD"
-    exit 0
-    ;;
-  -C)
-    # git -C <dest> rev-parse HEAD
-    if [ "$3" = "rev-parse" ]; then
-      echo "0123456789abcdef0123456789abcdef01234567"
-      exit 0
-    fi
-    exit 1
-    ;;
-  rev-parse)
-    echo "0123456789abcdef0123456789abcdef01234567"
-    exit 0
-    ;;
-  *)
-    exit 1
-    ;;
-esac
-`)
+	return fakeGit(t, "success")
 }
 
 // waitJob polls the job until terminal or the deadline expires.
@@ -262,22 +250,22 @@ func TestCloneGitUnavailable(t *testing.T) {
 func TestCloneFailureClassification(t *testing.T) {
 	cases := []struct {
 		name string
-		git  string
+		mode string
 		kind ErrorKind
 	}{
 		{
 			name: "repository not found",
-			git:  `echo "fatal: repository https://github.com/owner/repository.git/ not found" >&2; exit 128`,
+			mode: "not-found",
 			kind: ErrNotFound,
 		},
 		{
 			name: "authentication failure",
-			git:  `echo "fatal: could not read Username for 'https://github.com': terminal prompts disabled" >&2; exit 128`,
+			mode: "auth",
 			kind: ErrAuth,
 		},
 		{
 			name: "network failure",
-			git:  `echo "fatal: unable to access 'https://github.com/owner/repository.git/': Could not resolve host: github.com" >&2; exit 128`,
+			mode: "network",
 			kind: ErrNetwork,
 		},
 	}
@@ -286,7 +274,7 @@ func TestCloneFailureClassification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			parent := t.TempDir()
 			j := Start(targetForTest(t), filepath.Join(parent, "repository"), "", Options{
-				GitBinary: writeFakeGit(t, tc.git),
+				GitBinary: fakeGit(t, tc.mode),
 			})
 			st := waitJob(t, j, 15*time.Second)
 
@@ -304,13 +292,9 @@ func TestCloneFailureClassification(t *testing.T) {
 }
 
 func TestCloneCancellation(t *testing.T) {
-	// A git that hangs mid-clone.
-	git := writeFakeGit(t, `
-echo "Cloning into 'dest'..." >&2
-echo "Receiving objects:  10% (1/26)" >&2
-sleep 30
-exit 0
-`)
+	// A git that genuinely stays alive mid-clone until the real
+	// process-tree cancellation terminates it.
+	git := fakeGit(t, "hang")
 
 	parent := t.TempDir()
 	j := Start(targetForTest(t), filepath.Join(parent, "repository"), "", Options{
@@ -404,38 +388,9 @@ func TestGitEnvIsNonInteractive(t *testing.T) {
 }
 
 func TestCloneWithBranch(t *testing.T) {
-	// The fake git asserts the --branch flag arrived.
-	dir := t.TempDir()
-	git := filepath.Join(dir, "fake-git")
-	script := `#!/bin/sh
-case "$1" in
-  clone)
-    BRANCH=""
-    PREV=""
-    for arg in "$@"; do
-      if [ "$PREV" = "--branch" ]; then BRANCH="$arg"; fi
-      PREV="$arg"
-    done
-    if [ "$BRANCH" != "release" ]; then
-      echo "fake git: --branch release not received (got '$BRANCH')" >&2
-      exit 64
-    fi
-    DEST=""
-    for arg in "$@"; do DEST="$arg"; done
-    mkdir -p "$DEST/.git"
-    echo "ref: refs/heads/release" > "$DEST/.git/HEAD"
-    exit 0
-    ;;
-  -C)
-    echo "0123456789abcdef0123456789abcdef01234567"
-    exit 0
-    ;;
-esac
-exit 1
-`
-	if err := os.WriteFile(git, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// The fake git inspects the REAL production argv and refuses
+	// unless --branch release arrived through the process boundary.
+	git := fakeGit(t, "branch-release")
 
 	parent := t.TempDir()
 	j := Start(targetForTest(t), filepath.Join(parent, "repository"), "release", Options{GitBinary: git})

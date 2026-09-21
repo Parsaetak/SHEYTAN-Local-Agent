@@ -88,8 +88,14 @@ func TestHasEnvToken(t *testing.T) {
 	}
 }
 
+// TestResolveRootRejectsUnresolvedToken pins the fail-closed behavior
+// for an UNRESOLVABLE token. The variable is a uniquely named test
+// token that exists on no platform — the previous fixture used
+// %LOCALAPPDATA% assuming it is never set, which is false on Windows
+// (the runner HAS it) and turned the test into an accidental
+// environment assumption.
 func TestResolveRootRejectsUnresolvedToken(t *testing.T) {
-	t.Setenv("SHEYTAN_DATA_DIR", `%LOCALAPPDATA%\SHEYTAN-LA`)
+	t.Setenv("SHEYTAN_DATA_DIR", `%SHEYTAN_MISSING_TOKEN_12345%\SHEYTAN-LA`)
 
 	root, fallback, reason := ResolveRoot()
 
@@ -140,16 +146,18 @@ func TestResolveRootUsesAppRootWithoutOverride(t *testing.T) {
 
 // TestResolveRootIndependentOfWorkingDirectory — the v1.2.9 defect joined
 // relative values against the CWD; v1.3.0 anchors them to the app root.
+//
+// v1.3.5: the CWD mutation uses t.Chdir (Go 1.24+), which restores the
+// EXACT original working directory automatically. The previous version
+// changed the process-global CWD and restored a DIFFERENT temp directory,
+// leaking process-wide state into every later test.
 func TestResolveRootIndependentOfWorkingDirectory(t *testing.T) {
 	t.Setenv("SHEYTAN_DATA_DIR", "SHEYTAN-LA-data")
 
 	wd1 := t.TempDir()
 	wd2 := t.TempDir()
 
-	if err := os.Chdir(wd1); err != nil {
-		t.Skip("chdir not available")
-	}
-	t.Cleanup(func() { _ = os.Chdir(wd2) })
+	t.Chdir(wd1)
 
 	root := AbsAgainstAppRoot("SHEYTAN-LA-data")
 	if !filepath.IsAbs(root) {
@@ -159,9 +167,8 @@ func TestResolveRootIndependentOfWorkingDirectory(t *testing.T) {
 		t.Fatalf("relative override %q must anchor at the app root %q, not the CWD", root, AppRoot())
 	}
 
-	if err := os.Chdir(wd2); err != nil {
-		t.Skip("second chdir failed")
-	}
+	t.Chdir(wd2)
+
 	root2 := AbsAgainstAppRoot("SHEYTAN-LA-data")
 	if root != root2 {
 		t.Fatalf("resolution depends on the working directory: %q vs %q", root, root2)
@@ -232,15 +239,17 @@ func TestStartupDirectoryContract(t *testing.T) {
 
 // TestLoadRejectsPersistedEnvTokens — a v1.2.9 config.json that stored
 // the raw token as dataDir/modelsDir must never reach runtime state.
+// The token is a uniquely named test variable that exists on no
+// platform: %LOCALAPPDATA% would RESOLVE on Windows runners and the
+// rejection contract would silently stop being exercised.
 func TestLoadRejectsPersistedEnvTokens(t *testing.T) {
 	root := t.TempDir()
-	// LOCALAPPDATA is deliberately NOT set: the token cannot resolve.
 
 	cfgFile := filepath.Join(root, "config.json")
 	raw := `{
-                "dataDir": "%LOCALAPPDATA%\\SHEYTAN-LA",
-                "modelsDir": "%LOCALAPPDATA%\\SHEYTAN-LA\\models",
-                "sessionsDir": "%LOCALAPPDATA%\\SHEYTAN-LA\\sessions"
+                "dataDir": "%SHEYTAN_MISSING_TOKEN_12345%\\SHEYTAN-LA",
+                "modelsDir": "%SHEYTAN_MISSING_TOKEN_12345%\\SHEYTAN-LA\\models",
+                "sessionsDir": "%SHEYTAN_MISSING_TOKEN_12345%\\SHEYTAN-LA\\sessions"
         }`
 	if err := os.WriteFile(cfgFile, []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
