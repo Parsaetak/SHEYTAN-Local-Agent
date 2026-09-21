@@ -264,8 +264,22 @@ bool MappedFile::open(const std::string& path, std::string& error) {
         return false;
     }
 
-    handle_ = file;
-    map_ = section;
+    // v1.3.5 fix (found by the portable temp-cleanup contract): store the
+    // handles per the class contract — handle_ = the platform mapping
+    // handle (the SECTION, mirroring the POSIX fd), map_ = the mapping
+    // BASE (the value UnmapViewOfFile requires). The previous code stored
+    // the file handle in handle_ and the section handle in map_, so
+    // close() called UnmapViewOfFile(section) — which fails (it needs the
+    // view address) — and CloseHandle(file) left BOTH the section object
+    // and the view alive: every model unload leaked a section + view and
+    // pinned the .gguf file for the life of the process (the file could
+    // not be deleted or replaced after unload). The explicit file handle
+    // is not needed once the view exists (the section holds its own
+    // reference to the file), so it is closed here.
+    CloseHandle(file);
+
+    handle_ = section; // platform mapping handle (POSIX counterpart: fd)
+    map_ = view;      // mapping base — UnmapViewOfFile's argument
     data_ = static_cast<uint8_t*>(view);
     size_ = static_cast<uint64_t>(sz.QuadPart);
     return true;
@@ -273,11 +287,13 @@ bool MappedFile::open(const std::string& path, std::string& error) {
 
 void MappedFile::close() {
     if (map_ != nullptr) {
-        UnmapViewOfFile(map_);
+        UnmapViewOfFile(map_); // the VIEW base address (never a handle)
         map_ = nullptr;
     }
     if (handle_ != nullptr) {
-        CloseHandle(handle_); // closes the section AND the file handle
+        CloseHandle(handle_); // the SECTION handle (the file handle was
+                              // closed at open time; the section's own
+                              // reference kept the file alive until now)
         handle_ = nullptr;
     }
     data_ = nullptr;

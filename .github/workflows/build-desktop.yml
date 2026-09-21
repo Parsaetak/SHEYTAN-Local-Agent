@@ -183,6 +183,38 @@ jobs:
 
           echo "Codename removal gate passed: zero codename references."
 
+      # v1.3.5: native temp-path portability gate (Actions run
+      # 35583009466 — tokenizer/generate failed on Windows because two
+      # tests assumed a POSIX temp location). No native source or test
+      # may hard-code a POSIX temp path literal or read TMPDIR directly;
+      # the ONE canonical cross-platform helper is
+      # native/engine/tests/temp_dir.h (its POSIX fallback constant is
+      # the single sanctioned literal).
+      - name: Native temp-path portability gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bad="$(git grep -n -F '"/tmp' -- 'native/engine' \
+            ':!native/engine/tests/temp_dir.h' || true)"
+
+          if [ -n "$bad" ]; then
+            echo "::error::Hard-coded POSIX temp path literal in native sources (use native/engine/tests/temp_dir.h):"
+            printf '%s\n' "$bad"
+            exit 1
+          fi
+
+          env_bad="$(git grep -n -F 'getenv("TMPDIR")' -- 'native/engine' \
+            ':!native/engine/tests/temp_dir.h' || true)"
+
+          if [ -n "$env_bad" ]; then
+            echo "::error::Direct TMPDIR dependence in native sources (use native/engine/tests/temp_dir.h):"
+            printf '%s\n' "$env_bad"
+            exit 1
+          fi
+
+          echo "Native temp-path portability gate passed."
+
       - name: Setup Go 1.26
         uses: actions/setup-go@v7
         with:

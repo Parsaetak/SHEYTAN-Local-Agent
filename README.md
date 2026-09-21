@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.3.4
+Current release:  v1.3.5
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -69,6 +69,21 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.3.5 — Windows CTest Completion / Native Test Hardening
+
+**v1.3.5 root-fixes the two Windows CTest failures of Actions run 35583009466 (FAIL `tokenizer`, FAIL `generate` — the Windows runner had successfully configured CMake, built the complete native engine, built all 12 test executables and started CTest, 10 PASS / 2 FAIL): both failures share ONE root cause — POSIX-only temporary-path assumptions in the native tests (`getenv("TMPDIR")` with a literal `/tmp` fallback, and a hard-coded `/tmp/shtn-not-llama.gguf`), which do not exist on Windows. The fix is ONE reusable cross-platform test helper (`native/engine/tests/temp_dir.h`, new): `std::filesystem::temp_directory_path()` (GetTempPath on Windows), collision-free unique directories (process id + counter + clock + random suffix), native paths that round-trip through stdio (spaces supported), and RAII recursive cleanup — no `tmpnam`, no TMPDIR-must-exist assumption, no per-test platform `#ifdef` copies (the three previously duplicated implementations in test_gguf/test_model/test_host are consolidated). The deep audit that followed found and fixed two further GENUINE defects: a Windows engine bug in `MappedFile` (`native/engine/src/gguf.cpp`) where `close()` passed the SECTION handle to `UnmapViewOfFile` — which requires the VIEW base address — so the unmap silently failed, every model unload leaked a section + view, and the still-mapped view pinned the `.gguf` file until process exit (a model could not be deleted or replaced after unload on Windows); and `test_host`'s Phase 5 fixtures resolving through `getenv` with a cwd-relative `../tests/fixtures` fallback that only worked under CTest's default working directory (now the configure-time `SHTN_FIXTURES_DIR` macro, plus the Makefile rule define that was missing — `make -C native/engine test` now passes 12/12 too). New regression contracts prove the portable temp directory (create/write/read/close/remove, spaces, uniqueness, RAII cleanup) and the mapped-file release (after load + unload the model file must be deletable); a CI gate fails the build if any native source reintroduces a `/tmp` literal or a direct `getenv("TMPDIR")` outside the one helper. No assertion was weakened; no test skipped, disabled or excluded; CTest remains a hard release gate expecting 12/12 on BOTH platforms. The v1.3.4 Repository Intelligence slice is untouched and fully re-verified. Windows verification on this host: the engine, host and all 12 test binaries cross-compile fully-static (llvm-mingw/clang) and pass 12/12 executed under Wine with zero temp leftovers; MSVC CTest, packaging, installer and publication remain CI-owned.**
+
+| Area | Change | Status |
+|---|---|---|
+| **test_tokenizer / test_generate root-fix** | Synthetic fixtures now live under `shtn_test::TempDir` (portable temp root, unique per run, removed on exit); all original assertions kept 1:1 | ROOT-FIXED, VERIFIED (Linux 12/12; Windows 12/12 under Wine; the pre-fix v1.3.4 binaries reproduce both failures in the same harness) |
+| **Shared helper — `tests/temp_dir.h` (NEW)** | One RAII `TempDir` for the whole native suite: `std::filesystem::temp_directory_path()` + collision-free naming + native paths + spaces support + recursive no-throw cleanup; the duplicated private `tmp_dir()` copies in test_gguf/test_model/test_host are gone | IMPLEMENTED, TESTED (portable temp contract in test_gguf: create/write/read/close/remove, spaces, uniqueness, RAII) |
+| **Windows engine defect — `MappedFile` handle inversion** | `open()` closes the file handle once the view exists (the section holds its own reference) and stores `handle_` = section, `map_` = view base; `close()` unmaps the VIEW and closes the SECTION — matching the class contract and the POSIX branch | ROOT-FIXED, TESTED (unload → model file deletable contract in test_model + release contract in test_gguf; Windows run leaves zero locked files) |
+| **`test_host` cwd-dependence** | Phase 5 fixtures use the configure-time `SHTN_FIXTURES_DIR` macro (previously dead configuration — the getenv + `../tests/fixtures` fallback only worked under CTest's cwd); the plain-make rule now defines it too | ROOT-FIXED, VERIFIED (passes from foreign cwds; `make -C native/engine test` 12/12) |
+| **test_engine portability** | The `/definitely/not/here.gguf` nonexistent-path literal is now derived from the portable temp dir | IMPLEMENTED, VERIFIED |
+| **CI regression gate** | Audit job: "Native temp-path portability gate" — `git grep` fails on any `"/tmp` literal or direct `getenv("TMPDIR")` in native sources outside `tests/temp_dir.h` | IMPLEMENTED, VERIFIED (gate returns zero hits on this tree) |
+| **Repository Intelligence (v1.3.4)** | No source change; full re-verification (`internal/repoindex` tests, API contract, agent context, Workspace card) | INTACT, VERIFIED |
+| **Release integrity** | Canonical version 1.3.5 synced across package.json → config.go / build/config.yml / SIGNATURE via the canonical script; `--check` green; codename gate zero matches; ROADMAP.md byte-identical | VERIFIED |
 
 ## v1.3.4 — Codename-Gate Root-Fix + Repository Intelligence (ROADMAP v1.4 Slice 1)
 

@@ -7,30 +7,13 @@
 #include "shtn/engine.h"
 #include "gguf_writer.h"
 #include "model.h" // src/ is on the engine target's include path (tests)
+#include "temp_dir.h"
 
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <direct.h>
-#include <windows.h>
-#define S_MKDIR(p) _mkdir(p)
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <cstdlib>
-#define S_MKDIR(p) mkdir((p), 0755)
-#endif
 
 static int failures = 0;
 
@@ -44,22 +27,6 @@ static int failures = 0;
     } while (0)
 
 namespace {
-
-std::string tmp_dir() {
-#ifdef _WIN32
-    char base[MAX_PATH];
-    GetTempPathA(MAX_PATH, base);
-    std::string dir = std::string(base) + "shtn-model-test-" +
-                      std::to_string(GetCurrentProcessId());
-#else
-    const char* env = std::getenv("TMPDIR");
-    std::string base = env != nullptr ? env : "/tmp";
-    std::string dir = base + "/shtn-model-test-" +
-                      std::to_string(static_cast<unsigned long>(::getpid()));
-#endif
-    S_MKDIR(dir.c_str());
-    return dir;
-}
 
 shtn_engine* new_engine() {
     shtn_engine* engine = nullptr;
@@ -77,7 +44,11 @@ shtn_engine* new_engine() {
 } // namespace
 
 int main() {
-    const std::string dir = tmp_dir();
+    // Shared cross-platform temp-dir helper (v1.3.5 consolidation:
+    // replaces this test's private GetTempPathA/TMPDIR copy; the tree
+    // is removed on exit).
+    shtn_test::TempDir tmpdir("model");
+    const std::string dir = tmpdir.path();
 
     const auto tiny = gguf_test::make_tiny_model(dir + "/tiny.gguf");
     CHECK(gguf_test::write_file(tiny.path, tiny.image));
@@ -409,6 +380,38 @@ int main() {
         CHECK(shtn_engine_model_info(e, &mi) == SHTN_OK);
         CHECK(std::strcmp(mi.state, SHTN_MODEL_STATE_UNLOADED) == 0);
 
+        shtn_engine_destroy(e);
+    }
+
+    // --- unload releases the file mapping: the model file is deletable ---
+    // v1.3.5 regression guard for the Windows MappedFile defect: close()
+    // passed the SECTION handle to UnmapViewOfFile (which requires the
+    // VIEW base address), so the unmap silently failed, the section
+    // leaked, and the still-mapped view pinned the model file until
+    // process exit — on Windows the file could not be deleted or
+    // replaced after unload (a locked .gguf is a user-facing defect:
+    // the host process outlives the unload). The engine-level contract:
+    // after load + unload, the file must be removable on EVERY platform.
+    {
+        // A dedicated file (not tiny.gguf) so its deletion proves the
+        // release rather than collateral cleanup.
+        const std::string victim = tmpdir.file("unload-release.gguf");
+        CHECK(gguf_test::write_file(victim, tiny.image));
+
+        shtn_engine* e = new_engine();
+        CHECK(shtn_engine_load_model(e, victim.c_str(), nullptr) == SHTN_OK);
+        shtn_model_info mi{};
+        CHECK(shtn_engine_model_info(e, &mi) == SHTN_OK);
+        CHECK(std::strcmp(mi.state, SHTN_MODEL_STATE_LOADED) == 0);
+        CHECK(shtn_engine_unload_model(e) == SHTN_OK);
+
+        // THE contract: the mapping is gone, so the file deletes.
+        CHECK(std::remove(victim.c_str()) == 0);
+
+        // And the engine remains fully reusable afterwards.
+        CHECK(shtn_engine_load_model(e, tiny.path.c_str(), nullptr) ==
+              SHTN_OK);
+        CHECK(shtn_engine_unload_model(e) == SHTN_OK);
         shtn_engine_destroy(e);
     }
 

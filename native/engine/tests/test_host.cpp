@@ -5,6 +5,7 @@
 #include "../src/host_main.cpp"
 
 #include "gguf_writer.h"
+#include "temp_dir.h"
 
 #include <cstdio>
 #include <fstream>
@@ -12,24 +13,6 @@
 #include <sstream>
 #include <vector>
 #include <string>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <direct.h>
-#include <windows.h>
-#define S_MKDIR(p) _mkdir(p)
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <cstdlib>
-#define S_MKDIR(p) mkdir((p), 0755)
-#endif
 
 static int failures = 0;
 
@@ -245,18 +228,10 @@ int main() {
 
     // --- model ops: load / info / unload round trip ----------------------------
     {
-#ifdef _WIN32
-        char base[MAX_PATH];
-        GetTempPathA(MAX_PATH, base);
-        std::string dir = std::string(base) + "shtn-host-test-" +
-                          std::to_string(GetCurrentProcessId());
-#else
-        const char* env = std::getenv("TMPDIR");
-        std::string base = env != nullptr ? env : "/tmp";
-        std::string dir = base + "/shtn-host-test-" +
-                          std::to_string(static_cast<unsigned long>(::getpid()));
-#endif
-        S_MKDIR(dir.c_str());
+        // Shared cross-platform temp-dir helper (v1.3.5 consolidation:
+        // replaces this test's private GetTempPathA/TMPDIR copy).
+        shtn_test::TempDir tmpdir("host");
+        const std::string dir = tmpdir.path();
 
         const auto tiny = gguf_test::make_tiny_model(dir + "/tiny.gguf");
         {
@@ -598,8 +573,15 @@ int main() {
     // blocks 1-2 fail on every run). The gate now runs LAST; the exit
     // code is honest about ALL executed checks.
     {
-        const char* env = std::getenv("SHTN_FIXTURES_DIR");
-        std::string fixtures = env != nullptr ? env : "../tests/fixtures";
+        // v1.3.5 fix: the fixtures directory is the configure-time
+        // SHTN_FIXTURES_DIR macro (already provided by CMake for this
+        // target), exactly like test_forward and test_generate. The
+        // previous getenv("SHTN_FIXTURES_DIR") plus "../tests/fixtures"
+        // fallback made the test CWD-DEPENDENT: it only passed under
+        // ctest because CTest's default working directory is the build
+        // dir; running the binary from anywhere else silently loaded
+        // no model and failed every streaming assertion.
+        std::string fixtures = SHTN_FIXTURES_DIR;
         phase5_generate_tests(fixtures);
     }
 

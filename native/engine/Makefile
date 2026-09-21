@@ -75,7 +75,7 @@ $(BUILD)/test_protocol: tests/test_protocol.cpp $(BUILD)/libshtn_protocol.a
 
 $(BUILD)/test_host: tests/test_host.cpp $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a
 	mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -Itests tests/test_host.cpp $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a -o $@
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -Itests -DSHTN_FIXTURES_DIR='"$(CURDIR)/tests/fixtures"' tests/test_host.cpp $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a -lpthread -o $@
 
 $(BUILD)/test_gguf: tests/test_gguf.cpp $(BUILD)/libshtn_engine.a
 	mkdir -p $(BUILD)

@@ -4,16 +4,18 @@
 // verifies encode/decode round-trips, special token handling, BOS/EOS
 // insertion, bounded output, and unsupported-model rejection.
 //
-// Uses the same gguf_writer.h fixture helper the other tests use.
+// Uses the same gguf_writer.h fixture helper the other tests use, and
+// the shared cross-platform temp-dir helper (temp_dir.h) — v1.3.5: no
+// test may assume a POSIX temp location.
 
 #include "shtn/engine.h"
 #include "shtn/types.h"
 
 #include "gguf_writer.h"
+#include "temp_dir.h"
 #include "tokenizer.h"
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -135,10 +137,13 @@ static TinyBPE make_tiny_bpe(const std::string& path) {
 }
 
 int main() {
-    // We need a temp dir for the synthetic model file.
-    const char* tmpdir = std::getenv("TMPDIR");
-    if (tmpdir == nullptr) tmpdir = "/tmp";
-    std::string path = std::string(tmpdir) + "/shtn_test_tokenizer.gguf";
+    // All synthetic fixtures live under one cross-platform temporary
+    // directory (Windows/POSIX portable; removed on exit). v1.3.5 root
+    // fix for run 35583009466: the previous getenv(TMPDIR) plus literal
+    // /tmp fallback does not exist on Windows and the model load failed
+    // before every assertion below cascaded.
+    shtn_test::TempDir tmpdir("tokenizer");
+    const std::string path = tmpdir.file("tiny-bpe.gguf");
 
     TinyBPE m = make_tiny_bpe(path);
 
@@ -332,7 +337,7 @@ int main() {
     // --- unsupported tokenizer model kind -------------------------------
     {
         // Build a GGUF with an unsupported tokenizer.ggml.model.
-        std::string upath = path + ".unsupported";
+        std::string upath = tmpdir.file("unsupported.gguf");
         {
             gguf_test::BuildOptions o;
             o.version = 3;

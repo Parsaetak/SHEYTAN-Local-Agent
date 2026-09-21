@@ -2,6 +2,8 @@
 
 #include "shtn/engine.h"
 
+#include "temp_dir.h"
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -18,6 +20,11 @@ static int failures = 0;
     } while (0)
 
 int main() {
+    // Cross-platform temp location (v1.3.5): the nonexistent-path
+    // fixture below is derived from it instead of a POSIX-style
+    // "/definitely/not/here.gguf" literal.
+    shtn_test::TempDir tmpdir("engine");
+
     // ABI version sanity: must match the version the Go core pins.
     CHECK(shtn_abi_version() == SHTN_ABI_VERSION);
     CHECK(shtn_abi_version() == 4u); // Phase 5 (native generation added; v3 was Phase 4)
@@ -166,8 +173,11 @@ int main() {
         CHECK(mp.total_bytes == 0);
 
         // Loading a nonexistent file fails cleanly without crashing.
-        CHECK(shtn_engine_load_model(engine, "/definitely/not/here.gguf",
-                                     nullptr) == SHTN_ERR_INVALID_ARG);
+        // The path is built under the portable temp dir (it is never
+        // created), so the fixture works on every platform.
+        CHECK(shtn_engine_load_model(
+                  engine, tmpdir.file("definitely-not-here.gguf").c_str(),
+                  nullptr) == SHTN_ERR_INVALID_ARG);
 
         shtn_engine_destroy(engine);
     }

@@ -8,29 +8,12 @@
 
 #include "gguf.h"
 #include "gguf_writer.h"
+#include "temp_dir.h"
 
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <direct.h>
-#include <windows.h>
-#define S_MKDIR(p) _mkdir(p)
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <cstdlib>
-#define S_MKDIR(p) mkdir((p), 0755)
-#endif
 
 static int failures = 0;
 
@@ -45,22 +28,6 @@ static int failures = 0;
 
 namespace {
 
-std::string tmp_dir() {
-#ifdef _WIN32
-    char base[MAX_PATH];
-    GetTempPathA(MAX_PATH, base);
-    std::string dir = std::string(base) + "shtn-gguf-test-" +
-                      std::to_string(GetCurrentProcessId());
-#else
-    const char* env = std::getenv("TMPDIR");
-    std::string base = env != nullptr ? env : "/tmp";
-    std::string dir = base + "/shtn-gguf-test-" +
-                      std::to_string(static_cast<unsigned long>(::getpid()));
-#endif
-    S_MKDIR(dir.c_str());
-    return dir;
-}
-
 // parse_file is the common harness: map + parse, returning success.
 bool parse_file(const std::string& path, shtn::gguf::GgufHeader& out,
                 std::string& error) {
@@ -74,7 +41,11 @@ bool parse_file(const std::string& path, shtn::gguf::GgufHeader& out,
 } // namespace
 
 int main() {
-    const std::string dir = tmp_dir();
+    // Shared cross-platform temp-dir helper (v1.3.5 consolidation:
+    // replaces this test's private GetTempPathA/TMPDIR copy; the tree
+    // is removed on exit).
+    shtn_test::TempDir tmpdir("gguf");
+    const std::string dir = tmpdir.path();
 
     // --- 1. valid GGUF v3: metadata + tensor table + derived params -----
     {
@@ -490,6 +461,153 @@ int main() {
         CHECK(!shtn::gguf::checked_add_u64(UINT64_MAX, 1, r));
         CHECK(shtn::gguf::checked_mul_u64(3, 4, r) && r == 12);
         CHECK(!shtn::gguf::checked_mul_u64(UINT64_MAX, 2, r));
+    }
+
+    // --- 10. portable temp-directory contract (v1.3.5) --------------------
+    // Regression guard for Actions run 35583009466: no native test may
+    // ever depend on a hard-coded POSIX temp location again. Proves the
+    // shared helper (temp_dir.h) returns a USABLE, WRITABLE, native
+    // temporary location on every platform — create, write, read,
+    // close, remove, including a path containing spaces — plus
+    // uniqueness under repeated creation and RAII cleanup.
+    {
+        // The platform temp root must resolve to something non-empty.
+        CHECK(!shtn_test::temp_detail::resolve_temp_root().string().empty());
+
+        // The directory exists, is absolute and is a directory.
+        CHECK(tmpdir.exists());
+        CHECK(std::filesystem::path(dir).is_absolute());
+
+        // Create + write + close through the C stdio surface the GGUF
+        // loader itself uses (fopen/fwrite/fclose).
+        const std::string plain = tmpdir.file("contract.gguf");
+        {
+            FILE* f = std::fopen(plain.c_str(), "wb");
+            CHECK(f != nullptr);
+            if (f != nullptr) {
+                const char payload[] = "GGUF-contract-payload";
+                CHECK(std::fwrite(payload, 1, sizeof(payload), f) ==
+                      sizeof(payload));
+                CHECK(std::fclose(f) == 0);
+            }
+        }
+
+        // Re-open + read + close: the written bytes round-trip.
+        {
+            FILE* f = std::fopen(plain.c_str(), "rb");
+            CHECK(f != nullptr);
+            if (f != nullptr) {
+                char buf[64] = {0};
+                const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+                CHECK(n == 22); // strlen("GGUF-contract-payload")
+                CHECK(std::string(buf) == "GGUF-contract-payload");
+                CHECK(std::fclose(f) == 0);
+            }
+        }
+
+        // Remove the single file and prove the removal took.
+        CHECK(std::remove(plain.c_str()) == 0);
+        {
+            FILE* f = std::fopen(plain.c_str(), "rb");
+            CHECK(f == nullptr); // gone
+            if (f != nullptr) {
+                std::fclose(f);
+            }
+        }
+
+        // A path containing spaces round-trips through stdio.
+        const std::string spaced = tmpdir.file("space dir name.gguf");
+        {
+            FILE* f = std::fopen(spaced.c_str(), "wb");
+            CHECK(f != nullptr);
+            if (f != nullptr) {
+                const char payload[] = "spaces";
+                CHECK(std::fwrite(payload, 1, sizeof(payload), f) ==
+                      sizeof(payload));
+                CHECK(std::fclose(f) == 0);
+            }
+        }
+        {
+            FILE* g = std::fopen(spaced.c_str(), "rb");
+            CHECK(g != nullptr);
+            if (g != nullptr) {
+                char buf[16] = {0};
+                // sizeof("spaces") == 7: the NUL byte was written too.
+                CHECK(std::fread(buf, 1, sizeof(buf) - 1, g) == 7);
+                CHECK(std::string(buf) == "spaces");
+                CHECK(std::fclose(g) == 0);
+            }
+        }
+
+        // Uniqueness: two instances never share a location, even when
+        // created back-to-back (parallel ctest slots, repeated runs).
+        {
+            shtn_test::TempDir a("uniqueness");
+            shtn_test::TempDir b("uniqueness");
+            CHECK(a.exists());
+            CHECK(b.exists());
+            CHECK(a.path() != b.path());
+
+            // Scoped lifetime: the whole tree is removed when the owner
+            // dies (explicit remove() proves it inside the scope).
+            shtn_test::TempDir c("scoped");
+            const std::string inner = c.file("inner.gguf");
+            FILE* f = std::fopen(inner.c_str(), "wb");
+            CHECK(f != nullptr);
+            if (f != nullptr) {
+                std::fputs("x", f);
+                std::fclose(f);
+            }
+            const std::string cpath = c.path();
+            c.remove();
+            CHECK(!std::filesystem::is_directory(
+                std::filesystem::path(cpath)));
+        }
+    }
+
+    // --- 11. mapped-file release contract (v1.3.5) -----------------------
+    // After a file is mapped and released, it MUST be deletable on
+    // every platform. The previous Windows MappedFile::close() passed
+    // the SECTION handle to UnmapViewOfFile — which requires the VIEW
+    // base address — so the unmap silently failed, the section object
+    // leaked, and the still-mapped view pinned the file until process
+    // exit (a model could not be deleted or replaced after unload).
+    // Proven here at the reader layer; the engine lifecycle path is
+    // covered by the unload-then-delete section in test_model.cpp.
+    {
+        const std::string p = tmpdir.file("release-check.gguf");
+        gguf_test::BuildOptions ro;
+        ro.version = 3;
+        ro.extra_kv.push_back([](std::vector<uint8_t>& b) {
+            gguf_test::kv_str(b, "general.architecture", "llama");
+        });
+        CHECK(gguf_test::write_file(p, gguf_test::build(ro)));
+
+        {
+            shtn::gguf::MappedFile f;
+            std::string err;
+            CHECK(f.open(p, err));
+            CHECK(f.data() != nullptr);
+            CHECK(f.size() > 4);
+            // Parse still works through the mapping.
+            shtn::gguf::GgufHeader h{};
+            CHECK(shtn::gguf::parse_header(f, h, err));
+            // Explicit close, then close again (idempotent contract).
+            f.close();
+            f.close();
+        }
+
+        // THE contract: with the mapping fully released, the file can
+        // be deleted on Windows, Linux and macOS alike. On Windows the
+        // leaked view made this remove fail with a sharing violation.
+        CHECK(std::remove(p.c_str()) == 0);
+        {
+            FILE* f = std::fopen(p.c_str(), "rb");
+            CHECK(f == nullptr); // gone
+            if (f != nullptr) {
+                std::fclose(f);
+            }
+        }
     }
 
     if (failures > 0) {

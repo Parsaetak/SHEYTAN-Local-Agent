@@ -13,6 +13,7 @@
 #include "shtn/types.h"
 
 #include "generate.h"
+#include "temp_dir.h"
 #include "util.h"
 
 #include <atomic>
@@ -79,6 +80,12 @@ static shtn_generation_options base_opts(const char* prompt,
 
 int main() {
     const std::string fixtures = SHTN_FIXTURES_DIR;
+
+    // Cross-platform temporary location for the synthetic non-llama
+    // fixture (v1.3.5 root fix for run 35583009466: the previous
+    // hard-coded /tmp/shtn-not-llama.gguf path made fopen() return
+    // nullptr on the Windows runner). Removed on exit.
+    shtn_test::TempDir tmpdir("generate");
 
     // --- error path: no model ----------------------------------------------
     {
@@ -577,7 +584,7 @@ int main() {
         }
         b.resize(b.size() + 8 * 8 * 4, 0);
 
-        const std::string path = "/tmp/shtn-not-llama.gguf";
+        const std::string path = tmpdir.file("not-llama.gguf");
         FILE* f = std::fopen(path.c_str(), "wb");
         CHECK(f != nullptr);
         if (f != nullptr) {
