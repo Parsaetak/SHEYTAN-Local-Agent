@@ -7,19 +7,24 @@ package llm
 // Before v1.1.5 every consumer reached directly for the two concrete
 // pieces: LlamaServer (subprocess lifecycle) and Client (OpenAI-compatible
 // generation). The backend contract formalizes that surface so the managed
-// llama.cpp engine and the future SHEYTAN native engine are
-// interchangeable behind one interface:
+// llama.cpp engine and the SHEYTAN native engine are interchangeable behind
+// one interface:
 //
 //      React/TypeScript → Wails → Go Core → SHEYTAN Native API → C++ Native Engine
 //                                          ↘ Backend contract (this file)
 //
-// Phase 1 status (do not overstate):
+// Implementation status (updated v1.3.2 — do not overstate):
 //
 //      llama   — full implementation: lifecycle + generation, the default
 //                engine and the fallback for every generation request.
-//      native  — lifecycle, health, hardware and metrics only. Generate /
-//                StreamGenerate / LoadModel / ModelInfo return ErrNotImplemented
-//                until later phases; callers fall back to the llama backend.
+//      native  — full lifecycle, health, hardware, metrics, GGUF model
+//                loading, tokenizer, and REAL generation with streaming
+//                and cooperative cancellation (Phase 5+). Requests the
+//                native path cannot serve yet (tool schemas, images,
+//                non-llama architectures) return llm.ErrNotImplemented or
+//                the generation-capable=0 verdict, which the selection
+//                layer maps to the llama.cpp fallback — with the reason
+//                exposed, never silently.
 //
 // The wire types reused by this contract (Message, ChatRequest,
 // ChatResponse, StreamEvent, PerfStats, ToolSpec) are the same ones the
@@ -110,9 +115,62 @@ type Backend interface {
 // GenerationCapable is the optional capability probe used by backend
 // selection. A backend that does not implement it is treated as
 // generation-capable; the native backend implements it and reports false
-// until its generation path exists.
+// while it cannot serve (engine down, no model loaded, or the loaded model
+// did not validate as natively executable).
 type GenerationCapable interface {
 	GenerationCapable() bool
+}
+
+// GenerationFallbackReporter is the optional probe a backend implements to
+// explain WHY it currently cannot serve generation. It pairs with
+// GenerationCapable: capable=true must imply an empty reason. The selection
+// layer surfaces the reason in logs and the /api/engine status instead of
+// silently swapping engines under the user's explicit choice.
+type GenerationFallbackReporter interface {
+	GenerationFallbackReason() string
+}
+
+// BackendDecision is the observable outcome of backend selection: which
+// backend serves generation and, when the user's selection could not be
+// honored, why the fallback took over. FallbackReason is empty whenever
+// the selected backend itself serves (including when the user simply never
+// selected the native engine — the llama default is not a fallback).
+type BackendDecision struct {
+	// Backend is the backend that must serve a generation request.
+	Backend Backend
+
+	// SelectedName names the serving backend ("llama" or "native").
+	SelectedName string
+
+	// FallbackReason is non-empty exactly when the user selected the
+	// native engine but it cannot serve (not running, no model, or the
+	// model is not natively executable). The llama.cpp fallback is the
+	// documented behavior — but it must never be SILENT.
+	FallbackReason string
+}
+
+// SelectGenerationBackendDetailed resolves the serving backend and the
+// reason a native selection fell back. This is the observability contract
+// behind SelectGenerationBackend; the routing policy itself lives in one
+// place and is pinned by tests either way.
+func SelectGenerationBackendDetailed(cfg *config.Config, native, fallback Backend) BackendDecision {
+	if cfg != nil && cfg.NativeBackendEnabled() && native != nil {
+		if gc, ok := native.(GenerationCapable); ok && !gc.GenerationCapable() {
+			reason := "native engine cannot serve generation"
+			if fr, ok := native.(GenerationFallbackReporter); ok {
+				if r := fr.GenerationFallbackReason(); r != "" {
+					reason = r
+				}
+			}
+			return BackendDecision{
+				Backend:        fallback,
+				SelectedName:   fallback.Name(),
+				FallbackReason: reason,
+			}
+		}
+		return BackendDecision{Backend: native, SelectedName: native.Name()}
+	}
+	return BackendDecision{Backend: fallback, SelectedName: fallback.Name()}
 }
 
 // SelectGenerationBackend returns the backend that must serve a generation
@@ -120,19 +178,13 @@ type GenerationCapable interface {
 // generate, otherwise the llama.cpp fallback.
 //
 // This is the single selection point for the engine routing — the same
-// policy backs runtime.Stack.Engine() and the /api/engine snapshot. Phase 1
-// always resolves to the llama backend because the native engine reports
-// GenerationCapable() == false; the function exists and is pinned by tests
-// so later phases flip the routing by implementing generation, not by
-// editing call sites.
+// policy backs runtime.Stack.Engine() and the /api/engine snapshot. The
+// observable variant SelectGenerationBackendDetailed additionally reports
+// WHY a native selection fell back (logged by the runtime seam and exposed
+// through /api/engine); call sites that only need the backend keep using
+// this shorthand.
 func SelectGenerationBackend(cfg *config.Config, native, fallback Backend) Backend {
-	if cfg != nil && cfg.NativeBackendEnabled() && native != nil {
-		if gc, ok := native.(GenerationCapable); ok && !gc.GenerationCapable() {
-			return fallback
-		}
-		return native
-	}
-	return fallback
+	return SelectGenerationBackendDetailed(cfg, native, fallback).Backend
 }
 
 // HealthReport is the result of an active health probe.

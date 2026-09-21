@@ -396,11 +396,16 @@ func TestRealCppHostModelLifecycle(t *testing.T) {
 		t.Fatalf("backend memory estimates missing: %+v", llmInfo)
 	}
 
-	// Generation stays honestly unimplemented.
+	// Generation honesty on a NON-executable synthetic model: this
+	// writeTestGGUF fixture carries no llama tensor graph or usable
+	// tokenizer, so the load verdict is generation-capable=0 — the honest
+	// capability signal the selection layer routes to llama.cpp (real
+	// generation through a capable fixture is proven by the Phase 5
+	// integration tests). An empty request must error, never fake success.
 	if _, err := backend.Generate(ctx, &llm.ChatRequest{}); err == nil {
-		t.Fatal("native generation must remain unimplemented")
+		t.Fatal("Generate must fail without a usable prompt/model")
 	}
 	if backend.GenerationCapable() {
-		t.Fatal("native backend must not claim generation capability in Phase 2")
+		t.Fatal("synthetic fixture must not report generation capability (no llama graph / tokenizer)")
 	}
 }

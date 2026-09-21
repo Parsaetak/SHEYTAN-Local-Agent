@@ -28,9 +28,22 @@ type fakeBackend struct {
 	name      string
 	capable   bool
 	hasCapFn  bool
+	fallback  string // reported by GenerationFallbackReason (v1.3.2)
 	started   int
 	stopped   int
 	cancelled []string
+}
+
+// GenerationFallbackReason implements the optional v1.3.2 observability
+// probe (empty when capable).
+func (f *fakeBackend) GenerationFallbackReason() string {
+	if f.capable {
+		return ""
+	}
+	if f.fallback != "" {
+		return f.fallback
+	}
+	return "not capable"
 }
 
 func (f *fakeBackend) Name() string { return f.name }
@@ -100,7 +113,7 @@ func TestSelectGenerationBackendDefaultsToLlama(t *testing.T) {
 }
 
 func TestSelectGenerationBackendFallsBackWhenNotCapable(t *testing.T) {
-	// Phase 1 shape: native selected but generation-incapable → llama.
+	// Native selected but generation-incapable → llama.
 	cfg := config.Default()
 	cfg.EngineBackend = "native"
 
@@ -173,6 +186,124 @@ func TestSelectGenerationBackendNoCapabilityProbe(t *testing.T) {
 
 	if got.Name() != "native" {
 		t.Fatalf("selection = %q, want native (no probe = capable)", got.Name())
+	}
+}
+
+// --- v1.3.2: observable selection (no silent fallback) --------------------
+
+func TestSelectGenerationBackendDetailedExposesFallbackReason(t *testing.T) {
+	// The user selected native but it cannot serve: the decision MUST
+	// carry the backend's own inspectable reason — the fallback is
+	// documented behavior, but never a silent one.
+	cfg := config.Default()
+	cfg.EngineBackend = "native"
+
+	native := &fakeBackend{
+		name:     "native",
+		capable:  false,
+		fallback: "native engine not running (state failed: host binary not found)",
+	}
+	llama := &fakeBackend{name: "llama"}
+
+	d := SelectGenerationBackendDetailed(cfg, native, llama)
+
+	if d.Backend.Name() != "llama" || d.SelectedName != "llama" {
+		t.Fatalf("decision = %+v, want llama serving", d)
+	}
+	if d.FallbackReason != native.fallback {
+		t.Fatalf("FallbackReason = %q, want the backend's own reason", d.FallbackReason)
+	}
+}
+
+func TestSelectGenerationBackendDetailedReasonDefaultsWhenReporterAbsent(t *testing.T) {
+	// A backend with the capability probe but WITHOUT the optional
+	// reporter still gets a non-empty generic reason — the fallback
+	// cannot be silent either way. capOnlyBackend exposes
+	// GenerationCapable only.
+	cfg := config.Default()
+	cfg.EngineBackend = "native"
+
+	native := &capOnlyBackend{inner: &fakeBackend{name: "native", capable: false}}
+	llama := &fakeBackend{name: "llama"}
+
+	d := SelectGenerationBackendDetailed(cfg, native, llama)
+
+	if d.SelectedName != "llama" {
+		t.Fatalf("decision = %+v, want llama serving", d)
+	}
+	if d.FallbackReason == "" {
+		t.Fatal("fallback reason must never be empty when native was selected but fell back")
+	}
+	if d.FallbackReason == "not capable" {
+		t.Fatalf("FallbackReason = %q — the fake's own reason must NOT leak through capOnlyBackend", d.FallbackReason)
+	}
+}
+
+// capOnlyBackend exposes ONLY the GenerationCapable probe (no fallback
+// reporter) — the v1.3.2 default-reason path.
+type capOnlyBackend struct {
+	inner *fakeBackend
+}
+
+func (c *capOnlyBackend) Name() string                    { return c.inner.Name() }
+func (c *capOnlyBackend) Start(ctx context.Context) error { return c.inner.Start(ctx) }
+func (c *capOnlyBackend) Stop(ctx context.Context) error  { return c.inner.Stop(ctx) }
+func (c *capOnlyBackend) Health(ctx context.Context) (HealthReport, error) {
+	return c.inner.Health(ctx)
+}
+func (c *capOnlyBackend) LoadModel(ctx context.Context, s ModelSpec) error {
+	return c.inner.LoadModel(ctx, s)
+}
+func (c *capOnlyBackend) UnloadModel(ctx context.Context) error { return c.inner.UnloadModel(ctx) }
+func (c *capOnlyBackend) Generate(ctx context.Context, r *ChatRequest) (*ChatResponse, error) {
+	return c.inner.Generate(ctx, r)
+}
+func (c *capOnlyBackend) StreamGenerate(ctx context.Context, r *ChatRequest, fn func(StreamEvent) error) (PerfStats, error) {
+	return c.inner.StreamGenerate(ctx, r, fn)
+}
+func (c *capOnlyBackend) Cancel(ctx context.Context, id string) error { return c.inner.Cancel(ctx, id) }
+func (c *capOnlyBackend) ModelInfo(ctx context.Context) (ModelInfo, error) {
+	return c.inner.ModelInfo(ctx)
+}
+func (c *capOnlyBackend) HardwareInfo(ctx context.Context) (HardwareInfo, error) {
+	return c.inner.HardwareInfo(ctx)
+}
+func (c *capOnlyBackend) Metrics(ctx context.Context) (Metrics, error) { return c.inner.Metrics(ctx) }
+func (c *capOnlyBackend) GenerationCapable() bool                      { return c.inner.capable }
+
+func TestSelectGenerationBackendDetailedNativeServingHasNoFallback(t *testing.T) {
+	cfg := config.Default()
+	cfg.EngineBackend = "native"
+
+	native := &fakeBackend{name: "native", capable: true}
+	llama := &fakeBackend{name: "llama"}
+
+	d := SelectGenerationBackendDetailed(cfg, native, llama)
+
+	if d.SelectedName != "native" {
+		t.Fatalf("decision = %+v, want native serving", d)
+	}
+	if d.FallbackReason != "" {
+		t.Fatalf("FallbackReason = %q, want empty when native serves", d.FallbackReason)
+	}
+}
+
+func TestSelectGenerationBackendDetailedLlamaDefaultIsNotAFallback(t *testing.T) {
+	// The user never selected the native engine: llama serving is the
+	// DEFAULT, not a fallback — the reason must stay empty.
+	cfg := config.Default()
+	cfg.EngineBackend = ""
+
+	native := &fakeBackend{name: "native", capable: false}
+	llama := &fakeBackend{name: "llama"}
+
+	d := SelectGenerationBackendDetailed(cfg, native, llama)
+
+	if d.SelectedName != "llama" {
+		t.Fatalf("decision = %+v, want llama default", d)
+	}
+	if d.FallbackReason != "" {
+		t.Fatalf("FallbackReason = %q, want empty (default is not a fallback)", d.FallbackReason)
 	}
 }
 

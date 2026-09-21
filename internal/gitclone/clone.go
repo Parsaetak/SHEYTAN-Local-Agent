@@ -327,8 +327,19 @@ func (j *Job) runClone(ctx context.Context) (int, error) {
 		j.scan(ctx, stderr, true)
 	}()
 
-	waitErr := cmd.Wait()
+	// Drain both pipes to EOF BEFORE reaping the process: os/exec's
+	// Wait closes the parent pipe descriptors once the process exits,
+	// and a scanner that has not drained the buffered output yet can
+	// lose tail lines to the closed descriptor — the stderr evidence
+	// the error classification depends on (the StdoutPipe docs are
+	// explicit that calling Wait before all reads complete is
+	// incorrect). The scanners see EOF when the child exits and its
+	// write ends close; reaping an already-exited process returns
+	// immediately, so this order cannot deadlock. (Cancellation is
+	// tree-kill: the whole process group's pipes close, the scanners
+	// unblock, then the reap happens.)
 	wg.Wait()
+	waitErr := cmd.Wait()
 
 	exitCode := exitCodeOf(waitErr)
 	if waitErr != nil {

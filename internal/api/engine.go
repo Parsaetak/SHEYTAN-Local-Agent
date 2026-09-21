@@ -46,8 +46,7 @@ type engineSnapshot struct {
 	Timestamp  string   `json:"timestamp"`
 
 	// Backend (v1.1.5) names the backend that serves generation
-	// ("llama" in Phase 1 — the native engine reports
-	// generation-incapable and the selection falls back).
+	// ("llama" or "native" — the single selection policy decides).
 	Backend string `json:"backend"`
 
 	// Native (v1.1.5) carries the supervised native engine's status
@@ -102,6 +101,15 @@ type nativeEngineSnapshot struct {
 	Pid           int     `json:"pid,omitempty"`
 	UptimeSeconds float64 `json:"uptimeSeconds,omitempty"`
 	Restarts      int     `json:"restarts,omitempty"`
+
+	// FallbackReason (v1.3.2) is non-empty when the user selected the
+	// native engine but generation was routed to llama.cpp: the
+	// inspectable reason (engine down, no model, model not natively
+	// executable). FallbackCount is how many generation requests were
+	// routed that way. The fallback is the documented behavior — this
+	// field exists so it is never a silent one.
+	FallbackReason string `json:"fallbackReason,omitempty"`
+	FallbackCount  int    `json:"fallbackCount,omitempty"`
 }
 
 // handleEngine serves the authoritative engine snapshot.
@@ -213,6 +221,16 @@ func (s *Server) engineSnapshot() engineSnapshot {
 			Detail:    s.native.Detail(),
 			Pid:       s.native.Pid(),
 			Restarts:  s.native.Restarts(),
+		}
+
+		// v1.3.2 observable fallback: when the native engine was
+		// selected but is NOT the serving backend, surface the
+		// recorded reason + count from the runtime seam.
+		if native.Selected && snap.Backend != "native" && s.stack != nil {
+			if fb := s.stack.NativeFallback(); fb.Reason != "" {
+				native.FallbackReason = fb.Reason
+				native.FallbackCount = fb.Count
+			}
 		}
 
 		if started := s.native.StartedAt(); !started.IsZero() {

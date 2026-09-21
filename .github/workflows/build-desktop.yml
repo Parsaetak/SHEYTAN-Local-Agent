@@ -23,8 +23,12 @@ permissions:
 # (scripts/release-version.mjs --env) and every other job consumes it via
 # needs-outputs. A version bump therefore only touches package.json + the
 # derived surfaces the script repairs. The identity is version-only:
-# APP_VERSION (with the APP_VERSION_FULL compatibility alias); there is no
-# codename dimension.
+# APP_VERSION; there is no codename dimension and no second version
+# variable. Release-metadata VERIFICATION is likewise centralized: every
+# build job invokes the canonical cross-platform validator in check mode
+# instead of per-shell reimplementations (the v1.3.1 Windows job's
+# Select-String -SimpleMatch block treated the AppVersion pattern's regex
+# whitespace-escapes as literal text and failed every run: 35542000811).
 env:
   GO_VERSION: "1.26"
   NODE_VERSION: "24"
@@ -43,12 +47,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
 
-    # The identity step emits APP_VERSION / APP_VERSION_FULL (exactly as
-    # release-version.mjs --env names them). The output names here MUST
-    # match the keys written to GITHUB_OUTPUT below.
+    # The identity step emits APP_VERSION (exactly as release-version.mjs
+    # --env names it). The output names here MUST match the keys written to
+    # GITHUB_OUTPUT below.
     outputs:
       version: ${{ steps.identity.outputs.APP_VERSION }}
-      version_full: ${{ steps.identity.outputs.APP_VERSION_FULL }}
 
     steps:
       - name: Checkout
@@ -91,7 +94,7 @@ jobs:
 
           while IFS='=' read -r key value; do
             case "$key" in
-              APP_VERSION | APP_VERSION_FULL)
+              APP_VERSION)
                 export "$key=$value"
                 printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
                 ;;
@@ -100,22 +103,21 @@ jobs:
 
           # Fail fast — before any expensive build job starts — if the
           # release identity did not resolve.
-          if [ -z "${APP_VERSION:-}" ] || [ -z "${APP_VERSION_FULL:-}" ]; then
-            echo "::error::Release identity did not resolve. APP_VERSION and APP_VERSION_FULL must both be non-empty after 'release-version.mjs --env'."
+          if [ -z "${APP_VERSION:-}" ]; then
+            echo "::error::Release identity did not resolve. APP_VERSION must be non-empty after 'release-version.mjs --env'."
             exit 1
           fi
 
           # The identity step must be tagged so needs-outputs can read it
           # (id: identity above). Job outputs map from the APP_* names.
-          echo "Resolved identity: $APP_VERSION / $APP_VERSION_FULL"
+          echo "Resolved identity: $APP_VERSION"
 
-          # Belt and suspenders: the repaired tree must pass check mode.
+          # THE canonical release-metadata verification (v1.3.2): the
+          # repaired tree must pass the one cross-platform validator.
+          # There is deliberately NO per-shell reimplementation here — the
+          # bash greps the audit job previously carried were one of three
+          # divergent copies of the same semantics.
           node scripts/release-version.mjs --check
-
-          grep -E "AppVersion[[:space:]]+=[[:space:]]+\"$APP_VERSION\"" internal/config/config.go
-          grep -F "\"version\": \"$APP_VERSION_FULL\"" package.json
-          grep -F "productVersion: \"$APP_VERSION_FULL\"" build/config.yml
-          grep -F "SHEYTAN-Local-Agent v$APP_VERSION" SIGNATURE
 
       - name: Install frontend dependencies
         shell: bash
@@ -129,6 +131,11 @@ jobs:
           npm run typecheck
           npm run lint
           npm run test:units
+
+          # v1.3.2: release-metadata regression suite (semver shapes,
+          # drift/missing markers, whitespace/CRLF, --env identity,
+          # workflow contract — the run 35542000811 failure class).
+          npm run test:release
 
           # Production build contract: start from a CLEAN dist so no
           # previous-generation asset can survive into web/static.
@@ -243,7 +250,6 @@ jobs:
     # package.json — no local hardcoded version can drift here either.
     env:
       APP_VERSION: ${{ needs.audit.outputs.version }}
-      APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
     runs-on: windows-latest
 
     steps:
@@ -295,52 +301,30 @@ jobs:
         shell: pwsh
         run: node scripts/release-version.mjs
 
+      # v1.3.2 ROOT FIX for CI run 35542000811: release-metadata
+      # verification is performed by the ONE canonical cross-platform
+      # validator (scripts/release-version.mjs --check). The previous
+      # per-shell PowerShell block built a regex-syntax pattern for the
+      # AppVersion constant (whitespace-escape tokens around the equals
+      # sign) and passed it to Select-String -SimpleMatch, which treats
+      # regex escapes as LITERAL text — the pattern could never match
+      # config.go's real content and the Windows job failed at this step
+      # on every run. Shell steps now only orchestrate the canonical
+      # validator; the validator's own workflow contract (checked in
+      # --check mode) fails the build if a per-shell reimplementation
+      # ever reappears.
       - name: Verify release metadata
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          # PowerShell escaping rule: never reuse Bash-style backslash-quote
-          # escaping inside PowerShell strings. PowerShell
-          # terminates the string at the quote after the backslash, splits
-          # the -Pattern argument into extra positional tokens and fails
-          # with "A positional parameter cannot be found that accepts
-          # argument". Single-quoted literals plus explicit concatenation
-          # need no escaping, and the -Quiet boolean makes a missing match
-          # FAIL the step (a bare Select-String pipeline exits 0 when
-          # nothing matches, which would silently weaken this gate).
-          $checks = @(
-            @{
-              Label   = "internal/config/config.go AppVersion"
-              Path    = "internal/config/config.go"
-              Pattern = 'AppVersion\s*=\s*"' + $env:APP_VERSION + '"'
-            },
-            @{
-              Label   = "package.json version"
-              Path    = "package.json"
-              Pattern = '"version": "' + $env:APP_VERSION_FULL + '"'
-            },
-            @{
-              Label   = "build/config.yml productVersion"
-              Path    = "build/config.yml"
-              Pattern = 'productVersion: "' + $env:APP_VERSION_FULL + '"'
-            },
-            @{
-              Label   = "SIGNATURE first line"
-              Path    = "SIGNATURE"
-              Pattern = 'SHEYTAN-Local-Agent v' + $env:APP_VERSION
-            }
-          )
+          node scripts/release-version.mjs --check
 
-          foreach ($check in $checks) {
-            $found = Select-String -Path $check.Path -Pattern $check.Pattern -SimpleMatch -Quiet
-
-            if (-not $found) {
-              throw "Release metadata mismatch in $($check.Label): expected $($check.Pattern)"
-            }
-
-            Write-Host "Verified $($check.Label): $($check.Pattern)"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Canonical release metadata verification failed (release-version.mjs --check)."
           }
+
+          Write-Host "Release metadata verified through the canonical cross-platform gate."
 
       - name: Install frontend dependencies
         shell: pwsh
@@ -354,6 +338,11 @@ jobs:
           npm run typecheck
           npm run lint
           npm run test:units
+
+          # v1.3.2: release-metadata regression suite (semver shapes,
+          # drift/missing markers, whitespace/CRLF, --env identity,
+          # workflow contract — the run 35542000811 failure class).
+          npm run test:release
 
           # Production build contract: start from a CLEAN dist so no
           # previous-generation asset can survive into web/static.
@@ -397,6 +386,62 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      # v1.3.2: the Windows job now builds and ctests the native C++ engine
+      # BEFORE the Go tests — exactly like the Linux job — so the
+      # Go↔C++ integration suites (internal/native/engine
+      # TestRealCppHost*) execute against the REAL shtn-engine-host.exe on
+      # Windows instead of skipping. Native engine execution is a
+      # first-class release objective on the platform whose metadata gate
+      # previously failed; the pipeline must reach and prove it.
+      #
+      # windows-latest ships CMake + Visual Studio. Multi-config generators
+      # (Visual Studio) place runtime outputs under a per-configuration
+      # subdirectory (e.g. build/Release/); the Go tests expect the host at
+      # native/engine/build/shtn-engine-host.exe, so the step locates the
+      # produced executable wherever the generator placed it and stages it
+      # at the expected path. The CMake cache rule applies unchanged: wipe
+      # and reconfigure with --fresh (a relocatable cache is not a safe
+      # artifact).
+      - name: Native engine (C++) build and tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          cmake --version
+
+          # Regression guard: never reuse a stale or path-mismatched cache.
+          if (Test-Path "native/engine/build") {
+            Remove-Item "native/engine/build" -Recurse -Force
+          }
+          cmake -S native/engine -B native/engine/build --fresh
+
+          cmake --build native/engine/build --config Release
+
+          ctest --test-dir native/engine/build -C Release --output-on-failure
+
+          # Stage the host executable where the Go integration tests
+          # resolve it (<repo>/native/engine/build/shtn-engine-host.exe),
+          # regardless of which subdirectory the generator emitted it into.
+          $expected = Join-Path (Get-Location) "native\engine\build\shtn-engine-host.exe"
+
+          if (-not (Test-Path $expected)) {
+            $found = Get-ChildItem "native/engine/build" -Recurse -Filter "shtn-engine-host.exe" |
+              Select-Object -First 1
+
+            if ($null -eq $found) {
+              throw "shtn-engine-host.exe was not produced by the native build."
+            }
+
+            Copy-Item $found.FullName $expected
+            Write-Host "Staged host executable from $($found.FullName) to $expected"
+          }
+
+          if ((Get-Item $expected).Length -lt 10000) {
+            throw "shtn-engine-host.exe is suspiciously small."
+          }
+
+          Write-Host "Native engine (C++) built and tested on Windows: $expected"
 
       - name: Go verification
         shell: pwsh
@@ -860,7 +905,6 @@ jobs:
     # package.json — no local hardcoded version can drift here either.
     env:
       APP_VERSION: ${{ needs.audit.outputs.version }}
-      APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -931,15 +975,15 @@ jobs:
         shell: bash
         run: node scripts/release-version.mjs
 
+      # v1.3.2: the ONE canonical cross-platform verification — the bash
+      # greps this job previously carried (a second divergent copy of the
+      # release semantics) are gone. See scripts/release-version.mjs.
       - name: Verify release metadata
         shell: bash
         run: |
           set -euo pipefail
 
-          grep -E "AppVersion[[:space:]]+=[[:space:]]+\"$APP_VERSION\"" internal/config/config.go
-          grep -F "\"version\": \"$APP_VERSION_FULL\"" package.json
-          grep -F "productVersion: \"$APP_VERSION_FULL\"" build/config.yml
-          grep -F "SHEYTAN-Local-Agent v$APP_VERSION" SIGNATURE
+          node scripts/release-version.mjs --check
 
       - name: Install frontend dependencies
         shell: bash
@@ -953,6 +997,11 @@ jobs:
           npm run typecheck
           npm run lint
           npm run test:units
+
+          # v1.3.2: release-metadata regression suite (semver shapes,
+          # drift/missing markers, whitespace/CRLF, --env identity,
+          # workflow contract — the run 35542000811 failure class).
+          npm run test:release
 
           # Production build contract: start from a CLEAN dist so no
           # previous-generation asset can survive into web/static.
@@ -1304,7 +1353,6 @@ jobs:
     # (package.json) — it needs no checkout to verify the tag.
     env:
       APP_VERSION: ${{ needs.audit.outputs.version }}
-      APP_VERSION_FULL: ${{ needs.audit.outputs.version_full }}
 
     # Version-agnostic gate — the job runs for any v* tag and the first
     # step verifies the tag equals v${APP_VERSION}. A hardcoded tag would

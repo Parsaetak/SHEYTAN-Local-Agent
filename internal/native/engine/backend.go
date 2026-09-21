@@ -443,6 +443,35 @@ func (b *Backend) GenerationCapable() bool {
 	return b.eng.NativeGenerationCapable()
 }
 
+// GenerationFallbackReason implements llm.GenerationFallbackReporter: the
+// inspectable reason the native engine cannot serve generation RIGHT NOW
+// (empty when it can). It distinguishes the infrastructure classes the
+// selection layer reports to the user instead of collapsing them into a
+// generic "not capable":
+//
+//   - engine not running (never started, stopped, or failed)
+//   - engine running but no model loaded
+//   - model loaded but not natively executable (the engine's own verdict)
+func (b *Backend) GenerationFallbackReason() string {
+	if b.eng == nil {
+		return "native engine is not configured"
+	}
+	if !b.eng.IsAlive() {
+		detail := b.eng.Detail()
+		if detail != "" {
+			return fmt.Sprintf("native engine not running (state %s: %s)", b.eng.State(), detail)
+		}
+		return fmt.Sprintf("native engine not running (state %s)", b.eng.State())
+	}
+	if b.eng.NativeModelState() != ModelStateLoaded {
+		return "native engine is running but no model is loaded"
+	}
+	if reason := b.eng.NativeGenerationReason(); reason != "" {
+		return "loaded model is not natively executable: " + reason
+	}
+	return ""
+}
+
 // statRegularFile validates that path exists and is a regular file
 // (no directory, no dangling symlink).
 func statRegularFile(path string) (os.FileInfo, error) {

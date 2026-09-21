@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.3.1
+Current release:  v1.3.2
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -69,6 +69,20 @@ The model is never the authority on whether an engineering task succeeded — ob
 ```
 
 Critical execution logic belongs to Go. Presentation and interaction logic belong to React. The production desktop app embeds the built frontend (`web/static/`) via `go:embed` — no separate frontend server is needed.
+
+## v1.3.2 — Release Repair + Native Engine Execution Hardening
+
+**v1.3.2 root-fixes the Windows CI release-metadata failure (GitHub Actions run 35542000811): release metadata is now validated through ONE canonical cross-platform implementation (`scripts/release-version.mjs --check` — every build job orchestrates it; the per-shell bash/PowerShell reimplementations, one of which treated regex escapes as literal text under `-SimpleMatch`, are gone and structurally banned from returning), the redundant `APP_VERSION_FULL` alias is removed, and a release-metadata regression suite pins semver shapes, drift, whitespace/CRLF handling, identity emission and the workflow contract. Native engine execution becomes a first-class release objective: engine selection is observable (a native selection that falls back to llama.cpp now carries an inspectable reason in logs and `/api/engine` — never silent), a dedicated execution test contract covers executable discovery, deterministic startup, bounded boots, model-path failures, shutdown-during-generation and orphan-process prevention against the real C++ host, the Windows pipeline builds/ctests the native engine and runs the real-host Go integration suites before packaging, and the stable-asset verifier is rewritten contract-driven (vite output-pattern assertion + asset reachability) so legitimate deterministic names carrying version digits are never false-rejected. No working architecture was changed; the v1.3.1 frontend contract (deterministic filenames, `web/static` mirrors clean `dist`) is preserved.**
+
+| Area | Change | Status |
+|---|---|---|
+| **Canonical release gate** | `release-version.mjs` is the single release-metadata authority (sync / `--check` / `--env`); the audit, Windows and Linux jobs all run the canonical check; the validator's workflow contract requires `--check` in every build job and bans per-shell reimplementations (the run-35542000811 pattern class included) | IMPLEMENTED, TESTED (21-test regression suite, `npm run test:release`, run in every CI job) |
+| **Identity simplification** | `APP_VERSION_FULL` removed everywhere (workflow outputs/envs, `--env` emission) — an audit found no consumer distinguishing it from `APP_VERSION`; `--env` emits exactly one variable | IMPLEMENTED, TESTED |
+| **Observable engine selection** | `llm.SelectGenerationBackendDetailed` + `GenerationFallbackReporter`; the native backend reports the three infrastructure classes (not running / no model / not natively executable); the runtime seam logs and records the reason; `/api/engine` exposes `fallbackReason` + `fallbackCount` | IMPLEMENTED, TESTED |
+| **Native execution contract** | New `execution_contract_test.go`: executable discovery, protocol-mismatch rejection + retry, bounded-boot teardown, missing model path (engine stays healthy, load recovers), stop-during-generation (no wedge, no orphan, restartable), orphan prevention across repeated cycles (signal-0 probe) | IMPLEMENTED, ALL TESTS PASS (real C++ host) |
+| **Windows native execution** | The Windows job builds + ctests the native engine and stages `shtn-engine-host.exe` so the Go↔C++ `TestRealCppHost*` suites execute for real on Windows before packaging (subprocess IPC — no cgo change) | IMPLEMENTED (pipeline; validated structurally + via local execution of the same suites) |
+| **Contract-driven asset verifier** | `verify-static-assets.mjs` asserts the vite stable output patterns (no hash tokens) and proves every `web/static` file reachable from `index.html` (html refs, JS imports incl. `__vite__mapDeps`, css `url()`); the hyphen+digit name heuristic is gone | IMPLEMENTED, TESTED (7-case negative/positive suite) |
+| **Stale comment cleanup** | Phase-1-era comments corrected to Phase-5 reality (`llm/backend.go`, `api/engine.go`, integration tests); `TestBackendGenerationNotImplemented` renamed to match its semantics | IMPLEMENTED |
 
 ## v1.3.1 — Product Polish, Stable File Structure & Repository Cleanup
 
@@ -233,7 +247,7 @@ cgo) and the full rationale are documented in
 Windows and Linux x64 portable ZIPs are produced by CI. The Windows package layout (package root `SHEYTAN-LA`):
 
 ```text
-SHEYTAN-LA-v1.3.1-windows-x64.zip
+SHEYTAN-LA-v1.3.2-windows-x64.zip
 └── SHEYTAN-LA/
     ├── SHEYTAN-LA.exe           (GUI app + embedded UI + HTTP/WS API)
     ├── SHEYTAN-LA.bat           (portable launcher)
@@ -244,7 +258,7 @@ SHEYTAN-LA-v1.3.1-windows-x64.zip
     └── workspace/               (empty; portable Coding Lab workspaces)
 ```
 
-The Linux package (`SHEYTAN-Local-Agent-Linux-x64-v1.3.1.zip`) mirrors this layout under a `SHEYTAN-Local-Agent/` root with a Linux executable. A Windows NSIS installer (`SHEYTAN-LA-v1.3.1-windows-x64-installer.exe`) is produced alongside the portable ZIP.
+The Linux package (`SHEYTAN-Local-Agent-Linux-x64-v1.3.2.zip`) mirrors this layout under a `SHEYTAN-Local-Agent/` root with a Linux executable. A Windows NSIS installer (`SHEYTAN-LA-v1.3.2-windows-x64-installer.exe`) is produced alongside the portable ZIP.
 
 Unzip anywhere and run the executable. On first launch the app creates its portable data layout next to it:
 

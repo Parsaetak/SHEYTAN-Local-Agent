@@ -2,8 +2,8 @@
 
 ## Current State
 
-Date: 2026-09-20 (v1.3.1: product polish, stable file structure &
-repository cleanup; v1.3.1 log first below)
+Date: 2026-09-21 (v1.3.2: release repair + native engine execution
+hardening; v1.3.2 log first below)
 
 Repository:
 
@@ -16,25 +16,131 @@ Branch: `main`
 Current release:
 
 ```text
-v1.3.1
+v1.3.2
 ```
 
-v1.3.1 is the **professionalization & repository-hygiene** release. The
-product identity is now version-only (package.json → APP_VERSION, the
-retired codename removed from every surface), the embedded frontend
-uses STABLE deterministic filenames (no content hashes) with
-`web/static` exactly mirroring one clean authoritative build, the
-release workflow is simplified to a single canonical version flow, CI
-gains codename/stable-asset/stale-file gates, the version-suffixed
-test pile is consolidated into behavior-oriented files, and the
-documentation describes the current product first. No architecture
-changes; all existing functionality preserved. See the v1.3.1 log
-(first below) for every change and the verification matrix. The
+v1.3.2 is the **release-repair & native-execution-hardening** release.
+The Windows CI release-metadata failure (GitHub Actions run
+35542000811) is root-fixed: `scripts/release-version.mjs --check` is
+the ONE canonical cross-platform validator (every build job
+orchestrates it; the per-shell bash/PowerShell reimplementations — one
+of which treated regex escapes as literal text under
+`Select-String -SimpleMatch` — are gone and structurally banned from
+returning), the redundant `APP_VERSION_FULL` alias is removed, and a
+21-test release-metadata regression suite runs in every CI job.
+Native engine execution is hardened as a first-class objective:
+engine selection is observable (a native selection that falls back to
+llama.cpp carries an inspectable reason in the logs and
+`/api/engine`), a dedicated execution test contract proves
+deterministic startup, bounded boots, model-path failure behavior,
+shutdown-during-generation and orphan-process prevention against the
+real C++ host, and the Windows pipeline now builds/ctests the native
+engine and runs the real-host Go integration suites before packaging.
+The stable-asset verifier is contract-driven (vite output-pattern
+assertion + asset reachability). No architecture changes; the v1.3.1
+professionalization work is preserved. See the v1.3.2 log (first
+below) for every change and the verification matrix. The v1.3.1 line
+below remains authoritative for the version-only identity, stable
+frontend filenames and CI hygiene gates. The
 v1.3.0 line below remains authoritative for runtime path correctness,
 clean logging, universal scrolling and the GitHub clone workflow; the
 v1.2.x and v1.1.5 lines below remain the engineering evidence base.
 llama.cpp remains the default generation engine; the native engine
 serves the narrow, honestly-documented llama-architecture path.
+
+---
+
+## v1.3.2 — Release Repair + Native Engine Execution Hardening (2026-09-21)
+
+**Base:** `main @ 95b86caa52cf78709e05b401fc2ad783ba431cc7` (`v1.3.1`)
+**ROADMAP.md:** blob SHA-1 `c7e2c1720eb5e97bd932c0d76100b8719193e650` —
+byte-identical before and after (verified).
+
+### Root cause of CI run 35542000811 (Windows "Verify release metadata")
+
+The Windows job built `AppVersion\s*=\s*"<version>"` and passed it to
+`Select-String -SimpleMatch`, which treats the regex escapes as LITERAL
+text. The literal pattern never matches `config.go`'s real content
+(`AppVersion = "1.3.1"`), so the step failed on every run while the
+Linux/audit greps (regex semantics) passed — a per-shell divergence in
+three reimplementations of the same release contract.
+
+### Changes
+
+- **S1 — Canonical release gate.** `scripts/release-version.mjs` is the
+  single release-metadata authority: exported pure logic
+  (`validateSemver` with leading-zero rejection,
+  `readCanonicalVersion`, `workflowContractViolations`,
+  `inspectRepository`, `repairDrift`), CLI on the working directory,
+  `--env` emitting exactly `APP_VERSION`, and a workflow contract that
+  requires `--check` in every build job and BANS the per-shell
+  reimplementation fragments (the 35542000811 pattern class + the bash
+  grep spellings). The audit/Windows/Linux verification steps all
+  became `node scripts/release-version.mjs --check`.
+- **S2 — Release regression suite.** New
+  `scripts/release-version.test.mjs` (21 tests; `npm run
+  test:release`; run by every CI build job): semver shapes, drift,
+  missing markers, whitespace/gofmt alignment, CRLF, `--env` identity
+  (alias stays dead), workflow contract, patch-to-patch repair both
+  directions.
+- **S3 — Observable engine selection.** `llm.GenerationFallbackReporter`
+  + `SelectGenerationBackendDetailed`/`BackendDecision`; native
+  `Backend.GenerationFallbackReason()` (not-running / no-model /
+  not-executable); `runtime.streamGeneration` logs + records
+  (`Stack.NativeFallback()`); `/api/engine` native snapshot carries
+  `fallbackReason`/`fallbackCount`. Phase-1-era stale comments
+  corrected (`llm/backend.go`, `api/engine.go`, integration tests);
+  `TestBackendGenerationNotImplemented` renamed
+  `TestBackendGenerationLifecycleGuard`.
+- **S4 — Native execution test contract.** New
+  `internal/native/engine/execution_contract_test.go` + fake-host
+  `hang` mode: executable discovery, protocol-mismatch rejection +
+  retry, bounded-boot teardown, missing model path (engine stays
+  healthy; recovery load), stop-during-generation (no wedge, no
+  orphan, restartable), orphan prevention across repeated cycles
+  (signal-0 probe), fallback-reason states.
+- **S5 — Windows native execution.** The Windows job gains a native
+  C++ build + ctest step (clean `--fresh`, Release, multi-config
+  staging of `shtn-engine-host.exe`) before the Go tests, so the
+  `TestRealCppHost*` suites execute against the real engine on
+  Windows. Go↔C++ is subprocess IPC — no cgo change.
+- **S6 — Contract-driven asset verifier.**
+  `verify-static-assets.mjs`: vite output-pattern assertion (no hash
+  tokens) + full reachability closure (html refs, JS imports incl.
+  `__vite__mapDeps`, css url()); the hyphen+digit name heuristic
+  (false-reject risk for deterministic names with version digits) is
+  gone; the intentional code-splitting requirement retained with
+  justification; 7-case negative/positive suite proves the checks.
+- **S7 — Version/docs.** Canonical version 1.3.2 (package.json →
+  config.go / config.yml / SIGNATURE via the script); UPDATE.md
+  rewritten; README current-release + v1.3.2 section; agent.md
+  handoff; this log.
+
+### Verification (this host, 2026-09-21)
+
+- `node scripts/release-version.mjs` / `--check` / `--env`: consistent
+  at 1.3.2.
+- `npm run test:release`: 21/21. Frontend: `npm ci`, `typecheck`,
+  `lint`, `test:units`, clean `build`, `verify:web --dist`.
+- Go: `gofmt` clean; `go vet` clean; `go test` across `./internal/...`
+  (headless) and `./...` 0 FAIL; race on the concurrency-heavy
+  packages PASS.
+- Native: clean `--fresh` configure + build; ctest 12/12; complete
+  engine package suite against the real host PASS (incl. the new
+  execution-contract tests).
+- Stress suite: PASS (release-surface gate reading the reworked
+  workflow).
+- Repository scans: zero `APP_VERSION_FULL` references; no stale
+  codename matches; ROADMAP.md unchanged.
+
+### Environmental limits (unchanged class)
+
+The Wails desktop shell needs GTK4/WebKitGTK (not installed on this
+host — headless tag verified instead); the Windows build/NSIS and the
+packaged-release execution require the GitHub Windows runner. The
+workflow changes are validated structurally (YAML, canonical-check
+invocations, stress-gate fragments) and by running the same native/Go
+suites locally on Linux.
 
 ---
 

@@ -150,6 +150,16 @@ type Stack struct {
 	// scheduler loop have fully exited after a Close.
 	memDone   chan struct{}
 	schedDone chan struct{}
+
+	// nativeFallbackMu guards the last native-selection fallback
+	// reason (v1.3.2 observable-fallback contract): when the user
+	// selected the native engine but the selection policy had to route
+	// generation to llama.cpp, the reason is recorded here once per
+	// generation request and surfaced through /api/engine — the
+	// fallback is documented behavior, but never a SILENT one.
+	nativeFallbackMu    sync.Mutex
+	nativeFallbackLast  string
+	nativeFallbackCount int
 }
 
 // NewStack wires every tool into the orchestrator. The sandbox is optional —
@@ -838,6 +848,9 @@ func (s *Stack) StartMemoryManager(ctx context.Context) {
 //     "native") AND its loaded model validated natively executable AND
 //     the request is plain text (no tool schemas, no images);
 //   - anything else runs on the llama.cpp client path;
+//   - a native selection that cannot serve (engine down, no model, model
+//     not natively executable) falls back to llama.cpp with the reason
+//     LOGGED and recorded for /api/engine (v1.3.2: no silent fallback);
 //   - a native failure BEFORE the first streamed token falls back to
 //     llama.cpp with the reason logged (the llama retry discipline
 //     applied to backend selection); a failure AFTER the first token
@@ -845,13 +858,26 @@ func (s *Stack) StartMemoryManager(ctx context.Context) {
 func (s *Stack) streamGeneration(ctx context.Context, req *llm.ChatRequest,
 	onEvent func(llm.StreamEvent) error) (llm.PerfStats, error) {
 
-	selected := llm.SelectGenerationBackend(
+	decision := llm.SelectGenerationBackendDetailed(
 		s.Src.Load(),
 		s.nativeBackend,
 		s.llamaBackend,
 	)
 
-	if selected == nil || selected.Name() != "native" {
+	if decision.FallbackReason != "" {
+		// The user explicitly selected the native engine but it cannot
+		// serve: record + log the reason so the routing decision is
+		// observable (see NativeFallbackStatus).
+		s.recordNativeFallback(decision.FallbackReason)
+
+		logging.Default().Warn(
+			"native-engine",
+			"native engine selected but cannot serve generation (%s) — llama.cpp serving",
+			decision.FallbackReason,
+		)
+	}
+
+	if decision.SelectedName != "native" {
 		return s.clientStream(ctx, req, onEvent)
 	}
 
@@ -883,7 +909,7 @@ func (s *Stack) streamGeneration(ctx context.Context, req *llm.ChatRequest,
 		return onEvent(ev)
 	}
 
-	perf, err := selected.StreamGenerate(ctx, req, wrapped)
+	perf, err := decision.Backend.StreamGenerate(ctx, req, wrapped)
 	if err == nil {
 		return perf, nil
 	}
@@ -902,6 +928,37 @@ func (s *Stack) streamGeneration(ctx context.Context, req *llm.ChatRequest,
 	// Mid-stream failure after content: surface like any engine
 	// error (the loop's error handling owns it).
 	return perf, err
+}
+
+// recordNativeFallback stores the latest native-selection fallback reason
+// (v1.3.2 observable-fallback contract). Counted per request so the UI can
+// show how often the explicit native selection was routed to llama.cpp.
+func (s *Stack) recordNativeFallback(reason string) {
+	s.nativeFallbackMu.Lock()
+	defer s.nativeFallbackMu.Unlock()
+	s.nativeFallbackLast = reason
+	s.nativeFallbackCount++
+}
+
+// NativeFallbackStatus reports the observable native-selection fallback
+// state: the most recent reason (empty when the native engine is serving or
+// was never selected) and how many generation requests were routed to the
+// llama.cpp fallback despite the native selection. Purely local reads —
+// safe for the /api/engine poll path.
+type NativeFallbackStatus struct {
+	Reason string `json:"reason,omitempty"`
+	Count  int    `json:"count"`
+}
+
+// NativeFallback reports the recorded fallback status (zero value when the
+// native path is serving or not selected).
+func (s *Stack) NativeFallback() NativeFallbackStatus {
+	s.nativeFallbackMu.Lock()
+	defer s.nativeFallbackMu.Unlock()
+	return NativeFallbackStatus{
+		Reason: s.nativeFallbackLast,
+		Count:  s.nativeFallbackCount,
+	}
 }
 
 // researchTimeout converts the configuration's seconds value

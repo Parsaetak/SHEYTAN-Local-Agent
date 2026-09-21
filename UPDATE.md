@@ -1,167 +1,180 @@
-# UPDATE.md — v1.3.1 Product Polish, Stable File Structure & Repository Cleanup
+# UPDATE.md — v1.3.2 Release Repair + Native Engine Execution Hardening
 
-**Release:** `v1.3.1` (canonical application version; single version
+**Release:** `v1.3.2` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 8676582` (`v1.3.0`) · **Date:** 2026-09-20
-**Package:** `SHEYTAN-Local-Agent-v1.3.1-UPDATE.zip`
+**Base:** `main @ 95b86ca` (`v1.3.1`) · **Date:** 2026-09-21
+**Package:** `SHEYTAN-Local-Agent-v1.3.2-UPDATE.zip`
 **ROADMAP.md:** byte-identical to the locked baseline (git blob SHA-1
 `c7e2c1720eb5e97bd932c0d76100b8719193e650`) — verified before and after
 all work.
 
-This release professionalizes the v1.3.0 tree without touching working
-architecture: the product identity becomes **version-only**, the embedded
-frontend moves to **stable deterministic filenames**, the generated tree
-becomes exactly reproducible, the release/version workflow is simplified
-to one canonical source, CI gains explicit hygiene gates, and the
-historical version-suffixed test pile is consolidated into
-behavior-oriented files. Every fix targets repository quality, not
-features — all existing functionality is preserved.
+This release root-fixes the Windows CI failure of run `35542000811`,
+collapses release-metadata verification into ONE canonical cross-platform
+validator, removes the redundant `APP_VERSION_FULL` identity alias, and
+hardens native engine execution as a first-class release objective:
+observable engine selection (no silent fallback), a pinned native
+execution test contract (deterministic startup, model-path failures,
+shutdown-during-generation, orphan-process prevention), real native
+execution coverage in the Windows pipeline, and a contract-driven rewrite
+of the stable-asset verifier. No working architecture was changed.
 
 ---
 
-## S1. Version-only product identity (IMPLEMENTED, TESTED)
+## S1. Root fix: one canonical release-metadata gate (IMPLEMENTED, TESTED)
 
-- The retired product codename is removed from EVERY surface: runtime
-  constants (`internal/config/config.go` no longer declares a codename
-  constant), CI (`build-desktop.yml` carries no codename outputs, env
-  vars, package text or assertions), release scripts
-  (`scripts/release-version.mjs` no longer parses, defaults, emits or
-  verifies codenames), installer/portable package text
-  (`README.txt` / `BUILD-INFO.txt` carry `SHEYTAN-LA` + `Version:` +
-  `Platform:` + `Commit:` only), README/ARCHITECTURE/UPDATE/agent.md/
-  worklog, research User-Agent strings, stress-suite names, test names
-  and comments.
-- `scripts/release-version.mjs` is the single release-metadata gate:
-  it validates **plain semver** (`MAJOR.MINOR.PATCH`), reads one
-  canonical version from `package.json`, synchronizes the derived
-  surfaces (`config.go` `AppVersion`, `build/config.yml`
-  `productVersion`, `SIGNATURE` first line) and verifies the CI
-  derivation shape. `--env` emits exactly `APP_VERSION` and
-  `APP_VERSION_FULL` (a compatibility alias equal to `APP_VERSION` —
-  no third variable, no suffix, no codename).
-- Research providers (GitHub, Reddit, DuckDuckGo, SearXNG) identify as
-  `SHEYTAN-Local-Agent/<AppVersion>` — derived from the same runtime
-  constants the whole application reports (`research.DefaultUserAgent`),
-  with the user-configurable `Config.EffectiveResearchUserAgent()` still
-  honored by the Reddit provider. No provider hardcodes a release
-  identity.
-- The Linux portable ZIP and the release tag drop the historical `Z`
-  suffix: `SHEYTAN-Local-Agent-Linux-x64-v1.3.1.zip` and tag `v1.3.1`
-  (`internal/releasecontract` updated in lockstep with the workflow;
-  the stress gate enforces the agreement).
+- **Root cause of CI run 35542000811** (reproduced and verified): the
+  Windows job's "Verify release metadata" step built the pattern
+  `AppVersion\s*=\s*"<version>"` and passed it to PowerShell's
+  `Select-String -SimpleMatch`, which treats regex escapes as LITERAL
+  text — the pattern could never match `config.go`'s real content
+  (`AppVersion = "1.3.1"`), so the Windows job failed at that step on
+  every run while Linux passed (its grep semantics matched the regex).
+- `scripts/release-version.mjs` is now the single canonical
+  release-metadata authority. Its logic is exported as pure functions and
+  the CLI operates from the working directory; modes: sync (default),
+  `--check` (verify only, GitHub-Actions annotations), `--env` (emits
+  exactly `APP_VERSION=<version>` — machine-readable only).
+- The three per-shell reimplementations are gone: the audit job's bash
+  greps, the Windows `Select-String` block, and the Linux job's bash
+  greps all became `node scripts/release-version.mjs --check`. Shell
+  steps now only orchestrate the validator.
+- The validator's own **workflow contract** enforces the architecture in
+  both directions: every build job (audit, windows, linux) must invoke
+  the canonical check, and banned fragments fail the gate if a per-shell
+  reimplementation ever reappears — including the exact
+  regex-escapes-in-PowerShell pattern class that broke run 35542000811
+  and the four bash grep reimplementation spellings.
+- `APP_VERSION_FULL` is REMOVED throughout (audit outputs, job envs,
+  release job env, `--env` emission, comments). The v1.3.2 audit found
+  no consumer that distinguished it from `APP_VERSION` — it was a pure
+  alias and a second identity variable with zero semantic value.
+- Semver validation is stricter: leading-zero components (`1.03.2`) are
+  rejected, exactly `MAJOR.MINOR.PATCH` passes.
 
-## S2. Stable frontend filenames (IMPLEMENTED, TESTED)
+## S2. Release-metadata regression suite (IMPLEMENTED, ALL TESTS PASS)
 
-- `vite.config.ts` emits deterministic names at the BUILD level (not
-  post-build renames): `entryFileNames/chunkFileNames` =
-  `assets/[name].js`, `assetFileNames` = `assets/[name][extname]`.
-  Code splitting and lazy loading are fully preserved — every lazy
-  chunk (AgentBody, SettingsPanel, SystemPanel, WorkspacePanel, LabPanel,
-  ResearchPanel, AgentHeader, AgentSidebar, DownloadProgress,
-  useResource, vision) is itself stable.
-- The embedded tree now contains exactly:
-  `web/static/index.html`, `web/static/assets/index.js`,
-  `index.css`, `rolldown-runtime.js` and the stable component chunks —
-  the same physical file keeps the same name across builds, so the
-  agent can always identify what changed.
-- No content-hash filenames, no duplicate component bundles, no
-  orphaned CSS, no `.vite/manifest.json`.
+- New `scripts/release-version.test.mjs` (21 tests, wired as
+  `npm run test:release`, run by every CI build job): valid/invalid
+  semver shapes (suffixes, wildcards, whitespace, leading zeros),
+  drift detection on every derived surface, missing-marker reporting,
+  whitespace/gofmt-alignment variation, CRLF line endings (Windows
+  checkouts) including byte-preserving repair, `--env` identity
+  emission (exactly one variable; the retired alias must stay dead),
+  workflow-contract violations (missing `--env` derivation, too few
+  `--check` invocations, the 35542000811 pattern class, bash grep
+  reimpls), and patch-to-patch version changes (1.3.1 → 1.3.2 repair
+  across all surfaces, downgrade drift detection, alignment-preserving
+  splice).
 
-## S3. Authoritative generated tree (IMPLEMENTED)
+## S3. Observable native engine selection — no silent fallback (IMPLEMENTED, TESTED)
 
-- The production flow is `clean dist → npm run build → stable assets →
-  sync-web → web/static`; the workflow performs an explicit `rm -rf
-  dist` (Windows: `Remove-Item dist`) before every production build and
-  `sync-web.mjs` replaces `web/static` wholesale, so no
-  previous-generation asset can survive.
-- All old hashed bundles (`index-DRb7l71I.js`,
-  `AgentBody-jPzETmLT.js`, `SettingsPanel-CvoMBB6r.js`, …) are deleted
-  from the repository; `web/static` now exactly reflects the current
-  clean build.
-- `scripts/verify-static-assets.mjs` (new, wired into package.json as
-  `npm run verify:web`) enforces the acceptance contract: required
-  entries exist, every index.html reference resolves, every
-  dynamic-import chunk exists, no hashed filename patterns, no vite
-  manifest, and (with `--dist`) `web/static` mirrors the fresh build
-  file-for-file.
+- New `llm.GenerationFallbackReporter` interface +
+  `SelectGenerationBackendDetailed` returning a `BackendDecision`
+  (serving backend + the reason a native selection fell back).
+  `SelectGenerationBackend` remains the routing shorthand over the same
+  single policy.
+- The native `engine.Backend` implements
+  `GenerationFallbackReason()`, distinguishing the three infrastructure
+  classes instead of a generic "not capable": engine not running (with
+  state + detail), running without a model loaded, and model loaded but
+  not natively executable (the engine's own verdict).
+- `runtime.Stack.streamGeneration` records and logs the reason whenever
+  the user's explicit native selection is routed to llama.cpp
+  (`recordNativeFallback` / `Stack.NativeFallback()`), and `/api/engine`
+  exposes `fallbackReason` + `fallbackCount` in the native status block
+  for the UI. The llama.cpp fallback remains the documented behavior —
+  it is simply never a SILENT one anymore.
+- Stale Phase-1-era comments corrected in `internal/llm/backend.go`,
+  `internal/api/engine.go`, and the integration tests (generation has
+  been REAL since Phase 5); `TestBackendGenerationNotImplemented`
+  renamed to `TestBackendGenerationLifecycleGuard` to match its actual
+  Phase-5 semantics.
 
-## S4. CI hardening (IMPLEMENTED)
+## S4. Native execution test contract (IMPLEMENTED, ALL TESTS PASS)
 
-All existing quality gates are unchanged (Windows/Linux builds, native
-C++ build + ctest, frontend typecheck/lint/unit tests, race gate, Go
-tests + vet, stress suite, packaging, NSIS installer + source contract,
-release manifest, SHA256SUMS, published-release verification). Added:
+New `internal/native/engine/execution_contract_test.go` pins the
+execution properties beyond compilation, complementing the existing
+Phase 4/5/7 real-host suites (real inference, streaming, cancellation,
+lane recycling, context overflow — all retained):
 
-- **Codename removal gate** — a case-insensitive repository scan for the
-  retired terms (the removed constant names, the old user-agent identity
-  and the standalone codename word) fails the build on ANY match
-  (tracked files only; ROADMAP.md is verified clean).
-- **Stable frontend asset contract** — `verify-static-assets.mjs --dist`
-  runs in the audit, Windows and Linux jobs.
-- **Stale generated files** — the `--dist` mirror comparison fails CI if
-  `web/static` contains anything the current build does not produce.
-- **Version consistency** — the identity derivation
-  (`package.json → release-version.mjs --env → APP_VERSION`) is
-  shape-checked by the release script itself; the workflow verifies the
-  derived surfaces against the resolved version in every job.
+- executable discovery: `DefaultHostPath` override + platform-suffixed
+  default (`{dataDir}/bin/shtn-engine-host[.exe]`), `Available()`
+  tracking the resolved path exactly;
+- deterministic startup: protocol-mismatch handshake rejection fails
+  closed with the mismatch diagnostic (no surviving process) and the
+  engine stays retryable;
+- bounded boot: a host that never answers the handshake is torn down
+  deterministically by the caller's context (new fake-host `hang`
+  mode) — no hang, no orphan;
+- invalid/missing model path (real C++ host): clean rejection, model
+  concern walks to `failed`, the ENGINE stays healthy, and a valid load
+  recovers — infrastructure failures never convert to engine failures;
+- shutdown during active generation (real host): Stop aborts the
+  in-flight generation without wedging, the host process is fully
+  terminated (signal-0 probe on Unix), and the engine restarts cleanly;
+- orphan prevention: repeated start/stop cycles leave no host process
+  behind (pid cleared + signal-0 probe after every stop);
+- fallback-reason observability across engine states.
 
-## S5. Test-file consolidation (IMPLEMENTED, ALL TESTS PASS)
+## S5. Windows pipeline reaches native execution (IMPLEMENTED)
 
-- 24 version-suffixed files (`*_v114/v125/v126/v127/v1281/v129/v130_
-  test.go`) and 5 phase-suffixed files were consolidated into canonical
-  behavior-oriented test files — merged into existing canonicals where
-  they exist (`handoff_test.go`, `preflight_test.go`,
-  `runtransport_test.go`, `run_crossmode_test.go`,
-  `run_settlement_test.go`, `server_test.go`, `contextplan_test.go`,
-  `histref_test.go`, `scheduler_test.go`, `sessions_test.go`,
-  `pipeline_test.go`, `attachments_test.go`, `contextcache_test.go`,
-  `memory_test.go`, `recall_test.go`) and renamed where they are the
-  package's only tests (`authority_test.go`, `measurement_test.go`,
-  `config_patch_test.go`, `artifacts_test.go`, `policy_test.go`,
-  `client_test.go`, `blankwarn_test.go`, `mcp_test.go`,
-  `probelogging_test.go`).
-- Coverage is preserved or strengthened: every test function moved
-  verbatim; measurement tests renamed to behavior names
-  (`TestFirstPromptCostMeasurement`, `TestThinkingSimplePromptStaysCompact`,
-  `TestTrivialChatOffersNoToolsAndCompactBriefing`).
-- The stress suite keeps full scenario coverage; the codename-branded
-  file is renamed `cmd/stress_release_surface.go` with neutral function
-  and scenario names (`release_surface`, `memory_unique_ids`,
-  `trimlogs_rotate`).
+- The Windows job now builds and ctests the native C++ engine BEFORE the
+  Go tests (clean `--fresh` configure, Release build, `ctest -C
+  Release`, multi-config staging of `shtn-engine-host.exe` at the path
+  the Go tests resolve) — so the `TestRealCppHost*` integration suites
+  execute against the REAL engine on Windows instead of skipping. The
+  Go↔C++ boundary is subprocess IPC (no cgo), so this needs no toolchain
+  change.
+- With the metadata gate fixed (S1), the Windows pipeline now reaches
+  its complete downstream stages: native engine build + ctest, real
+  native execution in the Go suites, executable build + smoke probe,
+  portable ZIP, NSIS installer, and both verification steps.
 
-## S6. Documentation professionalization (IMPLEMENTED)
+## S6. Contract-driven stable-asset verifier (IMPLEMENTED, TESTED)
 
-- README: current product/architecture/installation/usage/capabilities
-  first; a v1.3.1 release section; the accumulated per-release tables
-  collapsed into a one-line-per-release history summary (full evidence
-  remains in `worklog.md`).
-- ARCHITECTURE: current subsystem ownership; historical release-label
-  narratives rewritten as current-state contracts.
-- agent.md: rewritten as a current-state-first engineering handoff (see
-  the file itself).
-- worklog: engineering evidence preserved; codename terminology
-  eliminated; historical `v1.x.yZ` labels rewritten to plain versions.
-- Historical `v1.x.yZ` labels across the entire codebase (95 files)
-  were rewritten to plain version identifiers — version/date/change
-  information preserved, only the removed codename suffix dropped.
+- `scripts/verify-static-assets.mjs` now DERIVES the contract instead of
+  guessing at name shapes:
+  - **build-config contract**: `vite.config.ts` must declare exactly
+    `assets/[name].js` (entries + chunks) and `assets/[name][extname]`
+    (assets), with no hash tokens — a content hash can only enter a
+    filename through these patterns, so asserting them asserts the whole
+    no-hash property;
+  - **reachability**: every file under `web/static` must be reachable
+    from `index.html` through real reference edges (html src/href, JS
+    import specifiers including dynamic imports and the
+    `__vite__mapDeps` dependency arrays, CSS `url(...)`). A planted
+    stale/hashed file is unreachable by construction and fails.
+- The old heuristic (rejecting any name with a hyphen + 6+ chars
+  containing a digit) is GONE: it could false-reject legitimate
+  deterministic names carrying version digits. Verified by a dedicated
+  negative/positive case suite: planted hashed file rejected, referenced
+  version-digit name accepted, unreferenced foreign file rejected,
+  missing referenced asset rejected, vite.config hash regression
+  rejected, disabled code splitting rejected, pristine tree passes.
+- The dynamic-import requirement is retained WITH its justification:
+  the application is intentionally code-split (the entry lazy-loads the
+  UI panels; per-panel stable filenames are part of the contract), so
+  zero dynamic imports means splitting was silently disabled.
+- `web/static` exactly mirrors a clean `dist` (unchanged `--dist`
+  mirror rule); deterministic filenames and the dist → static
+  synchronization contract are preserved.
 
 ## S7. Verification performed (this release)
 
-- `gofmt` clean across `./cmd ./internal ./scripts`.
-- `go build -tags headless ./...` OK; `go vet -tags headless ./...` clean.
-- `go test -tags headless -count=1 ./internal/...` — all packages pass
-  (0 FAIL).
-- `go test -race -tags headless -count=1` on the concurrency-heavy
-  packages (api, agent, sessions, contextplan, histref, runtime) — pass.
-- Frontend: `npm ci`, `npm run typecheck`, `npm run lint`,
-  `npm run test:units`, clean `npm run build` — all pass;
-  `verify-static-assets.mjs --dist` satisfied.
-- Native C++ engine: clean CMake configure + build + ctest (see final
-  report for the exact matrix on this host).
-- Stress suite: full run via `scripts/stress-main` (see final report).
-- `node scripts/release-version.mjs --check` consistent (canonical
-  `1.3.1`).
-- Repository-wide scans: zero codename matches; zero content-hash asset
-  filenames; zero stale generated files; ROADMAP.md blob SHA-1
-  unchanged before and after.
+Evidence-backed results from the v1.3.2 working tree (see the release
+report for the full list): frontend `npm ci` + `typecheck` + `lint` +
+`test:units` + clean `build` + `verify:web --dist` + the new
+`test:release` suite; Go suites across `./internal/...` (headless) and
+`./...`, race detector on the concurrency-heavy packages, `go vet`;
+native engine clean `--fresh` configure, full build, 12/12 ctest, and
+the complete Go↔C++ real-host suite (including the new execution
+contract); the stress suite including the release-surface gate;
+`release-version.mjs` sync + `--check` + `--env` consistent at canonical
+1.3.2; ROADMAP.md verified byte-identical before and after.
+
+Windows and Linux release PACKAGES are produced by the GitHub Actions
+pipeline (the Windows runner is required for the Windows build); the
+workflow changes in this release are validated structurally (YAML
+validity, canonical check invocations, stress-gate contract fragments)
+and by the release-metadata regression suite.

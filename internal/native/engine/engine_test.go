@@ -52,6 +52,7 @@ func TestMain(m *testing.M) {
 //	"badping" answers ping with the wrong protocol version
 //	"loadfail" load_model always fails with a parse-style error
 //	"loadslow" load_model delays 3 s (bounded load timeout target)
+//	"hang"     reads frames but never answers (bounded-boot target)
 func runFakeNativeHost() {
 	mode := os.Getenv("SHEYTAN_FAKE_NATIVE_MODE")
 
@@ -107,6 +108,14 @@ func runFakeNativeHost() {
 
 		if mode == "slow" {
 			time.Sleep(3 * time.Second)
+		}
+
+		if mode == "hang" {
+			// Handshake-hang target: the process lives and reads
+			// frames but never answers. The supervisor's bounded
+			// boot (caller context / handshake timeout) must
+			// tear it down deterministically — no orphan.
+			select {}
 		}
 
 		resp := &Response{ID: req.ID, OK: true}
@@ -957,7 +966,12 @@ func TestBackendImplementsContract(t *testing.T) {
 	var _ llm.Backend = NewBackend(nil)
 }
 
-func TestBackendGenerationNotImplemented(t *testing.T) {
+// TestBackendGenerationLifecycleGuard pins the honest lifecycle guard of
+// the native generation surface (Phase 5 semantics): without a running
+// engine generation fails with the lifecycle error (never a fake success),
+// and request shapes the native path cannot serve return the explicit
+// ErrNotImplemented fallback signal the router acts on.
+func TestBackendGenerationLifecycleGuard(t *testing.T) {
 	b := NewBackend(New("/nonexistent"))
 
 	if b.Name() != "native" {
