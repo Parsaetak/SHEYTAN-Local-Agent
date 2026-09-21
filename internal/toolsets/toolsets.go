@@ -35,6 +35,7 @@ const (
 var ToolGroups = map[string][]string{
 	"shell":        {GroupSystem, GroupCoding, GroupVerification},
 	"files":        {GroupFilesystem, GroupCoding},
+	"repo_search":  {GroupCoding, GroupFilesystem},
 	"codeExec":     {GroupCoding, GroupVerification},
 	"webSearch":    {GroupResearch},
 	"git":          {GroupGit, GroupCoding},

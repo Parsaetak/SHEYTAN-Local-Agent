@@ -1012,6 +1012,75 @@ export interface WorkspaceProjectFacts {
   lastObservedAt?: string;
 }
 
+// v1.3.4 (ROADMAP v1.4 slice 1): repository intelligence payloads —
+// mirrored from internal/repoindex (the Go package is the authority).
+export interface RepoIndexStatus {
+  root: string;
+  state: "empty" | "ready" | "stale";
+  files?: number;
+  symbols?: number;
+  depEdges?: number;
+  testLinks?: number;
+  languages?: Record<string, number>;
+  updatedAt?: string;
+  gitAvailable?: boolean;
+  truncated?: boolean;
+  staleRoot?: boolean;
+  partial?: boolean;
+}
+
+export interface RepoIndexUpdateReport {
+  root: string;
+  indexed: number;
+  reindexed: number;
+  removed: number;
+  unchanged: number;
+  partial?: boolean;
+  truncated?: boolean;
+  durationMs?: number;
+  gitAvailable?: boolean;
+}
+
+export interface RepoIndexRefreshResult {
+  report: RepoIndexUpdateReport;
+  status: RepoIndexStatus;
+}
+
+export interface RepoSearchQuery {
+  text?: string;
+  symbol?: string;
+  path?: string;
+  language?: string;
+  role?: string;
+  task?: string;
+  depsOf?: string;
+  usedBy?: string;
+  testsOf?: string;
+  limit?: number;
+}
+
+export interface RepoIndexResult {
+  path: string;
+  language?: string;
+  role?: string;
+  score: number;
+  evidence: string;
+  symbols?: string[];
+  line?: number;
+  gitState?: string;
+  recent?: boolean;
+}
+
+export interface RepoSearchReport {
+  root: string;
+  totalHits: number;
+  returned: number;
+  truncated?: boolean;
+  results: RepoIndexResult[];
+  indexAge?: string;
+  durationMs?: number;
+}
+
 export interface WorkspaceSummary {
   root: string;
   isDefault: boolean;
@@ -1465,6 +1534,25 @@ export const api = {
   // unavailable values arrive null and render as N/A).
   perf(): Promise<PerfSnapshot> {
     return request<PerfSnapshot>("/perf");
+  },
+
+  // v1.3.4 (ROADMAP v1.4 slice 1): repository intelligence — index
+  // status, bounded refresh and the hybrid search entry point.
+  repoIndex(signal?: AbortSignal): Promise<RepoIndexStatus> {
+    return request<RepoIndexStatus>("/repo/index", { signal });
+  },
+
+  repoIndexRefresh(): Promise<RepoIndexRefreshResult> {
+    return request<RepoIndexRefreshResult>("/repo/index/refresh", {
+      method: "POST",
+    }, 30_000);
+  },
+
+  repoSearch(query: RepoSearchQuery): Promise<RepoSearchReport> {
+    return request<RepoSearchReport>("/repo/search", {
+      method: "POST",
+      body: JSON.stringify(query),
+    }, 30_000);
   },
 
   // v1.2.4: Workspace — one compact work-environment summary.

@@ -28,6 +28,7 @@ import (
 	nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/projectintel"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/repoindex"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/scheduler"
@@ -105,6 +106,12 @@ type Stack struct {
 	// the stack so the Workspace surface can report project health and
 	// so a workspace switch can re-observe the new root.
 	Intel *projectintel.Store
+
+	// RepoIndex (v1.3.4, ROADMAP v1.4 slice 1) is the persistent
+	// repository index (symbols / dependency graph / test links /
+	// hybrid search). Exposed so the Workspace surface can report
+	// index state and so a workspace switch can refresh the index.
+	RepoIndex *repoindex.Store
 
 	// Telemetry records per-turn context-effectiveness measurements.
 	Telemetry *ctxtelemetry.Store
@@ -483,6 +490,61 @@ func NewStack(cfg *config.Config) *Stack {
 	// card to the new project on the very next run, no restart.
 	orch.SetProjectCard(func() string {
 		return intel.Card(src.Load().EffectiveWorkspaceRoot())
+	})
+
+	// repoEvidenceTokenBudget bounds the repository-evidence context
+	// block (same optional-block class as the recall block).
+	const repoEvidenceTokenBudget = 400
+
+	// v1.3.4 (ROADMAP v1.4 slice 1): persistent repository intelligence.
+	// One store per install, keyed per workspace root, persisted under
+	// <DataDir>/repoindex/. The initial update runs as an OWNED
+	// background worker (bounded incremental pass — the first chat never
+	// waits for it); the repo_search tool and the repo-evidence context
+	// block read the root LIVE so a workspace switch applies instantly.
+	repoIdx := repoindex.NewStore(
+		cfg.DataDir + "/repoindex",
+	)
+	stack.RepoIndex = repoIdx
+
+	memMgr.RegisterTrim("repoindex-cache", func() int64 {
+		return repoIdx.TrimCache()
+	})
+
+	stack.lifeWG.Add(1)
+
+	go func() {
+		defer stack.lifeWG.Done()
+
+		report, err := repoIdx.Update(stack.lifeCtx, src.Load().EffectiveWorkspaceRoot())
+		if err != nil {
+			logging.Default().Warn(
+				"runtime",
+				"repository index (background): %v",
+				err,
+			)
+			return
+		}
+		logging.Default().Info(
+			"runtime",
+			"repository index ready (background): %d files, %d re-parsed, partial=%t",
+			report.Indexed, report.Reindexed, report.Partial,
+		)
+	}()
+
+	orch.Register(repoindex.NewTool(repoIdx, func() string {
+		return src.Load().EffectiveWorkspaceRoot()
+	}))
+
+	// Repository evidence injection: targeted, evidence-backed file
+	// suggestions for the current task, ranked by the repoindex hybrid
+	// scorer. The root is read LIVE (same contract as the project card).
+	orch.SetRepoEvidence(func(task string) string {
+		return repoIdx.EvidenceBlock(
+			src.Load().EffectiveWorkspaceRoot(),
+			task,
+			repoEvidenceTokenBudget,
+		)
 	})
 
 	// Unified external research.

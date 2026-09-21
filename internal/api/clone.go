@@ -25,6 +25,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -303,6 +304,16 @@ func (s *Server) switchWorkspaceRoot(abs string) (*workspaceSummary, error) {
 	// Re-observe the new project (bounded walk, cached card).
 	if s.stack != nil && s.stack.Intel != nil {
 		if _, err := s.stack.Intel.Observe(abs); err != nil {
+			return nil, err
+		}
+	}
+
+	// Re-index the new project (bounded incremental pass; the first
+	// pass over a fresh root walks once within the update budget). No
+	// request context is in scope here (the switch is also the clone
+	// auto-switch path) — the store's own work budget bounds the pass.
+	if s.stack != nil && s.stack.RepoIndex != nil {
+		if _, err := s.stack.RepoIndex.Update(context.Background(), abs); err != nil {
 			return nil, err
 		}
 	}

@@ -423,6 +423,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/workspace/clone/status", s.handleCloneStatus)
 	mux.HandleFunc("/api/workspace/clone/cancel", s.handleCloneCancel)
 
+	// v1.3.4 (ROADMAP v1.4 slice 1): repository intelligence — index
+	// status, bounded refresh and the hybrid search entry point.
+	mux.HandleFunc("/api/repo/index", s.handleRepoIndex)
+	mux.HandleFunc("/api/repo/index/refresh", s.handleRepoIndexRefresh)
+	mux.HandleFunc("/api/repo/search", s.handleRepoSearch)
+
 	// v1.1.7: compact live performance, in-app logs and connection
 	// diagnostics — read-only surfaces over existing infrastructure.
 	mux.HandleFunc("/api/perf", s.handlePerf)

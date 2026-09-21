@@ -44,12 +44,14 @@ type TierSpec struct {
 	// ToolTokenBudget caps serialized tool-schema tokens in the prompt.
 	ToolTokenBudget int
 
-	// IncludeRecall / IncludeProjectCard / IncludeSkills gate the
-	// optional composition work — the tier decides BEFORE anything is
-	// composed, so FAST never pays recall-retrieval I/O at all.
-	IncludeRecall      bool
-	IncludeProjectCard bool
-	IncludeSkills      bool
+	// IncludeRecall / IncludeProjectCard / IncludeSkills /
+	// IncludeRepoEvidence gate the optional composition work — the tier
+	// decides BEFORE anything is composed, so FAST never pays
+	// recall-retrieval or repo-index I/O at all.
+	IncludeRecall       bool
+	IncludeProjectCard  bool
+	IncludeSkills       bool
+	IncludeRepoEvidence bool
 
 	// MaxTools caps the count of exposed tool schemas.
 	MaxTools int
@@ -58,44 +60,48 @@ type TierSpec struct {
 // tierSpecs are the policies per tier.
 var tierSpecs = map[string]TierSpec{
 	TierFast: {
-		Name:               TierFast,
-		CompactBriefing:    true,
-		HistoryShare:       0.30,
-		ToolTokenBudget:    700,
-		IncludeRecall:      false,
-		IncludeProjectCard: false,
-		IncludeSkills:      false,
-		MaxTools:           6,
+		Name:                TierFast,
+		CompactBriefing:     true,
+		HistoryShare:        0.30,
+		ToolTokenBudget:     700,
+		IncludeRecall:       false,
+		IncludeProjectCard:  false,
+		IncludeSkills:       false,
+		IncludeRepoEvidence: false,
+		MaxTools:            6,
 	},
 	TierStandard: {
-		Name:               TierStandard,
-		CompactBriefing:    false,
-		HistoryShare:       0.50,
-		ToolTokenBudget:    1400,
-		IncludeRecall:      true,
-		IncludeProjectCard: true,
-		IncludeSkills:      false,
-		MaxTools:           12,
+		Name:                TierStandard,
+		CompactBriefing:     false,
+		HistoryShare:        0.50,
+		ToolTokenBudget:     1400,
+		IncludeRecall:       true,
+		IncludeProjectCard:  true,
+		IncludeSkills:       false,
+		IncludeRepoEvidence: true,
+		MaxTools:            12,
 	},
 	TierDeep: {
-		Name:               TierDeep,
-		CompactBriefing:    false,
-		HistoryShare:       0.70,
-		ToolTokenBudget:    2200,
-		IncludeRecall:      true,
-		IncludeProjectCard: true,
-		IncludeSkills:      true,
-		MaxTools:           16,
+		Name:                TierDeep,
+		CompactBriefing:     false,
+		HistoryShare:        0.70,
+		ToolTokenBudget:     2200,
+		IncludeRecall:       true,
+		IncludeProjectCard:  true,
+		IncludeSkills:       true,
+		IncludeRepoEvidence: true,
+		MaxTools:            16,
 	},
 	TierMax: {
-		Name:               TierMax,
-		CompactBriefing:    false,
-		HistoryShare:       0.85,
-		ToolTokenBudget:    0, // 0 = no cap, expose everything enabled
-		IncludeRecall:      true,
-		IncludeProjectCard: true,
-		IncludeSkills:      true,
-		MaxTools:           0, // 0 = no cap
+		Name:                TierMax,
+		CompactBriefing:     false,
+		HistoryShare:        0.85,
+		ToolTokenBudget:     0, // 0 = no cap, expose everything enabled
+		IncludeRecall:       true,
+		IncludeProjectCard:  true,
+		IncludeSkills:       true,
+		IncludeRepoEvidence: true,
+		MaxTools:            0, // 0 = no cap
 	},
 }
 

@@ -170,9 +170,11 @@ type turnComposer struct {
 
 	// composed optional blocks
 	card      string
+	repoBlk   string
 	skillBlk  string
 	recallBlk string
 	cardOn    bool
+	repoOn    bool
 	skillsOn  bool
 	recallOn  bool
 
@@ -204,6 +206,7 @@ func (o *Orchestrator) newTurnComposer(
 	task string,
 	recaller Recaller,
 	cardProvider func() string,
+	repoEvidence func(task string) string,
 ) *turnComposer {
 	spec := taskclassify.Spec(tier)
 
@@ -259,6 +262,13 @@ func (o *Orchestrator) newTurnComposer(
 		c.cardOn = c.card != ""
 	}
 
+	// v1.3.4 (ROADMAP v1.4 slice 1): repository evidence for the task,
+	// ranked by the persistent repoindex. Bounded retrieval, tier-gated.
+	if spec.IncludeRepoEvidence && task != "" && repoEvidence != nil {
+		c.repoBlk = repoEvidence(task)
+		c.repoOn = c.repoBlk != ""
+	}
+
 	if spec.IncludeSkills && o.skillSource != nil && task != "" {
 		if matched := o.skillSource.MatchTask(task, 2); len(matched) > 0 {
 			c.skillBlk = renderSkills(matched, 400)
@@ -284,9 +294,11 @@ func (o *Orchestrator) newTurnComposer(
 // step 3 — the plan decided none of them travel this turn).
 func (c *turnComposer) dropOptional() {
 	c.card = ""
+	c.repoBlk = ""
 	c.skillBlk = ""
 	c.recallBlk = ""
 	c.cardOn = false
+	c.repoOn = false
 	c.skillsOn = false
 	c.recallOn = false
 }
@@ -401,6 +413,7 @@ func (c *turnComposer) Briefing() (string, bool) {
 func (c *turnComposer) OptionalTokens(staged int) int {
 	return staged +
 		tokensOrZero(c.card) +
+		tokensOrZero(c.repoBlk) +
 		tokensOrZero(c.skillBlk) +
 		tokensOrZero(c.recallBlk)
 }
@@ -414,9 +427,9 @@ func tokensOrZero(s string) int {
 }
 
 // Injectables returns the composed optional blocks in priority order
-// (card → skills → recall) with their injected flags.
-func (c *turnComposer) Injectables() (card, skills, recall string, cardOn, skillsOn, recallOn bool) {
-	return c.card, c.skillBlk, c.recallBlk, c.cardOn, c.skillsOn, c.recallOn
+// (card → repo evidence → skills → recall) with their injected flags.
+func (c *turnComposer) Injectables() (card, repo, skills, recall string, cardOn, repoOn, skillsOn, recallOn bool) {
+	return c.card, c.repoBlk, c.skillBlk, c.recallBlk, c.cardOn, c.repoOn, c.skillsOn, c.recallOn
 }
 
 // Escalate applies ONE tier upgrade (evidence-driven). It returns the
@@ -424,6 +437,7 @@ func (c *turnComposer) Injectables() (card, skills, recall string, cardOn, skill
 type upgrade struct {
 	tier       string
 	card       string
+	repo       string
 	skills     string
 	recall     string
 	fullBrief  string // non-empty → swap the compact briefing for the full one
@@ -467,6 +481,12 @@ func (c *turnComposer) Escalate(reason taskclassify.EscalationReason, task, refu
 		c.card = c.orch.projectCardProvider()()
 		c.cardOn = c.card != ""
 		up.card = c.card
+	}
+
+	if c.spec.IncludeRepoEvidence && !c.repoOn && task != "" && c.orch.repoEvidenceProvider() != nil {
+		c.repoBlk = c.orch.repoEvidenceProvider()(task)
+		c.repoOn = c.repoBlk != ""
+		up.repo = c.repoBlk
 	}
 
 	if c.spec.IncludeSkills && !c.skillsOn && c.orch.skillSource != nil && task != "" {
@@ -803,6 +823,12 @@ func (o *Orchestrator) projectCardProvider() func() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.projectCard
+}
+
+func (o *Orchestrator) repoEvidenceProvider() func(task string) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.repoEvidence
 }
 
 func (o *Orchestrator) recallProvider() Recaller {

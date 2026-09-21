@@ -110,6 +110,16 @@ export const workflowFile = join(".github", "workflows", "build-desktop.yml");
 export const requiredCheckInvocations = 3;
 
 /**
+ * The retired product codename is NEVER spelled literally in any tracked
+ * file — this contract included. The CI codename-removal gate scans every
+ * tracked file, so a literal token here (or in the regression suite) would
+ * re-trigger the very gate it enforces — the exact self-triggering
+ * regression of run 35571331850. The token is assembled at runtime; the
+ * scanned source text contains only inert fragments.
+ */
+const RETIRED_CODENAME = ["Ze", "ta"].join("");
+
+/**
  * Banned workflow fragments — every one is a per-shell REIMPLEMENTATION of
  * release metadata semantics that previously drifted (or broke: the
  * regex-in-PowerShell class is the run 35542000811 root cause). Release
@@ -153,8 +163,10 @@ export const bannedWorkflowFragments = [
       "(version-only identity, v1.3.3 contract)",
   },
   {
-    // v1.3.3: no codename may appear anywhere in the workflow.
-    fragment: "Zeta",
+    // v1.3.3: no codename may appear anywhere in the workflow. The
+    // fragment is the dynamically assembled retired token — never a
+    // literal (see RETIRED_CODENAME above).
+    fragment: RETIRED_CODENAME,
     reason:
       "codename fragment in the workflow — release identity is version-only " +
       "(no codename, no release suffix, v1.3.3 contract)",

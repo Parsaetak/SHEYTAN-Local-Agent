@@ -5271,3 +5271,38 @@ body::before {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+
+/* -------------------------------------------------------------------
+   v1.3.4: Repository Index card (Workspace panel) — additive block.
+   Reuses the wb-* tokens; only the search-result evidence line and
+   the language strip are new shapes.
+   ------------------------------------------------------------------- */
+
+.repo-langs {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.repo-search-form {
+  margin-top: 12px;
+}
+
+.repo-search-form input {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.repo-results li {
+  flex-wrap: wrap;
+}
+
+.repo-evidence {
+  display: block;
+  width: 100%;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+}

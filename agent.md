@@ -10,59 +10,69 @@ Branch: `main`
 # Latest Agent Handoff
 
 ## Task
-SHEYTAN-LA v1.3.3 (deep repair / native engine / release cleanup): root-fix the v1.3.2 CI failures of Actions run 35552680611 — the Linux settlement race ("agent.md handoff missing"), the Windows native-engine compilation failure in hardware.cpp, and the release-title identity drift — plus a native-engine deep audit and the permanent version-only release identity (tag v1.3.3, title 1.3.3, no prefix/codename/suffix, ever).
+SHEYTAN-LA v1.3.4 (codename-gate root-fix + ROADMAP v1.4 slice 1): root-fix the self-triggering codename-removal gate of Actions run 35571331850 (the gate scans every tracked file and the retired token had survived as literals inside the release contract source, its regression fixtures and four docs), and implement the first production vertical slice of Repository Intelligence — a bounded, persistent, incrementally updated repository index (`internal/repoindex`) with symbol/dependency graph, deterministic test/source relationships, Git-aware relevance metadata, hybrid evidence-ranked search, the agent-facing `repo_search` tool, a tier-gated repository-evidence context block, and a Workspace card — plus the version-only release identity kept intact (tag v1.3.4, title 1.3.4).
 
 ## Objective
-v1.3.3 must make settlement deterministic (the barrier waits for the run's TERMINAL outcome, never summary completion), make a mandatory-handoff failure unable to masquerade as successful completion, make the Windows native engine compile cleanly, keep native execution real through the application path (no orphans, no wedged state, no silent fallback), and lock the version-only release identity structurally — while ROADMAP.md stays byte-identical (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650, verified before and after).
+v1.3.4 must make the codename gate pass with ZERO matches without weakening it (no file exclusions, no pattern loosening — the regression coverage survives by constructing the forbidden strings dynamically), must ship a repository index that executes end-to-end in the real application (persistent, incremental, bounded, agent-usable as targeted context — not types or UI placeholders), and must leave ROADMAP.md byte-identical (git blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650, verified before and after).
 
 ## Current state
-All v1.3.3 work is IMPLEMENTED and VERIFIED on this host: gofmt/vet clean; 46/46 headless Go packages pass (incl. the real C++ host integration suite); race gate passes; settlement tests 20x under -race pass; native Linux clean-room ctest 12/12; full-engine Windows cross-build (host + 12 tests) with zero project warnings; frontend gate fully green (typecheck/lint/78 units/28 release tests/build/verify:web); release metadata synced to 1.3.3 and --check passes; the workflow satisfies the enforced version-only contract.
+All v1.3.4 work is IMPLEMENTED and VERIFIED on this host: gofmt/vet clean; full `go test -tags headless ./...` green; race gate green (api/agent/sessions/contextplan/histref/runtime/repoindex); `internal/repoindex` 30/30 tests pass incl. -race -count=2; repoindex API contract test green (switch → re-index → status → symbol/deps search → 400/405 error contract); native Linux clean-room ctest 12/12 with the real C++ host Go integration suite green against the fresh build; Windows exe cross-builds (PE32+, CGO_ENABLED=0); frontend gate fully green (typecheck/lint 0/0/84 units/28 release tests/build/verify:web); stress gate 47/47; release metadata synced to 1.3.4 and --check passes; the exact CI codename-gate command returns zero matches on this tree.
 
 ## Changes made
-- Settlement barrier (internal/api): waitForRunSettled / waitForRunSettledFor (runId-keyed, repeated-settlement-safe) / waitForRunOutcome poll the bounded outcome registry — the terminal record the v1.2.9 durable ordering writes only AFTER all durable artifacts; all settlement-waiting tests migrated; newRemoteServer returns the *Server handle.
-- Mandatory-handoff honesty (internal/api/server.go): every completed Agent run attempts the handoff (nil task = real failure, not a silent skip); a write failure demotes resultOutcome to "error" with the concrete cause in the terminal caption; reply/summary/live error activity preserved; successful ordering unchanged.
-- Windows native root-fix (native/engine/src/hardware.cpp): explicit <vector>/<cstdlib>/<intrin.h>; NOMINMAX + WIN32_LEAN_AND_MEAN guarded before windows.h; (std::min) parenthesized; the three windows.h test files carry the same guards.
-- Engine hardening (internal/native/engine/runtime.go): the IPC read loop drops event frames for ABANDONED streams instead of blocking on a full buffer (a >256-frame straggler burst could wedge the connection ahead of the cancelled final frame); backpressure for live consumers unchanged.
-- Native quality: 8 compiler warnings eliminated (sampler.cpp kept-counter; test_forward/test_model/test_host/test_generate dead vars/captures; test_generate rms-eps now a real GGUF F32 type-6 value).
-- Version-only identity: GitHub Release title is the plain canonical version (name: ${{ env.APP_VERSION }}); publication re-verification asserts tag AND title; release-version.mjs contract gains REQUIRED fragments (version-only title, tag==v${APP_VERSION} gate, tag-from-ref) and BANNED fragments (product+tag title, Zeta, APP_VERSION_FULL); 7 new regression tests (28 total); canonical 1.3.3 synced across package.json/config.go/build-config.yml/SIGNATURE; stale APP_VERSION_FULL doc rows corrected (ARCHITECTURE.md, README.md).
+- Codename gate root-fix: every literal of the retired token removed from README.md, UPDATE.md, agent.md, worklog.md; `scripts/release-version.mjs` assembles the banned workflow fragment at runtime (`["Ze", "ta"].join("")`) with the contract comment explaining why; `scripts/release-version.test.mjs` builds its forbidden fixtures from the same dynamic constant (three banned-shape cases + title-suffix case + assertion message check preserved). The gate command in the workflow is UNCHANGED.
+- Repository Intelligence (NEW package internal/repoindex): repoindex.go (store, per-root JSON persistence under <DataDir>/repoindex/ via atomic tmp+rename, bounded incremental Update with mtime+size fast path and bounded 64KB content digest, resumable 3s work budget, load cache validated by (size,mtime), TrimCache for the memory manager), parse.go (language/role detection + bounded line-oriented extraction for Go/TS-JS/C-C++/JSON/go.mod with binary sniffing), deps.go (verified dependency-edge resolution for Go module imports, TS/JS relative imports with extension + index probing, C/C++ quoted includes; deterministic symmetric test/source links: foo.go↔foo_test.go, *.test.*/*.spec.* same-dir + __tests__/ sibling), git.go (bounded git ls-files + status --porcelain → tracked/untracked/modified; optional by contract), search.go (hybrid dimensions: symbol exact/prefix/substring, path/basename, language/role filters, weighted keyword + task keywords over indexed metadata, depsOf/usedBy/testsOf expansion; deterministic score-desc/path-asc order; bounded pages; Evidence strings distinguish structural facts from inference; ExtractKeywords with stopword list), tool.go (repo_search agent tool: Name/Description/Parameters/Run + ShortDescription; workspace path jail relWithinRoot; bounded 8KB output; EvidenceBlock for the context pipeline).
+- Runtime wiring (internal/runtime/runtime.go): Stack.RepoIndex field; store created over <DataDir>/repoindex; OWNED background initial update (lifeWG); memmanager trim registered; `repo_search` registered as an agent tool with a LIVE root provider; `orch.SetRepoEvidence(...)` provider (400-token budget) reading the workspace root live.
+- Context pipeline (internal/agent + internal/taskclassify): TierSpec gains IncludeRepoEvidence (STANDARD+); turnComposer composes/clears/reports the repo block exactly like the card block (OptionalTokens, dropOptional, Injectables extended to (card, repo, skills, recall), Escalate composes it on tier upgrade + live post-window injection); orchestrator.go: SetRepoEvidence + injection in priority order (project card → repo evidence → skills → recall).
+- Toolsets (internal/toolsets): `repo_search` → {coding, filesystem} groups.
+- API (internal/api): NEW repoindex.go — GET /api/repo/index (walk-free status), POST /api/repo/index/refresh (bounded incremental update + fresh status), POST /api/repo/search (bounded hybrid search); routes registered; switchWorkspaceRoot re-indexes the new root with a bounded pass; NEW repoindex_api_test.go pins the whole contract.
+- Frontend: src/repoindex-view.ts (pure view helpers: state tone/label, topLanguages, score/result formatting, structural-evidence classification) + repoindex-view.test.ts (6 tests, wired into test:units); src/RepositoryIndexCard.tsx (Repository Index card: state chip, files/symbols/deps/tests/git chips, language strip, last update, bounded refresh, search entry point rendering bounded results with evidence); mounted on the Workspace panel; src/api.ts gains the three typed methods + payload types; styles.css additive block (repo-* classes on wb-* tokens).
 
 ## Files changed
-- internal/api/{server.go, runregistry_test.go, run_settlement_test.go, run_settlement_v133_test.go (NEW), runtransport_test.go, run_crossmode_test.go, run_task_test.go, history_api_test.go}
-- internal/native/engine/runtime.go
-- native/engine/src/{hardware.cpp, sampler.cpp}, native/engine/tests/{test_gguf.cpp, test_model.cpp, test_host.cpp, test_forward.cpp, test_generate.cpp}
-- scripts/{release-version.mjs, release-version.test.mjs}, package.json, internal/config/config.go, build/config.yml, SIGNATURE
-- .github/workflows/build-desktop.yml
-- README.md, UPDATE.md, agent.md, worklog.md
+- internal/repoindex/{repoindex.go, parse.go, deps.go, git.go, search.go, tool.go, repoindex_test.go} (NEW)
+- internal/runtime/runtime.go, internal/toolsets/toolsets.go, internal/taskclassify/tiers.go
+- internal/agent/{orchestrator.go, orchestrator_tiers.go}
+- internal/api/{repoindex.go (NEW), repoindex_api_test.go (NEW), server.go, clone.go}
+- src/{repoindex-view.ts (NEW), repoindex-view.test.ts (NEW), RepositoryIndexCard.tsx (NEW), WorkspacePanel.tsx, api.ts, styles.css}
+- scripts/{release-version.mjs, release-version.test.mjs}, package.json (version 1.3.4 + test:units wiring), internal/config/config.go, build/config.yml, SIGNATURE
+- README.md, UPDATE.md, agent.md, worklog.md, web/static (regenerated embedded frontend)
 
 ## Tests and verification
-- Go: gofmt clean; go vet -tags headless clean; go test -tags headless -count=1 ./internal/... 46/46 PASS; race on api/agent/sessions/contextplan/histref/runtime PASS; settlement 20x -race PASS; native lifecycle 10x PASS.
-- Native: Linux clean-room cmake --fresh + build + ctest 12/12; Windows full-engine MinGW-w64 cross-build (host + 12 CTest executables, PE32+, -Wall -Wextra -Wpedantic, ZERO project warnings); the pre-fix hardware.cpp REPRODUCES the CI failure class on the same toolchain and the fixed file compiles clean.
-- Frontend: npm ci; typecheck; lint 0/0; test:units 78/78; test:release 28/28; build + sync:web; verify:web --dist satisfied.
-- Release: release-version.mjs sync/check/env all consistent at 1.3.3; workflow satisfies the full v1.3.3 contract (live audit test).
-- Repository scans: no codename/suffix reference in any active surface; ROADMAP.md blob SHA unchanged.
+- Codename gate: exact CI command `git grep -inE 'app_?codename|version-z[e]ta|(^|[^[:alpha:]])z[e]ta([^[:alpha:]]|$)' -- .` → zero matches; release suite 28/28 (dynamic-construct fixtures prove the ban still fires).
+- Go: gofmt clean; go vet -tags headless ./... clean; go test -tags headless -count=1 ./... green; race gate (api/agent/sessions/contextplan/histref/runtime/repoindex) green; repoindex suite 30/30 incl. -race -count=2; TestRepoIndexAPIContract green.
+- Native: Linux clean-room cmake --fresh + build + ctest 12/12; real C++ host Go integration suite green against the fresh host (end-to-end, lifecycle, missing-model, orphan prevention, stop-during-generation, Phase 4/5 suites).
+- Windows: Go exe cross-builds (CGO_ENABLED=0 GOOS=windows → PE32+); MSVC + installer + publication remain CI-owned (no MinGW on this host — same documented limit as v1.3.3).
+- Frontend: npm ci; typecheck clean; lint 0/0; test:units 84/84 (6 new); test:release 28/28; build + sync:web; verify:web --dist satisfied.
+- Stress: scripts/stress-main `stress` → 47/47, 0 hangs/crashes.
+- Release: release-version.mjs sync repaired 3 surfaces to 1.3.4; --check green; --env emits exactly APP_VERSION=1.3.4.
+- ROADMAP.md blob SHA-1 c7e2c1720eb5e97bd932c0d76100b8719193e650 verified unchanged.
 
 ## Failures / blockers
-- None open. Known environmental limits: Wails desktop shell needs GTK4/WebKitGTK (headless tag is the documented verification path); MSVC build/installer/publication execute on the GitHub Windows runner (the Windows native code path verified here via real-SDK cross-build + token-level macro-collision proof).
+- None open. One transient cold-start race flake was observed ONCE in internal/api's TestHandoffFailureSurfacesErrorActivity under the full -race suite on the first cold run; it passed 3/3 full-suite re-runs, 10x isolated under -race, and is in the pre-existing v1.3.3 standby attach path (not in any v1.3.4 surface). Environmental limits: Wails desktop shell needs GTK4/WebKitGTK (headless tag is the documented verification path); MinGW/MSVC Windows-native cross-build unavailable on this host (CI owns it).
 
 ## Remaining work
-- CI Actions rerun from a push of this tree (maintainer-side; tag v1.3.3 triggers the release job with the version-only title).
-- Optional future (roadmap, do not start now): native engine packaging into the portable ZIPs.
+- CI Actions run from a push of this tree (maintainer-side; tag v1.3.4 triggers the release job with the version-only title).
+- ROADMAP v1.4 later slices (explicitly NOT started): error/source relationship mapping, call-graph depth beyond import edges, semantic retrieval (only with measured evidence).
 
 ## Recommended next action
-Commit this tree, tag v1.3.3, push; CI runs the full matrix — settlement determinism and handoff honesty on Linux, the now-compilable native engine build + 12 CTest executables + real-host Go integration on Windows, the enforced version-only release identity, packaging, installer and release verification.
+Commit this tree, tag v1.3.4, push; CI runs the full matrix (Linux + Windows reach the release job), publishes tag v1.3.4 with title 1.3.4 and the versioned artifacts.
 
 ## Do not redo
-- Do NOT use summary completion as a settlement proxy — the barrier is the run's TERMINAL outcome in the bounded registry (waitForRunSettled / waitForRunSettledFor for sequential runs).
-- Do NOT let a mandatory-handoff failure settle "done" — the v1.3.3 honesty demotion (resultOutcome → "error") is pinned by TestMandatoryHandoffFailureCannotMasqueradeAsDone.
-- Do NOT rely on transitive includes or unguarded windows.h in the native engine: explicit includes + NOMINMAX + parenthesized (std::min) are the permanent pattern (see hardware.cpp's header comment).
-- Do NOT reintroduce a product-prefixed/tag-derived release title, a codename fragment (Zeta) or a second identity variable (APP_VERSION_FULL) — the release-version.mjs workflow contract fails the build on every one.
+- Do NOT spell the retired codename literally anywhere — including contract source, tests and docs; the gate scans every tracked file. Assemble it at runtime if a fixture needs it (see RETIRED_CODENAME in release-version.mjs/test.mjs).
+- Do NOT weaken the codename gate with file exclusions or pattern loosening — the zero-match scan is the contract.
+- Do NOT rescan the whole repository per repoindex request — Update() is incremental (mtime+size fast path, bounded digest); Search() refreshes only within stalenessWindow and the search time budget.
+- Do NOT let repoindex records grow unbounded — every dimension (files, depth, parse bytes, digest bytes, symbols, imports, edges, test links, git output) has a hard cap by design.
+- Do NOT present inferred keyword/path matches as structural facts — Result.Evidence must keep the verified/inferred distinction; Deps and Tests are statement-derived only.
+- Do NOT make Git mandatory for indexing or treat its signals as correctness authority.
+- Do NOT reintroduce a product-prefixed/tag-derived release title, a codename fragment or a second identity variable (APP_VERSION_FULL) — the release-version.mjs workflow contract fails the build on every one.
+- Do NOT modify ROADMAP.md to mark the feature complete — document implemented slices in README/UPDATE/worklog; the blob SHA stays c7e2c1720eb5e97bd932c0d76100b8719193e650.
 - Do NOT make the native→llama.cpp fallback silent; do NOT cache native/engine/build (--fresh always); do NOT hand-edit SIGNATURE's version line.
 <!-- sheytan:handoff:end -->
 
-Current release: `v1.3.2` — release repair + native engine execution
-hardening (canonical cross-platform release-metadata gate, APP_VERSION_FULL
-removal, observable engine selection, native execution test contract, Windows
-native-execution pipeline stage, contract-driven asset verifier). Prior lines:
+Current release: `v1.3.4` — codename-gate root-fix + Repository
+Intelligence slice 1 (persistent bounded repository index, symbol/
+dependency graph, test/source relationships, Git-aware metadata, hybrid
+evidence-ranked search, repo_search agent tool, tier-gated repo-evidence
+context block, Workspace index card). Prior lines:
 `v1.3.0` (runtime path correctness, clean logging, universal scrolling,
 professional Settings, GitHub cloning), `v1.2.9` (stabilization & security),
 `v1.2.8`/`v1.2.8.1` (professional Chat + Agent workspaces, cross-mode

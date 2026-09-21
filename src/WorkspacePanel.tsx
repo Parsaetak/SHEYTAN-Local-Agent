@@ -6,6 +6,7 @@ import {
   type WorkspaceSummary as WorkspaceSummaryData,
 } from "./api";
 import { parseGitHubUrl } from "./clone-url";
+import RepositoryIndexCard from "./RepositoryIndexCard";
 import { useRuntimeStore } from "./store";
 
 // v1.2.4: the Workspace panel — the whole work environment in one glance:
@@ -702,6 +703,10 @@ function WorkspacePanel() {
           )}
         </div>
       </div>
+
+      {/* v1.3.4 (ROADMAP v1.4 slice 1): persistent repository index +
+          the repository search entry point. */}
+      <RepositoryIndexCard />
     </div>
   );
 }

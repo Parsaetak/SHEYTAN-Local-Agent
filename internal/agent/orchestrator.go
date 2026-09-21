@@ -154,6 +154,18 @@ func (o *Orchestrator) SetProjectCard(provider func() string) {
 	o.mu.Unlock()
 }
 
+// SetRepoEvidence installs the repository-intelligence evidence
+// provider (v1.3.4, ROADMAP v1.4 slice 1). When set and non-empty, its
+// block is injected as a system message immediately after the project
+// card — the same cache-friendly position — so the model starts the
+// task with targeted, evidence-ranked file suggestions from the
+// persistent repository index. Nil disables.
+func (o *Orchestrator) SetRepoEvidence(provider func(task string) string) {
+	o.mu.Lock()
+	o.repoEvidence = provider
+	o.mu.Unlock()
+}
+
 // responseEmitInterval is the LEGACY streaming coalesce cadence (~12
 // updates/s). v1.0.9 (TURBINE) derives the live cadence from the config:
 // cfg.EffectiveStreamEmitInterval() targets ONE emit per display frame
@@ -210,10 +222,11 @@ type Orchestrator struct {
 	genMu sync.RWMutex
 	gen   GenerationStream
 
-	mu          sync.Mutex
-	sessionID   string
-	recaller    Recaller
-	projectCard func() string
+	mu           sync.Mutex
+	sessionID    string
+	recaller     Recaller
+	projectCard  func() string
+	repoEvidence func(task string) string
 
 	// Phase 7 additions -------------------------------------------------
 
@@ -486,6 +499,7 @@ func (o *Orchestrator) RunDetailed(
 	o.mu.Lock()
 	recaller := o.recaller
 	cardProvider := o.projectCard
+	repoProvider := o.repoEvidence
 	o.mu.Unlock()
 
 	// v1.1.4: one consistent config snapshot per run. The previous code
@@ -626,7 +640,7 @@ func (o *Orchestrator) RunDetailed(
 
 	composer := o.newTurnComposer(
 		cfg, effCtx, safety, ro.toolPolicy, ro.thinking,
-		tier, task, recaller, cardProvider,
+		tier, task, recaller, cardProvider, repoProvider,
 	)
 
 	// v1.0.1: every conversation still opens with the SHEYTAN briefing
@@ -859,12 +873,18 @@ func (o *Orchestrator) RunDetailed(
 	preWindowRecallBlocks := []llm.Message{} // card, skills, recall, staged attachment chunks
 	preWindowRefBlocks := []llm.Message{}    // cross-mode history-reference blocks
 
-	card, skillBlk, recallBlk, cardOn, skillsOn, recallOn := composer.Injectables()
+	card, repoBlk, skillBlk, recallBlk, cardOn, repoOn, skillsOn, recallOn := composer.Injectables()
 
 	if cardOn {
 		cardMsg := llm.Message{Role: "system", Content: card}
 		messages = insertBeforeLastUser(messages, cardMsg)
 		preWindowRecallBlocks = append(preWindowRecallBlocks, cardMsg)
+	}
+
+	if repoOn {
+		repoMsg := llm.Message{Role: "system", Content: repoBlk}
+		messages = insertBeforeLastUser(messages, repoMsg)
+		preWindowRecallBlocks = append(preWindowRecallBlocks, repoMsg)
 	}
 
 	if skillsOn {
@@ -2136,6 +2156,11 @@ func (o *Orchestrator) RunDetailed(
 				if up.card != "" {
 					messages = insertBeforeLastUser(messages, llm.Message{Role: "system", Content: up.card})
 					postWindowRecallTokens += chunking.EstimateTokens(up.card)
+				}
+
+				if up.repo != "" {
+					messages = insertBeforeLastUser(messages, llm.Message{Role: "system", Content: up.repo})
+					postWindowRecallTokens += chunking.EstimateTokens(up.repo)
 				}
 
 				if up.skills != "" {

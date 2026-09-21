@@ -1,0 +1,68 @@
+SHEYTAN-Local-Agent v1.3.4 — UPDATE package manifest
+====================================================
+
+Base:      v1.3.3 (main @ 4ebb1c8)
+Release:   1.3.4 (version-only identity: tag v1.3.4, title 1.3.4)
+Date:      2026-09-21
+
+Contents: UPDATE.md (release notes), REPLACEMENT-SHA256.txt
+(per-file hashes) and every changed/new file relative to v1.3.3,
+including the regenerated embedded frontend (web/static).
+Extract over an existing v1.3.3 working tree; every path below
+replaces its predecessor wholesale. No file was deleted by this
+release.
+
+Highlights
+----------
+1. Codename-gate root-fix (run 35571331850): zero retired-token
+   literals in any tracked file; regression coverage now builds
+   the forbidden strings dynamically; the gate itself unchanged.
+2. ROADMAP v1.4 slice 1 — Repository Intelligence:
+   internal/repoindex (persistent bounded incremental index,
+   symbol/dependency graph, deterministic test/source links,
+   Git-aware relevance metadata), hybrid evidence-ranked search,
+   repo_search agent tool, tier-gated repository-evidence context
+   block, Workspace Repository Index card + /api/repo/* endpoints.
+3. Release identity: canonical 1.3.4 synced across package.json ->
+   internal/config/config.go / build/config.yml / SIGNATURE.
+4. ROADMAP.md is NOT part of this package: it stays byte-identical
+   to the locked baseline (git blob c7e2c1720eb5e97bd932c0d76100b8719193e650).
+
+File list (per-file purpose)
+----------------------------
+ARCHITECTURE.md  [docs: release notes / architecture / agent handoff / work log]
+README.md  [docs: release notes / architecture / agent handoff / work log]
+SIGNATURE  [release signature: version line synced to 1.3.4]
+UPDATE.md  [docs: release notes / architecture / agent handoff / work log]
+agent.md  [docs: release notes / architecture / agent handoff / work log]
+build/config.yml  [Wails build metadata: productVersion 1.3.4]
+internal/agent/orchestrator.go  [repo-evidence context seam + tier-gated composition/injection]
+internal/agent/orchestrator_tiers.go  [repo-evidence context seam + tier-gated composition/injection]
+internal/api/clone.go  [workspace switch re-indexes the new root]
+internal/api/repoindex.go  [NEW: /api/repo/* endpoints + contract test]
+internal/api/repoindex_api_test.go  [NEW: /api/repo/* endpoints + contract test]
+internal/api/server.go  [route registration for /api/repo/*]
+internal/config/config.go  [runtime version constant: AppVersion 1.3.4]
+internal/repoindex/deps.go  [NEW: repository intelligence package]
+internal/repoindex/git.go  [NEW: repository intelligence package]
+internal/repoindex/parse.go  [NEW: repository intelligence package]
+internal/repoindex/repoindex.go  [NEW: repository intelligence package]
+internal/repoindex/repoindex_test.go  [NEW: repository intelligence package]
+internal/repoindex/search.go  [NEW: repository intelligence package]
+internal/repoindex/tool.go  [NEW: repository intelligence package]
+internal/runtime/runtime.go  [Stack.RepoIndex wiring, background index, tool + evidence registration]
+internal/taskclassify/tiers.go  [TierSpec.IncludeRepoEvidence (STANDARD+)]
+internal/toolsets/toolsets.go  [repo_search tool group mapping]
+package.json  [canonical version source: 1.3.4 + test:units wiring]
+scripts/release-version.mjs  [release contract: retired token assembled at runtime]
+scripts/release-version.test.mjs  [release regression suite: dynamic forbidden fixtures]
+src/RepositoryIndexCard.tsx  [NEW: Workspace Repository Index card]
+src/WorkspacePanel.tsx  [mounts the Repository Index card]
+src/api.ts  [typed /api/repo/* client methods + payload types]
+src/repoindex-view.test.ts  [NEW: repository index view helpers + tests]
+src/repoindex-view.ts  [NEW: repository index view helpers + tests]
+src/styles.css  [additive repo-* styles on the wb-* tokens]
+web/static/assets/WorkspacePanel.js  [regenerated embedded frontend from this tree]
+web/static/assets/index.css  [regenerated embedded frontend from this tree]
+web/static/assets/index.js  [regenerated embedded frontend from this tree]
+worklog.md  [docs: release notes / architecture / agent handoff / work log]
