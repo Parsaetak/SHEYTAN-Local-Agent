@@ -247,6 +247,7 @@ upgrade_replaced:
   CreateDirectory "$INSTDIR\data\bin"
   CreateDirectory "$INSTDIR\data\sessions"
   CreateDirectory "$INSTDIR\data\logs"
+  CreateDirectory "$INSTDIR\data\workspace"
   nsExec::ExecToLog 'icacls "$INSTDIR\data" /grant *S-1-5-32-545:(OI)(CI)M'
   Pop $0
 

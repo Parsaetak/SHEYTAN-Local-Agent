@@ -7,9 +7,13 @@ package llm
 // full state for /api/engine and the UI.
 
 import (
+	"fmt"
+	"path/filepath"
 	"runtime"
 	"sync/atomic"
 	"time"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 )
 
 // AttemptContext describes WHO initiated the failed attempt.
@@ -103,6 +107,27 @@ var (
 
 func nextAttemptID() uint64 {
 	return attemptCounter.Add(1)
+}
+
+// exitCodeHex renders a process exit code in the canonical 0x…… form
+// used across engine diagnostics (spec §19: record exit code AND hex).
+func exitCodeHex(code int) string {
+	if code == 0 {
+		return ""
+	}
+
+	if code < 0 {
+		// Go renders wait status negatives; normalize to unsigned NTSTATUS-style.
+		return fmt.Sprintf("0x%08X", uint32(uint(code)))
+	}
+
+	return fmt.Sprintf("0x%08X", uint32(code))
+}
+
+// engineLeaseDir resolves the cross-process lease directory for a
+// config (<DataDir>/run — single derivation shared with the updater).
+func engineLeaseDir(cfg *config.Config) string {
+	return filepath.Join(cfg.DataDir, "run")
 }
 
 // recordFailureReport stores one failure report (nil-safe on the server).

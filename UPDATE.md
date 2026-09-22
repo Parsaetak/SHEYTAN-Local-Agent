@@ -139,7 +139,7 @@ NOT verified in this environment (remains CI / Windows-machine owned):
 - Windows builds, Windows NSIS installer execution, Windows native C++
   CTest, Windows executable smoke tests, and the real-Windows runtime
   acceptance of §45.
-- GitHub Actions runs (no commit pushed from this environment), the
+- GitHub Actions runs observed from THIS environment, the
   v1.3.6 tag, release publication, and published asset hashes.
 - A real llama.cpp engine boot on user hardware.
 

@@ -504,7 +504,9 @@ func UpdateEngineWithProgress(ctx context.Context, cfg *config.Config, eng Engin
 	if wasRunning {
 		logging.Default().Info("updater", "restarting engine with %s", tag)
 		if err := eng.Restart(); err != nil {
-			return fmt.Sprintf("engine updated to %s but restart failed: %v", tag, err), nil
+			// v1.3.6 (spec §13): an updated engine that does not restart is
+			// an ERROR — never a nil-error success message.
+			return "", fmt.Errorf("engine updated to %s but restart verification failed: %w", tag, err)
 		}
 	}
 	return fmt.Sprintf("engine updated to llama.cpp %s", tag), nil
@@ -647,65 +649,6 @@ func RunScheduled(ctx context.Context, src *config.Source, eng Engine, notify fu
 // receives measured progress.
 const engineUpdateCapBytes = 2 << 30 // 2 GiB; Vulkan bundles are ~300 MB
 
-func downloadEngine(ctx context.Context, url, tag, binDir string, onProgress func(downloader.Progress)) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	stage := filepath.Join(binDir, ".engine-download")
-	if err := os.MkdirAll(stage, 0o755); err != nil {
-		return err
-	}
-
-	opts := downloader.Options{
-		Dest: filepath.Join(stage, AssetName(tag)),
-		Sources: []downloader.Source{{
-			URL:   url,
-			Label: "llama.cpp release " + tag + " (github.com/ggml-org/llama.cpp)",
-			Trust: downloader.TrustPrimary,
-		}},
-		MaxBytes:   engineUpdateCapBytes,
-		FileMode:   0o644,
-		Resume:     true,
-		AllowHTTP:  downloader.IsLoopbackURL(url),
-		CacheKey:   "llama-engine-update-" + tag,
-		CacheDir:   stage,
-		OnProgress: onProgress,
-	}
-	job, err := downloader.New(opts)
-	if err != nil {
-		return err
-	}
-
-	res, err := job.Run(ctx)
-	if err != nil {
-		return err
-	}
-
-	archive := res.Path
-	defer os.Remove(archive)
-
-	stageDir := filepath.Join(binDir, ".update-stage")
-	_ = os.RemoveAll(stageDir)
-	if err := extractZip(archive, stageDir); err != nil {
-		_ = os.RemoveAll(stageDir)
-		return err
-	}
-	found := findBinary(stageDir)
-	if found == "" {
-		_ = os.RemoveAll(stageDir)
-		return fmt.Errorf("release zip for %s contained no server binary", tag)
-	}
-	_ = os.RemoveAll(filepath.Join(binDir, ".update-old"))
-	if err := copyAll(filepath.Dir(found), binDir); err != nil {
-		_ = os.RemoveAll(stageDir)
-		return err
-	}
-	_ = os.RemoveAll(stageDir)
-	_ = os.Remove(archive + ".part")
-	_ = os.Chmod(filepath.Join(binDir, engineBinaryName()), 0o755)
-	return nil
-}
-
 // findBinary locates the server executable inside an extracted tree.
 func findBinary(root string) string {
 	var hit string
@@ -723,27 +666,6 @@ func findBinary(root string) string {
 		return nil
 	})
 	return hit
-}
-
-func copyAll(srcDir, dstDir string) error {
-	return filepath.Walk(srcDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(srcDir, p)
-		target := filepath.Join(dstDir, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, info.Mode())
-	})
 }
 
 // extractZip extracts a zip archive into dir.

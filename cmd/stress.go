@@ -50,7 +50,6 @@ func runStressSuite(cfg *config.Config) int {
 	orch.Register(tools.Shell{})
 	orch.Register(tools.Files{})
 	orch.Register(tools.CodeExec{})
-	orch.Register(tools.WebSearch{})
 	orch.Register(tools.Git{})
 
 	tests := []stressTest{

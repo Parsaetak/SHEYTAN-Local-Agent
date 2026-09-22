@@ -1,265 +1,140 @@
 # SHEYTAN-Local-Agent v1.3.6 — FINAL FACTUAL REPORT
 
-This report follows the mandated section-50 structure. Every claim in
-the "Verification" section corresponds to an actually executed check in
-the producing environment. Anything that was NOT executed there is
-listed as such — the words "fixed", "complete", "release-ready" and
-"verified" are used only where evidence exists.
+Regenerated from the ACTUAL final repository state (2026-09-22, deep
+repair pass). The previous version of this file described a local-only
+commit (`b98b336…`) that never landed and a "NOT pushed" state that has
+since changed; that stale content was replaced per the documentation-
+truth rule. Every claim below corresponds to an actually executed check
+in the producing environment (Linux x86-64, Go 1.26.0, Node 24).
+Anything NOT executed there is listed as such.
 
 ## Repository state
 
 * Base commit: `57f0c1bc106dae121e0c333892dfd3c9306b7ea7` (`1.3.5`)
-* Final commit: `b98b33653599d7f78eeb6f575cf42b3454c4364f` (branch
-  `v1.3.6-engine-lifecycle`, produced locally; NOT pushed)
-* Version: `1.3.6` (package.json → release-version.mjs →
-  `internal/config/config.go` AppVersion, `build/config.yml`
-  productVersion, `SIGNATURE`; `--check` green)
-* Branch: `v1.3.6-engine-lifecycle` (local only)
-* Actions run(s): NONE from this environment. The green baseline run
-  `35669251105` was inspected via the spec; no new run was triggered
-  because no push was performed.
+* v1.3.6 landed on `main` as `9036e1f` ("v1.3.6", parent `57f0c1b`)
+  plus `0207611` ("Remove obsolete Research workspace assets" — the fix
+  for failing Actions run `35702334699`, whose root cause was the stale
+  tracked frontend files `src/ResearchPanel.tsx` and
+  `web/static/assets/ResearchPanel.js`).
+* This deep-repair pass is the current HEAD (see git log; committed
+  locally with an agent identity — this environment has NO GitHub push
+  credentials, so no Actions run could be triggered from here).
+* Version: `1.3.6` (package.json is the single canonical source;
+  `scripts/release-version.mjs --check` is green: AppVersion,
+  productVersion, SIGNATURE all consistent).
+* Verified deletion state: `src/ResearchPanel.tsx` and
+  `web/static/assets/ResearchPanel.js` do NOT exist in the tree; no
+  Research navigation/workspace/panel remains in the frontend; `#research`
+  resolves to the Agent layer; `npm run verify:web --dist` is green.
 
-## Root causes
+## Engine architecture (verified)
 
-Only actually discovered causes (confirmed by code inspection and, where
-possible, deterministic tests):
+* Managed llama.cpp backend (Chat/Agent → llm.Backend → LlamaBackend →
+  LlamaServer → llama-server(.exe) → GGUF) is the primary/default path.
+* SHEYTAN native backend (shtn-engine-host → C++ engine core) is a
+  separate runtime, isolated from llama.cpp; the REAL host binary was
+  built from `native/engine` (make) and smoke-tested over its length-
+  prefixed JSON IPC protocol (shutdown op → clean ack, rc 0); all 12
+  native test suites pass on Linux.
+* LiteRT: no LiteRT implementation exists anywhere in the tree; none
+  was invented; nothing claims LiteRT support.
 
-1. **Two competing engine provisioning paths.**
-   `internal/llm/llama.go` owned `ensureBinary` →
-   `downloadEngineArchive` while `internal/updater/updater.go` owned
-   `UpdateEngineWithProgress` → `downloadEngine`, which overwrote the
-   live bin directory in place (`copyAll`) after a 700 ms sleep. No
-   lock existed across the two paths; the scheduled updater ran with a
-   live `LlamaServer` while boot-path auto-update ran inside
-   `startLocked`. This is the structural race behind the observed
-   startup/update overlap.
-2. **Blind port adoption.** `adoptExisting` adopted ANY process
-   answering `/health` with HTTP 200 on port 8080 — no PID, no
-   executable-path check — so a foreign llama.cpp or a stale
-   installation could be connected to and labeled as the managed
-   engine (consistent with the observed b10642 → b11090 → b10642
-   version flap).
-3. **Loader failures treated as argument failures.** `explainExit`
-   decoded only `0xC0000135`; `0xC0000139` (STATUS_ENTRYPOINT_NOT_FOUND
-   — the reported runtime failure) fell through to the generic
-   "exited during startup" error and the compatibility ladder retried
-   the SAME broken binary up to four times.
-4. **Installer-imposed second data root.** `packaging/nsis/installer.nsi`
-   wrote the machine environment variable
-   `SHEYTAN_DATA_DIR=%LOCALAPPDATA%\SHEYTAN-LA`, forcing installed
-   copies to keep models/logs/sessions in AppData while the runtime
-   contract resolves the canonical root to `<AppRoot>\data`.
-5. **Stale visible version.** `src/App.tsx` rendered
-   `appVersion ?? "v1.2.2"` — a hard-coded stale literal shown before
-   `/api/state` resolved (or on failure).
+## What this deep-repair pass changed (all with regression tests)
 
-## Engine
+1. §7/§13/§14 — `UpdateEngineNow` is now a FULL deferred-commit
+   transaction: stage → validate → atomic swap → verify identity →
+   START exact installed binary → verify ready → COMMIT (+cleanup).
+   Startup-verification failure now ROLLS BACK to the previous package
+   byte-for-byte and returns a NON-NIL error (the old `return msg, nil`
+   after a failed start is gone, including the legacy updater path).
+   The commit tag/manifest are written only after verified readiness.
+2. §11/§12 — `mergeForeignFiles` replaced by allowlisted
+   `mergeCompanionFiles` (native engine host + license/metadata only);
+   stale DLLs/foreign exes are DROPPED and logged. `copyClosureDedup`
+   replaced by `copyEngineClosure` (entry binary + beside-the-binary
+   runtime DLLs — including dynamically loaded backends — + metadata;
+   never the directory, never neighboring engines' libraries).
+3. §15/§16 — cross-process engine ownership added
+   (`internal/englease`): lease file + PID + executable path + process
+   start-time verification (real OS APIs: OpenProcess/GetProcessTimes
+   on Windows, /proc stat starttime on Unix); live foreign holders are
+   refused, never killed; stale leases are recoverable only after
+   failed verification; the CLI updater refuses to provision under a
+   live foreign owner; lifecycle ops hold the owner lease.
+4. §17 — adoption now additionally proves ENGINE identity: on-disk
+   SHA-256 must match the recorded install manifest, and (when
+   provable) the process must have started at/after the recorded
+   install time. Missing manifest → explicit "identity check
+   unavailable" log, never a fake pass.
+5. §9 — Tier-2 system discovery is now wired into production:
+   `Rediscover()` (POST `/api/engine/rediscover`) runs the full ladder
+   (managed → cache → Tier 1 → bounded Tier-2 scan) and imports a
+   validated candidate through the single authority; Tier-2 still never
+   runs on the startup path.
+6. §19/§20 — launch-phase failure reports now carry ExitCode,
+   ExitCodeHex, ExeSHA256/Size/Mtime and the classified failure class
+   (never guessed); preflight surfaces `depsUnavailable` /
+   `probeUnavailable` reasons in its JSON instead of silently reading
+   as "no deps"/"no version".
+7. §23/§25 — the canonical data root is now REALLY the install-local
+   `<AppRoot>\data` tree: `ResolveRoot()` defaults to
+   `<AppRoot>\data` (the installer already created and ACL'd exactly
+   this tree; the installer additionally creates `data\workspace`);
+   `MigrateAppRootDirectData` folds a pre-`<AppRoot>\data` portable
+   layout into the canonical root (rename-first, collision-safe,
+   engine bin moved as a unit); explicit `SHEYTAN_DATA_DIR` overrides
+   remain authoritative and untouched.
+8. §26 — the second search backend (`tools.WebSearch`, DuckDuckGo/Bing
+   scraper registered as an agent tool) is REMOVED; web search flows
+   exclusively through the internal research service (the SAME service
+   behind the Net Search composer control and `/api/net-search`), with
+   server-side per-request enforcement and provenance. A regression
+   test pins the single-backend contract.
+9. §28/§29 — stale scratch manifests deleted (MANIFEST.txt,
+   REPLACEMENT-MANIFEST.txt, REPLACEMENT-SHA256.txt,
+   UPDATE-MANIFEST.txt — all described superseded or never-landed
+   commits); worklog/agent.md stale branch claims corrected; this
+   report regenerated from real state. gofmt drift in
+   internal/research/service.go fixed.
+10. Dead code removed: `downloadEngine`/`copyAll` in internal/updater
+    (the last competing download implementation).
 
-* Lifecycle architecture: ONE lifecycle owner (`LlamaServer`) with the
-  existing `switchMu`/watchdog/generation-token architecture preserved;
-  a NEW explicit `updating` state (`StateUpdating`) covers maintenance;
-  `UpdateEngineNow` holds `switchMu` for the whole update transaction
-  (stop → install → restart → verify), so Start/Start, Start/Update,
-  Update/Start, prewarm/first-request and watchdog/updater overlaps are
-  structurally serialized.
-* Ownership/adoption: adoption now requires the OS-attributed listening
-  PID's executable to equal the managed engine path
-  (`proc.ListeningProcess` + `proc.SameExecutable`; Windows
-  GetExtendedTcpTable/QueryFullProcessImageName, Linux
-  /proc/net/tcp + /proc/<pid>/exe — no shell parsing). Foreign or
-  unprovable processes are refused with recorded evidence and are never
-  killed automatically.
-* Provisioning/discovery: ONE authority (`updater.InstallStaged`) —
-  staged download → extraction → static candidate validation
-  (`engcheck.StaticValidate` + PE import closure) → atomic directory
-  swap (previous dir renamed aside, staging renamed in, non-engine
-  files merged back) → installed-binary SHA-256 verification → commit
-  (tag + `engine-install.json`) → cleanup. `ensureBinary` tiers:
-  managed binary → discovery import → download via the same authority.
-* Failure classification: loader-class exit codes
-  (0xC0000135/0xC0000139/0xC000007B/0xC0000142/0xC0000005/0xC000001D/
-  0xC0000409, Win32 5/126/127/0xC1) decode into actionable diagnostics;
-  a textual NTSTATUS fallback covers Unix's 8-bit exit truncation. The
-  preflight (exists → arch → dependency closure via `debug/pe` →
-  bounded `--version` through the production subprocess runner) runs
-  BEFORE any model launch; preflight loader failures stop the boot with
-  zero model launches.
-* Logging: per-attempt stdout (500-line ring) and stderr (64-line ring)
-  preserved; failure reports (`EngineFailureReport`) capture phase,
-  attempt ID, generation, executable identity (path/SHA-256/size/mtime),
-  expected tag, probed version, OS/arch, PID, exit code (hex included),
-  decoded class, dependency evidence, stdout/stderr tails, model path,
-  compat level and attempt context. Surfaced via `/api/engine`
-  `diagnostics`.
-* Update synchronization: scheduled updater and manual updater both
-  route through `TransactionalEngine.UpdateEngineNow` (engine-owned)
-  and a process-wide install lock guards every provisioning operation.
-* Rollback: any failure before commit restores the previous engine
-  directory; last-known-good is preserved and restarted on failure
-  (tested: `TestUpdateEngineFailurePreservesLastKnownGood`).
+## Verification matrix (executed in this environment)
 
-## System discovery
+* Frontend: typecheck OK; lint 0 warnings/0 errors; unit tests 96/96;
+  release tests 28/28; `npm run build` OK; `verify:web --dist` OK
+  (web/static mirrors the current build exactly); release-version
+  `--check` OK.
+* Go: gofmt clean (whole tree); `go vet -tags headless ./...` OK;
+  `go test ./internal/... -tags headless -count=1` → 51/51 packages
+  OK; `-race` suites OK (api/agent/sessions/contextplan/histref/
+  runtime + llm/updater/englease/proc/config).
+* Windows cross-builds from this Linux environment: main desktop
+  binary, headless main, cmd/ CLI — all compile (GOOS=windows).
+* Native C++: `make` + `make test` in native/engine → 12/12 suites
+  pass; real `shtn-engine-host` IPC round-trip verified.
+* New regression suites: update-failure semantics + rollback
+  (internal/llm), commit-after-verification ordering, DLL/package
+  isolation (internal/updater), engine ownership lease
+  (internal/englease, incl. live-foreign refusal and stale recovery),
+  data-root contract + stray-layout + AppData no-recreation
+  (internal/config), single-search-backend (internal/runtime).
 
-* Search mechanism: `internal/engdiscovery` — Tier 0 (managed dir +
-  persisted cache), Tier 1 (PATH, executable dir, sibling bins, common
-  user/package locations), Tier 2 (bounded parallel scan: worker pool,
-  depth bound, time bound, candidate cap, noise-dir skip list;
-  background-only, never on the startup path).
-* Cache: `<DataDir>/discovery-cache.json` (path/size/mtime/SHA-256/
-  arch/tag/tier/validation); entries re-inspected when size/mtime
-  change; corrupt binaries are not offered (tested).
-* Candidates found on THIS machine: none expected (sandbox); the
-  fixture-based tests prove discovery/import behavior. No claim is
-  made about coverage on the user's machine.
-* Imported package: validated candidates import through
-  `ImportCandidate` with byte-identical dedupe (SHA-256) and
-  provenance recorded in `engine-install.json` (source = original
-  path); the recorded release tag is NOT overwritten by a discovered
-  import (bookkeeping never relabels the engine silently).
-* Validation evidence: static-first (format + architecture + import
-  closure), bounded `--version` probe last, through the same
-  `internal/proc` runner as production launches; probe output is
-  recorded, never trusted as configuration.
+## NOT executed in this environment (honest limitations)
 
-## Data root
-
-* Old root: `%LOCALAPPDATA%\SHEYTAN-LA` (forced by the 1.3.5
-  installer's machine env var).
-* New canonical root: `<AppRoot>\data` (portable contract, already the
-  runtime default; the installer no longer overrides it and DELETES the
-  legacy machine env var, creating the data tree with Users-modify
-  ACLs).
-* Migration result: `config.MigrateLegacyAppDataRoot` folds the legacy
-  root into the canonical root once — idempotent, restart-safe,
-  hash-verified copies, newer-wins collisions, config recovery, engine
-  bundle as a unit (never mixed), legacy root removed only after full
-  verification, explicit `SHEYTAN_DATA_DIR` overrides never touched.
-  VERIFIED by the new test suite on Linux; NOT executed against a real
-  Windows installation from here.
-* Duplicate cleanup result: identical files are dropped during merge
-  (SHA-256), engine staging directories (`.update-stage`,
-  `.engine-download`, `.update-old`) are removed after committed
-  installs, and discovered imports skip byte-identical copies.
-
-## Net Search
-
-* Removed Research surface: workspace layer, nav item, lazy route,
-  `#research` hash handling (invalid hashes resolve to Agent — no dead
-  route), `ResearchPanel.tsx` (deleted), store research slice, API
-  client methods, and the research CSS blocks. Shortcut numbering
-  updated (Ctrl+4 = System).
-* Chat integration: the shared composer control (`Thinking · Tools ·
-  Net Search`) serves Chat and Agent (one component, one store).
-* Agent integration: identical control and payload; the per-request
-  `netSearch` intent rides `/api/run`.
-* Backend reuse: the existing `internal/research` service, providers
-  and cache are REUSED with zero duplication; `/api/net-search` is the
-  same handler as the `/api/research` shim; `agent.WithNetSearch`
-  authorizes exactly the research tool for that request (offered
-  surface + execution gate), recorded in turn telemetry
-  (`ctxtelemetry.TurnRecord.NetSearch`).
-* Tests: `workspace-v136.test.ts` (layer removed, hash fallback),
-  `net-search.test.ts` (evidence classification, honest result-count
-  extraction), plus existing suites kept green; Go-side enforcement is
-  covered by `ToolPolicy.allows` semantics and the orchestrator tool
-  selection; no duplicate search request path exists.
-
-## UI version
-
-* Source of version: `package.json` (single release source) → Vite
-  `define` injects `__APP_VERSION__` at build time; the backend's
-  runtime `appVersion` (`/api/state` → `config.AppVersion`) stays
-  authoritative once loaded; `displayVersion()` normalizes the `v`
-  prefix.
-* Visible value: `v1.3.6` for a v1.3.6 build (first paint included).
-* Stale-version regression test: `src/version-contract.test.ts` — bans
-  version-shaped display literals in shipped source (comments excepted),
-  requires the `__APP_VERSION__` path, requires the vite injection from
-  package.json, and the ambient declaration. The rebuilt
-  `web/static/assets/index.js` contains `1.3.6` and zero `1.2.2`/`1.3.5`
-  literals.
-
-## Verification
-
-Only actual results, separated by environment:
-
-### Local Linux (this environment; Go 1.27.1, Node 24, Linux x86-64)
-
-* `gofmt` clean across `internal/` and `cmd/` (one PRE-EXISTING drift in
-  `internal/research/service.go` was also corrected — whitespace-only).
-* `go vet -tags headless ./internal/... ./cmd/...` clean.
-* `go test ./internal/... -tags headless -count=1` — 51/51 packages ok,
-  including NEW suites: `internal/llm` (loader classification,
-  preflight-phase catch with zero model launches, foreign-process
-  adoption refusal, managed-process adoption acceptance, transactional
-  commit/rollback, deterministic Start+Update race), `internal/updater`
-  (zip mode honoring, transactional seam), `internal/proc` (real
-  port-owner attribution), `internal/engcheck`, `internal/engdiscovery`
-  (discovery, cache invalidation, bounded scan, validation),
-  `internal/config` (AppData migration + hard path invariants).
-* Frontend: `npm ci`, `npm run typecheck` clean, `npm run lint`
-  (0 warnings, 0 errors), `npm run test:units` 96/96 (was 84 tests + 12
-  new), `npm run test:release` 28/28, `npm run build`, `npm run
-  verify:web` — all pass; `web/static` rebuilt and embedded-tree
-  contract satisfied.
-* `node scripts/release-version.mjs --check` — consistent at 1.3.6.
-* Clean-room: a fresh `git worktree` at the final commit builds
-  (`go build -tags headless ./...`) and re-passes the focused suites
-  and the release check.
-* Deterministic note: full (`-tags headless`-less) Go builds/tests of
-  the Wails desktop target require GTK/webkitgtk dev packages, absent
-  in this sandbox — the headless variant (what CI's Go verification
-  exercises) is the verified configuration. This is a pre-existing
-  environment property, not a regression.
-
-### Local Windows
-
-* NOT verified — no Windows machine or Windows CI in this environment.
-  Windows-specific code paths (`identity_windows.go`, NSIS installer
-  execution, MSVC/CTest native suites) compile-checked via
-  `GOOS=windows` only as far as cross-compilation of the Go packages
-  (see below) and are otherwise unexecuted.
-
-### GitHub Actions
-
-* NOT verified — nothing was pushed. No run exists for this work. CI
-  must not be weakened when the branch lands; the new tests execute
-  cross-platform (the engine/discovery fixtures run on Linux and
-  Windows runners; no filesystem-wide unbounded scans in CI).
-
-### Tag/release verification
-
-* NOT performed — no `v1.3.6` tag exists, no release exists, no asset
-  hashes exist. Publication state: NOT PUBLISHED.
-
-## Remaining issues
-
-Only issues actually unresolved:
-
-1. Windows runtime acceptance (§45) — installer execution, data-root
-   migration on a real installation, engine boot, `0xC0000139`
-   reproduction in the wild, Net Search against live providers: must be
-   performed on the Windows machine after applying this update.
-2. GitHub Actions verification of the pushed branch, the `v1.3.6` tag
-   run, and release publication.
-3. The native C++ suite was not executed here (no Windows toolchain, no
-   Wine); it is untouched by this change set and its 12/12 gate remains
-   CI-owned.
-4. The `0xC0000139` incident root cause on the user's machine (a
-   mismatched/partial DLL set beside the binary, per the evidence) is
-   now DIAGNOSED and PREVENTED structurally (identity proof + package
-   validation + no mixing), but the specific defective binary on the
-   user's disk was never inspected from here — the diagnostic surface
-   will name the evidence on the machine itself.
-
-## ZIP
-
-* Exact path: `/home/z/my-project/download/SHEYTAN-Local-Agent-v1.3.6-UPDATE.zip`
-* Contents count: 62 changed/new repository files + `MANIFEST.txt` +
-  `REPORT.md` (this file)
-* SHA-256: printed by the build step (see MANIFEST header output in the
-  delivery message; the value is also verifiable against the file)
-* Manifest verification: every entry re-hashed after writing and
-  compared; entries match the git diff file list exactly; no `.git`,
-  `node_modules`, build caches, binaries or installers are included;
-  deleted files are listed in the manifest (not in the ZIP).
+* Real Windows runtime acceptance (§32): launch → data root → engine
+  discovery → start → PID → /health → model → real inference →
+  Stop/Restart — requires a Windows machine; NOT executed here.
+* NSIS installer execution and installer/runtime install test to a
+  non-AppData location — requires Windows; NOT executed here. The
+  installer/runtime agreement was verified by code inspection + tests
+  of the shared path contract.
+* GPU/NPU acceleration — not verified; report CPU / no verified
+  accelerator.
+* GitHub Actions run for the final commit — this environment has no
+  push credentials; the final commit is local. The failing run
+  `35702334699` (commit `9036e1f`) was confirmed failed via the
+  Actions page; its root cause (stale tracked frontend files) is
+  verified removed in the final tree, and every check that run
+  performs is green locally. A push from a credentialed environment
+  is required to observe the real run result.

@@ -42,6 +42,14 @@ type EnginePreflight struct {
 	ProbeOut   string                    `json:"probeOutput,omitempty"`
 	At         time.Time                 `json:"at"`
 	DurationMs int64                     `json:"durationMs"`
+
+	// DepsUnavailable and ProbeUnavailable carry the v1.3.6 (spec §20)
+	// honesty contract: when dependency inspection or the version probe
+	// could not produce evidence, the REASON is surfaced here instead of
+	// the report silently reading as "no deps" / "no version". Never
+	// faked, never guessed.
+	DepsUnavailable  string `json:"depsUnavailable,omitempty"`
+	ProbeUnavailable string `json:"probeUnavailable,omitempty"`
 }
 
 // preflightFailure is a typed error: the candidate failed BEFORE any
@@ -165,6 +173,8 @@ func (s *LlamaServer) preflightBinary(cfg *config.Config, binPath string) (*Engi
 	pf.Deps = deps
 
 	if err != nil {
+		pf.DepsUnavailable = fmt.Sprintf("dependency validation unavailable: %v", err)
+
 		s.logf("preflight dependency inspection unavailable for %s: %v", filepath.Base(binPath), err)
 	}
 
@@ -225,6 +235,8 @@ func (s *LlamaServer) preflightBinary(cfg *config.Config, binPath string) (*Engi
 		// evidence the executable runs; llama.cpp returns 0 on
 		// --version, but tolerate non-loader failures without blocking
 		// the boot — the compat ladder owns argument-level behavior.
+		pf.ProbeUnavailable = fmt.Sprintf("version probe unavailable: %v", err)
+
 		s.logf("preflight --version probe failed (non-loader): %v", err)
 	} else {
 		if v := firstNonEmptyLine(string(out)); v != "" {

@@ -223,3 +223,115 @@ func copyTreeSkipping(srcRoot, dstRoot string, skip ...string) error {
 		return copyVerified(path, dst)
 	})
 }
+
+// appRootDataEntries lists the top-level entries a PRE-<AppRoot>\data
+// runtime layout could have created DIRECTLY under the application root
+// (v1.3.0–early-v1.3.6 portable runs resolved the data root to AppRoot
+// itself). Only unambiguous application-data names are folded; binaries
+// and unrelated files are never touched.
+var appRootDataEntries = []string{
+	"config.json", "models", "sessions", "logs", "bin", "lab",
+	"workspace", "charts", "sandbox", "run", "research",
+}
+
+// MigrateAppRootDirectData folds a pre-<AppRoot>\data layout —
+// application data created DIRECTLY under the executable's directory —
+// into the canonical install-local <AppRoot>\data root (v1.3.6 spec
+// §23/§24). Safe to call on every start:
+//
+//   - it never runs when the user chose an explicit data root;
+//   - entries that already exist in the canonical root are LEFT ALONE
+//     (the canonical copy stays authoritative; the stray is reported);
+//   - the engine `bin` directory moves as a UNIT (rename, never a
+//     DLL-by-DLL merge — spec §24/§12: mixing engine package
+//     generations produces the 0xC0000139 entry-point failure class).
+//
+// Rename-first, verified: a rename either succeeds atomically within
+// the application root or the entry is left untouched (idempotent on
+// the next start).
+func MigrateAppRootDirectData(cfg *Config) (*MigrationReport, error) {
+	report := &MigrationReport{}
+
+	if !canonicalRootIsDefault() {
+		return report, nil
+	}
+
+	appRoot := filepath.Clean(AppRoot())
+	canonical := filepath.Clean(cfg.DataDir)
+
+	// Only the default derivation is migrated; explicit roots are the
+	// user's deliberate choice and are never touched (spec §24).
+	if canonical != filepath.Clean(filepath.Join(appRoot, "data")) || canonical == appRoot {
+		return report, nil
+	}
+
+	if err := migrateAppRootEntries(appRoot, canonical, report); err != nil {
+		return report, err
+	}
+
+	return report, nil
+}
+
+// migrateAppRootEntries is the testable core of MigrateAppRootDirectData:
+// it folds the listed app-data entries from appRoot into canonical.
+func migrateAppRootEntries(appRoot, canonical string, report *MigrationReport) error {
+	fi, err := os.Stat(appRoot)
+	if err != nil || !fi.IsDir() {
+		return nil
+	}
+
+	report.Detected = append(report.Detected, appRoot)
+
+	moved := 0
+
+	for _, name := range appRootDataEntries {
+		src := filepath.Join(appRoot, name)
+		info, statErr := os.Stat(src)
+		if statErr != nil {
+			continue
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			continue
+		}
+
+		dst := filepath.Join(canonical, name)
+
+		if _, err := os.Stat(dst); err == nil {
+			report.Collisions = append(report.Collisions,
+				fmt.Sprintf("%s: canonical entry already exists; the stray application-root entry was left untouched", name))
+
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("migrate app-root data: create %s: %w", filepath.Dir(dst), err)
+		}
+
+		if err := os.Rename(src, dst); err != nil {
+			report.Collisions = append(report.Collisions,
+				fmt.Sprintf("%s: rename into the canonical root failed (%v); entry left in place", name, err))
+
+			continue
+		}
+
+		report.Merged = append(report.Merged,
+			fmt.Sprintf("%s: moved into the canonical install-local data root", name))
+
+		if name == "config.json" {
+			report.Recovered = append(report.Recovered, dst)
+			report.ReloadConfig = true
+		}
+
+		moved++
+	}
+
+	if moved > 0 {
+		// Never REMOVE the application root itself (it hosts the
+		// executable) — the stray entries were folded one by one; the
+		// Removed list stays empty by construction here.
+		report.Merged = append(report.Merged,
+			fmt.Sprintf("app-root layout migration complete: %d entr(y/ies) folded into %s", moved, canonical))
+	}
+
+	return nil
+}

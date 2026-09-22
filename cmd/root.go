@@ -46,6 +46,28 @@ func RunWithDefaultFn(defaultFn func() int) int {
 		logging.Default().Warn("paths", "%s", note)
 	}
 
+	// v1.3.6 (spec §23/§24): fold a pre-<AppRoot>\data portable layout
+	// (application data created DIRECTLY under the executable's
+	// directory) into the canonical install-local data root BEFORE any
+	// other migration touches derived trees. Rename-first, verified,
+	// never runs when an explicit data-root override is set.
+	appRootReport, appRootErr := config.MigrateAppRootDirectData(cfg)
+	if appRootErr != nil {
+		logging.Default().Error("paths", "app-root data migration incomplete (will retry on next start): %v", appRootErr)
+	}
+	for _, line := range config.LogMigrationNotes(nil, appRootReport) {
+		logging.Default().Info("paths", "%s", line)
+	}
+
+	if appRootReport != nil && appRootReport.ReloadConfig {
+		if reloaded, rerr := config.Load(configPath()); rerr == nil {
+			cfg = reloaded
+			logging.Default().Info("paths", "configuration folded from the application root into the install-local data root and re-loaded")
+		} else {
+			logging.Default().Warn("paths", "folded configuration could not be re-loaded: %v (defaults remain active)", rerr)
+		}
+	}
+
 	// v1.3.0: fold v1.2.9 malformed runtime trees
 	// (<root>\%LOCALAPPDATA%\SHEYTAN-LA, doubled SHEYTAN-LA nesting)
 	// into the canonical root — models/sessions first, verified, then the

@@ -11,7 +11,8 @@ Repository:
 https://github.com/Parsaetak/SHEYTAN-local-agent
 ```
 
-Branch: `v1.3.6-engine-lifecycle` (work branch on top of `57f0c1b`)
+Branch: `main` (v1.3.6 landed on main as `9036e1f` "v1.3.6" +
+`0207611` "Remove obsolete Research workspace assets", on top of `57f0c1b`)
 
 Current release:
 
@@ -102,6 +103,57 @@ clean logging, universal scrolling and the GitHub clone workflow; the
 v1.2.x and v1.1.5 lines below remain the engineering evidence base.
 llama.cpp remains the default generation engine; the native engine
 serves the narrow, honestly-documented llama-architecture path.
+
+---
+
+## v1.3.6 — Deep Repair (2026-09-22, current)
+
+Deep-repair pass on top of the pushed v1.3.6 (`9036e1f`) and the stale-
+asset removal (`0207611`). What THIS pass added (all with regression
+tests):
+
+1. §7/§13/§14: `UpdateEngineNow` is a full DEFERRED-COMMIT transaction —
+   stage → validate → swap → verify identity → START → verify ready →
+   COMMIT/cleanup; startup-verification failure now ROLLS BACK to the
+   previous package byte-for-byte and returns a NON-NIL error (the
+   `return msg, nil` pattern is gone everywhere, including the legacy
+   updater path); commit tag/manifest only after verified readiness.
+2. §11/§12: `mergeForeignFiles` → allowlisted `mergeCompanionFiles`
+   (stale DLLs/foreign exes DROPPED + logged); `copyClosureDedup` →
+   `copyEngineClosure` (entry exe + beside-the-binary runtime DLLs incl.
+   dynamic backends + metadata; never the directory).
+3. §15/§16: `internal/englease` — cross-process engine ownership lease
+   (file + PID + exe path + process start-time verification; live
+   foreign holders refused, never killed; stale recovery only after
+   failed verification; CLI updater refuses under a live owner).
+4. §17: adoption additionally proves ENGINE identity (on-disk SHA-256
+   vs install manifest + process-started-after-install when provable).
+5. §9: Tier-2 discovery wired into production via `Rediscover()`
+   (POST `/api/engine/rediscover`); still never on the startup path.
+6. §19/§20: launch-phase failure reports carry ExitCode/ExitCodeHex/
+   ExeSHA256/class; preflight surfaces `depsUnavailable`/
+   `probeUnavailable` honestly.
+7. §23/§25: `ResolveRoot()` now REALLY defaults to `<AppRoot>\data`
+   (runtime + installer agreement); `MigrateAppRootDirectData` folds the
+   pre-`<AppRoot>\data` portable layout into the canonical root.
+8. §26: the second search backend (`tools.WebSearch`) REMOVED — one
+   search backend (internal research service) with a regression test.
+9. §28/§29: stale scratch manifests deleted (MANIFEST.txt,
+   REPLACEMENT-*.txt, UPDATE-MANIFEST.txt); REPORT.md regenerated from
+   real state; gofmt drift in internal/research/service.go fixed; dead
+   `downloadEngine`/`copyAll` removed.
+
+VERIFIED (Linux x86-64, Go 1.26.0 / Node 24): gofmt clean; go vet
+(-tags headless) clean; go test ./internal/... -tags headless 51/51
+packages; -race suites green (CI set + llm/updater/englease/proc/
+config); frontend typecheck + lint + 96/96 units + 28/28 release tests
++ build + verify:web --dist; release-version --check green; Windows
+cross-builds of main/headless/CLI compile; native engine 12/12 C++
+suites + real shtn-engine-host IPC round-trip.
+
+NOT executed here (needs Windows machine / push credentials): real
+Windows runtime acceptance, NSIS install test, the Actions run for the
+final commit (this environment cannot push).
 
 ---
 

@@ -28,11 +28,6 @@ func (CodeExec) ShortDescription() string {
 	return "Run short Python snippets for calculations."
 }
 
-// WebSearch — web search with provenance.
-func (WebSearch) ShortDescription() string {
-	return "Search the web and return sourced results."
-}
-
 // Git — repository state and history.
 func (Git) ShortDescription() string {
 	return "Inspect and manage repository state."

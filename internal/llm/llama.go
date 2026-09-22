@@ -20,7 +20,9 @@ import (
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engdiscovery"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/englease"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
@@ -528,6 +530,21 @@ func (s *LlamaServer) startLocked() error {
 	// Settings PATCH can no longer produce a half-old, half-new launch.
 	cfg := s.src.Load()
 
+	// v1.3.6 (spec §16): claim the cross-process ownership lease BEFORE
+	// any boot/adoption decision. One installation has exactly ONE
+	// managing owner: a second app instance (live, verified through
+	// pid+exe+start-time) is refused — never silently adopted, never
+	// killed. The lease is re-entrant for this process; a stale file is
+	// recovered only after the recorded holder fails verification.
+	lease, leaseErr := englease.Acquire(engineLeaseDir(cfg), englease.OwnerLease, "engine-owner")
+	if leaseErr != nil {
+		s.setState(StateFailed)
+
+		return fmt.Errorf("engine start refused: %w", leaseErr)
+	}
+
+	defer lease.Release()
+
 	portInUse := PortInUse(
 		cfg.LlamaHost,
 		cfg.LlamaPort,
@@ -855,8 +872,9 @@ func (s *LlamaServer) startLocked() error {
 				if isLoaderFailure(err) {
 					s.logf("loader-class startup failure — stopping compatibility retries (deterministic binary failure)")
 
-					s.mu.Lock()
-					s.recordFailureReportLocked(&EngineFailureReport{
+					lf, classMatched := loaderFailure{}, false
+
+					rep := &EngineFailureReport{
 						Phase:       "launch",
 						AttemptID:   nextAttemptID(),
 						Context:     AttemptFirstLaunch,
@@ -869,7 +887,40 @@ func (s *LlamaServer) startLocked() error {
 							strings.Split(err.Error(), "\n"), 4,
 						),
 						At: time.Now().UTC(),
-					})
+					}
+
+					// v1.3.6 (spec §19): first-class evidence — the
+					// launch-phase report carries the same identity
+					// fields the preflight report does. The failure
+					// class is only named when exit code or output
+					// actually identifies it (never guessed).
+					if efd, ok := err.(*exitFailure); ok {
+						rep.ExitCode = efd.code
+						rep.ExitCodeHex = exitCodeHex(efd.code)
+
+						if classified, ok2 := classifyLoaderExit(efd.code); ok2 {
+							lf, classMatched = classified, true
+						}
+					}
+
+					if !classMatched {
+						if classified, ok2 := loaderClassFromText(err.Error()); ok2 {
+							lf = classified
+						}
+					}
+
+					if ident, ierr := engcheck.IdentityOf(binPath); ierr == nil {
+						rep.ExeSHA256 = ident.SHA256
+						rep.ExeSize = ident.Size
+						rep.ExeMtime = ident.ModTime
+					}
+
+					if classMatched || lf.Kind != "" {
+						rep.FailureClass = string(lf.Kind)
+					}
+
+					s.mu.Lock()
+					s.recordFailureReportLocked(rep)
 					s.mu.Unlock()
 
 					s.setState(StateFailed)
@@ -2335,14 +2386,19 @@ func (s *LlamaServer) Restart() error {
 // files while this LlamaServer is alive: it holds switchMu for the WHOLE
 // transaction so Start/Restart/prewarm can never interleave, stops the
 // engine itself, installs the staged candidate through the ONE
-// provisioning authority (updater.InstallStaged), restarts the EXACT
-// installed binary and verifies readiness before committing.
+// provisioning authority (updater), restarts the EXACT installed binary
+// and verifies readiness before committing.
 //
-// Transaction:
+// UpdateEngineNow transaction (spec §7 — COMMIT and CLEANUP happen only
+// after the installed binary is started and verified):
 //
 //	take lifecycle lock → STOP current engine →
-//	stage+validate+swap (updater) → on failure: restart last-known-good →
-//	on success: START exact installed binary → verify ready → commit tag
+//	stage+validate+swap (updater, deferred commit) → on failure:
+//	restart last-known-good → on swap success: START exact installed
+//	binary → verify ready → COMMIT tag + manifest + remove previous
+//	package — or on startup failure: ROLLBACK (previous package
+//	restored byte-for-byte) → restart last-known-good → RETURN ERROR
+//	(never nil after an unverified engine, spec §13/§14).
 //
 // A download/install failure NEVER destroys the working installation:
 // the previous binary stays on disk and is restarted.
@@ -2354,7 +2410,18 @@ func (s *LlamaServer) UpdateEngineNow(
 	s.switchMu.Lock()
 	defer s.switchMu.Unlock()
 
+	// v1.3.6 (spec §16): hold the cross-process ownership lease for the
+	// whole maintenance window — another SHEYTAN instance (or the CLI
+	// updater) must never manage this installation concurrently. The
+	// lease is re-entrant for this process.
 	cfg := s.src.Load()
+
+	lease, leaseErr := englease.Acquire(engineLeaseDir(cfg), englease.OwnerLease, "engine-owner")
+	if leaseErr != nil {
+		return "", fmt.Errorf("engine update refused: %w", leaseErr)
+	}
+
+	defer lease.Release()
 
 	wasRunning := s.IsRunning()
 
@@ -2382,7 +2449,7 @@ func (s *LlamaServer) UpdateEngineNow(
 	s.stopping = false
 	s.mu.Unlock()
 
-	installed, err := s.runEngineInstall(ctx, cfg, tag, onProgress)
+	staged, err := s.runEngineInstall(ctx, cfg, tag, onProgress)
 
 	if err != nil {
 		// Rollback: the staged installer leaves the last-known-good
@@ -2408,24 +2475,48 @@ func (s *LlamaServer) UpdateEngineNow(
 	// transition chain itself (starting → ready) and its entry gate
 	// rejects a boot when the state already claims one is in flight.
 
-	// START EXACT INSTALLED BINARY: ensureBinary resolves to the path
+	// START EXACT INSTALLED BINARY: startLocked resolves to the path
 	// the staged installer just verified (cfg.LlamaBinPath is either
 	// explicitly configured or defaults into the managed bin dir).
 	if startErr := s.startLocked(); startErr != nil {
-		msg := fmt.Sprintf(
-			"engine installed to llama.cpp %s but startup verification failed: %v",
+		// v1.3.6 (spec §13/§14): an installed-but-unverifiable engine is
+		// NEVER reported as success. The transaction is not committed:
+		// the previous package is restored byte-for-byte and restarted,
+		// and the update returns an ERROR.
+		logging.Default().Warn("updater",
+			"engine %s installed but startup verification failed (%v) — rolling back to the previous package",
+			tag, startErr)
+
+		if rbErr := staged.Rollback(); rbErr != nil {
+			logging.Default().Warn("updater",
+				"rollback to previous engine package failed: %v", rbErr)
+
+			s.setState(StateFailed)
+
+			return "", fmt.Errorf(
+				"engine %s installed but startup verification failed: %v; rollback also failed: %w",
+				tag, startErr, rbErr,
+			)
+		}
+
+		if startErr2 := s.startLocked(); startErr2 != nil {
+			logging.Default().Warn("updater",
+				"last-known-good restart after rollback also failed: %v", startErr2)
+		}
+
+		s.setState(StateFailed)
+
+		return "", fmt.Errorf(
+			"engine %s installed but startup verification failed: %w (previous package restored)",
 			tag, startErr,
 		)
-
-		// The install itself is COMMITTED (files verified on disk);
-		// the startup problem is reported honestly — no silent
-		// rollback churn on top of a verified package.
-		logging.Default().Warn("updater", "%s", msg)
-
-		return msg, nil
 	}
 
-	return installed.Outcome, nil
+	// Verified ready → only now does the transaction commit (spec §7:
+	// START → HEALTH → COMMIT → CLEANUP).
+	staged.Commit()
+
+	return staged.Result().Outcome, nil
 }
 
 // StateUpdating is the explicit maintenance state (v1.3.6, spec §1):
@@ -2433,24 +2524,25 @@ func (s *LlamaServer) UpdateEngineNow(
 // operation may touch it.
 const StateUpdating = "updating"
 
-// runEngineInstall drives the unified installer — from the test-seamed
-// archive when set (deterministic tests), otherwise the real staged
-// download.
+// runEngineInstall drives the unified installer's DEFERRED-COMMIT path
+// — from the test-seamed archive when set (deterministic tests),
+// otherwise the real staged download. The caller decides Commit vs
+// Rollback after startup verification (spec §7/§13/§14).
 func (s *LlamaServer) runEngineInstall(
 	ctx context.Context,
 	cfg *config.Config,
 	tag string,
 	onProgress func(downloader.Progress),
-) (updater.InstallResult, error) {
+) (*updater.StagedInstall, error) {
 	s.mu.Lock()
 	archive := s.testStagedArchive
 	s.mu.Unlock()
 
 	if archive != "" {
-		return updater.InstallStagedFromArchive(cfg, tag, archive)
+		return updater.InstallStagedFromArchiveDeferred(cfg, tag, archive)
 	}
 
-	return updater.InstallStaged(ctx, cfg, tag, onProgress)
+	return updater.InstallStagedDeferred(ctx, cfg, tag, onProgress)
 }
 
 // SetStagedArchiveForTest points UpdateEngineNow at a local archive

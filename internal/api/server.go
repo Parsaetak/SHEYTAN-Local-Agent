@@ -396,6 +396,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/llama", s.handleLlama)
 	mux.HandleFunc("/api/engine", s.handleEngine)
+	mux.HandleFunc("/api/engine/rediscover", s.handleEngineRediscover)
 	mux.HandleFunc("/api/attachments", s.handleAttachments)
 	mux.HandleFunc("/api/attachments/", s.handleAttachments)
 	mux.HandleFunc("/api/run", s.handleRun)

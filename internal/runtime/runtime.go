@@ -225,7 +225,6 @@ func NewStack(cfg *config.Config) *Stack {
 	orch.Register(tools.Shell{})
 	orch.Register(tools.Files{})
 	orch.Register(tools.CodeExec{})
-	orch.Register(tools.WebSearch{})
 	orch.Register(tools.Git{})
 	orch.Register(tools.NewBrowserTool(cfg))
 	orch.Register(tools.NewDataTool(cfg))

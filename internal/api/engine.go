@@ -486,3 +486,32 @@ func tailStrings(in []string, n int) []string {
 
 	return in[len(in)-n:]
 }
+
+// handleEngineRediscover is the explicit Repair/Rediscover action
+// (v1.3.6, spec §9): re-runs the discovery ladder (managed dir → cache
+// → Tier 1 → bounded Tier-2 scan), imports a validated candidate when
+// one exists, and restarts the engine. It never runs automatically on
+// the startup path and never downloads anything — when no local engine
+// exists the honest error tells the caller a download is required.
+func (s *Server) handleEngineRediscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, errMethodNotAllowed())
+		return
+	}
+
+	outcome, err := s.llama.Rediscover()
+	if err != nil {
+		writeJSON(w, map[string]any{
+			"ok":      false,
+			"outcome": outcome,
+			"error":   err.Error(),
+		})
+
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"ok":      true,
+		"outcome": outcome,
+	})
+}

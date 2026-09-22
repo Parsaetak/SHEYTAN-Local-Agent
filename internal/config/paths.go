@@ -17,11 +17,20 @@
 //	<install-root>\%LOCALAPPDATA%\SHEYTAN-LA\models
 //	<install-root>\SHEYTAN-LA\%LOCALAPPDATA%\SHEYTAN-LA\models
 //
-// THE CONTRACT (v1.3.0)
+// THE CONTRACT (v1.3.0, amended v1.3.6 spec §23 — INSTALL-LOCAL ROOT)
 //
 // Exactly ONE authoritative resolution mechanism, in this package:
 //
 //  1. the application root is the executable's directory (AppRoot);
+//     the CANONICAL DATA ROOT is <AppRoot>\data — a dedicated subtree
+//     of the installed application root (models/sessions/logs/bin/
+//     workspace live under it). The v1.3.0 rule used AppRoot itself;
+//     v1.3.6 nests the data one level so an installed app (Program
+//     Files or portable) keeps its writable data tree separate from
+//     the binaries, matching the NSIS installer's <AppRoot>\data
+//     directory contract. A one-time migration folds a pre-existing
+//     AppRoot-level layout into <AppRoot>\data (see
+//     MigrateAppRootDirectData);
 //  2. environment-variable references are expanded ONCE, here — never
 //     persisted and never passed through unresolved;
 //  3. a value that still contains an unresolved %TOKEN% is REJECTED and
@@ -99,12 +108,20 @@ func ExpandEnvPath(raw string) string {
 	return expanded
 }
 
+// defaultDataRoot is the CANONICAL data root when no override is set:
+// a dedicated `data` subtree under the application root (v1.3.6 spec
+// §23 — the installed runtime's one canonical root, shared verbatim
+// with the NSIS installer).
+func defaultDataRoot() string {
+	return filepath.Join(AppRoot(), "data")
+}
+
 // ResolveRoot resolves the canonical application-data root.
 //
 // Resolution order:
 //  1. SHEYTAN_DATA_DIR (expanded; must resolve to a real absolute or
 //     app-root-relative path with NO surviving env tokens);
-//  2. the executable's directory (portable root).
+//  2. the canonical install-local root <AppRoot>\data.
 //
 // A path that is relative resolves against the application root, never
 // the current working directory. The returned path is absolute and
@@ -114,22 +131,22 @@ func ExpandEnvPath(raw string) string {
 func ResolveRoot() (root string, fallback bool, reason string) {
 	raw, present := os.LookupEnv("SHEYTAN_DATA_DIR")
 	if !present || strings.TrimSpace(raw) == "" {
-		return AppRoot(), false, ""
+		return defaultDataRoot(), false, ""
 	}
 
 	expanded := ExpandEnvPath(strings.TrimSpace(raw))
 
 	if HasEnvToken(expanded) {
-		return AppRoot(), true, fmt.Sprintf(
-			"SHEYTAN_DATA_DIR=%q contains an unresolved environment-variable reference (%s); using the application root",
+		return defaultDataRoot(), true, fmt.Sprintf(
+			"SHEYTAN_DATA_DIR=%q contains an unresolved environment-variable reference (%s); using the canonical install-local data root",
 			raw, expanded,
 		)
 	}
 
 	// A literal "%"-only escape ("%%") is pathological; reject it too.
 	if strings.Contains(expanded, "%") {
-		return AppRoot(), true, fmt.Sprintf(
-			"SHEYTAN_DATA_DIR=%q expanded to %q which still contains a raw '%%' — refusing; using the application root",
+		return defaultDataRoot(), true, fmt.Sprintf(
+			"SHEYTAN_DATA_DIR=%q expanded to %q which still contains a raw '%%' — refusing; using the canonical install-local data root",
 			raw, expanded,
 		)
 	}
@@ -139,8 +156,8 @@ func ResolveRoot() (root string, fallback bool, reason string) {
 	// Defense in depth: the resolved root must never nest a token-shaped
 	// directory name ("%LOCALAPPDATA%") — the v1.2.9 malformed layout.
 	if isMalformedRootPath(resolved) {
-		return AppRoot(), true, fmt.Sprintf(
-			"SHEYTAN_DATA_DIR=%q resolved to the malformed path %q; using the application root",
+		return defaultDataRoot(), true, fmt.Sprintf(
+			"SHEYTAN_DATA_DIR=%q resolved to the malformed path %q; using the canonical install-local data root",
 			raw, resolved,
 		)
 	}
@@ -210,10 +227,10 @@ func normalizeRuntimePaths(cfg *Config) []string {
 		expanded := ExpandEnvPath(cfg.DataDir)
 		if HasEnvToken(expanded) {
 			reports = append(reports, fmt.Sprintf(
-				"dataDir=%q contains unresolved environment references; using the canonical application root",
+				"dataDir=%q contains unresolved environment references; using the canonical install-local data root",
 				cfg.DataDir,
 			))
-			cfg.DataDir = AppRoot()
+			cfg.DataDir = defaultDataRoot()
 		} else {
 			cfg.DataDir = AbsAgainstAppRoot(expanded)
 		}
@@ -223,10 +240,10 @@ func normalizeRuntimePaths(cfg *Config) []string {
 
 	if isMalformedRootPath(cfg.DataDir) {
 		reports = append(reports, fmt.Sprintf(
-			"dataDir=%q is a malformed nested root; using the canonical application root",
+			"dataDir=%q is a malformed nested root; using the canonical install-local data root",
 			cfg.DataDir,
 		))
-		cfg.DataDir = AppRoot()
+		cfg.DataDir = defaultDataRoot()
 	}
 
 	// --- derived roots ---------------------------------------------------

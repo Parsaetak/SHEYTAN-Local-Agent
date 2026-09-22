@@ -34,6 +34,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/englease"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 )
 
@@ -60,6 +61,26 @@ type InstallResult struct {
 	Tag     string `json:"tag"`
 	BinPath string `json:"binPath"`
 	SHA256  string `json:"sha256"`
+}
+
+// leaseDir resolves the cross-process lease directory for a config.
+func leaseDir(cfg *config.Config) string {
+	return filepath.Join(cfg.DataDir, "run")
+}
+
+// refuseIfForeignEngineOwner reports — without touching anything — when
+// a live FOREIGN process owns this engine installation (spec §16: a CLI
+// updater must never mutate the bin directory under a live app, and two
+// app instances must never both manage one installation).
+func refuseIfForeignEngineOwner(cfg *config.Config) error {
+	if holder, ok := englease.ForeignHolder(leaseDir(cfg), englease.OwnerLease); ok {
+		return fmt.Errorf(
+			"engine installation is owned by a live SHEYTAN process (pid %d, started %s) — stop that instance's engine or close it before provisioning; it will not be killed automatically",
+			holder.PID, holder.AcquiredAt,
+		)
+	}
+
+	return nil
 }
 
 // ResolveDownloadURL resolves (url, tag) for a fresh engine download:
@@ -128,39 +149,26 @@ type installManifest struct {
 const installManifestName = "engine-install.json"
 
 // InstallStaged downloads, validates and atomically installs the engine
-// release `tag` into the managed bin directory. The caller must already
-// own the engine lifecycle (engine stopped or not yet started); file
-// safety is additionally guaranteed by WithInstallLock.
+// release `tag` into the managed bin directory, committing immediately.
+// Callers that must verify the engine STARTS before the transaction is
+// committed use InstallStagedDeferred + Commit/Rollback instead (spec
+// §7: START → HEALTH → COMMIT). The caller must already own the engine
+// lifecycle; file safety is guaranteed by the process-wide install lock
+// and the cross-process install lease.
 func InstallStaged(
 	ctx context.Context,
 	cfg *config.Config,
 	tag string,
 	onProgress func(downloader.Progress),
 ) (InstallResult, error) {
-	installMu <- struct{}{}
-	defer func() { <-installMu }()
-
-	url := AssetURL(tag)
-	if url == "" {
-		return InstallResult{}, fmt.Errorf("no prebuilt llama.cpp asset for %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
-
-	binDir := EngineBinDir(cfg)
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
+	staged, err := InstallStagedDeferred(ctx, cfg, tag, onProgress)
+	if err != nil {
 		return InstallResult{}, err
 	}
 
-	// 1) DISCOVER + DOWNLOAD to staging (never the live directory).
-	logging.Default().Info("updater", "downloading engine %s from %s", tag, url)
+	staged.Commit()
 
-	archive, err := downloadEngineArchiveStaged(ctx, url, tag, binDir, onProgress)
-	if err != nil {
-		return InstallResult{}, fmt.Errorf("download engine %s: %w", tag, err)
-	}
-
-	defer os.Remove(archive)
-
-	return installFromArchive(cfg, tag, archive, url)
+	return staged.Result(), nil
 }
 
 // InstallStagedFromArchive runs the validate→swap→verify→commit
@@ -172,19 +180,147 @@ func InstallStagedFromArchive(
 	tag string,
 	archivePath string,
 ) (InstallResult, error) {
+	staged, err := InstallStagedFromArchiveDeferred(cfg, tag, archivePath)
+	if err != nil {
+		return InstallResult{}, err
+	}
+
+	staged.Commit()
+
+	return staged.Result(), nil
+}
+
+// InstallStagedDeferred downloads, validates and atomically SWAPS IN
+// the engine release `tag`, but does NOT commit: the caller decides —
+// Commit() after the engine is verified to start, Rollback() to restore
+// the previous package byte-for-byte (spec §13/§14: a startup
+// verification failure must restore last-known-good and return an
+// error, never leave an unverified engine recorded as success).
+func InstallStagedDeferred(
+	ctx context.Context,
+	cfg *config.Config,
+	tag string,
+	onProgress func(downloader.Progress),
+) (*StagedInstall, error) {
 	installMu <- struct{}{}
 	defer func() { <-installMu }()
 
-	return installFromArchive(cfg, tag, archivePath, "archive://"+filepath.Base(archivePath))
-}
+	if err := refuseIfForeignEngineOwner(cfg); err != nil {
+		return nil, err
+	}
 
-// installFromArchive is the shared transaction body (caller holds installMu).
-func installFromArchive(cfg *config.Config, tag, archive, url string) (InstallResult, error) {
-	result := InstallResult{}
+	release, err := englease.Acquire(leaseDir(cfg), englease.InstallLease, "engine-install")
+	if err != nil {
+		return nil, fmt.Errorf("engine install lease: %w", err)
+	}
+
+	defer release.Release()
+
+	url := AssetURL(tag)
+	if url == "" {
+		return nil, fmt.Errorf("no prebuilt llama.cpp asset for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
 
 	binDir := EngineBinDir(cfg)
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		return result, err
+		return nil, err
+	}
+
+	// 1) DISCOVER + DOWNLOAD to staging (never the live directory).
+	logging.Default().Info("updater", "downloading engine %s from %s", tag, url)
+
+	archive, err := downloadEngineArchiveStaged(ctx, url, tag, binDir, onProgress)
+	if err != nil {
+		return nil, fmt.Errorf("download engine %s: %w", tag, err)
+	}
+
+	defer os.Remove(archive)
+
+	return stageFromArchive(cfg, tag, archive, url)
+}
+
+// InstallStagedFromArchiveDeferred is the archive-seam variant of
+// InstallStagedDeferred (deterministic tests without a network).
+func InstallStagedFromArchiveDeferred(
+	cfg *config.Config,
+	tag string,
+	archivePath string,
+) (*StagedInstall, error) {
+	installMu <- struct{}{}
+	defer func() { <-installMu }()
+
+	if err := refuseIfForeignEngineOwner(cfg); err != nil {
+		return nil, err
+	}
+
+	release, err := englease.Acquire(leaseDir(cfg), englease.InstallLease, "engine-install")
+	if err != nil {
+		return nil, fmt.Errorf("engine install lease: %w", err)
+	}
+
+	defer release.Release()
+
+	return stageFromArchive(cfg, tag, archivePath, "archive://"+filepath.Base(archivePath))
+}
+
+// StagedInstall is a validated engine package that has been atomically
+// swapped into the managed bin directory but NOT yet committed. Until
+// Commit() runs, the previous package remains recoverable in
+// <binDir>.update-old (spec §7: COMMIT and CLEANUP happen only after
+// the installed binary is started and verified).
+type StagedInstall struct {
+	cfg      *config.Config
+	tag      string
+	url      string
+	binDir   string
+	oldDir   string
+	result   InstallResult
+	manifest installManifest
+}
+
+// Result returns the install identity of the staged package.
+func (st *StagedInstall) Result() InstallResult {
+	if st == nil {
+		return InstallResult{}
+	}
+
+	return st.result
+}
+
+// Commit records the install manifest + engine tag and removes the
+// previous package. Idempotent; safe to call once the engine has been
+// verified running (or when no previous package needs preserving).
+func (st *StagedInstall) Commit() {
+	if st == nil {
+		return
+	}
+
+	// 6) COMMIT — record the REAL identity in both manifests.
+	recordInstallManifest(st.binDir, st.manifest)
+
+	RecordEngineTag(st.cfg, st.tag)
+
+	// 7) CLEANUP — obsolete staging + previous package (spec §20: keep
+	// only the active validated package; last-known-good protection is
+	// the ROLLBACK path, not a permanent second copy).
+	_ = os.RemoveAll(st.oldDir)
+	_ = os.RemoveAll(filepath.Join(st.binDir, ".update-stage"))
+	_ = os.Remove(filepath.Join(st.binDir, ".engine-download"))
+
+	logging.Default().Info("updater",
+		"engine %s committed (sha256 %.12s…)", st.tag, st.result.SHA256)
+
+	st.oldDir = ""
+}
+
+// stageFromArchive is the shared transaction body up to (and including)
+// the byte-identity verification of the swapped-in package; COMMIT and
+// CLEANUP are the caller's decision via StagedInstall.Commit/Rollback
+// (spec §7). Caller holds installMu and the install lease.
+func stageFromArchive(cfg *config.Config, tag, archive, url string) (*StagedInstall, error) {
+	binDir := EngineBinDir(cfg)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return nil, err
 	}
 
 	// 2) EXTRACT to the staging directory.
@@ -193,26 +329,26 @@ func installFromArchive(cfg *config.Config, tag, archive, url string) (InstallRe
 
 	if err := extractArchiveBySuffix(archive, url, stageDir); err != nil {
 		_ = os.RemoveAll(stageDir)
-		return result, fmt.Errorf("extract engine %s: %w", tag, err)
+		return nil, fmt.Errorf("extract engine %s: %w", tag, err)
 	}
 
 	// 3) VALIDATE CANDIDATE — static gate BEFORE anything is swapped.
 	found := findBinary(stageDir)
 	if found == "" {
 		_ = os.RemoveAll(stageDir)
-		return result, fmt.Errorf("release archive for %s contained no server binary", tag)
+		return nil, fmt.Errorf("release archive for %s contained no server binary", tag)
 	}
 
 	ident, verr := engcheck.StaticValidate(found)
 	if verr != nil {
 		_ = os.RemoveAll(stageDir)
-		return result, fmt.Errorf("candidate validation failed for %s: %w", tag, verr)
+		return nil, fmt.Errorf("candidate validation failed for %s: %w", tag, verr)
 	}
 
 	deps, derr := engcheck.CheckDependencies(found)
 	if derr == nil && len(deps.Missing) > 0 {
 		_ = os.RemoveAll(stageDir)
-		return result, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"candidate for %s is missing runtime DLLs beside the binary: %s — refusing to install an incomplete package",
 			tag, strings.Join(deps.Missing, ", "),
 		)
@@ -227,17 +363,12 @@ func installFromArchive(cfg *config.Config, tag, archive, url string) (InstallRe
 	oldDir := binDir + ".update-old"
 	_ = os.RemoveAll(oldDir)
 
-	swapDone := false
-
 	if err := os.Rename(binDir, oldDir); err != nil {
 		_ = os.RemoveAll(stageDir)
-		return result, fmt.Errorf("stage engine swap: %w", err)
+		return nil, fmt.Errorf("stage engine swap: %w", err)
 	}
 
 	restore := func() {
-		if swapDone {
-			return
-		}
 		// Rollback: put the previous engine directory back.
 		_ = os.RemoveAll(binDir)
 		_ = os.Rename(oldDir, binDir)
@@ -246,12 +377,13 @@ func installFromArchive(cfg *config.Config, tag, archive, url string) (InstallRe
 	if err := os.Rename(filepath.Join(oldDir, ".update-stage"), binDir); err != nil {
 		restore()
 		_ = os.RemoveAll(stageDir)
-		return result, fmt.Errorf("activate staged engine: %w", err)
+		return nil, fmt.Errorf("activate staged engine: %w", err)
 	}
 
-	// Merge-back: non-engine components that lived beside the engine
-	// (native host, license files) survive the package swap.
-	mergeForeignFiles(oldDir, binDir)
+	// Merge-back: ONLY allowlisted non-engine companions (native host,
+	// license/metadata files) survive the package swap. Stale DLLs and
+	// foreign binaries can never re-enter the new package (spec §12).
+	mergeCompanionFiles(oldDir, binDir)
 
 	// 5) VERIFY INSTALLED BINARY — byte identity must match the staged,
 	// validated candidate.
@@ -262,60 +394,98 @@ func installFromArchive(cfg *config.Config, tag, archive, url string) (InstallRe
 	if ierr != nil || installedIdent.SHA256 != ident.SHA256 {
 		restore()
 		_ = os.RemoveAll(stageDir)
-		return result, fmt.Errorf("installed binary identity mismatch for %s (want %s…)", tag, ident.SHA256[:12])
+		return nil, fmt.Errorf("installed binary identity mismatch for %s (want %s…)", tag, ident.SHA256[:12])
 	}
 
-	result.BinPath = installedPath
-	result.SHA256 = installedIdent.SHA256
-	result.Tag = tag
-
-	// 6) COMMIT — record the REAL identity in both manifests.
-	recordInstallManifest(binDir, installManifest{
-		Tag:         tag,
-		SHA256:      installedIdent.SHA256,
-		Size:        installedIdent.Size,
-		InstalledAt: time.Now().UTC().Format(time.RFC3339),
-		Source:      url,
-	})
-
-	RecordEngineTag(cfg, tag)
-
-	swapDone = true
-
-	// 7) CLEANUP — obsolete staging + previous package (spec §20: keep
-	// only the active validated package; last-known-good protection is
-	// the ROLLBACK path above, not a permanent second copy).
-	_ = os.RemoveAll(oldDir)
-	_ = os.RemoveAll(stageDir)
-	_ = os.Remove(archive + ".part")
-	_ = os.RemoveAll(filepath.Join(binDir, ".engine-download"))
+	staged := &StagedInstall{
+		cfg:    cfg,
+		tag:    tag,
+		url:    url,
+		binDir: binDir,
+		oldDir: oldDir,
+		result: InstallResult{
+			BinPath: installedPath,
+			SHA256:  installedIdent.SHA256,
+			Tag:     tag,
+			Outcome: fmt.Sprintf("engine installed: llama.cpp %s", tag),
+		},
+		manifest: installManifest{
+			Tag:         tag,
+			SHA256:      installedIdent.SHA256,
+			Size:        installedIdent.Size,
+			InstalledAt: time.Now().UTC().Format(time.RFC3339),
+			Source:      url,
+		},
+	}
 
 	logging.Default().Info("updater",
-		"engine %s installed and verified (sha256 %.12s…)", tag, installedIdent.SHA256)
+		"engine %s staged and identity-verified (sha256 %.12s…) — awaiting startup verification before commit",
+		tag, installedIdent.SHA256)
 
-	result.Outcome = fmt.Sprintf("engine installed: llama.cpp %s", tag)
+	return staged, nil
+}
 
-	return result, nil
+// Rollback restores the previous package byte-for-byte and discards the
+// staged one. Used when startup verification failed after the swap
+// (spec §14: the old package remains the active, usable engine).
+func (st *StagedInstall) Rollback() error {
+	if st == nil || st.oldDir == "" {
+		return nil
+	}
+
+	if _, err := os.Stat(st.oldDir); err != nil {
+		return fmt.Errorf("rollback: previous engine package is gone: %w", err)
+	}
+
+	_ = os.RemoveAll(st.binDir)
+
+	if err := os.Rename(st.oldDir, st.binDir); err != nil {
+		return fmt.Errorf("rollback: restore previous engine package: %w", err)
+	}
+
+	logging.Default().Warn("updater",
+		"engine %s rolled back — previous package restored as active", st.tag)
+
+	st.oldDir = ""
+
+	return nil
 }
 
 // ImportCandidate installs an EXTERNALLY discovered engine package
 // (System Engine Discovery, spec §10–§13) into the managed directory:
-// the candidate's directory is copied into staging, validated, and
+// the candidate's VALIDATED CLOSURE (entry binary + its runtime DLL
+// set + package metadata) is copied into staging, validated, and
 // swapped in with the same transactional choreography as a download.
-// Byte-identical files already present in the managed dir are NOT copied
-// again (dedupe by SHA-256, spec §13/§20).
+// Unrelated neighboring binaries, stale DLLs from OTHER packages and
+// arbitrary files are never imported (spec §11/§12).
+//
+// Commit is immediate: import only runs when the managed binary is
+// missing or unusable (there is no verified last-known-good package to
+// protect), and byte-identical files already present in the managed dir
+// are not copied again (dedupe by SHA-256, spec §13/§20).
 func ImportCandidate(cfg *config.Config, candidateDir, binaryRelPath string) (InstallResult, error) {
 	result := InstallResult{}
 
 	installMu <- struct{}{}
 	defer func() { <-installMu }()
 
+	if err := refuseIfForeignEngineOwner(cfg); err != nil {
+		return result, err
+	}
+
+	release, err := englease.Acquire(leaseDir(cfg), englease.InstallLease, "engine-install")
+	if err != nil {
+		return result, fmt.Errorf("engine install lease: %w", err)
+	}
+
+	defer release.Release()
+
 	binDir := EngineBinDir(cfg)
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return result, err
 	}
 
-	// Stage a COPY of the candidate into .update-stage.
+	// Stage the candidate's validated closure into .update-stage.
 	stageDir := filepath.Join(binDir, ".update-stage")
 	_ = os.RemoveAll(stageDir)
 
@@ -323,7 +493,7 @@ func ImportCandidate(cfg *config.Config, candidateDir, binaryRelPath string) (In
 		return result, err
 	}
 
-	copied, skipped, err := copyClosureDedup(candidateDir, stageDir)
+	copied, skipped, err := copyEngineClosure(candidateDir, stageDir, binaryRelPath)
 	if err != nil {
 		_ = os.RemoveAll(stageDir)
 		return result, fmt.Errorf("stage discovered engine: %w", err)
@@ -369,7 +539,7 @@ func ImportCandidate(cfg *config.Config, candidateDir, binaryRelPath string) (In
 		return result, fmt.Errorf("activate imported engine: %w", err)
 	}
 
-	mergeForeignFiles(oldDir, binDir)
+	mergeCompanionFiles(oldDir, binDir)
 
 	installedPath := filepath.Join(binDir, filepath.Base(found))
 	_ = os.Chmod(installedPath, 0o755)
@@ -383,7 +553,7 @@ func ImportCandidate(cfg *config.Config, candidateDir, binaryRelPath string) (In
 	result.BinPath = installedPath
 	result.SHA256 = installedIdent.SHA256
 	result.Outcome = fmt.Sprintf(
-		"imported discovered engine package (%d files copied, %d byte-identical skipped)",
+		"imported discovered engine package (%d closure files copied, %d byte-identical skipped)",
 		copied, skipped,
 	)
 
@@ -407,10 +577,26 @@ func ImportCandidate(cfg *config.Config, candidateDir, binaryRelPath string) (In
 	return result, nil
 }
 
-// copyClosureDedup copies candidateDir into dst, skipping files whose
-// SHA-256 already matches an existing file (byte-identical dedupe).
-// Returns (copied, skipped, err).
-func copyClosureDedup(srcDir, dstDir string) (int, int, error) {
+// copyEngineClosure copies ONLY the candidate's validated engine
+// closure from srcDir into dstDir (spec §11: import the closure, never
+// the directory):
+//
+//   - the entry binary itself;
+//   - every runtime DLL living DIRECTLY beside the entry binary — the
+//     package's runtime closure, including dynamically loaded backends
+//     (ggml-cuda.dll & friends are LoadLibrary'd, not PE-imported, so a
+//     pure import-table closure would BREAK the engine);
+//   - package metadata beside the binary (LICENSE/README/NOTICE/version
+//     manifests).
+//
+// Everything else — other executables, subdirectory trees, models,
+// scripts, build artifacts, neighboring engines' libraries — is
+// skipped as foreign and reported. Byte-identical files already in
+// dstDir are not copied again (dedupe). Returns (copied, skipped, err).
+func copyEngineClosure(srcDir, dstDir, binaryRelPath string) (int, int, error) {
+	exeAbs := filepath.Join(srcDir, binaryRelPath)
+	binDirInSrc := filepath.Dir(exeAbs)
+
 	copied, skipped := 0, 0
 
 	err := filepath.Walk(srcDir, func(p string, info os.FileInfo, err error) error {
@@ -423,11 +609,41 @@ func copyClosureDedup(srcDir, dstDir string) (int, int, error) {
 			return nil
 		}
 
-		target := filepath.Join(dstDir, rel)
-
 		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			// Descend ONLY along the path leading to the entry binary
+			// (the package may be nested, e.g. build/bin/llama-server).
+			// Every other subtree is foreign (spec §11).
+			if relTo, relErr := filepath.Rel(p, exeAbs); relErr == nil && !strings.HasPrefix(relTo, "..") {
+				return nil
+			}
+
+			return filepath.SkipDir
 		}
+
+		inBinDir := filepath.Dir(p) == binDirInSrc
+		base := filepath.Base(p)
+		ext := strings.ToLower(filepath.Ext(base))
+
+		allowed := false
+
+		switch {
+		case rel == binaryRelPath:
+			allowed = true // the validated entry binary
+
+		case inBinDir && ext == ".dll":
+			allowed = true // the package's own runtime closure (one unit)
+
+		case inBinDir && isPackageMetadataName(base):
+			allowed = true // provenance/metadata
+		}
+
+		if !allowed {
+			skipped++
+
+			return nil
+		}
+
+		target := filepath.Join(dstDir, rel)
 
 		// Dedupe: when the destination already exists with identical
 		// bytes, never copy it again (spec §20).
@@ -437,6 +653,7 @@ func copyClosureDedup(srcDir, dstDir string) (int, int, error) {
 				dstHash, hErr2 := engcheck.HashFile(target)
 				if hErr2 == nil && srcHash == dstHash {
 					skipped++
+
 					return nil
 				}
 			}
@@ -452,6 +669,25 @@ func copyClosureDedup(srcDir, dstDir string) (int, int, error) {
 	})
 
 	return copied, skipped, err
+}
+
+// isPackageMetadataName reports whether a file name is package
+// provenance/metadata (never a runtime component, never a foreign
+// binary). Deliberately NARROW: a prefix allowlist plus the .md
+// documentation extension — generic .txt/.json data files are NOT
+// metadata (server-logs.txt would otherwise survive swaps).
+func isPackageMetadataName(base string) bool {
+	upper := strings.ToUpper(base)
+
+	prefixes := []string{"LICENSE", "README", "NOTICE", "AUTHORS", "CONTRIBUTING", "CHANGELOG", "VERSION"}
+
+	for _, p := range prefixes {
+		if strings.HasPrefix(upper, p) {
+			return true
+		}
+	}
+
+	return strings.ToLower(filepath.Ext(base)) == ".md"
 }
 
 func copyFileMode(src, dst string, mode os.FileMode) error {
@@ -476,13 +712,24 @@ func copyFileMode(src, dst string, mode os.FileMode) error {
 	return err
 }
 
-// mergeForeignFiles moves files from oldDir that do not exist in newDir
-// into newDir (recursive). Engine package files are already present in
-// newDir and stay untouched.
-func mergeForeignFiles(oldDir, newDir string) {
+// mergeCompanionFiles carries ONLY allowlisted non-engine companions
+// from oldDir into newDir after a package swap (spec §11/§12):
+//
+//   - the SHEYTAN native engine host (shtn-engine-host*) — managed by
+//     SHEYTAN, never shipped inside a llama.cpp release package;
+//   - license/readme/metadata text files.
+//
+// A stale DLL, a foreign binary or ANY other file that the new package
+// does not own is deliberately DROPPED (and logged): the new package's
+// DLL closure must come from the new package alone, or the runtime ends
+// in the mixed-DLL 0xC0000139 state. Returns the dropped entries for
+// diagnostics (spec §21).
+func mergeCompanionFiles(oldDir, newDir string) []string {
 	if _, err := os.Stat(oldDir); err != nil {
-		return
+		return nil
 	}
+
+	var dropped []string
 
 	_ = filepath.Walk(oldDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil || p == oldDir {
@@ -494,30 +741,68 @@ func mergeForeignFiles(oldDir, newDir string) {
 			return nil
 		}
 
-		// Skip provisioning bookkeeping dirs — they belong to the swap.
+		// Skip provisioning bookkeeping — it belongs to the swap.
 		base := filepath.Base(rel)
-		if strings.HasPrefix(base, ".update-") || base == ".engine-download" {
+		if strings.HasPrefix(base, ".update-") || base == ".engine-download" || base == installManifestName {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
+
 			return nil
 		}
-
-		target := filepath.Join(newDir, rel)
 
 		if info.IsDir() {
 			return nil // created on demand by file moves
 		}
 
+		if !isCompanionFile(base) {
+			dropped = append(dropped, rel)
+
+			logging.Default().Warn("updater",
+				"package swap: stale engine file NOT carried into the new package: %s", rel)
+
+			return nil
+		}
+
+		target := filepath.Join(newDir, rel)
+
 		if _, err := os.Stat(target); err == nil {
-			return nil // engine package owns this name — keep the new one
+			return nil // the new package owns this name — keep the new one
 		}
 
 		_ = os.MkdirAll(filepath.Dir(target), 0o755)
-		_ = os.Rename(p, target)
+
+		if err := os.Rename(p, target); err == nil {
+			logging.Default().Info("updater",
+				"package swap: carried companion file into the new package: %s", rel)
+		}
 
 		return nil
 	})
+
+	return dropped
+}
+
+// isCompanionFile is the swap carry-over allowlist (spec §12). DLLs and
+// unknown executables are NEVER companions: they must come from the new
+// package as one coherent unit.
+func isCompanionFile(base string) bool {
+	lower := strings.ToLower(base)
+
+	// The native engine host family — built and managed by SHEYTAN.
+	if strings.HasPrefix(lower, "shtn-engine-host") {
+		return true
+	}
+
+	if strings.HasSuffix(lower, ".dll") || strings.HasSuffix(lower, ".so") || strings.HasSuffix(lower, ".dylib") {
+		return false // runtime libraries are the package's own closure
+	}
+
+	if strings.HasSuffix(lower, ".exe") {
+		return false // unknown executables never survive a swap
+	}
+
+	return isPackageMetadataName(base)
 }
 
 func recordInstallManifest(binDir string, m installManifest) {

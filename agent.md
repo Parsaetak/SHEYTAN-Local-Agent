@@ -21,8 +21,10 @@ native engine, evidence/verification semantics, local-first operation)
 and the green CI baseline.
 
 ## Current state
-All v1.3.6 work is IMPLEMENTED on branch `v1.3.6-engine-lifecycle`
-(base `57f0c1b` = 1.3.5). Verified on Linux x86-64 (Go 1.27.1,
+All v1.3.6 work is IMPLEMENTED on `main` (base `57f0c1b` = 1.3.5;
+v1.3.6 landed as commit `9036e1f` plus `0207611`, which removed the
+stale `src/ResearchPanel.tsx` and `web/static/assets/ResearchPanel.js`
+files that had failed Actions run `35702334699`). Verified on Linux x86-64 (Go 1.27.1,
 Node 24): gofmt + go vet (-tags headless) clean; go test
 ./internal/... -tags headless 51/51 packages including the new suites
 (engine lifecycle/adoption/classification/transactional update/race in

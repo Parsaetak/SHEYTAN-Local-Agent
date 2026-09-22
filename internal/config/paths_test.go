@@ -109,8 +109,8 @@ func TestResolveRootRejectsUnresolvedToken(t *testing.T) {
 	if !filepath.IsAbs(root) {
 		t.Fatalf("root %q is not absolute", root)
 	}
-	if root != AppRoot() {
-		t.Fatalf("fallback root %q != application root %q", root, AppRoot())
+	if root != filepath.Join(AppRoot(), "data") {
+		t.Fatalf("fallback root %q != canonical install-local data root %q", root, filepath.Join(AppRoot(), "data"))
 	}
 }
 
@@ -131,6 +131,9 @@ func TestResolveRootExpandsResolvableToken(t *testing.T) {
 	assertNoEnvToken(t, "root", root)
 }
 
+// TestResolveRootUsesAppRootWithoutOverride — v1.3.6 (spec §23): without
+// an override the canonical root is the INSTALL-LOCAL <AppRoot>\data
+// subtree (the installer creates exactly this tree).
 func TestResolveRootUsesAppRootWithoutOverride(t *testing.T) {
 	t.Setenv("SHEYTAN_DATA_DIR", "")
 
@@ -139,8 +142,8 @@ func TestResolveRootUsesAppRootWithoutOverride(t *testing.T) {
 	if fallback || reason != "" {
 		t.Fatalf("no override: fallback=%t reason=%q", fallback, reason)
 	}
-	if root != AppRoot() {
-		t.Fatalf("root = %q, want AppRoot() %q", root, AppRoot())
+	if root != filepath.Join(AppRoot(), "data") {
+		t.Fatalf("root = %q, want the install-local %q", root, filepath.Join(AppRoot(), "data"))
 	}
 }
 

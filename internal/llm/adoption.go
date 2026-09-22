@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
@@ -126,6 +127,16 @@ func (s *LlamaServer) adoptExisting(cfg *config.Config) bool {
 		return false
 	}
 
+	// v1.3.6 (spec §17): ENGINE IDENTITY — path equality alone cannot
+	// distinguish the recorded installed build from an engine swapped in
+	// place at the same path. When an install manifest exists, the
+	// on-disk binary must hash-match the recorded SHA-256, and (when
+	// provable) the process must have STARTED after that install was
+	// committed. A stale pre-update engine is refused, never killed.
+	if !s.proveEngineIdentity(cfg, expected, pid) {
+		return false
+	}
+
 	logging.Default().Info("engine",
 		"adopting managed engine on port %d: pid %d serves %s (identity proven)",
 		cfg.LlamaPort, pid, exe)
@@ -188,4 +199,63 @@ func (s *LlamaServer) currentPIDLocked() int {
 // ErrorLogs returns the captured engine stderr ring.
 func (s *LlamaServer) ErrorLogs() []string {
 	return s.errRing.lines()
+}
+
+// proveEngineIdentity verifies the RUNNING engine matches the recorded
+// installed build (spec §17: "installation identity = expected, engine
+// identity = expected"):
+//
+//  1. when an install manifest exists, the on-disk binary must hash to
+//     the recorded SHA-256;
+//  2. when the manifest's install time AND the process start time are
+//     both provable, the process must have started at/after the install
+//     commit (a process from BEFORE the last install is a stale engine).
+//
+// Honest degradation (spec §20): a missing manifest or an unprovable
+// start time is logged explicitly — never faked — and adoption then
+// rests on the proven path + health + PID evidence.
+func (s *LlamaServer) proveEngineIdentity(cfg *config.Config, exePath string, pid int) bool {
+	manifest, ok := updater.ReadInstallManifest(cfg)
+	if !ok {
+		s.logf("engine identity check unavailable: no install manifest for %s — adoption rests on path/health/PID proof", exePath)
+
+		return true
+	}
+
+	ident, err := engcheck.IdentityOf(exePath)
+	if err != nil {
+		s.logf("engine identity check unavailable (%v) — adoption rests on path/health/PID proof", err)
+
+		return true
+	}
+
+	if manifest.SHA256 != "" && ident.SHA256 != manifest.SHA256 {
+		logging.Default().Warn("engine",
+			"adoption refused: the binary at %s (sha256 %.12s…) does not match the recorded install manifest (sha256 %.12s…) — a different build replaced or shadowed the managed engine",
+			exePath, ident.SHA256, manifest.SHA256)
+
+		s.logf("adoption refused: engine identity mismatch at %s", exePath)
+
+		return false
+	}
+
+	installedAt, terr := time.Parse(time.RFC3339, manifest.InstalledAt)
+	startedAt, perr := proc.ProcessStartTime(pid)
+
+	if terr == nil && perr == nil && !startedAt.IsZero() {
+		if startedAt.Add(-2 * time.Second).Before(installedAt) {
+			logging.Default().Warn("engine",
+				"adoption refused: the engine process (pid %d) was started %s, BEFORE the recorded install at %s — stale engine from a previous package",
+				pid, startedAt.Format(time.RFC3339), installedAt.Format(time.RFC3339))
+
+			s.logf("adoption refused: stale engine process predates the recorded install")
+
+			return false
+		}
+	} else {
+		s.logf("engine start-time vs install-time check unavailable (install=%v ok=%v, process=%v ok=%v) — identity rests on the SHA-256 match",
+			manifest.InstalledAt, terr == nil, startedAt.IsZero(), perr == nil)
+	}
+
+	return true
 }
