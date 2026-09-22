@@ -5,7 +5,7 @@
 > The model proposes. The tools execute. The laboratory verifies.
 > SHEYTAN calculates the best runtime for the machine, the model and the task.
 
-SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built around Go, React/TypeScript, Wails v3, managed llama.cpp inference, controlled tools, isolated coding workspaces, research, memory, recall, and objective verification.
+SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built around Go, React/TypeScript, Wails v3, managed llama.cpp inference, controlled tools, isolated coding workspaces, Net Search, memory, recall, and objective verification.
 
 **SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
 
@@ -52,7 +52,7 @@ The model is never the authority on whether an engineering task succeeded — ob
 │  lifecycle · sandbox governor ·           │
 │  attachments · chunking · context cache    │
 │  context plan · memory · recall · continuum│
-│  research · sessions · browser · vision    │
+│  net search · sessions · browser · vision  │
 └──────────┬──────────────────────┬─────────┘
             │                      │
             ▼                      ▼
@@ -273,7 +273,7 @@ cgo) and the full rationale are documented in
 | **Context** | Preflight budget pipeline with a guaranteed fit: model-aware effective window (configured ∩ GGUF limit ∩ engine limit), output reserve + safety margin, measured tool schemas, automatic degradation ladder (dynamic toolsets → compact briefing → dropped optional blocks), refusal without an engine call when the budget is impossible; history windowing to the budget; content-keyed LRU cache; context-effectiveness telemetry per turn |
 | **Long context** | Continuum chapter rollover: when a session crosses the pressure threshold, facts/decisions/threads are distilled into a framework and the conversation continues in a fresh chapter session (the UI follows automatically) |
 | **Memory & recall** | Trust-classed memory (M1–M7, external material quarantined), BM25 recall with recency boost and 👍/👎 feedback steering (persistent sidecar) |
-| **Research** | Auto/GitHub/Reddit/DuckDuckGo/SearXNG providers, TTL-cached, authority-ranked, provenance-tagged |
+| **Net Search** (v1.3.6) | The former Research backend (Auto/GitHub/Reddit/DuckDuckGo/SearXNG providers, TTL-cached, authority-ranked, provenance-tagged) exposed as a per-request composer control in Chat and Agent — `/api/net-search` (the `/api/research` route remains as a shim); user-facing naming is Net Search everywhere |
 | **Observability** | `app.log` + `tools.jsonl` + `llm.jsonl` with rotation and bounds, crash reports (pruned), diagnostics zip with secret redaction, perf HUD (TTFT / tok/s), engine logs ring |
 | **Concurrency** | Copy-on-write live configuration (no data races between Settings patches and active runs), mutex-guarded registries, per-run config snapshots, race-detector-clean core |
 
@@ -372,7 +372,7 @@ sheytan-local-agent diagnostics
 sheytan-local-agent update --status
 ```
 
-REST/WS surface (loopback only): `/api/state`, `/api/engine`, `/api/models`, `/api/sessions`, `/api/config`, `/api/llama`, `/api/run`, `/api/abort`, `/api/attachments`, `/api/tools`, `/api/lab`, `/api/research`, `/api/feedback`, `/ws/activity?sessionId=`.
+REST/WS surface (loopback only): `/api/state`, `/api/engine`, `/api/models`, `/api/sessions`, `/api/config`, `/api/llama`, `/api/run`, `/api/abort`, `/api/attachments`, `/api/tools`, `/api/lab`, `/api/net-search` (shim: `/api/research`), `/api/feedback`, `/ws/activity?sessionId=`.
 
 # Agent / tool capabilities and limits
 

@@ -1,8 +1,6 @@
 package llm
 
 import (
-	"archive/zip"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +20,7 @@ import (
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engdiscovery"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
@@ -178,6 +177,23 @@ type LlamaServer struct {
 	// handle. dlProgress is nil outside downloads.
 	dlJob      atomic.Pointer[downloader.Job]
 	dlProgress atomic.Pointer[downloader.Progress]
+
+	// v1.3.6 (spec §4/§7): first-class failure diagnostics. lastPreflight
+	// records the last preflight evidence; lastFailure the last decoded
+	// startup failure (exit code, decoded Windows loader class, tails).
+	// Both are guarded by mu and surfaced through EngineDiagnostics and
+	// /api/engine — the UI must render the REAL failure, never a spinner.
+	lastPreflight *EnginePreflight
+	lastFailure   *EngineFailureReport
+
+	// updateCancel (v1.3.6) cancels an in-flight provisioning operation
+	// driven through the unified installer (CancelDownload). Guarded by mu.
+	updateCancel context.CancelFunc
+
+	// testStagedArchive (test seam, v1.3.6): when non-empty,
+	// UpdateEngineNow runs the transaction from this archive instead
+	// of downloading — deterministic CI without a network.
+	testStagedArchive string
 }
 
 // maxAutoRestarts bounds the watchdog's automatic recovery attempts per
@@ -341,16 +357,19 @@ func (s *LlamaServer) IsRunning() bool {
 // its effective path. An empty configured LlamaBinPath is resolved to the
 // default location and persisted through the config source (v1.1.4: the
 // old code mutated the shared Config in place).
+//
+// v1.3.6 (spec §14): this is NO LONGER a competing download
+// implementation. Provisioning is tiered through the ONE authority:
+//
+//  1. a valid managed binary already in place → use it (no re-download);
+//  2. a validated discovered candidate (System Engine Discovery,
+//     Tier 0/1) → import it into the managed directory;
+//  3. otherwise → download through updater.InstallStaged — the same
+//     transactional installer the scheduled updater uses.
 func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
-	binPath := cfg.LlamaBinPath
+	binPath := expectedEngineBinPath(cfg)
 
-	if binPath == "" {
-		binPath = filepath.Join(
-			cfg.DataDir,
-			"bin",
-			llamaBinaryName(),
-		)
-
+	if cfg.LlamaBinPath != binPath {
 		next := s.src.Update(func(c *config.Config) {
 			c.LlamaBinPath = binPath
 		})
@@ -377,48 +396,89 @@ func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
 		)
 	}
 
-	dir := filepath.Dir(binPath)
-
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(binPath), 0o755); err != nil {
 		return "", err
 	}
 
 	s.setState(StateDownloading)
 
-	url, tag, err := llamaDownloadURL()
+	// 2) System Engine Discovery (Tier 0/1 quick pass): reuse an
+	// already-installed compatible engine instead of downloading.
+	if imported := s.tryImportDiscoveredEngine(cfg); imported {
+		if _, err := os.Stat(binPath); err == nil {
+			return binPath, nil
+		}
+	}
+
+	// 3) Download through the single transactional installer.
+	ctx, cancel := context.WithTimeout(context.Background(), engineDownloadTimeout)
+	defer cancel()
+
+	s.mu.Lock()
+	s.updateCancel = cancel
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.updateCancel = nil
+		s.mu.Unlock()
+	}()
+
+	url, tag, err := updater.ResolveDownloadURL(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	s.logf("Downloading llama.cpp server from %s", url)
+	s.logf("Downloading llama.cpp engine %s from %s through the unified installer", tag, url)
 
-	// v1.2.3: the fetch runs through the reusable Download Manager —
-	// streamed to disk, resume-capable, verified, retried with
-	// bounded backoff, observable (progress in engine events) and
-	// cancellable. Extraction happens only from the VERIFIED archive.
-	if err := s.downloadEngineArchive(url, dir); err != nil {
-		if errors.Is(err, downloader.ErrCancelled) {
+	if _, err := updater.InstallStaged(ctx, cfg, tag, s.publishDownloadProgress); err != nil {
+		if errors.Is(err, downloader.ErrCancelled) || errors.Is(ctx.Err(), context.Canceled) {
 			return "", fmt.Errorf("engine download cancelled")
 		}
-		return "", fmt.Errorf("download llama.cpp: %w", err)
+
+		return "", fmt.Errorf("provision llama.cpp engine: %w", err)
 	}
 
 	if _, err := os.Stat(binPath); err != nil {
 		return "", fmt.Errorf(
-			"llama.cpp binary not found at %s after extraction",
+			"llama.cpp binary not found at %s after provisioning",
 			binPath,
 		)
 	}
 
-	if err := os.Chmod(binPath, 0o755); err != nil {
-		// The binary must be executable on Unix; keep going on Windows where
-		// the permission bit is meaningless but log the failure.
-		s.logf("chmod engine binary: %v", err)
-	}
-	updater.RecordEngineTag(cfg, tag)
-
 	return binPath, nil
 }
+
+// tryImportDiscoveredEngine runs the quick (Tier 0/1) discovery pass and
+// imports a validated candidate when one exists. Returns whether an
+// import produced a usable managed binary. Full-system discovery
+// (Tier 2) never runs on the boot path — it is background-only (spec
+// §11: no startup full-disk scan).
+func (s *LlamaServer) tryImportDiscoveredEngine(cfg *config.Config) bool {
+	cand, err := engdiscovery.QuickFind(cfg, llamaBinaryName())
+	if err != nil || cand == nil {
+		return false
+	}
+
+	s.logf("discovered existing engine candidate: %s — importing into the managed directory", cand.Path)
+
+	result, ierr := updater.ImportCandidate(cfg, filepath.Dir(cand.Path), filepath.Base(cand.Path))
+	if ierr != nil {
+		s.logf("discovered candidate rejected: %v", ierr)
+
+		return false
+	}
+
+	if cand.Tag != "" {
+		updater.RecordEngineTag(cfg, cand.Tag)
+	}
+
+	logging.Default().Info("engine", "imported discovered engine: %s", result.Outcome)
+
+	return true
+}
+
+const engineDownloadTimeout = 10 * time.Minute
 
 const modelLoadTimeout = 180 * time.Second
 const engineCompatMax = 3
@@ -494,6 +554,23 @@ func (s *LlamaServer) startLocked() error {
 	if err != nil {
 		s.setState(StateFailed)
 		return err
+	}
+
+	// v1.3.6 (spec §6): ENGINE PRE-FLIGHT — validate the candidate
+	// BEFORE any model launch: exists, architecture, dependency
+	// closure, bounded --version probe. A loader-class failure here
+	// (0xC0000139 and friends) is terminal for this boot: fast,
+	// classified, actionable — never a compatibility-ladder storm.
+	if _, pfail := s.preflightBinary(cfg, binPath); pfail != nil {
+		s.mu.Lock()
+		s.detail = pfail.Error()
+		s.mu.Unlock()
+
+		s.setState(StateFailed)
+
+		logging.Default().Error("engine", "engine preflight failed: %v", pfail)
+
+		return pfail
 	}
 
 	// Phase 7 startup state machine — before any launch attempt the
@@ -764,6 +841,37 @@ func (s *LlamaServer) startLocked() error {
 				)
 
 				if _, died := err.(*exitFailure); !died {
+					s.setState(StateFailed)
+					return err
+				}
+
+				// v1.3.6 (spec §5): CLASSIFY → STOP RETRIES.
+				// A loader-class exit (0xC0000139, missing
+				// DLL, bad image, ...) is deterministic: every
+				// remaining compat level would execute the
+				// SAME broken binary before argument parsing
+				// is even reached. Break the ladder and the
+				// pass loop; the diagnostic carries the class.
+				if isLoaderFailure(err) {
+					s.logf("loader-class startup failure — stopping compatibility retries (deterministic binary failure)")
+
+					s.mu.Lock()
+					s.recordFailureReportLocked(&EngineFailureReport{
+						Phase:       "launch",
+						AttemptID:   nextAttemptID(),
+						Context:     AttemptFirstLaunch,
+						OS:          goOS,
+						Arch:        goArch,
+						ExePath:     binPath,
+						ModelPath:   modelPath,
+						CompatLevel: level,
+						ClassSummary: compactLines(
+							strings.Split(err.Error(), "\n"), 4,
+						),
+						At: time.Now().UTC(),
+					})
+					s.mu.Unlock()
+
 					s.setState(StateFailed)
 					return err
 				}
@@ -1656,15 +1764,26 @@ func (s *LlamaServer) waitReadySignaled(
 }
 
 func (s *LlamaServer) exitError(err error) error {
+	code := 0
+	if c := exitCodeOf(err); c != nil {
+		code = *c
+	}
+
 	return &exitFailure{
 		err:  explainExit(err),
 		tail: s.errRing.lines(),
+		code: code,
 	}
 }
 
 type exitFailure struct {
 	err  error
 	tail []string
+
+	// code is the raw process exit code when the child actually ran and
+	// exited (0 = unknown/not a process exit). v1.3.6: loader-class
+	// detection and diagnostics decode from this field.
+	code int
 }
 
 func explainExit(err error) error {
@@ -1672,10 +1791,17 @@ func explainExit(err error) error {
 		return fmt.Errorf("llama.cpp exited during startup")
 	}
 
-	msg := err.Error()
+	// v1.3.6 (spec §4): decode Windows loader/runtime failures into
+	// first-class diagnostics with advice instead of the weak
+	// "exit status 0xc0000139".
+	if code := exitCodeOf(err); code != nil {
+		if lf, ok := classifyLoaderExit(*code); ok {
+			return loaderFailureError(lf, "")
+		}
+	}
 
-	if strings.Contains(msg, "3221225781") ||
-		strings.Contains(msg, "0xc0000135") {
+	if strings.Contains(err.Error(), "3221225781") ||
+		strings.Contains(err.Error(), "0xc0000135") {
 		return fmt.Errorf(
 			"llama.cpp could not start: a required Windows DLL is missing. "+
 				"Install the free Microsoft Visual C++ Redistributable (64-bit) "+
@@ -2044,28 +2170,10 @@ func CompactLinesForTest(
 	return compactLines(lines, n)
 }
 
-// adoptExisting reports whether the port already answers our llama.cpp
-// /health endpoint.
-func (s *LlamaServer) adoptExisting(cfg *config.Config) bool {
-	url := fmt.Sprintf(
-		"http://%s:%d/health",
-		cfg.LlamaHost,
-		cfg.LlamaPort,
-	)
-
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-	}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return false
-	}
-
-	defer resp.Body.Close()
-
-	return resp.StatusCode == http.StatusOK
-}
+// adoptExisting moved to adoption.go (v1.3.6): adoption now REQUIRES
+// process-identity proof (listening PID + executable path equal to the
+// managed engine binary) instead of trusting any /health 200 on the
+// port.
 
 // Stop terminates the subprocess gracefully: SIGTERM, bounded grace
 // period, then kill — followed by a BOUNDED wait until the exit watcher
@@ -2220,6 +2328,137 @@ func (s *LlamaServer) Restart() error {
 	time.Sleep(300 * time.Millisecond)
 
 	return s.startLocked()
+}
+
+// UpdateEngineNow is the ENGINE-OWNED exclusive update operation
+// (v1.3.6, spec §1/§2). It is the only way the updater touches engine
+// files while this LlamaServer is alive: it holds switchMu for the WHOLE
+// transaction so Start/Restart/prewarm can never interleave, stops the
+// engine itself, installs the staged candidate through the ONE
+// provisioning authority (updater.InstallStaged), restarts the EXACT
+// installed binary and verifies readiness before committing.
+//
+// Transaction:
+//
+//	take lifecycle lock → STOP current engine →
+//	stage+validate+swap (updater) → on failure: restart last-known-good →
+//	on success: START exact installed binary → verify ready → commit tag
+//
+// A download/install failure NEVER destroys the working installation:
+// the previous binary stays on disk and is restarted.
+func (s *LlamaServer) UpdateEngineNow(
+	ctx context.Context,
+	tag string,
+	onProgress func(downloader.Progress),
+) (string, error) {
+	s.switchMu.Lock()
+	defer s.switchMu.Unlock()
+
+	cfg := s.src.Load()
+
+	wasRunning := s.IsRunning()
+
+	s.mu.Lock()
+	s.stopping = true // suppress the exit watcher's auto-restart during the swap
+	s.mu.Unlock()
+
+	if wasRunning {
+		s.setState(StateUpdating)
+
+		logging.Default().Info("updater", "stopping engine for transactional update to %s", tag)
+
+		if err := s.Stop(); err != nil {
+			s.mu.Lock()
+			s.stopping = false
+			s.mu.Unlock()
+
+			return "", fmt.Errorf("stop engine before update: %w", err)
+		}
+	} else {
+		s.setState(StateUpdating)
+	}
+
+	s.mu.Lock()
+	s.stopping = false
+	s.mu.Unlock()
+
+	installed, err := s.runEngineInstall(ctx, cfg, tag, onProgress)
+
+	if err != nil {
+		// Rollback: the staged installer leaves the last-known-good
+		// binary on disk untouched — restart it so the engine stays
+		// usable (best effort; the error carries the real cause).
+		logging.Default().Warn("updater",
+			"engine update to %s failed (%v) — restarting last-known-good engine",
+			tag, err)
+
+		// NOTE: no setState(StateStarting) here — startLocked owns its
+		// state transitions and its idempotence gate refuses to boot
+		// when the state already says "starting".
+
+		if startErr := s.startLocked(); startErr != nil {
+			logging.Default().Warn("updater",
+				"last-known-good restart also failed: %v", startErr)
+		}
+
+		return "", fmt.Errorf("install engine %s: %w", tag, err)
+	}
+
+	// NOTE: no setState(StateStarting) — startLocked performs the full
+	// transition chain itself (starting → ready) and its entry gate
+	// rejects a boot when the state already claims one is in flight.
+
+	// START EXACT INSTALLED BINARY: ensureBinary resolves to the path
+	// the staged installer just verified (cfg.LlamaBinPath is either
+	// explicitly configured or defaults into the managed bin dir).
+	if startErr := s.startLocked(); startErr != nil {
+		msg := fmt.Sprintf(
+			"engine installed to llama.cpp %s but startup verification failed: %v",
+			tag, startErr,
+		)
+
+		// The install itself is COMMITTED (files verified on disk);
+		// the startup problem is reported honestly — no silent
+		// rollback churn on top of a verified package.
+		logging.Default().Warn("updater", "%s", msg)
+
+		return msg, nil
+	}
+
+	return installed.Outcome, nil
+}
+
+// StateUpdating is the explicit maintenance state (v1.3.6, spec §1):
+// the engine directory is owned by the updater; no other lifecycle
+// operation may touch it.
+const StateUpdating = "updating"
+
+// runEngineInstall drives the unified installer — from the test-seamed
+// archive when set (deterministic tests), otherwise the real staged
+// download.
+func (s *LlamaServer) runEngineInstall(
+	ctx context.Context,
+	cfg *config.Config,
+	tag string,
+	onProgress func(downloader.Progress),
+) (updater.InstallResult, error) {
+	s.mu.Lock()
+	archive := s.testStagedArchive
+	s.mu.Unlock()
+
+	if archive != "" {
+		return updater.InstallStagedFromArchive(cfg, tag, archive)
+	}
+
+	return updater.InstallStaged(ctx, cfg, tag, onProgress)
+}
+
+// SetStagedArchiveForTest points UpdateEngineNow at a local archive
+// (test-only seam; production always downloads through InstallStaged).
+func (s *LlamaServer) SetStagedArchiveForTest(path string) {
+	s.mu.Lock()
+	s.testStagedArchive = path
+	s.mu.Unlock()
 }
 
 // LoadedModel returns the absolute path of the model currently served.
@@ -2583,99 +2822,6 @@ func (s *LlamaServer) logf(
 	s.logBuf.add(line)
 }
 
-// safeArchivePath validates an archive member name and returns the
-// absolute extraction target.
-//
-// v1.2.0: this is a DELEGATION to the single authoritative validator
-// (updater.safeZipPath, exported as updater.SafeArchivePath). Keeping two
-// independent implementations invited exactly the kind of drift the
-// zip-slip hardening was meant to prevent; the contract now lives in one
-// place and covers POSIX-absolute, Windows-rooted, drive-letter, UNC and
-// mixed-separator members identically on every host.
-func safeArchivePath(dir, name string) (string, error) {
-	return updater.SafeArchivePath(dir, name)
-}
-
-// engineDownloadTimeout bounds one engine-binary download. The previous
-// plain http.Get had no deadline: a stalled CDN connection could hang the
-// prewarm goroutine AND hold switchMu forever, blocking every later engine
-// start/restart (v1.1.4).
-const engineDownloadTimeout = 10 * time.Minute
-
-// engineDownloadCapBytes bounds the downloaded archive size (2 GiB — the
-// full Vulkan llama.cpp bundles are a few hundred MB).
-const engineDownloadCapBytes = 2 << 30
-
-// downloadAndExtract downloads url and extracts it into dir.
-// downloadEngineArchive fetches the llama.cpp server archive through the
-// reusable Download Manager (v1.2.3) and extracts it into dir.
-//
-// The archive is streamed to "<dir>/.engine-download/<name>.part",
-// verified, atomically renamed, and only then extracted — a partially
-// downloaded or truncated archive can never reach extraction. Interrupted
-// transfers resume via HTTP Range when the release server supports it,
-// and the last working source is remembered so a retry does not re-probe
-// every endpoint.
-func (s *LlamaServer) downloadEngineArchive(url, dir string) error {
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		engineDownloadTimeout,
-	)
-	defer cancel()
-
-	stage := filepath.Join(dir, ".engine-download")
-	if err := os.MkdirAll(stage, 0o755); err != nil {
-		return err
-	}
-
-	dest := filepath.Join(stage, "llama-server"+engineArchiveSuffix(url))
-
-	opts := downloader.Options{
-		Dest: dest,
-		Sources: []downloader.Source{{
-			URL:   url,
-			Label: "llama.cpp release (github.com/ggml-org/llama.cpp)",
-			Trust: downloader.TrustPrimary,
-		}},
-		MaxBytes:   engineDownloadCapBytes,
-		FileMode:   0o644,
-		Resume:     true,
-		CacheKey:   "llama-engine-" + runtime.GOOS + "-" + runtime.GOARCH,
-		CacheDir:   stage,
-		OnProgress: s.publishDownloadProgress,
-	}
-
-	job, err := downloader.New(opts)
-	if err != nil {
-		return err
-	}
-	s.dlJob.Store(job)
-	defer func() {
-		s.dlJob.Store(nil)
-		s.dlProgress.Store(nil)
-	}()
-
-	res, err := job.Run(ctx)
-	if err != nil {
-		return err
-	}
-
-	s.logf(
-		"llama.cpp archive verified (%d bytes, source %s, resumed %d)",
-		res.Bytes, res.Source.Label, res.ResumedFrom,
-	)
-
-	if err := extractEngineArchive(res.Path, url, dir); err != nil {
-		return err
-	}
-
-	// Extraction succeeded: the staged archive has served its purpose.
-	// The source cache under the stage dir survives for the next retry.
-	_ = os.Remove(dest)
-	_ = os.Remove(dest + ".part")
-	return nil
-}
-
 // publishDownloadProgress stores the latest measured progress and fans it
 // out to engine-event subscribers (throttled upstream to ~4 Hz). It runs
 // on the download goroutine; fan-out is non-blocking by contract.
@@ -2710,175 +2856,20 @@ func (s *LlamaServer) DownloadProgress() *downloader.Progress {
 	return s.dlProgress.Load()
 }
 
-// CancelDownload aborts an in-flight engine asset download. Network and
-// file activity stop immediately; the .part file is kept so a retry can
-// resume instead of restarting from zero.
+// CancelDownload aborts an in-flight engine provisioning operation
+// (v1.3.6: the unified installer runs under a cancellable context; the
+// .part file is kept so a retry can resume instead of restarting).
 func (s *LlamaServer) CancelDownload() bool {
-	job := s.dlJob.Load()
-	if job == nil {
+	s.mu.Lock()
+	cancel := s.updateCancel
+	s.mu.Unlock()
+
+	if cancel == nil {
 		return false
 	}
-	job.Cancel()
+
+	cancel()
 	return true
-}
-
-// engineArchiveSuffix maps a release URL to its archive suffix so the
-// extraction format can be detected even when the staged file uses a
-// neutral local name.
-func engineArchiveSuffix(url string) string {
-	switch {
-	case strings.HasSuffix(url, ".zip"):
-		return ".zip"
-	case strings.HasSuffix(url, ".tar.gz"):
-		return ".tar.gz"
-	case strings.HasSuffix(url, ".tgz"):
-		return ".tgz"
-	default:
-		return filepath.Ext(url)
-	}
-}
-
-// extractEngineArchive unpacks a VERIFIED archive into dir. The format
-// is chosen from the source URL suffix (the staged name is neutral).
-// Zip members go through the shared zip-slip guard; tar.gz extraction is
-// delegated to the system tar the same way the previous implementation
-// did.
-func extractEngineArchive(archivePath, url, dir string) error {
-	switch engineArchiveSuffix(url) {
-	case ".zip":
-		f, err := os.Open(archivePath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		stat, err := f.Stat()
-		if err != nil {
-			return err
-		}
-
-		zr, err := zip.NewReader(f, stat.Size())
-		if err != nil {
-			return err
-		}
-
-		for _, fm := range zr.File {
-			out, err := safeArchivePath(
-				dir,
-				fm.Name,
-			)
-			if err != nil {
-				return err
-			}
-
-			if fm.FileInfo().IsDir() {
-				if err := os.MkdirAll(
-					out,
-					0o755,
-				); err != nil {
-					return err
-				}
-
-				continue
-			}
-
-			if err := os.MkdirAll(
-				filepath.Dir(out),
-				0o755,
-			); err != nil {
-				return err
-			}
-
-			rc, err := fm.Open()
-			if err != nil {
-				return err
-			}
-
-			outFile, err := os.Create(out)
-			if err != nil {
-				_ = rc.Close()
-				return err
-			}
-
-			_, copyErr := io.Copy(
-				outFile,
-				rc,
-			)
-
-			closeErr := outFile.Close()
-			rcErr := rc.Close()
-
-			if copyErr != nil {
-				return copyErr
-			}
-
-			if closeErr != nil {
-				return closeErr
-			}
-
-			if rcErr != nil {
-				return rcErr
-			}
-		}
-
-	case ".tar.gz", ".tgz":
-		f, err := os.Open(archivePath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		gz, err := gzip.NewReader(f)
-		if err != nil {
-			return err
-		}
-
-		defer gz.Close()
-
-		cmd := proc.Command(
-			"tar",
-			"-xzf",
-			"-",
-			"-C",
-			dir,
-		)
-
-		cmd.Stdin = gz
-
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf(
-				"tar -xzf: %w: %s",
-				err,
-				out,
-			)
-		}
-
-	default:
-		out, err := os.Create(
-			filepath.Join(
-				dir,
-				filepath.Base(url),
-			),
-		)
-		if err != nil {
-			return err
-		}
-
-		f, err := os.Open(archivePath)
-		if err != nil {
-			out.Close()
-			return err
-		}
-		defer f.Close()
-
-		if _, err := io.Copy(out, f); err != nil {
-			out.Close()
-			return err
-		}
-		out.Close()
-	}
-
-	return nil
 }
 
 // ResolveModelPath turns a configured model name into an existing absolute
@@ -3020,80 +3011,6 @@ func llamaBinaryName() string {
 	default:
 		return "llama-server"
 	}
-}
-
-func llamaDownloadURL() (string, string, error) {
-	// v1.1.5 repair: llama.cpp removed its prebuilt LINUX binaries
-	// upstream (b10642 still ships the Windows asset but no ubuntu zip any
-	// more), so the pinned-tag URL 404s forever on Linux. Follow the
-	// updater's existing design instead of hardcoding the pinned tag:
-	//   1. pinned tag, when this platform's asset actually exists;
-	//   2. newest release that carries this platform's asset (bounded scan);
-	//   3. otherwise an honest error that says what to do — never a bare
-	//      HTTP 404 from a URL that can never succeed again.
-	// Returns (url, resolvedTag, error) so the caller records the ACTUAL
-	// source tag the binary came from.
-	if url := updater.AssetURL(updater.DefaultEngineTag); url != "" {
-		probeCtx, probeCancel := context.WithTimeout(
-			context.Background(),
-			30*time.Second,
-		)
-
-		if updater.AssetExists(probeCtx, updater.DefaultEngineTag) {
-			probeCancel()
-			return url, updater.DefaultEngineTag, nil
-		}
-
-		probeCancel()
-	}
-
-	scanCtx, scanCancel := context.WithTimeout(
-		context.Background(),
-		60*time.Second,
-	)
-
-	tag, tagErr := updater.LatestTag(scanCtx)
-	scanCancel()
-
-	if tagErr == nil && tag != "" {
-		if url := updater.AssetURL(tag); url != "" {
-			return url, tag, nil
-		}
-
-		return "", "",
-			fmt.Errorf(
-				"no prebuilt llama.cpp server asset exists for %s/%s — this platform/architecture is not served by upstream releases; build llama-server from source and set llamaBinPath, or select the native engine (engineBackend \"native\")",
-				runtime.GOOS,
-				runtime.GOARCH,
-			)
-	}
-
-	// v1.2.2: classify the failure HONESTLY. The old text always claimed
-	// "no prebuilt asset … (upstream no longer publishes Linux binaries)"
-	// — on a Windows machine whose api.github.com/Atom requests are
-	// blocked, engine startup reported a wrong, misleading cause. Network
-	// failure and asset absence are different problems with different
-	// remedies, and neither may leave startup looking mysteriously broken.
-	if updater.IsNoAssetError(tagErr) {
-		return "", "",
-			fmt.Errorf(
-				"no recent llama.cpp release ships a prebuilt server asset for %s/%s — build llama-server from source and set llamaBinPath, or select the native engine (engineBackend \"native\")",
-				runtime.GOOS,
-				runtime.GOARCH,
-			)
-	}
-
-	logging.Default().Warn(
-		"engine",
-		"engine binary missing and the llama.cpp release server could not be reached: %v",
-		tagErr,
-	)
-
-	return "", "",
-		fmt.Errorf(
-			"the llama.cpp release server could not be reached (%v) — the engine binary is not installed on this machine and could not be downloaded. Reconnect and start the engine again, or place a prebuilt llama-server(.exe) into the bin folder, or select the native engine (engineBackend \"native\")",
-			tagErr,
-		)
 }
 
 func ListLocalModels(dir string) []string {

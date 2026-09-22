@@ -1,0 +1,92 @@
+SHEYTAN-Local-Agent v1.3.6 — UPDATE MANIFEST
+================================================================
+
+Base commit:  57f0c1bc106dae121e0c333892dfd3c9306b7ea7
+Final commit: b98b33653599d7f78eeb6f575cf42b3454c4364f
+Version:      1.3.6
+Actions run used for verification: NONE — this update was produced and
+              verified in a local Linux environment WITHOUT push access;
+              the GitHub Actions run for the pushed branch is owned by
+              the Windows development machine (see REPORT.md).
+
+Release/publication state: NOT PUBLISHED. No tag exists, no release
+exists, no CI run exists. A green main run is not publication proof.
+
+Changed files (62) — per-file SHA-256:
+  fa72a1ad97b3a6d4e6973ff9e1b90caabb91ad0b666774b044598027609e43e2  ARCHITECTURE.md
+  d8c3191ecbaf7fdfb4b9802c08c8681f60d3d3243223c75565193f27d1e8e790  README.md
+  741d0d7e6af3352ebada50a84597e02d4fcc1b5bc96057dee6cae519d685c5b1  SIGNATURE
+  d5d53a7973317404dfa81a86c12ffe5a0ae95e70942a134d36814eda0c043066  UPDATE.md
+  0b5270ce20845bd3fe3e6716eae140c0f4c4371aba35190d88a2ee8ccff56209  agent.md
+  f419ad6726a429adabeb5c2d538054ff47e96b658b80c239f0da4f34a0f322c2  build/config.yml
+  71d22b8a8509239f785dd7978490b55933ff4758513a6f5550099849ef5b04b4  cmd/root.go
+  68dd75972b518efce0eed069c905b60302f7be7b1ee7d03259396adfeb64c121  index.html
+  32bea895793a02a9aa0b56a0573727f84f1ed8bc014922e76205ddeaaaedf4d4  internal/agent/orchestrator.go
+  2c923e7e43865cd56bc596e2b5652d45927b9180c631b3990d35ab64aeaf8f58  internal/agent/orchestrator_tiers.go
+  6c781c905924cef091b6e3ec8b0d7dc491978c7a61d0b6a999083dad28e5b05e  internal/api/engine.go
+  7d0a82e9708ed2b6490d80bf2a98106c3b564649a26256073e833728d36d2b5e  internal/api/server.go
+  ec427333854063d0acf178456b84bdb86b88aa6ce2bbbfd5da0d0cf140b83a78  internal/config/config.go
+  de694bdca61ae28c29028f46344f79cdc7da747fc43e9fc5cb44aa2f3ddaa5c2  internal/config/migrate_appdata.go
+  e5f60acf65bb5c8a1139a4ffcba05e39f6d44741c32ca6089f6856f418725b38  internal/config/migrate_appdata_test.go
+  673540fbb56542581f0ca2fde07be850a9f7dad3a0ec124a1a94f4c531f6ef12  internal/ctxtelemetry/ctxtelemetry.go
+  5417f68959d1a659f1b414f3f378ab05541fc4550376777d72d9a709d6e1e16c  internal/engcheck/engcheck.go
+  8a3c7268e52944f0a79056e880c2d9afce238dcd39aa3bc2af1e9b4308e82e94  internal/engcheck/engcheck_test.go
+  88273944dc5b283c810e3055c9974e53b0a29e78a5cf5f6cb8a98d3c6cfabfdc  internal/engdiscovery/discovery.go
+  d96ba83ef374c295d136c5c0c511a354c3f711b62af8bd1d65084f16c98cd2df  internal/engdiscovery/discovery_test.go
+  02b769cde5fcb91df853ab639969ee88433ca098e7632d79292e0be01b82e946  internal/engdiscovery/probe.go
+  fdac5d2b7068793adfdf36bd42566608819821796f1a3b136f8619d5bbed0bff  internal/llm/adoption.go
+  ee814c2a70f8a754fc331f4a221a60f4a24711104221ab39219402655feae11c  internal/llm/diagnostics.go
+  5bcc05b57fb7e140e1f19f7d53da41f6b2e94ae3e055875954d698503c49f2ed  internal/llm/lifecycle_v136_test.go
+  0517b2e759b1542c60bce45c73f17370a41f4e6f55ae08a480df5c2272687244  internal/llm/llama.go
+  c53028a43b2673b8baac3757df45e592210126e8f00f87ffe135608249370a6e  internal/llm/llama_test.go
+  3f63d991fb8effc45d56d4cbfc18010e0da0205fd15306f7553a598dd4ffff7f  internal/llm/loaderclass.go
+  0f1a06f7dfc156985bd3bf37522d9e31de894e8461f44145aa9e47ea3d576745  internal/llm/preflight.go
+  2c865751b7a67587e8d8c0016fa885889c6b65c735a66d0c3ac2f7d80517c8aa  internal/proc/identity.go
+  cef4d222769d56332316398146480846e46324bc889f1eca1698e985450e1e4d  internal/proc/identity_test.go
+  476562f2e8d5f5992eb00ec15d5524114ead8e6ed56a92ccb582b4b0f353b61e  internal/proc/identity_unix.go
+  a9b99ab509739daf88845818980c8caee226083bd17224753a54a66cf75eb857  internal/proc/identity_windows.go
+  dc6af84fd35da013f49cb511ec9cab237121f44c0cc36a0bc49105a33ddae76a  internal/research/service.go
+  a8b51e4698318251de7e5c40a4ce702dc60ff79831eed269a8e04f5188910e96  internal/updater/install.go
+  842b112cf01c6b0bf764732111463210bc2f563694ef241016d9cd19e86e863e  internal/updater/updater.go
+  26e43f527ce741a25604eb5d2c43dad86e50c3953586c6ffcd2b279b6a80bcc2  internal/updater/zipsafe_test.go
+  e08e5b5b7982620747bf3d1a17b19b5d0c74455c96177416c187716166e438c1  package-lock.json
+  67f7b225af8df18873f7bec8d1159244b5e945cb5bc80a6e26a20c1630f58a3a  package.json
+  fded45c42b28986210dd55e7e3c30e0a6d5a574f84eeea75f1e8bd622fcdd546  packaging/nsis/installer.nsi
+  d9d0c930cf891bb06c8e8c310bffd6a098fdbe8e029cada4e3733adb866eba43  src/App.tsx
+  3f317a4ac2702fbb167955d7e0e793c5e95d13e04657ba66d3c99f4237a49fb2  src/ComposerControls.tsx
+  f5c0a04a6399ac5fd39d16f37adc2595134dd8b0187b3144733df301fe72093c  src/SettingsPanel.tsx
+  ceed79446b56d9cfa0316b43fd739817f26862fa613718ff3add21304977b777  src/api.ts
+  e033dd013570018e00660193e4370538eaacc79900cf2aecc3c96c2404fee710  src/layers.css
+  446447ddd6552cb45add9a8dc1b5cda0530166373a01971f182b5fed7f9b40ea  src/motion.css
+  061f273661189bdcffd68e093196d7bc992eff4648963113a1acd7e9ab436800  src/net-search.test.ts
+  8e536679da63a5a296f9f227c1bae9cebcb762570d2e19206e22e01dda4c420c  src/run-events.ts
+  563fc7c176d831aeb0080c333abfc0e2f45a487057190603784dd99d44725c9e  src/scroll-contract.test.ts
+  5a0d60a0e586f40f38689143cb0bce3e10c4555230ce1cad761abe9d1589fd7f  src/shortcuts.ts
+  b19f68441502c7ca9437971755fb7b156970334ad41de51932211292f6bfb37c  src/store.ts
+  ad19bfd87af17acb34678c23e37b2f439f3673923861e5c830ee7e7235e327f4  src/styles.css
+  58b2fecf192b018d42d6eb990437ec6bffb4dafd28c6edf080588c4e3a92c653  src/version-contract.test.ts
+  23b73e2cbccc6985f86086e6e75291b7b2aa769d970c12796b9320fb6b1e50bb  src/vite-env.d.ts
+  d5c8e347e2a1f0c775d817c5e46dc0580ef4fff15296e45d23518010556e3b11  src/workspace-v136.test.ts
+  4e9d6d2c74bc3fc2f1541c0eef37a2aa90a57fb1bb31588bc7687d5b5f41cd3c  src/workspace.ts
+  b7937582e069f6dc140ca3cd8ba86db18d1cee7fa530286efc3919e9f3d5c293  vite.config.ts
+  e47ccdc0c44aae7639f68cca95f446cc64aad56d584c66cd743b69e23093cbb1  web/static/assets/AgentBody.js
+  9c367770a39c3b24d68fbaf3ee1345bbbbc8246ed38ac1ff5fe19ce9fe369c06  web/static/assets/SettingsPanel.js
+  82d4911a8b6bc87267bbf5a503177518a9d08948c77b79c215c09d81abac0455  web/static/assets/index.css
+  3c17abdf85d85b711aa8eb8d82b5095b5f744e06d006524b0c2ef02fd13e8c1e  web/static/assets/index.js
+  f62ae5fd55603e54e22b5635bc82c9d3bd45077ded2a69509d8e6cc98ae03e6f  web/static/index.html
+  6a92f7976e9c96df01def0604941eef7e5b3af8f34c047bea84d0aa315d839bb  worklog.md
+
+Deleted files (2) — removed by this release (NOT in the ZIP):
+  src/ResearchPanel.tsx
+  web/static/assets/ResearchPanel.js
+
+Verification summary (executed locally, Linux x86-64, Go 1.27.1, Node 24):
+  - gofmt clean; go vet -tags headless ./internal/... ./cmd/... clean
+  - go test ./internal/... -tags headless -count=1: 51/51 packages ok
+    (includes the new engine/discovery/identity/migration suites)
+  - clean-room checkout of the final commit: headless build OK,
+    focused suites re-run green, release-version --check green
+  - frontend: npm ci, typecheck, lint (0 warnings), test:units 96/96,
+    test:release 28/28, build, verify:web; web/static rebuilt
+  - NOT verified here: Windows builds/installer/CTest/smoke,
+    real-Windows runtime acceptance, GitHub Actions, tag/release.

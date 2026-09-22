@@ -606,11 +606,6 @@ html.reduce-motion .panel-loading-mark {
   animation: m-blur-in var(--dur-4) var(--ease-emph) both;
 }
 
-/* Research panel: header + history cards */
-.research-panel-header {
-  animation: m-blur-in var(--dur-5) var(--ease-emph) both;
-}
-
 /* Session list (AgentSidebar): rows cascade in */
 .session-list > * {
   animation: m-fade-up var(--dur-4) var(--ease-emph) both;
@@ -654,7 +649,6 @@ html.reduce-motion .panel-loading-mark {
 
 /* Smooth scrolling on every scrollable panel — no layout thrash */
 .workspace,
-.research-panel,
 .lab-panel,
 .settings-page,
 .activity-stream,

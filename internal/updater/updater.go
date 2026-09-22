@@ -445,17 +445,35 @@ func UpdateEngine(ctx context.Context, cfg *config.Config, eng Engine, tag strin
 	return UpdateEngineWithProgress(ctx, cfg, eng, tag, nil)
 }
 
+// TransactionalEngine is implemented by the engine lifecycle owner
+// (v1.3.6, spec §1/§2): it wraps the whole update in an EXCLUSIVE
+// lifecycle operation so Start/Restart/prewarm can never interleave with
+// the file swap.
+type TransactionalEngine interface {
+	Engine
+	UpdateEngineNow(ctx context.Context, tag string, onProgress func(downloader.Progress)) (string, error)
+}
+
 // UpdateEngineWithProgress is UpdateEngine with a live progress callback
 // (v1.2.3 Download Manager) for callers with UI to feed.
+//
+// v1.3.6: when the engine implements TransactionalEngine — the live
+// LlamaServer always does — the ENTIRE update is delegated to the
+// engine-owned transaction (lifecycle lock held start-to-finish,
+// transactional staged install, verified restart). The legacy
+// stop/download/copy/restart choreography below remains only for plain
+// Engine implementations and is serialized by the process-wide install
+// lock inside InstallStaged.
 func UpdateEngineWithProgress(ctx context.Context, cfg *config.Config, eng Engine, tag string, onProgress func(downloader.Progress)) (string, error) {
+	if te, ok := eng.(TransactionalEngine); ok && te != nil {
+		return te.UpdateEngineNow(ctx, tag, onProgress)
+	}
+
 	url := AssetURL(tag)
 	if url == "" {
 		return "", fmt.Errorf("no prebuilt llama.cpp asset for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
-	binDir := filepath.Join(cfg.DataDir, "bin")
-	if cfg.LlamaBinPath != "" {
-		binDir = filepath.Dir(cfg.LlamaBinPath)
-	}
+	binDir := EngineBinDir(cfg)
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return "", err
 	}
@@ -475,14 +493,13 @@ func UpdateEngineWithProgress(ctx context.Context, cfg *config.Config, eng Engin
 	}
 
 	logging.Default().Info("updater", "downloading engine %s from %s", tag, url)
-	if err := downloadEngine(ctx, url, tag, binDir, onProgress); err != nil {
+	if _, err := InstallStaged(ctx, cfg, tag, onProgress); err != nil {
 		// Best effort: bring the old engine back up.
 		if wasRunning {
 			_ = eng.Restart()
 		}
 		return "", fmt.Errorf("download engine %s: %w", tag, err)
 	}
-	RecordEngineTag(cfg, tag)
 
 	if wasRunning {
 		logging.Default().Info("updater", "restarting engine with %s", tag)
@@ -767,7 +784,11 @@ func extractZip(zipPath, dir string) error {
 		if err != nil {
 			return err
 		}
-		fo, err := os.Create(out)
+		// v1.3.6: honor the archive's stored Unix mode — release zips
+		// mark the server binary executable, and the validated candidate
+		// must be executable BEFORE it is swapped in (the pre-swap
+		// static gate rejects non-executable files on Unix).
+		fo, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode().Perm())
 		if err != nil {
 			_ = rc.Close()
 			return err

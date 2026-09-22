@@ -47,7 +47,7 @@ type SaveState = "idle" | "loading" | "saved" | "error";
 //   Models         current model, available models, vision capability
 //   Performance    Quiet/Balanced/Maximum + measured context/metrics
 //   Agent & Tools  tools, permissions, thinking, sandbox posture
-//   Network        research + remote provider
+//   Network        Net Search + remote provider (internal keys stay research*)
 //   Updates        check, policy, version
 //   Diagnostics    read-only health, hardware, logs, network
 //   Advanced       the ONLY home for expert controls
@@ -462,7 +462,7 @@ function SettingsPanel() {
           <h2>Configure SHEYTAN</h2>
           <p>
             Models, inference, agent behavior, tools, browser automation, Coding
-            Lab, research, and performance.
+            Lab, Net Search, and performance.
           </p>
         </div>
 
@@ -1054,8 +1054,8 @@ function SettingsPanel() {
             <section className="settings-card settings-card-wide">
               <div className="settings-card-heading">
                 <div>
-                  <span className="eyebrow">RESEARCH</span>
-                  <h3>External intelligence</h3>
+                  <span className="eyebrow">NET SEARCH</span>
+                  <h3>Net Search</h3>
                 </div>
                 <span className="settings-card-value">
                   {config.researchEnabled
@@ -1067,7 +1067,7 @@ function SettingsPanel() {
               <div className="settings-form-grid">
                 <label className="inline-toggle">
                   <FieldLabel
-                    name="Enable research"
+                    name="Net Search enabled"
                     tip="Lets the agent search and cite external sources when a task needs evidence beyond the local machine."
                   />
                   <input
@@ -1161,7 +1161,7 @@ function SettingsPanel() {
 
                 <label className="inline-toggle">
                   <FieldLabel
-                    name="GitHub research"
+                    name="Net Search provider: GitHub"
                     tip="Search GitHub issues and pull requests for engineering evidence."
                   />
                   <input
@@ -1183,7 +1183,7 @@ function SettingsPanel() {
 
                 <label className="inline-toggle">
                   <FieldLabel
-                    name="Reddit research"
+                    name="Net Search provider: Reddit"
                     tip="Search Reddit for community experience and practical answers."
                   />
                   <input
@@ -1205,7 +1205,7 @@ function SettingsPanel() {
 
                 <label className="inline-toggle">
                   <FieldLabel
-                    name="General web research"
+                    name="Net Search provider: general web"
                     tip="Fetch and cite ordinary web pages."
                   />
                   <input
@@ -1936,8 +1936,8 @@ function SettingsPanel() {
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>
-                  <span className="eyebrow">RESEARCH</span>
-                  <h3>Research internals</h3>
+                  <span className="eyebrow">NET SEARCH</span>
+                  <h3>Net Search internals</h3>
                 </div>
                 <span className="settings-chip chip-warn">advanced</span>
               </div>

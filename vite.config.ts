@@ -1,8 +1,23 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
+
+// v1.3.6 (spec §29/§30): BUILD-TIME CANONICAL FRONTEND VERSION.
+// package.json is the single release version source (the same source
+// scripts/release-version.mjs syncs into internal/config, build/config.yml
+// and SIGNATURE). The value is injected as __APP_VERSION__ at build time;
+// the backend's runtime appVersion (/api/state → config.AppVersion) stays
+// authoritative once loaded, and first paint shows the SAME canonical
+// version instead of a stale hard-coded literal.
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8")) as {
+  version: string;
+};
 
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   server: {
     host: "127.0.0.1",
     port: 5173,

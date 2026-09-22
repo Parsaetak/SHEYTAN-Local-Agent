@@ -744,12 +744,12 @@ textarea:focus-visible {
    (body → .app-shell → .app-body → .workspace) and left
    .view-transition a plain block whose flex-basis content height
    (min-height:auto) overflowed .workspace invisibly — the System tab
-   (and tall Workspace/Research/Lab content) was clipped with NO
+   (and tall Workspace/Lab content) was clipped with NO
    scrollable viewport anywhere. The fix establishes ONE layout rule
    for every view: the view wrapper becomes a shrinkable flex column,
    and each tab's panel owns its scroll viewport:
 
-     simple surfaces (System, Workspace, Research, Settings)
+     simple surfaces (System, Workspace, Settings)
        → the panel itself is the single vertical scroll viewport;
      IDE-style surfaces (Agent, Coding Lab)
        → the panel keeps overflow:hidden and its INTERNAL regions

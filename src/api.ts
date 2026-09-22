@@ -555,6 +555,11 @@ export interface RunRequest {
   /** manual-mode allow-list (tool names); ignored in auto mode */
   toolAllow?: string[];
 
+  // v1.3.6 (spec §24): explicit per-request Net Search intent. The
+  // backend authorizes the existing research tool for THIS request
+  // server-side; the setting is recorded in run telemetry.
+  netSearch?: boolean;
+
   // v1.2.8: explicitly attached cross-mode history sessions. DATA, never
   // authority — only the relevant portions are retrieved per request and
   // injected with provenance labels.
@@ -1173,7 +1178,6 @@ export interface NetDiagResult {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
-const RESEARCH_TIMEOUT_MS = 30_000;
 const uploadTimeoutMs = 2 * 60_000;
 
 async function request<T>(
@@ -1693,25 +1697,10 @@ export const api = {
     );
   },
 
-  researchConfig(): Promise<ResearchConfig> {
-    return request<ResearchConfig>("/research");
-  },
-
-  research(payload: {
-    query: string;
-    backend?: string;
-    maxResults?: number;
-    timeoutSec?: number;
-  }): Promise<ResearchResponse> {
-    return request<ResearchResponse>(
-      "/research",
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
-      RESEARCH_TIMEOUT_MS,
-    );
-  },
+  // v1.3.6 (spec §21/§26): the standalone research client is removed —
+  // Net Search flows through the per-request run contract (netSearch on
+  // /api/run) and the same backend service remains reachable at
+  // /api/net-search. No second search implementation exists here.
 };
 
 // v1.3.0: re-exported for convenience (the implementation lives in

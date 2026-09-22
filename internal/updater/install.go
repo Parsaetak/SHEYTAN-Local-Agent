@@ -1,0 +1,679 @@
+package updater
+
+// v1.3.6 (spec §2/§14/§20): THE single engine provisioning authority.
+//
+// Every path that puts a llama.cpp engine into the managed bin directory
+// — first-run download, scheduled update, manual update, repair — goes
+// through InstallStaged. There is no second download implementation and
+// no in-place overwrite of a live engine directory any more.
+//
+// Transaction (each step all-or-nothing for the ACTIVE installation):
+//
+//      DISCOVER url → DOWNLOAD to staging → EXTRACT to .update-stage →
+//      VALIDATE CANDIDATE (static: exists/arch/dependency closure) →
+//      SWAP (old dir renamed aside, staging renamed in, non-engine files
+//            merged back) → VERIFY INSTALLED BINARY (identity == staged) →
+//      COMMIT (record tag + sha) → CLEANUP (staging archives, old dir)
+//
+// On any failure BEFORE the commit the previous engine directory is
+// restored byte-for-byte; last-known-good is never destroyed.
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+)
+
+// installMu serializes every provisioning operation process-wide: two
+// updaters (scheduled + manual) can never mutate the bin directory
+// concurrently, and neither can a boot-path provisioning step racing a
+// scheduled pass (spec §1 Update+Update, scheduled+manual).
+var installMu = make(chan struct{}, 1)
+
+// WithInstallLock runs fn while holding the process-wide install lock.
+// The engine-owned transaction (LlamaServer.UpdateEngineNow) takes the
+// lifecycle lock FIRST and the install lock SECOND — the same order as
+// every other provisioning caller, so no lock-order inversion exists.
+func WithInstallLock(fn func()) {
+	installMu <- struct{}{}
+	defer func() { <-installMu }()
+
+	fn()
+}
+
+// InstallResult reports what one install committed.
+type InstallResult struct {
+	Outcome string `json:"outcome"`
+	Tag     string `json:"tag"`
+	BinPath string `json:"binPath"`
+	SHA256  string `json:"sha256"`
+}
+
+// ResolveDownloadURL resolves (url, tag) for a fresh engine download:
+// the pinned tag when its asset exists on this platform, else the newest
+// release that carries this platform's asset (bounded scan), else an
+// honest error. Moved here from llm.llamaDownloadURL (v1.3.6) so the
+// provisioning authority owns source resolution too.
+func ResolveDownloadURL(ctx context.Context) (string, string, error) {
+	if url := AssetURL(DefaultEngineTag); url != "" {
+		probeCtx, probeCancel := context.WithTimeout(ctx, 30*time.Second)
+
+		if AssetExists(probeCtx, DefaultEngineTag) {
+			probeCancel()
+			return url, DefaultEngineTag, nil
+		}
+
+		probeCancel()
+	}
+
+	scanCtx, scanCancel := context.WithTimeout(ctx, 60*time.Second)
+	tag, tagErr := LatestTag(scanCtx)
+	scanCancel()
+
+	if tagErr == nil && tag != "" {
+		if url := AssetURL(tag); url != "" {
+			return url, tag, nil
+		}
+
+		return "", "", fmt.Errorf(
+			"no prebuilt llama.cpp server asset exists for %s/%s — this platform/architecture is not served by upstream releases; build llama-server from source and set llamaBinPath, or select the native engine (engineBackend \"native\")",
+			runtime.GOOS, runtime.GOARCH,
+		)
+	}
+
+	if tagErr != nil {
+		return "", "", fmt.Errorf(
+			"could not resolve a downloadable engine (network check failed: %v) — connect to the internet once so the engine can be downloaded, or place a prebuilt llama-server(.exe) into the managed bin directory",
+			tagErr,
+		)
+	}
+
+	return "", "", fmt.Errorf("no downloadable engine release found")
+}
+
+// EngineBinDir resolves the managed bin directory for engine files
+// (single authority for the derivation — spec §40).
+func EngineBinDir(cfg *config.Config) string {
+	if cfg.LlamaBinPath != "" {
+		return filepath.Dir(cfg.LlamaBinPath)
+	}
+
+	return filepath.Join(cfg.DataDir, "bin")
+}
+
+// installManifest records the committed package identity beside the
+// binary (spec §2: verify executable identity; spec §34: real recorded
+// tag + hash, not bookkeeping guesses).
+type installManifest struct {
+	Tag         string `json:"tag"`
+	SHA256      string `json:"sha256"`
+	Size        int64  `json:"size"`
+	InstalledAt string `json:"installedAt"`
+	Source      string `json:"source"`
+}
+
+const installManifestName = "engine-install.json"
+
+// InstallStaged downloads, validates and atomically installs the engine
+// release `tag` into the managed bin directory. The caller must already
+// own the engine lifecycle (engine stopped or not yet started); file
+// safety is additionally guaranteed by WithInstallLock.
+func InstallStaged(
+	ctx context.Context,
+	cfg *config.Config,
+	tag string,
+	onProgress func(downloader.Progress),
+) (InstallResult, error) {
+	installMu <- struct{}{}
+	defer func() { <-installMu }()
+
+	url := AssetURL(tag)
+	if url == "" {
+		return InstallResult{}, fmt.Errorf("no prebuilt llama.cpp asset for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+
+	binDir := EngineBinDir(cfg)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return InstallResult{}, err
+	}
+
+	// 1) DISCOVER + DOWNLOAD to staging (never the live directory).
+	logging.Default().Info("updater", "downloading engine %s from %s", tag, url)
+
+	archive, err := downloadEngineArchiveStaged(ctx, url, tag, binDir, onProgress)
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("download engine %s: %w", tag, err)
+	}
+
+	defer os.Remove(archive)
+
+	return installFromArchive(cfg, tag, archive, url)
+}
+
+// InstallStagedFromArchive runs the validate→swap→verify→commit
+// transaction from an ALREADY DOWNLOADED archive. It is the testable
+// seam of InstallStaged (deterministic CI without a network) and the
+// recovery path for resuming from a staged archive.
+func InstallStagedFromArchive(
+	cfg *config.Config,
+	tag string,
+	archivePath string,
+) (InstallResult, error) {
+	installMu <- struct{}{}
+	defer func() { <-installMu }()
+
+	return installFromArchive(cfg, tag, archivePath, "archive://"+filepath.Base(archivePath))
+}
+
+// installFromArchive is the shared transaction body (caller holds installMu).
+func installFromArchive(cfg *config.Config, tag, archive, url string) (InstallResult, error) {
+	result := InstallResult{}
+
+	binDir := EngineBinDir(cfg)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return result, err
+	}
+
+	// 2) EXTRACT to the staging directory.
+	stageDir := filepath.Join(binDir, ".update-stage")
+	_ = os.RemoveAll(stageDir)
+
+	if err := extractArchiveBySuffix(archive, url, stageDir); err != nil {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("extract engine %s: %w", tag, err)
+	}
+
+	// 3) VALIDATE CANDIDATE — static gate BEFORE anything is swapped.
+	found := findBinary(stageDir)
+	if found == "" {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("release archive for %s contained no server binary", tag)
+	}
+
+	ident, verr := engcheck.StaticValidate(found)
+	if verr != nil {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("candidate validation failed for %s: %w", tag, verr)
+	}
+
+	deps, derr := engcheck.CheckDependencies(found)
+	if derr == nil && len(deps.Missing) > 0 {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf(
+			"candidate for %s is missing runtime DLLs beside the binary: %s — refusing to install an incomplete package",
+			tag, strings.Join(deps.Missing, ", "),
+		)
+	}
+
+	// 4) SWAP — atomic directory rename choreography:
+	//     binDir → binDir.old        (previous engine, preserved)
+	//     old/.update-stage → binDir (validated candidate becomes active)
+	//
+	// .update-stage lives INSIDE binDir, so it travels with the rename
+	// and is renamed back out in one move. Same volume → atomic.
+	oldDir := binDir + ".update-old"
+	_ = os.RemoveAll(oldDir)
+
+	swapDone := false
+
+	if err := os.Rename(binDir, oldDir); err != nil {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("stage engine swap: %w", err)
+	}
+
+	restore := func() {
+		if swapDone {
+			return
+		}
+		// Rollback: put the previous engine directory back.
+		_ = os.RemoveAll(binDir)
+		_ = os.Rename(oldDir, binDir)
+	}
+
+	if err := os.Rename(filepath.Join(oldDir, ".update-stage"), binDir); err != nil {
+		restore()
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("activate staged engine: %w", err)
+	}
+
+	// Merge-back: non-engine components that lived beside the engine
+	// (native host, license files) survive the package swap.
+	mergeForeignFiles(oldDir, binDir)
+
+	// 5) VERIFY INSTALLED BINARY — byte identity must match the staged,
+	// validated candidate.
+	installedPath := filepath.Join(binDir, filepath.Base(found))
+	_ = os.Chmod(installedPath, 0o755)
+
+	installedIdent, ierr := engcheck.IdentityOf(installedPath)
+	if ierr != nil || installedIdent.SHA256 != ident.SHA256 {
+		restore()
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("installed binary identity mismatch for %s (want %s…)", tag, ident.SHA256[:12])
+	}
+
+	result.BinPath = installedPath
+	result.SHA256 = installedIdent.SHA256
+	result.Tag = tag
+
+	// 6) COMMIT — record the REAL identity in both manifests.
+	recordInstallManifest(binDir, installManifest{
+		Tag:         tag,
+		SHA256:      installedIdent.SHA256,
+		Size:        installedIdent.Size,
+		InstalledAt: time.Now().UTC().Format(time.RFC3339),
+		Source:      url,
+	})
+
+	RecordEngineTag(cfg, tag)
+
+	swapDone = true
+
+	// 7) CLEANUP — obsolete staging + previous package (spec §20: keep
+	// only the active validated package; last-known-good protection is
+	// the ROLLBACK path above, not a permanent second copy).
+	_ = os.RemoveAll(oldDir)
+	_ = os.RemoveAll(stageDir)
+	_ = os.Remove(archive + ".part")
+	_ = os.RemoveAll(filepath.Join(binDir, ".engine-download"))
+
+	logging.Default().Info("updater",
+		"engine %s installed and verified (sha256 %.12s…)", tag, installedIdent.SHA256)
+
+	result.Outcome = fmt.Sprintf("engine installed: llama.cpp %s", tag)
+
+	return result, nil
+}
+
+// ImportCandidate installs an EXTERNALLY discovered engine package
+// (System Engine Discovery, spec §10–§13) into the managed directory:
+// the candidate's directory is copied into staging, validated, and
+// swapped in with the same transactional choreography as a download.
+// Byte-identical files already present in the managed dir are NOT copied
+// again (dedupe by SHA-256, spec §13/§20).
+func ImportCandidate(cfg *config.Config, candidateDir, binaryRelPath string) (InstallResult, error) {
+	result := InstallResult{}
+
+	installMu <- struct{}{}
+	defer func() { <-installMu }()
+
+	binDir := EngineBinDir(cfg)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return result, err
+	}
+
+	// Stage a COPY of the candidate into .update-stage.
+	stageDir := filepath.Join(binDir, ".update-stage")
+	_ = os.RemoveAll(stageDir)
+
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		return result, err
+	}
+
+	copied, skipped, err := copyClosureDedup(candidateDir, stageDir)
+	if err != nil {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("stage discovered engine: %w", err)
+	}
+
+	found := filepath.Join(stageDir, binaryRelPath)
+
+	ident, verr := engcheck.StaticValidate(found)
+	if verr != nil {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("discovered candidate failed validation: %w", verr)
+	}
+
+	deps, derr := engcheck.CheckDependencies(found)
+	if derr == nil && len(deps.Missing) > 0 {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf(
+			"discovered candidate is missing runtime DLLs: %s",
+			strings.Join(deps.Missing, ", "),
+		)
+	}
+
+	oldDir := binDir + ".update-old"
+	_ = os.RemoveAll(oldDir)
+
+	swapDone := false
+
+	if err := os.Rename(binDir, oldDir); err != nil {
+		_ = os.RemoveAll(stageDir)
+		return result, fmt.Errorf("stage engine swap: %w", err)
+	}
+
+	restore := func() {
+		if swapDone {
+			return
+		}
+		_ = os.RemoveAll(binDir)
+		_ = os.Rename(oldDir, binDir)
+	}
+
+	if err := os.Rename(filepath.Join(oldDir, ".update-stage"), binDir); err != nil {
+		restore()
+		return result, fmt.Errorf("activate imported engine: %w", err)
+	}
+
+	mergeForeignFiles(oldDir, binDir)
+
+	installedPath := filepath.Join(binDir, filepath.Base(found))
+	_ = os.Chmod(installedPath, 0o755)
+
+	installedIdent, ierr := engcheck.IdentityOf(installedPath)
+	if ierr != nil || installedIdent.SHA256 != ident.SHA256 {
+		restore()
+		return result, fmt.Errorf("imported binary identity mismatch")
+	}
+
+	result.BinPath = installedPath
+	result.SHA256 = installedIdent.SHA256
+	result.Outcome = fmt.Sprintf(
+		"imported discovered engine package (%d files copied, %d byte-identical skipped)",
+		copied, skipped,
+	)
+
+	// Provenance (spec §13): record WHERE the package came from. The
+	// recorded release tag is intentionally NOT overwritten — a
+	// discovered candidate's upstream tag is unknown until probed, and
+	// bookkeeping must not silently relabel the engine (spec §34).
+	recordInstallManifest(binDir, installManifest{
+		Tag:         "discovered",
+		SHA256:      installedIdent.SHA256,
+		Size:        installedIdent.Size,
+		InstalledAt: time.Now().UTC().Format(time.RFC3339),
+		Source:      candidateDir,
+	})
+
+	_ = os.RemoveAll(oldDir)
+	_ = os.RemoveAll(stageDir)
+
+	swapDone = true
+
+	return result, nil
+}
+
+// copyClosureDedup copies candidateDir into dst, skipping files whose
+// SHA-256 already matches an existing file (byte-identical dedupe).
+// Returns (copied, skipped, err).
+func copyClosureDedup(srcDir, dstDir string) (int, int, error) {
+	copied, skipped := 0, 0
+
+	err := filepath.Walk(srcDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries quietly
+		}
+
+		rel, rerr := filepath.Rel(srcDir, p)
+		if rerr != nil || rel == "." {
+			return nil
+		}
+
+		target := filepath.Join(dstDir, rel)
+
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+
+		// Dedupe: when the destination already exists with identical
+		// bytes, never copy it again (spec §20).
+		if dstInfo, statErr := os.Stat(target); statErr == nil && dstInfo.Size() == info.Size() {
+			srcHash, hErr := engcheck.HashFile(p)
+			if hErr == nil {
+				dstHash, hErr2 := engcheck.HashFile(target)
+				if hErr2 == nil && srcHash == dstHash {
+					skipped++
+					return nil
+				}
+			}
+		}
+
+		if err := copyFileMode(p, target, info.Mode()); err != nil {
+			return err
+		}
+
+		copied++
+
+		return nil
+	})
+
+	return copied, skipped, err
+}
+
+func copyFileMode(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+
+	return err
+}
+
+// mergeForeignFiles moves files from oldDir that do not exist in newDir
+// into newDir (recursive). Engine package files are already present in
+// newDir and stay untouched.
+func mergeForeignFiles(oldDir, newDir string) {
+	if _, err := os.Stat(oldDir); err != nil {
+		return
+	}
+
+	_ = filepath.Walk(oldDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil || p == oldDir {
+			return nil
+		}
+
+		rel, rerr := filepath.Rel(oldDir, p)
+		if rerr != nil {
+			return nil
+		}
+
+		// Skip provisioning bookkeeping dirs — they belong to the swap.
+		base := filepath.Base(rel)
+		if strings.HasPrefix(base, ".update-") || base == ".engine-download" {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		target := filepath.Join(newDir, rel)
+
+		if info.IsDir() {
+			return nil // created on demand by file moves
+		}
+
+		if _, err := os.Stat(target); err == nil {
+			return nil // engine package owns this name — keep the new one
+		}
+
+		_ = os.MkdirAll(filepath.Dir(target), 0o755)
+		_ = os.Rename(p, target)
+
+		return nil
+	})
+}
+
+func recordInstallManifest(binDir string, m installManifest) {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return
+	}
+
+	_ = os.WriteFile(filepath.Join(binDir, installManifestName), data, 0o644)
+}
+
+// ReadInstallManifest returns the committed install manifest, when present.
+func ReadInstallManifest(cfg *config.Config) (installManifest, bool) {
+	var m installManifest
+
+	data, err := os.ReadFile(filepath.Join(EngineBinDir(cfg), installManifestName))
+	if err != nil {
+		return m, false
+	}
+
+	if err := json.Unmarshal(data, &m); err != nil {
+		return m, false
+	}
+
+	return m, true
+}
+
+// downloadEngineArchiveStaged fetches the release archive through the
+// Download Manager into <binDir>/.engine-download (verified, resumable,
+// bounded) and returns the archive path.
+func downloadEngineArchiveStaged(
+	ctx context.Context,
+	url, tag, binDir string,
+	onProgress func(downloader.Progress),
+) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	stage := filepath.Join(binDir, ".engine-download")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return "", err
+	}
+
+	opts := downloader.Options{
+		Dest: filepath.Join(stage, AssetName(tag)),
+		Sources: []downloader.Source{{
+			URL:   url,
+			Label: "llama.cpp release " + tag + " (github.com/ggml-org/llama.cpp)",
+			Trust: downloader.TrustPrimary,
+		}},
+		MaxBytes:   engineUpdateCapBytes,
+		FileMode:   0o644,
+		Resume:     true,
+		AllowHTTP:  downloader.IsLoopbackURL(url),
+		CacheKey:   "llama-engine-update-" + tag,
+		CacheDir:   stage,
+		OnProgress: onProgress,
+	}
+
+	job, err := downloader.New(opts)
+	if err != nil {
+		return "", err
+	}
+
+	res, err := job.Run(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return res.Path, nil
+}
+
+// extractArchiveBySuffix unpacks a VERIFIED archive into dir. Zip members
+// go through the shared zip-slip guard; tar.gz extraction is delegated
+// to the system tar exactly as the previous llm-side implementation did.
+// (Moved from llm.extractEngineArchive, v1.3.6.)
+func extractArchiveBySuffix(archivePath, url, dir string) error {
+	switch engineArchiveSuffix(url) {
+	case ".zip":
+		return extractZip(archivePath, dir)
+
+	case ".tar.gz", ".tgz":
+		f, err := os.Open(archivePath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return err
+		}
+		defer gz.Close()
+
+		tr := tar.NewReader(gz)
+
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+
+			out, err := SafeArchivePath(dir, hdr.Name)
+			if err != nil {
+				return err
+			}
+
+			if hdr.Typeflag == tar.TypeDir {
+				if err := os.MkdirAll(out, 0o755); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+				return err
+			}
+
+			outFile, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+			if err != nil {
+				return err
+			}
+
+			_, copyErr := io.Copy(outFile, tr)
+			closeErr := outFile.Close()
+
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
+
+	default:
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+
+		return copyFileMode(archivePath, filepath.Join(dir, filepath.Base(url)), 0o755)
+	}
+}
+
+// engineArchiveSuffix maps a release URL to its archive suffix.
+func engineArchiveSuffix(url string) string {
+	switch {
+	case strings.HasSuffix(url, ".zip"):
+		return ".zip"
+	case strings.HasSuffix(url, ".tar.gz"):
+		return ".tar.gz"
+	case strings.HasSuffix(url, ".tgz"):
+		return ".tgz"
+	default:
+		return filepath.Ext(url)
+	}
+}

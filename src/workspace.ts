@@ -2,7 +2,6 @@ export type WorkspaceView =
   | "agent"
   | "workspace"
   | "lab"
-  | "research"
   | "system"
   | "settings";
 
@@ -57,15 +56,11 @@ export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
     icon: "◆",
     modes: ["agent"],
   },
-  {
-    id: "research",
-    label: "Research",
-    eyebrow: "RESEARCH",
-    title: "External intelligence",
-    description: "External evidence and sources",
-    icon: "⌕",
-    modes: ["chat", "agent"],
-  },
+  // v1.3.6 (spec §21/§22): the Research workspace LAYER is removed —
+  // Net Search lives where it is used, as a per-request control in both
+  // Chat and Agent composers (ComposerControls), backed by the same
+  // research service. No dead route remains; an old #research hash
+  // resolves to Agent via parseWorkspaceHash's invalid-view fallback.
   {
     id: "system",
     label: "System",

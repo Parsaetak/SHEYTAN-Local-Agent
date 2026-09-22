@@ -388,6 +388,12 @@ type runOptions struct {
 	// toolPolicy (v1.2.5) is the per-request manual tool control.
 	toolPolicy ToolPolicy
 
+	// netSearch (v1.3.6, spec §23/§24) is the composer's explicit
+	// per-request Net Search intent. When true, the EXISTING research
+	// tool is authorized for THIS request server-side — never inferred
+	// from message text, never silently extended to unrelated tools.
+	netSearch bool
+
 	// receivedAt (v1.2.5) carries the API layer's request-received
 	// timestamp so the run clock's TTFT/total cover the full path.
 	receivedAt time.Time
@@ -432,6 +438,18 @@ func WithToolPolicy(mode string, allowed []string) RunOption {
 			Mode:    NormalizeToolPolicyMode(mode),
 			Allowed: allowed,
 		}
+	}
+}
+
+// WithNetSearch records the per-request Net Search intent (v1.3.6,
+// spec §24). The backend authorizes the EXISTING research tool for THIS
+// request: the tool is guaranteed in the offered surface and executable
+// under any tool-policy mode, while every other tool's availability is
+// untouched. The setting is recorded in run telemetry.
+func WithNetSearch(enabled bool) RunOption {
+	return func(ro *runOptions) {
+		ro.netSearch = enabled
+		ro.toolPolicy.NetSearch = enabled
 	}
 }
 
@@ -535,6 +553,16 @@ func (o *Orchestrator) RunDetailed(
 	// =====================================================================
 
 	task := lastUserQuery(messages)
+
+	// v1.3.6 (spec §24): NET SEARCH REQUEST CONTRACT. The composer's
+	// explicit Net Search intent is carried on the tool policy itself
+	// (ToolPolicy.NetSearch — see WithNetSearch): the research tool is
+	// guaranteed offered and executable for THIS request, server-side,
+	// never inferred from message text, never extended to other tools.
+	if ro.netSearch {
+		logging.Default().Info("agent",
+			"net search enabled for this request — the research tool is authorized server-side")
+	}
 
 	// v1.2.8: one bounded task state per run, maintained from REAL tool
 	// traffic (never model claims). Published as a `task` activity per
@@ -1052,6 +1080,7 @@ func (o *Orchestrator) RunDetailed(
 		Tier:            tier,
 		ThinkingControl: ro.thinking,
 		ToolPolicyMode:  ro.toolPolicy.Mode,
+		NetSearch:       ro.netSearch,
 
 		// 1.1.6 context telemetry: the full decision trail per turn.
 		ContextRequested:    effCtx.Requested,

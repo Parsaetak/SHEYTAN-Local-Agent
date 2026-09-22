@@ -172,3 +172,88 @@ export function normalizeToolAllowlist(list: unknown): string[] {
 
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// v1.3.6 (spec §25): Net Search UI state — pure helpers, unit-testable.
+// ---------------------------------------------------------------------------
+
+// NetSearchState is the compact in-composer Net Search control state:
+//
+//	off      the control is disabled
+//	enabled  armed — the next request may use the research tool
+//	searching a run is executing the research tool right now
+//	results   the last run produced external evidence
+//	failed   the last search attempt failed (visible + actionable)
+export type NetSearchState =
+  | "off"
+  | "enabled"
+  | "searching"
+  | "results"
+  | "failed";
+
+// isResearchToolStart reports whether one wire event marks the START of
+// the backend research tool. The tool_start activity carries the tool
+// call in `detail` ({function:{name,...}}) and a caption — both are
+// consulted, neither is trusted beyond the name check.
+export function isResearchToolStart(data: unknown): boolean {
+  return eventToolName(data) === "research";
+}
+
+// isResearchToolEnd reports whether one wire event marks the END of the
+// research tool call. tool_end captions read "Tool research → ...".
+export function isResearchToolEnd(caption: unknown): boolean {
+  if (typeof caption !== "string") {
+    return false;
+  }
+
+  const c = caption.toLowerCase();
+
+  return c.startsWith("tool research") || c.includes("tool \"research\"");
+}
+
+// researchEndFailed reports whether a tool_end result text marks the
+// research call as FAILED (the backend prefixes refused/failed results
+// with "Error:").
+export function researchEndFailed(resultText: unknown): boolean {
+  return typeof resultText === "string" && resultText.startsWith("Error:");
+}
+
+// extractNetSearchResultCount pulls the result count from a research
+// result text when it is stated ("8 results", "8 个结果"). Returns null
+// when the count is not stated — the UI must not invent one.
+export function extractNetSearchResultCount(text: unknown): number | null {
+  if (typeof text !== "string") {
+    return null;
+  }
+
+  const m = text.match(/(\d+)\s+results?/i);
+
+  return m ? Number(m[1]) : null;
+}
+
+function eventToolName(data: unknown): string | null {
+  if (data === null || typeof data !== "object") {
+    return null;
+  }
+
+  const detail = (data as Record<string, unknown>)["detail"];
+  if (detail === null || typeof detail !== "object") {
+    return null;
+  }
+
+  const fn = (detail as Record<string, unknown>)["function"];
+  if (fn !== null && typeof fn === "object") {
+    const name = (fn as Record<string, unknown>)["name"];
+    if (typeof name === "string") {
+      return name.toLowerCase();
+    }
+  }
+
+  // Fallback: some paths flatten the tool name directly.
+  const flat = (detail as Record<string, unknown>)["name"];
+  if (typeof flat === "string") {
+    return flat.toLowerCase();
+  }
+
+  return null;
+}

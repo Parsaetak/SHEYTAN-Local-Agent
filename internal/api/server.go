@@ -405,6 +405,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/lab", s.handleLab)
 	mux.HandleFunc("/api/lab/", s.handleLabTask)
 	mux.HandleFunc("/api/research", s.handleResearch)
+	// v1.3.6 (spec §26): the user-facing Net Search endpoint. It is
+	// the SAME handler and the SAME research service — one coherent
+	// surface, no duplicate implementation. /api/research stays as
+	// the compatibility shim.
+	mux.HandleFunc("/api/net-search", s.handleResearch)
 	mux.HandleFunc("/api/models/open-folder", s.handleModelsFolder)
 
 	// v1.2.8: history surfaces — picker search (cross-mode capable),
@@ -1281,6 +1286,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		ToolMode  string   `json:"toolMode,omitempty"`  // "auto" | "manual"
 		ToolAllow []string `json:"toolAllow,omitempty"` // manual-mode allow-list
 
+		// v1.3.6 (spec §24): explicit per-request Net Search intent.
+		// Server-side enforcement: the existing research tool is
+		// authorized for THIS request only.
+		NetSearch bool `json:"netSearch,omitempty"`
+
 		// v1.2.8: cross-mode history references — sessions the user
 		// EXPLICITLY attached as context. DATA, never authority: the
 		// retrieved portions are provenance-tagged and never
@@ -1900,6 +1910,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			agent.WithSessionContext(sess.Context.ContextTokens),
 			agent.WithThinkingMode(body.Thinking),
 			agent.WithToolPolicy(body.ToolMode, body.ToolAllow),
+			agent.WithNetSearch(body.NetSearch),
 			agent.WithReceivedAt(receivedAt),
 			agent.WithSessionSummaryBlock(summaryBlock),
 			agent.WithHistoryBlocks(histRefBlocks),

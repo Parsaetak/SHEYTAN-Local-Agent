@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -48,6 +49,13 @@ func TestMain(m *testing.M) {
 			return
 		case "--list-devices":
 			runFakeEngineDeviceProbe()
+
+			return
+		case "--version":
+			// v1.3.6 preflight identity probe (spec §6): the fake
+			// engine reports a realistic llama.cpp version line so
+			// the preflight gate passes in tests.
+			fmt.Println("version: 4818 (abcdef12)")
 
 			return
 		}
@@ -117,6 +125,44 @@ func runFakeLlamaServer() {
 	// assert the actual launch contract.
 	if out := os.Getenv("SHEYTAN_FAKE_ARGS_OUT"); out != "" {
 		_ = os.WriteFile(out, []byte(strings.Join(args, "\n")), 0o644)
+	}
+
+	// v1.3.6 (spec §5): deterministic loader-failure mode. The binary
+	// records the launch (count file), prints the textual NTSTATUS
+	// evidence to stderr, and exits with a classifiable code:
+	//   Windows — the REAL 0xC0000139 exit status;
+	//   Unix    — exit code 57 (not classifiable by code) so the
+	//             TEXTUAL fallback classification is exercised.
+	if mode == "loader-fail" {
+		// Only REAL server launches count as launches — capability
+		// probes (--help) and preflight probes (--version) carry no
+		// --port flag and must not pollute the launch-count evidence.
+		launchedAsServer := false
+
+		for _, a := range args {
+			if a == "--port" {
+				launchedAsServer = true
+				break
+			}
+		}
+
+		if launchedAsServer {
+			if countFile := os.Getenv("SHEYTAN_FAKE_LAUNCH_COUNT"); countFile != "" {
+				f, err := os.OpenFile(countFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				if err == nil {
+					_, _ = f.WriteString("launch\n")
+					_ = f.Close()
+				}
+			}
+		}
+
+		fmt.Fprintln(os.Stderr, "loader error: STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139) — the procedure entry point ggml_backend_sched_alloc could not be located")
+
+		if runtime.GOOS == "windows" {
+			os.Exit(-1073741515) // 0xC0000139
+		}
+
+		os.Exit(57)
 	}
 
 	// Phase 7: strict CLI-contract emulation.

@@ -18,11 +18,12 @@ export type ShortcutSpec = {
 };
 
 // Layer order mirrors the sidebar navigation.
+// v1.3.6: the Research layer is removed — Net Search lives in the
+// composers. Digit shortcuts renumber accordingly (Ctrl+4 = System).
 const VIEW_ORDER: readonly WorkspaceView[] = [
   "agent",
   "workspace",
   "lab",
-  "research",
   "system",
   "settings",
 ];

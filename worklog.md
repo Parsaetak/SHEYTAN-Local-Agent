@@ -2,8 +2,63 @@
 
 ## Current State
 
-Date: 2026-09-21 (v1.3.2: release repair + native engine execution
-hardening; v1.3.2 log first below)
+Date: 2026-09-22 (v1.3.6: engine lifecycle ownership, system discovery,
+Net Search, canonical data root; v1.3.6 log first below)
+
+Repository:
+
+```text
+https://github.com/Parsaetak/SHEYTAN-local-agent
+```
+
+Branch: `v1.3.6-engine-lifecycle` (work branch on top of `57f0c1b`)
+
+Current release:
+
+```text
+1.3.6
+```
+
+v1.3.6 is the **engine-ownership** release. Root-fixed from the
+2026-09-22 runtime evidence: (1) ONE provisioning authority
+(`updater.InstallStaged`: stage → validate → atomic swap → verify →
+commit → cleanup, with rollback) replaces the two competing engine
+download paths; (2) `LlamaServer.UpdateEngineNow` holds `switchMu`
+across the whole update so Start/Restart/prewarm can never race the
+updater; (3) adoption of a port-serving process now REQUIRES proven
+process identity (`internal/proc`: GetExtendedTcpTable/QueryFullProcessImageName
+on Windows, /proc/net/tcp+/proc/<pid>/exe on Linux — no shell parsing);
+(4) `0xC0000139`-class loader failures decode into first-class
+diagnostics and break the compatibility ladder instead of retrying
+(§4/§5); (5) an engine preflight (arch, dependency closure via
+debug/pe, bounded --version) runs before any model launch; (6) System
+Engine Discovery (`internal/engdiscovery`, Tier 0/1/2, cached,
+non-destructive, SHA-dedup import) reuses existing engines before
+downloading; (7) the canonical data root is the install-local
+`<AppRoot>\data` tree — the installer deletes its legacy
+`SHEYTAN_DATA_DIR` env var and the runtime migrates the old
+`%LOCALAPPDATA%\SHEYTAN-LA` root once (hash-verified, engine bundle as
+a unit); (8) the Research tab is removed and Net Search becomes a
+per-request composer control in Chat and Agent, enforced server-side
+(`agent.WithNetSearch`), same backend service, `/api/net-search`
+endpoint; (9) the stale `v1.2.2` UI version fallback is replaced by a
+build-time constant from package.json with a regression suite.
+
+VERIFIED (Linux x86-64, Go 1.27.1 / Node 24): gofmt + go vet
+(-tags headless) clean; `go test ./internal/... -tags headless` 51/51
+packages incl. new engine/discovery/identity/migration suites;
+frontend typecheck + lint + 96/96 units + 28/28 release tests + build
++ verify:web; `release-version.mjs --check` green at 1.3.6; ROADMAP.md
+blob SHA unchanged (c7e2c1720eb5e97bd932c0d76100b8719193e650).
+
+NOT verified here (CI / Windows-machine owned): Windows builds and
+installer, Windows C++ CTest, Windows runtime acceptance, GitHub
+Actions runs, the v1.3.6 tag and release publication.
+
+---
+
+Historical: 2026-09-21 (v1.3.2: release repair + native engine
+execution hardening; v1.3.2 log first below)
 
 Repository:
 

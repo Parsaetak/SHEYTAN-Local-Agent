@@ -13,8 +13,6 @@ import {
   type LabTaskSessionSnapshot,
   type ModelsResponse,
   type Preset,
-  type ResearchConfig,
-  type ResearchResponse,
   type Session,
   type SysInfo,
   type ToolInfo,
@@ -45,6 +43,12 @@ import {
   normalizeToolPolicyMode,
   type ThinkingControl,
   type ToolPolicyMode,
+  // v1.3.6: Net Search control state + wire-event evidence helpers.
+  type NetSearchState,
+  isResearchToolStart,
+  isResearchToolEnd,
+  researchEndFailed,
+  extractNetSearchResultCount,
 } from "./run-events";
 import {
   applyReasoningSnapshot,
@@ -130,6 +134,25 @@ function persistActiveSessionByMode(
 const THINKING_STORAGE_KEY = "sheytan.thinking";
 const TOOLMODE_STORAGE_KEY = "sheytan.toolMode";
 const TOOLALLOW_STORAGE_KEY = "sheytan.toolAllow";
+// v1.3.6: the Net Search control persists like the other composer
+// controls (it is sent with every run while enabled).
+const NETSEARCH_STORAGE_KEY = "sheytan.netSearch";
+
+function initialNetSearch(): boolean {
+  try {
+    return window.localStorage.getItem(NETSEARCH_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function persistNetSearch(v: boolean): void {
+  try {
+    window.localStorage.setItem(NETSEARCH_STORAGE_KEY, v ? "1" : "0");
+  } catch {
+    // in-memory only
+  }
+}
 
 function initialThinkingControl(): ThinkingControl {
   try {
@@ -240,6 +263,17 @@ type RuntimeState = {
   toolAllowlist: string[];
   setToolAllowed: (name: string, allowed: boolean) => void;
 
+  // v1.3.6 (spec §23/§25): per-request Net Search control. `netSearch`
+  // is the persisted user intent (sent with every run);
+  // `netSearchState` renders the compact in-composer evidence states
+  // (off/enabled/searching/results/failed) from REAL wire events;
+  // `netSearchResultCount` is the stated count from the search output
+  // when known — never invented.
+  netSearch: boolean;
+  setNetSearch: (v: boolean) => void;
+  netSearchState: NetSearchState;
+  netSearchResultCount: number | null;
+
   // v1.2.2: socket/poll ownership. AgentBody acquires on mount and
   // releases on unmount; a LIVE run keeps the activity socket and the
   // engine poll alive across workspace tab switches (the backend hub has
@@ -282,10 +316,9 @@ type RuntimeState = {
   activeLabTaskId: string | null;
   activeLabTask: LabTaskSessionSnapshot | null;
 
-  researchConfig: ResearchConfig | null;
-  research: ResearchResponse | null;
-  researchLoading: boolean;
-  researchError: string | null;
+  // v1.3.6 (spec §21/§22): the Research workspace slice is removed —
+  // Net Search reuses the same backend service through the run contract
+  // and the composer control; no separate workspace state exists.
 
   refreshSysinfo: () => Promise<void>;
   refreshModels: () => Promise<void>;
@@ -320,14 +353,6 @@ type RuntimeState = {
   removePendingAttachment: (id: string) => Promise<void>;
 
   runLabAction: (payload: Record<string, unknown>) => Promise<unknown>;
-
-  loadResearchConfig: () => Promise<void>;
-  searchResearch: (payload: {
-    query: string;
-    backend?: string;
-    maxResults?: number;
-    timeoutSec?: number;
-  }) => Promise<ResearchResponse | undefined>;
 
   connectActivity: () => void;
   disconnectActivity: () => void;
@@ -1450,6 +1475,31 @@ function handleConversationEvent(event: ActivityEvent): void {
       // Preparing → Thinking but never demote Generating.
       transitionPhase("thinking_activity");
 
+      // v1.3.6 (spec §25): Net Search evidence states from REAL wire
+      // events — searching while the research tool executes, results or
+      // failure when it settles, with the stated result count when the
+      // output carries one. No fabricated counts, no inferred intent.
+      {
+        const data: unknown = event.data;
+        const caption: unknown = event.data.caption;
+
+        if (kind === "tool_start" && isResearchToolStart(data)) {
+          useRuntimeStore.setState({
+            netSearchState: "searching",
+            netSearchResultCount: null,
+          });
+        } else if (kind === "tool_end" && isResearchToolEnd(caption)) {
+          const resultText: unknown = event.data.detail;
+          const failed = researchEndFailed(resultText);
+          const count = extractNetSearchResultCount(resultText);
+
+          useRuntimeStore.setState({
+            netSearchState: failed ? "failed" : "results",
+            netSearchResultCount: count,
+          });
+        }
+      }
+
       break;
     }
 
@@ -1613,6 +1663,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   thinkingControl: initialThinkingControl(),
   toolPolicyMode: initialToolPolicyMode(),
   toolAllowlist: initialToolAllowlist(),
+  netSearch: initialNetSearch(),
+  netSearchState: initialNetSearch() ? "enabled" : "off",
+  netSearchResultCount: null,
 
   engine: null,
 
@@ -1631,11 +1684,6 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   labError: null,
   activeLabTaskId: null,
   activeLabTask: null,
-
-  researchConfig: null,
-  research: null,
-  researchLoading: false,
-  researchError: null,
 
   refreshSysinfo: async () => {
     try {
@@ -1699,6 +1747,18 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     persistToolAllowlist(next);
     set({ toolAllowlist: next });
+  },
+
+  // v1.3.6 (spec §25): the Net Search control is a REAL action — the
+  // intent travels with the next run and the state chip always reflects
+  // what actually happened, never a decorative toggle.
+  setNetSearch: (v) => {
+    persistNetSearch(v);
+    set({
+      netSearch: v,
+      netSearchState: v ? "enabled" : "off",
+      netSearchResultCount: null,
+    });
   },
 
   refreshPresets: async () => {
@@ -2325,6 +2385,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         ...(state.toolPolicyMode === "manual"
           ? { toolMode: "manual", toolAllow: state.toolAllowlist }
           : {}),
+        // v1.3.6 (spec §24): the explicit Net Search intent travels with
+        // every request while enabled — server-side enforcement, never
+        // text inference.
+        ...(state.netSearch ? { netSearch: true } : {}),
         // v1.2.8: the attached cross-mode history references travel with
         // every request — the backend retrieves only the relevant portions
         // and labels provenance (the source sessions are never modified).
@@ -2412,6 +2476,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         ...(state.toolPolicyMode === "manual"
           ? { toolMode: "manual", toolAllow: state.toolAllowlist }
           : {}),
+        // v1.3.6 (spec §24): the explicit Net Search intent travels with
+        // every request while enabled — server-side enforcement, never
+        // text inference.
+        ...(state.netSearch ? { netSearch: true } : {}),
         // v1.2.8.1 REPAIR: the regenerated turn runs with the SAME
         // cross-mode history references as the original run. The payload
         // previously omitted historyRefs entirely and the backend had no
@@ -2611,66 +2679,6 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       // failure surface. The previous `throw` escaped every fire-and-forget
       // call site (LabPanel's `void onAction(...)`) as an unhandled
       // promise rejection.
-    }
-  },
-
-  loadResearchConfig: async () => {
-    set({
-      researchError: null,
-    });
-
-    try {
-      const researchConfig = await api.researchConfig();
-
-      set({
-        researchConfig,
-      });
-    } catch (error) {
-      set({
-        researchError:
-          error instanceof Error
-            ? error.message
-            : "Failed to load research configuration.",
-      });
-    }
-  },
-
-  searchResearch: async (payload) => {
-    const query = payload.query.trim();
-
-    if (!query) {
-      throw new Error("Research query is required.");
-    }
-
-    set({
-      researchLoading: true,
-      researchError: null,
-    });
-
-    try {
-      const research = await api.research({
-        ...payload,
-        query,
-      });
-
-      set({
-        research,
-        researchLoading: false,
-      });
-
-      return research;
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Research request failed.";
-
-      set({
-        researchLoading: false,
-        researchError: message,
-      });
-
-      // v1.1.4: no rethrow (see runLabAction — the panel calls this
-      // fire-and-forget; the rethrow was an unhandled rejection).
-      return undefined;
     }
   },
 

@@ -110,6 +110,11 @@ type TurnRecord struct {
 	// ToolPolicyMode records the per-request tool policy (auto/manual).
 	ToolPolicyMode string `json:"toolPolicyMode,omitempty"`
 
+	// NetSearch (v1.3.6, spec §24) records the composer's EXPLICIT
+	// per-request Net Search intent — the real setting that drove the
+	// run, never an inference from message text.
+	NetSearch bool `json:"netSearch,omitempty"`
+
 	// Timing is the measured per-request stage table.
 	Timing RequestTiming `json:"timing,omitempty"`
 }

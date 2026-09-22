@@ -64,8 +64,11 @@ func TestSafeZipPathRejectsTraversal(t *testing.T) {
 }
 
 // TestLLMAndUpdaterValidatorsAgree pins the single-validator contract:
-// internal/llm's engine-archive validator must accept and reject exactly
-// the same member set as the updater's.
+// since v1.3.6 the engine archive extraction lives ONLY here (the llm
+// package provisions through updater.InstallStaged and no longer owns an
+// extractor), and SafeArchivePath remains the exported authority. The
+// test keeps both spellings (internal + exported) pinned to one behavior
+// so a future split cannot drift.
 func TestLLMAndUpdaterValidatorsAgree(t *testing.T) {
 	dir := t.TempDir()
 

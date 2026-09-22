@@ -63,9 +63,15 @@ const (
 // ToolPolicy is the per-request manual tool control. In MANUAL mode only
 // the listed tools may be offered AND executed — the orchestrator never
 // silently re-enables a disabled tool, even when escalating context tiers.
+//
+// NetSearch (v1.3.6, spec §24) is the composer's EXPLICIT per-request
+// Net Search intent: it authorizes the research tool for this request
+// regardless of policy mode (the user asked for it directly), without
+// widening any other tool's availability.
 type ToolPolicy struct {
-	Mode    string
-	Allowed []string
+	Mode      string
+	Allowed   []string
+	NetSearch bool
 }
 
 // NormalizeToolPolicyMode validates a policy mode string.
@@ -79,6 +85,13 @@ func NormalizeToolPolicyMode(s string) string {
 
 // allows reports whether a tool may run under the policy.
 func (p ToolPolicy) allows(name string) bool {
+	// v1.3.6: an explicit Net Search request authorizes exactly the
+	// research tool — server-side enforcement of the user's intent,
+	// never inferred from message text, never extended to other tools.
+	if p.NetSearch && strings.EqualFold(name, "research") {
+		return true
+	}
+
 	if p.Mode != ToolPolicyManual {
 		return true
 	}
@@ -252,6 +265,31 @@ func (o *Orchestrator) newTurnComposer(
 		}
 	} else {
 		selected = toolsets.SelectForTask(c.enabled, task, spec.MaxTools)
+	}
+
+	// v1.3.6 (spec §23/§24): Net Search guarantee — when the user
+	// explicitly enabled Net Search for this request, the research tool
+	// is part of the offered surface regardless of task signals, in
+	// BOTH policy modes. The global per-tool enable gate still applies
+	// (research disabled in settings stays disabled).
+	if policy.NetSearch {
+		found := false
+
+		for _, s := range selected {
+			if strings.EqualFold(s, "research") {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			for _, e := range c.enabled {
+				if strings.EqualFold(e, "research") {
+					selected = append(selected, e)
+					break
+				}
+			}
+		}
 	}
 
 	c.setTools(selected, task)

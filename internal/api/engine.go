@@ -88,6 +88,13 @@ type engineSnapshot struct {
 	// episode (bounded by maxAutoRestarts; reset after a stable healthy
 	// episode). Lets the UI report recovery honestly.
 	Restarts int `json:"restarts,omitempty"`
+
+	// v1.3.6 (spec §7): first-class engine diagnostics — binary path,
+	// recorded/probed version, decoded failure classification, restart
+	// count, recent stdout/stderr and the full failure report. The UI
+	// renders the REAL engine truth (Ready/Starting/Updating/Failed,
+	// exact failure reason) instead of a generic spinner.
+	Diagnostics *llm.EngineDiagnostics `json:"diagnostics,omitempty"`
 }
 
 // nativeEngineSnapshot is the native engine status block (local reads
@@ -210,6 +217,11 @@ func (s *Server) engineSnapshot() engineSnapshot {
 		snap.LoadedPath = s.llama.LoadedModel()
 		snap.Logs = tailStrings(s.llama.Logs(), 24)
 	}
+
+	// v1.3.6 (spec section 7): the diagnostics block rides along on
+	// every llama-path snapshot (remote providers have no local engine).
+	diag := s.llama.EngineDiagnostics(s.src.Load())
+	snap.Diagnostics = &diag
 
 	// v1.1.5: native engine status block (local reads only).
 	if s.native != nil {

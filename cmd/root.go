@@ -74,6 +74,20 @@ func RunWithDefaultFn(defaultFn func() int) int {
 		}
 	}
 
+	// v1.3.6 (spec §18): fold the 1.3.5-era AppData data root
+	// (%LOCALAPPDATA%\SHEYTAN-LA — written by the old installer's
+	// SHEYTAN_DATA_DIR env var) into the canonical <AppRoot>\data
+	// root. Hash-verified, restart-safe, engine bundle as a unit,
+	// legacy root removed only after full verification. Runs ONLY
+	// when no explicit data-root override is set.
+	appDataReport, appDataErr := config.MigrateLegacyAppDataRoot(cfg)
+	if appDataErr != nil {
+		logging.Default().Error("paths", "legacy AppData migration incomplete (will retry on next start): %v", appDataErr)
+	}
+	for _, line := range config.LogMigrationNotes(nil, appDataReport) {
+		logging.Default().Info("paths", "%s", line)
+	}
+
 	if err := cfg.EnsureDirs(); err != nil {
 		logging.Default().Error("boot", "ensure dirs: %v", err)
 	}

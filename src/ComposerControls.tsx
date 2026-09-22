@@ -1,6 +1,6 @@
 // ComposerControls.tsx — v1.2.5 per-request composer controls.
 //
-// Two REAL controls (not visual-only):
+// Three REAL controls (not visual-only):
 //
 //   Thinking ▾    auto | fast | thinking — sent with every run request;
 //                 changes the backend's tier posture, the thinking nudge
@@ -11,13 +11,23 @@
 //                 restriction is enforced server-side and is never
 //                 silently re-enabled (see agent.WithToolPolicy).
 //
+//   Net Search    v1.3.6 (spec §23/§25): explicit per-request Net Search
+//                 intent, enforced server-side (agent.WithNetSearch). The
+//                 state chip reflects the REAL wire evidence: searching →
+//                 results / failed — external results are provenance,
+//                 never model-invented.
+//
 // The live status chip (backend "status" events: measured tier/token
 // telemetry) rides beside them so the user sees what the controls did.
 
 import { useMemo, useState } from "react";
 
 import { useRuntimeStore } from "./store";
-import { THINKING_OPTIONS, type ThinkingControl } from "./run-events";
+import {
+  THINKING_OPTIONS,
+  type ThinkingControl,
+  type NetSearchState,
+} from "./run-events";
 
 function ComposerControls() {
   const thinkingControl = useRuntimeStore((s) => s.thinkingControl);
@@ -28,6 +38,12 @@ function ComposerControls() {
   const setToolAllowed = useRuntimeStore((s) => s.setToolAllowed);
   const tools = useRuntimeStore((s) => s.tools);
   const liveStatus = useRuntimeStore((s) => s.liveStatus);
+
+  // v1.3.6: Net Search control state.
+  const netSearch = useRuntimeStore((s) => s.netSearch);
+  const setNetSearch = useRuntimeStore((s) => s.setNetSearch);
+  const netSearchState = useRuntimeStore((s) => s.netSearchState);
+  const netSearchResultCount = useRuntimeStore((s) => s.netSearchResultCount);
 
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -162,6 +178,21 @@ function ComposerControls() {
         ) : null}
       </div>
 
+      {/* v1.3.6 (spec §23/§25): Net Search control — REAL per-request
+          action, enforced server-side. The evidence chip renders the
+          measured states from wire events (never invented). */}
+      <div className="control-menu">
+        <button
+          type="button"
+          className={`control-button${netSearch ? " active" : ""}`}
+          aria-pressed={netSearch}
+          onClick={() => setNetSearch(!netSearch)}
+          title="External search for this request: results are evidence with provenance, fetched by the Net Search backend — not invented by the model"
+        >
+          Net Search{netSearch ? netSearchStateSuffix(netSearchState, netSearchResultCount) : ""}
+        </button>
+      </div>
+
       {/* Live status chip — backend "status" events only (measured values) */}
       {liveStatus ? (
         <span className="control-status-chip" role="status">
@@ -170,6 +201,27 @@ function ComposerControls() {
       ) : null}
     </div>
   );
+}
+
+// netSearchStateSuffix renders the live evidence states (spec §25):
+// SEARCHING / RESULTS AVAILABLE (with the stated count when known) /
+// SEARCH FAILED. OFF and ENABLED are carried by the button itself.
+function netSearchStateSuffix(
+  state: NetSearchState,
+  resultCount: number | null,
+): string {
+  switch (state) {
+    case "searching":
+      return " · Searching…";
+    case "results":
+      return resultCount !== null
+        ? ` · ${resultCount} results`
+        : " · Results";
+    case "failed":
+      return " · Failed";
+    default:
+      return "";
+  }
 }
 
 export default ComposerControls;

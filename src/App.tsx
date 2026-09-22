@@ -19,7 +19,6 @@ const AgentBody = lazy(() => import("./AgentBody"));
 const AgentHeader = lazy(() => import("./AgentHeader"));
 const AgentSidebar = lazy(() => import("./AgentSidebar"));
 const LabPanel = lazy(() => import("./LabPanel"));
-const ResearchPanel = lazy(() => import("./ResearchPanel"));
 const SettingsPanel = lazy(() => import("./SettingsPanel"));
 const SystemPanel = lazy(() => import("./SystemPanel"));
 const WorkspacePanel = lazy(() => import("./WorkspacePanel"));
@@ -89,6 +88,17 @@ function ShortcutHelpOverlay({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+// v1.3.6 (spec §29): the ONLY version display path. The backend's
+// runtime appVersion (/api/state → config.AppVersion) is authoritative
+// once loaded; until then the build-time canonical constant from
+// package.json covers first paint. There is NO hard-coded version
+// fallback anywhere in the frontend — a stale literal can never return.
+function displayVersion(appVersion: string | null): string {
+  const raw = appVersion ?? __APP_VERSION__;
+
+  return `v${raw.replace(/^v/, "")}`;
 }
 
 function App() {
@@ -220,14 +230,14 @@ function App() {
         </div>
 
         <div className="topbar-meta">
-          <span>{appVersion ?? "v1.2.2"}</span>
+          <span>{displayVersion(appVersion)}</span>
         </div>
       </header>
 
       <div className="app-body">
         <aside className="sidebar">
           {/* v1.1.9: mode-aware navigation — Chat surfaces Workspace,
-              Research, and Settings; Agent adds Coding Lab. One label per
+              and Settings; Agent adds Coding Lab. One label per
               item, no repeated headings, no per-item descriptions. */}
           <nav className="app-navigation m-stagger" aria-label="Workspace">
             {visibleLayers.map((layer, index) => (
@@ -298,12 +308,6 @@ function App() {
               <PanelErrorBoundary label="Coding Lab" resetKey="lab">
                 <Suspense fallback={<PanelLoading label="Coding Lab" />}>
                   <LabPanel />
-                </Suspense>
-              </PanelErrorBoundary>
-            ) : effectiveView === "research" ? (
-              <PanelErrorBoundary label="Research" resetKey="research">
-                <Suspense fallback={<PanelLoading label="Research" />}>
-                  <ResearchPanel />
                 </Suspense>
               </PanelErrorBoundary>
             ) : effectiveView === "system" ? (

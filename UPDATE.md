@@ -1,4 +1,152 @@
-# UPDATE.md — v1.3.5 Windows CTest Completion / Native Test Hardening
+# UPDATE.md — v1.3.6 Engine Lifecycle, System Discovery, Net Search & Canonical Data Root
+
+**Release:** `v1.3.6` (canonical application version; single version
+hierarchy: package.json → release-version.mjs → config.go /
+build/config.yml / SIGNATURE)
+**Base:** `main @ 57f0c1b` (`1.3.5`) · **Date:** 2026-09-22
+**Package:** `SHEYTAN-Local-Agent-v1.3.6-UPDATE.zip`
+**ROADMAP.md:** untouched by this release (blob SHA verified unchanged:
+`c7e2c1720eb5e97bd932c0d76100b8719193e650`).
+
+This release root-fixes the engine ownership defect class reported in
+the 2026-09-22 runtime evidence: engine startup raced the engine
+updater, `0xC0000139` (STATUS_ENTRYPOINT_NOT_FOUND) was retried through
+the compatibility ladder as if it were an argument problem, a process
+answering `/health` on port 8080 could be adopted without any identity
+proof, and the installer's hidden `SHEYTAN_DATA_DIR` environment
+variable kept a second data root alive in AppData.
+
+1. **One provisioning authority.** `internal/updater.InstallStaged` is
+   now the only path that puts a llama.cpp engine into the managed bin
+   directory: staged download → extraction → static candidate
+   validation → atomic directory swap (old dir renamed aside, staging
+   renamed in, non-engine files merged back) → installed-binary
+   identity verification (SHA-256) → commit (tag + `engine-install.json`
+   manifest) → cleanup. Any failure before the commit restores the
+   previous engine directory; last-known-good is never destroyed and
+   obsolete staging archives are removed. The in-place `copyAll`
+   overwrite of a live bin directory is gone.
+
+2. **Engine-owned transactional updates.** `LlamaServer.UpdateEngineNow`
+   wraps the whole update in an EXCLUSIVE lifecycle operation: it holds
+   `switchMu` start-to-finish (Start/Restart/prewarm can never
+   interleave), stops the engine itself, installs through the single
+   authority, restarts the exact installed binary and verifies
+   readiness. `updater.UpdateEngineWithProgress` delegates to it
+   (`TransactionalEngine`), so the scheduled updater and the manual
+   updater both take the same engine-owned path.
+
+3. **Identity-proven adoption (no blind port adoption).**
+   `internal/proc.ListeningProcess` attributes a listening TCP port to
+   a PID through real OS APIs (GetExtendedTcpTable +
+   QueryFullProcessImageName on Windows; /proc/net/tcp +
+   /proc/<pid>/exe on Linux — never cmd.exe/PowerShell/tasklist
+   parsing). Adoption of a port-serving process now REQUIRES that its
+   executable equals the managed engine path; a foreign process is
+   refused with recorded evidence (PID + executable), never killed
+   automatically.
+
+4. **`0xC0000139` is a first-class diagnostic.** Loader-class Windows
+   exit codes (0xC0000135/0xC0000139/0xC000007B/0xC0000142/… and Win32
+   5/126/127/193) decode into actionable reports (class, summary,
+   advice, binary identity, dependency evidence); when the OS exit code
+   is truncated (Unix keeps 8 bits), the loader's own NTSTATUS text in
+   the captured stderr is classified. A new ENGINE PREFLIGHT
+   (`internal/llm/preflight.go`: exists → architecture → dependency
+   closure via debug/pe → bounded `--version` probe, sharing the
+   production subprocess runner) catches these failures BEFORE any
+   model launch.
+
+5. **No retry storm on deterministic failures.** Loader-class startup
+   failures break the compatibility ladder immediately — the ladder
+   remains only for genuine llama.cpp argument-layout problems (the
+   bounded repair behavior is unchanged and still tested).
+
+6. **System Engine Discovery.** `internal/engdiscovery` searches for an
+   existing compatible llama.cpp / shtn-engine-host package before any
+   download: Tier 0 (managed dir + persisted discovery cache),
+   Tier 1 (PATH, exe dir, sibling bins, common user locations),
+   Tier 2 (bounded parallel full-system scan — background only, never
+   on the startup path). Validation is non-destructive: static checks
+   first (format + architecture + PE import closure), a bounded
+   `--version` probe last. Validated candidates are imported into the
+   managed directory with byte-identical dedupe (SHA-256) and
+   provenance recorded.
+
+7. **Canonical data root + AppData migration.** The NSIS installer no
+   longer writes the machine `SHEYTAN_DATA_DIR` env var (it DELETES it,
+   retiring the 1.3.5 AppData contract), creates the install-local
+   `<AppRoot>\data` tree and grants the built-in Users group modify
+   rights (icacls, inheritable) so mutable data stays writable under a
+   Program Files install. The runtime migrates a 1.3.5-era
+   `%LOCALAPPDATA%\SHEYTAN-LA` root into the canonical root once —
+   hash-verified, idempotent, restart-safe, engine bundle as a unit
+   (two llama.cpp builds are never mixed), legacy root removed only
+   after full verification, and an explicit user override is never
+   touched.
+
+8. **Net Search (Research tab removed, backend reused).** The Research
+   workspace layer/tab/panel is removed with no dead route (an old
+   `#research` hash resolves to Agent). The SAME research service now
+   backs a per-request Net Search control in BOTH Chat and Agent
+   composers (`Thinking · Tools · Net Search`), enforced server-side
+   via `agent.WithNetSearch` (the research tool is authorized for that
+   request only, recorded in telemetry) and reachable directly at
+   `/api/net-search` (same handler as the `/api/research` shim — one
+   implementation). Settings labels read "Net Search"; persisted JSON
+   keys are unchanged.
+
+9. **Visible version fixed.** The `appVersion ?? "v1.2.2"` fallback in
+   `src/App.tsx` is replaced by a build-time canonical constant
+   (`__APP_VERSION__` injected by Vite from package.json — the single
+   release source); the backend's runtime version stays authoritative
+   once loaded. A regression suite (`version-contract.test.ts`) blocks
+   any stale version literal from returning to shipped source.
+
+10. **Engine diagnostics surface.** `/api/engine` now carries a
+    `diagnostics` block (binary path, recorded tag + probed version,
+    decoded failure class, restart count, recent stdout/stderr, the
+    full failure report and the last preflight evidence) so the UI can
+    render the REAL engine state (Ready/Starting/Updating/Failed with
+    the exact reason) instead of a generic spinner.
+
+11. **Release identity.** Canonical `1.3.6` synced through
+    package.json → `internal/config/config.go` (`AppVersion`),
+    `build/config.yml` (`productVersion`), `SIGNATURE`. Version-only
+    identity: tag `v1.3.6`, release title `1.3.6`, no codename, no
+    suffix, no `APP_VERSION_FULL`.
+
+## Verification status (truthful)
+
+Verified locally on Linux x86-64 (Go 1.27.1, Node 24):
+
+- `gofmt` clean (one pre-existing drift in `internal/research/service.go`
+  also corrected); `go vet -tags headless ./internal/... ./cmd/...` clean.
+- `go test ./internal/... -tags headless -count=1` — 51 packages ok,
+  including the new suites: engine lifecycle/adoption/classification/
+  transactional-update/race (`internal/llm`), installer transaction and
+  rollback (`internal/updater`), process identity (`internal/proc`),
+  static analysis (`internal/engcheck`), discovery
+  (`internal/engdiscovery`), migration + path invariants
+  (`internal/config`).
+- Frontend: `npm ci`, `typecheck`, `lint` (0 warnings), `test:units`
+  (96/96, including the new workspace/net-search/version contracts),
+  `test:release` (28/28), `build`, `verify:web`; the stale `v1.2.2`
+  literal is gone from the rebuilt `web/static` bundle.
+
+NOT verified in this environment (remains CI / Windows-machine owned):
+
+- Windows builds, Windows NSIS installer execution, Windows native C++
+  CTest, Windows executable smoke tests, and the real-Windows runtime
+  acceptance of §45.
+- GitHub Actions runs (no commit pushed from this environment), the
+  v1.3.6 tag, release publication, and published asset hashes.
+- A real llama.cpp engine boot on user hardware.
+
+---
+
+# UPDATE.md — v1.3.5 Windows CTest Completion / Native Test Hardening (historical)
+
 
 **Release:** `v1.3.5` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /

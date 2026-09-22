@@ -10,39 +10,95 @@ Branch: `main`
 # Latest Agent Handoff
 
 ## Task
-SHEYTAN-LA v1.3.5 (Windows CI completion / native test hardening): root-fix the two Windows CTest failures of Actions run 35583009466 (FAIL tokenizer, FAIL generate — both caused by POSIX-only temporary-path assumptions in the native tests), standardize ALL native-test temporary files onto one shared cross-platform helper, audit the whole native tree for the same defect class, keep CTest a real release gate (12/12 everywhere, no skips/disables/exclusions), preserve the v1.3.4 Repository Intelligence slice untouched, and ship release 1.3.5 with the version-only identity (tag v1.3.5, title 1.3.5).
-
-## Objective
-v1.3.5 must reach Windows CTest 12/12 (and keep Linux 12/12) with NO weakened assertions, NO skipped/disabled tests, NO platform exclusions; native temporary-file handling must be centralized in ONE reusable helper (tests/temp_dir.h) with no test depending on a hard-coded /tmp path, TMPDIR being set, or the working directory; the fix must be root-cause (cross-platform), not a one-off Windows hack; every additional genuine portability defect found during the audit must be fixed without redesigning the engine or its subprocess/IPC architecture; the v1.3.4 repoindex feature and all release gates must remain green; the final deliverable is an UPDATE zip containing ONLY the files changed/added by this upgrade plus an update manifest.
+SHEYTAN-LA v1.3.6 (engine lifecycle ownership, system discovery, Net
+Search, canonical data root): root-fix the Start/Update race, the blind
+port-8080 adoption, the unclassified 0xC0000139 loader failures, the
+competing engine download paths, the AppData second data root, the
+Research-tab discoverability problem, and the stale v1.2.2 UI version
+fallback — while preserving the proven architecture (Chat/Agent shared
+sessions, context planning, repository intelligence, Coding Lab,
+native engine, evidence/verification semantics, local-first operation)
+and the green CI baseline.
 
 ## Current state
-All v1.3.5 work is IMPLEMENTED and VERIFIED on this host: the two failing tests (test_tokenizer, test_generate) now use the shared shtn_test::TempDir helper and pass; the three duplicated private tmp_dir() copies (test_gguf, test_model, test_host) are consolidated onto the same helper; test_engine's "/definitely/not/here.gguf" POSIX literal is replaced by a portable nonexistent-path fixture. Two further GENUINE defects were found and fixed by the audit: (1) native/engine/src/gguf.cpp MappedFile Windows handle inversion — close() passed the SECTION handle to UnmapViewOfFile (which needs the VIEW base address), so every model unload leaked a section + view and pinned the .gguf file until process exit (locked model files after unload on Windows); (2) test_host's Phase 5 fixtures resolved via getenv plus a cwd-relative "../tests/fixtures" fallback that only worked under CTest's default working directory — now the configure-time SHTN_FIXTURES_DIR macro (plus the Makefile rule define that was missing). New regression contracts: portable temp-directory contract (create/write/read/close/remove, spaces, uniqueness, RAII) and mapped-file release contract (unload must make the model file deletable) in test_gguf/test_model. A CI "Native temp-path portability gate" (git grep for /tmp literals and direct getenv(TMPDIR) outside temp_dir.h) blocks reintroduction. Verification: Linux cmake --fresh + ctest 12/12 (parallel -j4 too, zero temp leftovers, foreign-cwd execution OK); make -C native/engine test 12/12; Windows full cross-build (llvm-mingw clang 23, static) of engine + host + 12 tests executed under Wine 11.18 → 12/12, zero temp leftovers (pre-fix v1.3.4 binaries reproduce both original failures and the file lock in the same harness); gofmt clean; go vet -tags headless ./internal/... ./cmd/... clean; race gate green; go test ./internal/... -tags headless 47/47 packages including internal/repoindex (v1.3.4 feature intact) and internal/native/engine real-host integration; stress 47/47; frontend fully green (npm ci, typecheck, lint, 84/84 units, 28/28 release tests, build, verify:web --dist; web/static byte-identical — no frontend source changed); release metadata synced to 1.3.5, --check green, codename gate zero matches.
+All v1.3.6 work is IMPLEMENTED on branch `v1.3.6-engine-lifecycle`
+(base `57f0c1b` = 1.3.5). Verified on Linux x86-64 (Go 1.27.1,
+Node 24): gofmt + go vet (-tags headless) clean; go test
+./internal/... -tags headless 51/51 packages including the new suites
+(engine lifecycle/adoption/classification/transactional update/race in
+internal/llm; installer transaction in internal/updater; process
+identity in internal/proc; static analysis in internal/engcheck;
+discovery in internal/engdiscovery; migration + path invariants in
+internal/config); frontend typecheck, lint (0 warnings), test:units
+96/96 (workspace/net-search/version contracts included),
+test:release 28/28, build, verify:web; release-version.mjs --check
+green at 1.3.6; ROADMAP.md blob SHA unchanged
+(c7e2c1720eb5e97bd932c0d76100b8719193e650).
 
-## Surfaces touched (all changes)
-- native/engine/tests/temp_dir.h (NEW): shared cross-platform RAII temp-dir helper (std::filesystem::temp_directory_path, collision-free names, native paths, spaces-safe, no-throw recursive cleanup)
-- native/engine/tests/{test_tokenizer,test_generate,test_gguf,test_model,test_host,test_engine}.cpp: portable temp handling; consolidation; new temp/mapped-file regression contracts; test_host uses SHTN_FIXTURES_DIR
-- native/engine/src/gguf.cpp: MappedFile Windows open/close corrected (handle_ = section, map_ = view base; file handle closed at open; close() unmaps the view, closes the section)
-- native/engine/Makefile: test_host rule bakes -DSHTN_FIXTURES_DIR like forward/generate
-- .github/workflows/build-desktop.yml: Native temp-path portability gate in the audit job
-- package.json / internal/config/config.go / build/config.yml / SIGNATURE: canonical version 1.3.5 (synced by scripts/release-version.mjs)
-- README.md, UPDATE.md, agent.md, worklog.md, REPLACEMENT-MANIFEST.txt, REPLACEMENT-SHA256.txt: release documentation
+NOT verified in this environment — remains owned by the Windows
+development machine and CI: Windows builds (exe/ZIP/NSIS installer),
+Windows native C++ CTest (12/12 gate), Windows Go verification, the
+real-Windows runtime acceptance (§45), GitHub Actions runs, the
+v1.3.6 tag, release publication and published-asset hashes. A real
+llama.cpp boot on user hardware is likewise unverified here.
+
+## Surfaces touched
+- internal/proc: identity.go + identity_windows.go + identity_unix.go
+  (NEW) — ListeningProcess/ProcessExePath/SameExecutable via real OS
+  APIs; never shell parsing.
+- internal/engcheck (NEW): single static-analysis authority — SHA-256
+  identity, PE/ELF architecture sniff, Windows import closure.
+- internal/llm: loaderclass.go (NEW), preflight.go (NEW),
+  diagnostics.go (NEW), adoption.go (NEW); llama.go — ensureBinary now
+  tiers through discovery import and updater.InstallStaged (the old
+  downloadEngineArchive/llamaDownloadURL/extractEngineArchive
+  duplicates are DELETED), preflight gate before any model launch,
+  loader-class failures break the compatibility ladder, identity-proven
+  adoption, UpdateEngineNow engine-owned transaction,
+  EngineDiagnostics(); exitFailure carries the raw exit code.
+- internal/updater: install.go (NEW) — InstallStaged/
+  InstallStagedFromArchive/ImportCandidate (stage → validate → atomic
+  swap → verify → commit → cleanup, rollback on failure, dedupe by
+  SHA-256); TransactionalEngine delegation in UpdateEngineWithProgress;
+  extractZip honors stored Unix modes.
+- internal/engdiscovery (NEW): tiered discovery (0/1/2), persisted
+  cache, non-destructive validation, bounded probe via the production
+  subprocess runner.
+- internal/config: migrate_appdata.go (NEW) — legacy AppData root
+  migration (idempotent, hash-verified, engine bundle as a unit);
+  migrate_appdata_test.go (NEW) incl. hard path invariants.
+- cmd/root.go: legacy AppData migration wired after
+  MigrateMalformedRoots.
+- packaging/nsis/installer.nsi: install-local data tree + Users modify
+  ACL (icacls), DataDir registry note, legacy machine SHEYTAN_DATA_DIR
+  env var DELETED.
+- internal/api: /api/net-search registered (same handler — one
+  implementation); /api/run body gains netSearch; /api/engine snapshot
+  gains the diagnostics block.
+- internal/agent: WithNetSearch + ToolPolicy.NetSearch (server-side
+  enforcement, research tool guaranteed offered and executable for that
+  request only); ctxtelemetry TurnRecord.NetSearch.
+- Frontend: ResearchPanel.tsx deleted; research layer removed from
+  workspace.ts/shortcuts.ts/App.tsx/store/api client; Net Search
+  control added to ComposerControls (states off/enabled/searching/
+  results/failed from REAL wire events; result count only when stated);
+  vite.config.ts injects __APP_VERSION__ from package.json;
+  vite-env.d.ts declares it; App.tsx displayVersion() replaces the
+  v1.2.2 fallback; settings labels → Net Search (JSON keys unchanged);
+  layers.css/motion.css research blocks removed; new tests
+  workspace-v136 / net-search / version-contract wired into
+  test:units; web/static rebuilt (ResearchPanel.js gone, no 1.2.2
+  literal in the bundle).
+- Version: package.json 1.3.6 → release-version.mjs synced
+  internal/config/config.go, build/config.yml, SIGNATURE; package-lock
+  root version synced.
 
 ## Verification notes
-- Windows-native MSVC CTest, the Windows executable, portable ZIP, NSIS installer and publication remain CI-owned (this host cannot run MSVC/NSIS); the local Windows-equivalent proof is the fully-static llvm-mingw cross-build of all 13 binaries executed under Wine (12/12 tests pass).
-- Wails desktop shell needs GTK4/WebKitGTK system packages (headless tag is the documented verification path; CI installs them on the Linux packaging runner).
-- No deleted files; no frontend assets regenerated (no frontend source changed).
+Everything in "Current state" corresponds to an executed check in this
+environment. The Windows/CI-owned items above were NOT executed and
+must not be claimed as passing. The UPDATE ZIP manifest records the
+honest verification summary.
 
-## Recommended next action
-Commit this tree, tag v1.3.5, push; CI runs the full matrix — the Windows job must now reach native CTest 12/12, then packaging, installer verification and publication with the version-only title 1.3.5.
-
-## Do not redo
-- Do NOT reintroduce "/tmp", getenv("TMPDIR"), cwd-relative fixture paths or a second temp-helper implementation in native/engine — use tests/temp_dir.h; the audit-job portability gate fails the build otherwise.
-- Do NOT store raw Win32 handles in MappedFile::map_ — the class contract is handle_ = platform mapping handle (fd / section), map_ = mapping base (what UnmapViewOfFile / munmap take); test_gguf/test_model pin the release contract (a mapped-then-closed file must be deletable).
-- Do NOT skip, disable or exclude tokenizer/generate (or any native test) to obtain green CI; the expected CTest result is 12/12 on BOTH platforms.
-- Do NOT resolve test fixtures from the environment or the working directory — fixtures come from the configure-time SHTN_FIXTURES_DIR macro (CMake and Makefile both define it).
-- Do NOT reintroduce a product-prefixed/tag-derived release title, a codename fragment or a second identity variable; do NOT cache native/engine/build (--fresh always); do NOT hand-edit SIGNATURE's version line.
-- Do NOT weaken the codename gate, the repoindex caps/budgets or the Evidence verified/inferred distinction (v1.3.4 contracts).
-- Do NOT modify ROADMAP.md — the blob SHA stays c7e2c1720eb5e97bd932c0d76100b8719193e650.
 <!-- sheytan:handoff:end -->
 
 Current release: `v1.3.4` — codename-gate root-fix + Repository

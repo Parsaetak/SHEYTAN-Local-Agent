@@ -18,7 +18,6 @@ const read = (name: string): string =>
   readFileSync(join(import.meta.dirname, name), "utf8");
 
 const styles = read("styles.css");
-const layers = read("layers.css");
 const settingsCss = read("settings.css");
 
 function assertContains(
@@ -64,14 +63,9 @@ test("workspace panel owns a vertical scroll viewport", () => {
   }
 });
 
-test("research panel owns a vertical scroll viewport", () => {
-  const idx = layers.indexOf(".research-panel");
-  if (idx < 0) throw new Error("research-panel rule missing");
-  const rule = layers.slice(idx, layers.indexOf("}", idx));
-  if (!/overflow:\s*auto/.test(rule)) {
-    throw new Error(`research-panel must scroll: ${rule}`);
-  }
-});
+// v1.3.6: the "research panel owns a vertical scroll viewport" contract
+// was removed with the Research tab itself (spec §21/§22) — Net Search
+// renders inside the composers and no .research-panel rule exists.
 
 test("settings page owns a vertical scroll viewport", () => {
   const idx = settingsCss.indexOf(".settings-page");
