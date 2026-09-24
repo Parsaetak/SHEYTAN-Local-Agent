@@ -253,6 +253,13 @@ upgrade_replaced:
 
   WriteRegStr HKLM "${REGKEY}" "DataDir" "$INSTDIR\data"
   DeleteRegValue HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "SHEYTAN_DATA_DIR"
+  ; v1.3.7: broadcast the environment change so already-running processes
+  ; (and the shell that launches them) observe the deletion instead of
+  ; inheriting the stale SHEYTAN_DATA_DIR=%LOCALAPPDATA%\SHEYTAN-LA into
+  ; children -- a stale value resolves as an "explicit override", which
+  ; skips every migration and recreates the retired AppData root for one
+  ; launch window.
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 
   ; Windows application identity (AppUserModelID) — notifications and
   ; taskbar grouping resolve to SHEYTAN-LA.

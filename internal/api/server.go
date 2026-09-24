@@ -2253,6 +2253,14 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 // protocol level so half-open TCP sockets are detected and released.
 const wsPingInterval = 25 * time.Second
 
+// idleSettleWaitBudget (v1.3.7) bounds how long an idle sentinel may WAIT on
+// a terminal-but-unsettled run's settlement edge before degrading to the
+// legacy no-lastRun sentinel. Real settle-tails are pure durable file I/O
+// (summary roll, agent.md handoff, recall index, continuum rollover — no
+// LLM call), so single-digit milliseconds is the norm; the budget exists so
+// a wedged durable step can never strand a WebSocket attach indefinitely.
+const idleSettleWaitBudget = 10 * time.Second
+
 // standbyRecheckInterval (v1.2.8.1) bounds how long a standby connection
 // can miss a wake signal — it re-checks the runs map itself. The wake
 // channel fires for runs that start AFTER the connection entered standby;
@@ -2305,6 +2313,60 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	idleSentinel := func() map[string]any {
+		// v1.3.7 SETTLEMENT BARRIER — the fix for the Actions run
+		// 35749698189 failure (TestStaleRunEventsFilteredByServer:
+		// "idle sentinel carries no lastRun outcome — the v1.2.6
+		// terminal replay regressed").
+		//
+		// The race: the run's terminal VISIBILITY flips early —
+		// observe() folds the orchestrator's `done` activity and
+		// sets running=false — while the terminal OUTCOME is
+		// recorded only later, by settle(), after every durable
+		// settle-tail artifact (reply persist → summary roll →
+		// agent.md handoff → recall index → continuum rollover,
+		// the v1.2.9 durable completion ordering). A socket that
+		// attaches inside that window reached the idle path, read
+		// an EMPTY registry, and emitted a lastRun-less sentinel
+		// the frontend could not finalise from.
+		//
+		// The barrier: when the session's registered run is
+		// terminal but its settlement edge is still open, WAIT for
+		// it — deterministic synchronization on the edge closed
+		// by settleTerminal (which settle() calls strictly after
+		// outcomes.record), never a sleep. The invariant restored:
+		// a run visible as no longer running ALWAYS has a
+		// recoverable outcome on the idle/lastRun path. The wait
+		// is bounded so a pathological settle-tail degrades to the
+		// old sentinel instead of hanging the socket forever, and
+		// it releases instantly when the client is gone.
+		s.runsMu.Lock()
+
+		var live *runLive
+
+		if rs, ok := s.runs[sessionID]; ok && rs != nil && rs.live != nil {
+			live = rs.live
+		}
+
+		s.runsMu.Unlock()
+
+		if live != nil && !live.snapshot().Running {
+			select {
+			case <-live.settledSignal():
+				// Outcome recorded + state settled — build
+				// the sentinel with the lastRun block below.
+			case <-clientGone:
+				// The client left while the run was still
+				// settling; the caller's next write fails
+				// and tears the connection down.
+			case <-time.After(idleSettleWaitBudget):
+				// Safety valve: a settle-tail stuck past
+				// the budget (e.g. wedged durable step)
+				// must not strand the socket. The sentinel
+				// degrades to the legacy no-lastRun form;
+				// the registry still serves later attaches.
+			}
+		}
+
 		// v1.2.6: the idle sentinel now carries the AUTHORITATIVE last
 		// run outcome (bounded registry). A socket that attaches after
 		// a run finished — the exact case that previously left the UI

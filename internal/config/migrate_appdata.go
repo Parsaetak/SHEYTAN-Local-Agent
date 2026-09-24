@@ -234,6 +234,65 @@ var appRootDataEntries = []string{
 	"workspace", "charts", "sandbox", "run", "research",
 }
 
+// mergeStrayLogsDir folds a stray application-root logs directory into
+// the canonical logs directory (v1.3.7 — see the call site for why the
+// plain collision rule never worked for this entry). Every stray file is
+// copied with copyVerified (temp file + size + SHA-256 + rename); an
+// existing canonical file is NEVER overwritten (the live app.log stays
+// authoritative). The stray directory is removed only after every file
+// landed verified — an interrupted merge leaves it in place and retries
+// on the next start (already-copied files are skipped by the
+// exists-check, so the fold is idempotent).
+func mergeStrayLogsDir(src, dst string, report *MigrationReport) error {
+	moved := 0
+
+	walkErr := filepath.Walk(src, func(p string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
+		}
+
+		rel, rerr := filepath.Rel(src, p)
+		if rerr != nil {
+			return rerr
+		}
+
+		target := filepath.Join(dst, rel)
+
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+
+		if !info.Mode().IsRegular() {
+			return nil // symlinks/special files never migrate
+		}
+
+		if _, serr := os.Stat(target); serr == nil {
+			return nil // the canonical tree owns this name — keep it
+		}
+
+		if cerr := copyVerified(p, target); cerr != nil {
+			return fmt.Errorf("fold %s: %w", rel, cerr)
+		}
+
+		moved++
+
+		return nil
+	})
+
+	if walkErr != nil {
+		return walkErr
+	}
+
+	if rerr := os.RemoveAll(src); rerr != nil {
+		return rerr
+	}
+
+	report.Merged = append(report.Merged,
+		fmt.Sprintf("logs: %d historical log file(s) folded into the canonical data root", moved))
+
+	return nil
+}
+
 // MigrateAppRootDirectData folds a pre-<AppRoot>\data layout —
 // application data created DIRECTLY under the executable's directory —
 // into the canonical install-local <AppRoot>\data root (v1.3.6 spec
@@ -297,6 +356,21 @@ func migrateAppRootEntries(appRoot, canonical string, report *MigrationReport) e
 		dst := filepath.Join(canonical, name)
 
 		if _, err := os.Stat(dst); err == nil {
+			// v1.3.7: `logs` is the ONE entry the boot order guarantees to
+			// collide — the log catcher (cmd/root.go) starts BEFORE this
+			// migration and creates the canonical <AppRoot>\data\logs.
+			// Under the v1.3.6 collision rule ("destination exists → leave
+			// the stray") the historical <AppRoot>\logs therefore NEVER
+			// folded. Fold it now with a verified, never-overwriting merge.
+			if name == "logs" {
+				if merr := mergeStrayLogsDir(src, dst, report); merr != nil {
+					report.Collisions = append(report.Collisions,
+						fmt.Sprintf("logs: historical log merge incomplete (%v); the stray logs directory stays for the next start", merr))
+				}
+
+				continue
+			}
+
 			report.Collisions = append(report.Collisions,
 				fmt.Sprintf("%s: canonical entry already exists; the stray application-root entry was left untouched", name))
 

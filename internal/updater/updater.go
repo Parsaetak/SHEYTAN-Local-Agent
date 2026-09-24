@@ -195,7 +195,21 @@ type ghAsset struct {
 // the API is rate-limited (anonymous GitHub API is capped at 60 req/h per
 // IP) we fall back to the releases Atom feed and verify candidate tags by
 // HEAD-checking the asset URL.
+// latestTagProbe is the swappable release probe behind LatestTag (tests
+// inject a deterministic answer; production always resolves from the
+// network — the same seam pattern as netcheck.SetProbe).
+var latestTagProbe func(ctx context.Context) (string, error)
+
+// SetLatestTagForTest overrides the release-tag probe (tests only).
+func SetLatestTagForTest(fn func(ctx context.Context) (string, error)) {
+	latestTagProbe = fn
+}
+
 func LatestTag(ctx context.Context) (string, error) {
+	if latestTagProbe != nil {
+		return latestTagProbe(ctx)
+	}
+
 	if netcheck.IsOffline() {
 		return "", fmt.Errorf("offline — skipping update check")
 	}

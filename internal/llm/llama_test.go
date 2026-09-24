@@ -165,6 +165,47 @@ func runFakeLlamaServer() {
 		os.Exit(57)
 	}
 
+	// v1.3.7: model-architecture failure modes for the auto-update ladder
+	// (needsNewerEngine). The engine pretends the model requires a newer
+	// llama.cpp — the exact signature the ladder matches:
+	//
+	//   arch-fail-committed — a server launch fails with the architecture
+	//       error while an install MANIFEST sits beside the executable
+	//       (a committed package that cannot load the model); a staged,
+	//       unverified package (no manifest yet) serves normally, so the
+	//       deferred update VERIFIES and commits.
+	//   arch-fail-always — every server launch fails with the
+	//       architecture error: the deferred update can never verify, so
+	//       the ladder must ROLL BACK to the previous package.
+	if mode == "arch-fail-committed" || mode == "arch-fail-always" {
+		launchedAsServer := false
+
+		for _, a := range args {
+			if a == "--port" {
+				launchedAsServer = true
+				break
+			}
+		}
+
+		if launchedAsServer {
+			fail := mode == "arch-fail-always"
+
+			if !fail {
+				exe, err := os.Executable()
+				if err == nil {
+					_, statErr := os.Stat(filepath.Join(filepath.Dir(exe), "engine-install.json"))
+					fail = statErr == nil // committed package present → fail
+				}
+			}
+
+			if fail {
+				fmt.Fprintln(os.Stderr,
+					"error: unknown model architecture: 'x-custom-arch' — this model requires a newer llama.cpp")
+				os.Exit(1)
+			}
+		}
+	}
+
 	// Phase 7: strict CLI-contract emulation.
 	//
 	// strict-new-args    — mimics the on|off|auto contract: a --flash-attn

@@ -18,7 +18,7 @@ import (
 
 const (
 	AppName    = "SHEYTAN-Local-Agent"
-	AppVersion = "1.3.6"
+	AppVersion = "1.3.7"
 )
 
 // The product identity is version-only: AppName + AppVersion (synchronized
@@ -910,11 +910,6 @@ func (c *Config) PushRecentWorkspace(root string) []string {
 // LabDir returns the Coding Lab root.
 func (c *Config) LabDir() string {
 	return filepath.Join(c.DataDir, "lab")
-}
-
-// ResearchDir returns the research cache/storage root.
-func (c *Config) ResearchDir() string {
-	return filepath.Join(c.DataDir, "research")
 }
 
 // ProviderKind returns local or remote.

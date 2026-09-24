@@ -60,6 +60,16 @@ type runLive struct {
 	runID     string
 	sessionID string
 
+	// settled is the SETTLEMENT EDGE (v1.3.7): a channel closed exactly
+	// once, at the top of settleTerminal, i.e. strictly AFTER settle() has
+	// recorded the terminal outcome in the bounded registry (the v1.2.7
+	// ordering) and therefore at the moment the outcome becomes
+	// recoverable AND the authoritative state settles terminal. The
+	// idle/lastRun reader path waits on this edge instead of racing the
+	// settlement window — see server.go's idleSentinel barrier.
+	settled     chan struct{}
+	settledOnce sync.Once
+
 	// seq is the monotonic per-run event sequence. Every published event
 	// of this run carries the value returned by next() — stamped BEFORE
 	// the event reaches any subscriber, so (snapshot at seq N) + (all
@@ -91,6 +101,7 @@ func newRunLive(runID, sessionID string, startedAt time.Time) *runLive {
 		startedAt: startedAt,
 		running:   true,
 		phase:     "preparing",
+		settled:   make(chan struct{}),
 	}
 }
 
@@ -175,6 +186,18 @@ func (l *runLive) observe(a agent.Activity) {
 	}
 }
 
+// settledSignal returns the settlement edge of this run: a channel that is
+// closed exactly once, after the terminal outcome has been recorded in the
+// bounded registry and the authoritative state has settled terminal. A
+// reader released by this close observes BOTH the recorded outcome and the
+// terminal state — the deterministic happens-before edge the idle/lastRun
+// path synchronizes on (v1.3.7). A receive on the still-open channel simply
+// blocks, which is how a reader inside the settlement window parks until the
+// outcome is recoverable.
+func (l *runLive) settledSignal() <-chan struct{} {
+	return l.settled
+}
+
 // settleTerminal records the authoritative terminal outcome exactly once
 // (the run goroutine calls it on every exit path; outcome from REAL
 // signals only). persisted carries the reply/reasoning actually saved to
@@ -183,6 +206,20 @@ func (l *runLive) observe(a agent.Activity) {
 func (l *runLive) settleTerminal(outcome, caption string, persisted bool, reply, reasoning string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// v1.3.7 SETTLEMENT EDGE. settleTerminal is called by settle() strictly
+	// AFTER the terminal outcome has been recorded in the bounded registry
+	// (the v1.2.7 ordering), so closing the signal HERE means "the outcome
+	// is recoverable and the state is authoritatively terminal". The close
+	// must happen on EVERY call path — including the already-terminal early
+	// return below — because observe() may have folded the terminal
+	// activity first (the early-visibility flip that created the
+	// settlement window); the registry record still happened before this
+	// call, so the edge is honest on that path too. This is the missing
+	// synchronization edge of Actions run 35749698189: previously a socket
+	// attaching between the observe() flip and the settle() record read an
+	// empty registry and emitted a lastRun-less idle sentinel.
+	l.settledOnce.Do(func() { close(l.settled) })
 
 	if l.terminalOutcome != "" {
 		return

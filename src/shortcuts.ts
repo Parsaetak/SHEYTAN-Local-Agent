@@ -29,7 +29,7 @@ const VIEW_ORDER: readonly WorkspaceView[] = [
 ];
 
 export const SHORTCUTS: readonly ShortcutSpec[] = [
-  { id: "views", keys: "Ctrl + 1…6", description: "Switch workspace layers" },
+  { id: "views", keys: "Ctrl + 1…5", description: "Switch workspace layers" },
   { id: "new-session", keys: "Ctrl + N", description: "New session" },
   { id: "focus-composer", keys: "/", description: "Focus the message composer" },
   { id: "perf-hud", keys: "Ctrl + Shift + P", description: "Toggle performance HUD" },

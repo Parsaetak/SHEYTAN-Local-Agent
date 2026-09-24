@@ -393,6 +393,123 @@ func TestStaleRunEventsFilteredByServer(t *testing.T) {
 	}
 }
 
+// TestIdleSentinelWaitsForSettlementEdge pins the EXACT race of Actions run
+// 35749698189, deterministically — no scheduling luck required.
+//
+// The production window: observe() folds the orchestrator's `done` activity
+// (running flips false — EARLY terminal visibility) while settle() has not
+// yet recorded the outcome in the bounded registry (it runs only after the
+// durable settle-tail). A socket attaching in that window must NOT receive a
+// lastRun-less idle sentinel: the v1.3.7 settlement barrier parks it on the
+// run's settlement edge, and the sentinel it then receives carries the
+// recorded outcome.
+func TestIdleSentinelWaitsForSettlementEdge(t *testing.T) {
+	engine := remoteFakeEngine(t, "unused.")
+	srv, server := newRemoteServerWithHandle(t, engine.URL)
+	sessionID := createSessionForRun(t, server)
+
+	// The EXACT settlement-window state: registered run, generation over
+	// (observe() folded the terminal activity → Running == false), but the
+	// outcome registry holds NOTHING for this session yet and the
+	// settlement edge is still open.
+	live := newRunLive("run-settle-window", sessionID, time.Now())
+	live.observe(stampedActivity("response", "the final answer"))
+	live.observe(stampedActivity("done", "Completed"))
+
+	srv.runsMu.Lock()
+	srv.runs[sessionID] = &runState{
+		cancel: func() {},
+		hub:    newActivityHub(),
+		live:   live,
+	}
+	srv.runsMu.Unlock()
+
+	conn := dialActivityWS(t, server, sessionID)
+
+	// ONE reader goroutine owns the connection's read side (gorilla conns
+	// are not safe for concurrent reads, and an intentionally timed-out
+	// ReadJSON would poison it — the reader below blocks without a
+	// deadline so no spurious timeout can ever be cached).
+	frames := make(chan map[string]any, 8)
+	readErr := make(chan error, 1)
+
+	go func() {
+		for {
+			var frame map[string]any
+			if err := conn.ReadJSON(&frame); err != nil {
+				readErr <- err
+				return
+			}
+
+			frames <- frame
+		}
+	}()
+
+	waitFrame := func(desc string) map[string]any {
+		t.Helper()
+
+		select {
+		case frame := <-frames:
+			return frame
+		case err := <-readErr:
+			t.Fatalf("%s: read ws frame: %v", desc, err)
+		case <-time.After(20 * time.Second):
+			t.Fatalf("%s: no frame within 20s", desc)
+		}
+
+		return nil
+	}
+
+	if frame := waitFrame("attach ack"); frame["type"] != "attached" {
+		t.Fatalf("first frame = %v, want attached", frame["type"])
+	}
+
+	// While the settlement edge is open the socket must receive NOTHING —
+	// a premature idle here is precisely the lastRun-less sentinel of the
+	// CI failure. (wsPingInterval is 25s, so no ping can land inside this
+	// window; only a data frame can satisfy the select.)
+	select {
+	case frame := <-frames:
+		t.Fatalf("idle sentinel arrived BEFORE settlement: %v — the v1.3.7 settlement barrier is missing", frame)
+	case err := <-readErr:
+		t.Fatalf("read ws frame while waiting for settlement: %v", err)
+	case <-time.After(750 * time.Millisecond):
+		// Expected: the barrier parks the sentinel on the open edge.
+	}
+
+	// Settle exactly as production does: the outcome is recorded FIRST,
+	// then the authoritative terminal state flips (closing the edge).
+	srv.outcomes.record(sessionID, runOutcome{
+		RunID:     "run-settle-window",
+		StartedAt: time.Now().Add(-time.Second),
+		EndedAt:   time.Now(),
+		Outcome:   "done",
+		Persisted: true,
+	})
+
+	live.settleTerminal("done", "Completed", true, "the final answer", "")
+
+	// The barrier releases deterministically: the idle sentinel carries the
+	// recorded lastRun outcome.
+	idle := waitFrame("post-settlement idle sentinel")
+	if idle["type"] != "idle" {
+		t.Fatalf("expected idle after settlement, got %v", idle["type"])
+	}
+
+	lastRun, ok := idle["lastRun"].(map[string]any)
+	if !ok {
+		t.Fatal("idle sentinel carries no lastRun outcome — the settlement barrier released before the outcome was recoverable")
+	}
+
+	if outcome, _ := lastRun["outcome"].(string); outcome != "done" {
+		t.Fatalf("lastRun.outcome = %q, want done", outcome)
+	}
+
+	if rid, _ := lastRun["runId"].(string); rid != "run-settle-window" {
+		t.Fatalf("lastRun.runId = %q, want run-settle-window", rid)
+	}
+}
+
 // TestTerminalSnapshotReplaysPersistedReply pins the authoritative terminal
 // state: a socket that attaches AFTER the run finished (but while the entry
 // still exists) receives the terminal snapshot including the persisted
@@ -420,30 +537,65 @@ func TestTerminalSnapshotReplaysPersistedReply(t *testing.T) {
 	}
 	runResp.Body.Close()
 
-	// Drain until the run settles on THIS socket (done → idle again).
+	// Drain until the run settles on THIS socket. Three AUTHORITATIVE
+	// terminal contracts satisfy the drain — whichever side of the
+	// attach/subscribe race the scheduler lands on (verified: v1.3.6
+	// hit all three under CI-grade starvation):
+	//   1. the live path — the terminal `done`/`complete` event, then
+	//      the idle sentinel;
+	//   2. the snapshot path — a TERMINAL run_snapshot (running=false +
+	//      terminalOutcome, the persisted reply replayed) for a socket
+	//      that subscribed after the terminal events were published;
+	//   3. the late-evidence path — an idle sentinel carrying the
+	//      recorded lastRun outcome for a socket whose wake was
+	//      starved past the run's entire lifetime (the entry is
+	//      already gone from the runs map).
+	// All three are the documented transport contract (header items
+	// 1–7); the drain accepts each and still REQUIRES terminal
+	// evidence — a bare idle with no run-scoped evidence never
+	// satisfies it.
 	var sawDone bool
+	var sawTerminalEvidence bool
 
 	deadline := time.Now().Add(30 * time.Second)
 
+drain:
 	for time.Now().Before(deadline) {
 		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
 		var frame map[string]any
 		if err := conn.ReadJSON(&frame); err != nil {
-			t.Fatalf("read frame: %v", err)
+			t.Fatalf("read frame: %v (sawDone=%v terminalEvidence=%v)", err, sawDone, sawTerminalEvidence)
 		}
 
-		if frame["type"] == "done" || frame["type"] == "complete" {
+		switch frame["type"] {
+		case "done", "complete":
 			sawDone = true
-		}
 
-		if sawDone && frame["type"] == "idle" {
-			break
+		case "run_snapshot":
+			if running, _ := frame["running"].(bool); !running {
+				if outcome, _ := frame["terminalOutcome"].(string); outcome == "done" {
+					if reply, _ := frame["latestResponse"].(string); strings.Contains(reply, "2+2") {
+						sawTerminalEvidence = true
+					}
+				}
+			}
+
+		case "idle":
+			if lastRun, ok := frame["lastRun"].(map[string]any); ok {
+				if outcome, _ := lastRun["outcome"].(string); outcome == "done" {
+					sawTerminalEvidence = true
+				}
+			}
+
+			if sawDone || sawTerminalEvidence {
+				break drain
+			}
 		}
 	}
 
-	if !sawDone {
-		t.Fatal("the socket never observed the run's terminal event")
+	if !sawDone && !sawTerminalEvidence {
+		t.Fatal("the socket never observed the run's terminal evidence (event, terminal snapshot or lastRun outcome)")
 	}
 
 	// A SECOND socket attaching now (post-terminal, post-cleanup) gets the

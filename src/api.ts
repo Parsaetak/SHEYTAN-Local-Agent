@@ -687,35 +687,6 @@ export interface LabActionResponse {
   error?: string;
 }
 
-export interface ResearchResult {
-  title: string;
-  url: string;
-  snippet?: string;
-  source: string;
-  provider: string;
-  publishedAt?: string;
-  authority: string;
-  matchScore: number;
-  contentHash?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ResearchResponse {
-  ok: boolean;
-  provider: string;
-  query: string;
-  duration: number;
-  results: ResearchResult[];
-  error?: string;
-  providers?: string[];
-  backend?: string;
-}
-
-export interface ResearchConfig {
-  backend: string;
-  providers: string[];
-}
-
 // v1.1.3: authoritative engine state (backend process state is the single
 // source of truth; the UI never invents these).
 export type EngineState =

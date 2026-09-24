@@ -313,12 +313,55 @@ func (st *StagedInstall) Commit() {
 	st.oldDir = ""
 }
 
+// engineDirIsManaged reports whether dir is a location SHEYTAN owns
+// (inside the data root). The transactional engine install swaps the
+// WHOLE bin directory aside; doing that to a directory SHEYTAN does not
+// own would permanently delete every non-companion file in it — e.g. a
+// user-set llamaBinPath pointing at a shared tools directory or a
+// hand-built llama.cpp tree (v1.3.7 guard).
+func engineDirIsManaged(cfg *config.Config, dir string) bool {
+	dataDir := filepath.Clean(cfg.DataDir)
+	dir = filepath.Clean(dir)
+
+	if dir == dataDir {
+		return true
+	}
+
+	return strings.HasPrefix(dir, dataDir+string(os.PathSeparator))
+}
+
+// refuseUnmanagedEngineDir is the swap gate: the transactional
+// choreography (rename the whole bin dir aside, replace it, delete the
+// old one on commit) is only safe in a SHEYTAN-owned directory. A custom
+// llamaBinPath outside the data root keeps working as an engine — it is
+// simply never auto-swapped (update it manually, or clear llamaBinPath
+// to return to the managed location).
+func refuseUnmanagedEngineDir(cfg *config.Config, binDir string) error {
+	if engineDirIsManaged(cfg, binDir) {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"refusing to swap engine directory %s: it is outside the SHEYTAN data root %s — "+
+			"a custom llamaBinPath location is user-managed and an automatic package swap could destroy files SHEYTAN does not own. "+
+			"Clear llamaBinPath to use the managed location, or update the custom engine manually",
+		binDir, cfg.DataDir,
+	)
+}
+
 // stageFromArchive is the shared transaction body up to (and including)
 // the byte-identity verification of the swapped-in package; COMMIT and
 // CLEANUP are the caller's decision via StagedInstall.Commit/Rollback
 // (spec §7). Caller holds installMu and the install lease.
 func stageFromArchive(cfg *config.Config, tag, archive, url string) (*StagedInstall, error) {
 	binDir := EngineBinDir(cfg)
+
+	// v1.3.7: the directory swap only ever touches SHEYTAN-owned
+	// locations (see refuseUnmanagedEngineDir).
+	if err := refuseUnmanagedEngineDir(cfg, binDir); err != nil {
+		return nil, err
+	}
+
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -481,6 +524,13 @@ func ImportCandidate(cfg *config.Config, candidateDir, binaryRelPath string) (In
 	defer release.Release()
 
 	binDir := EngineBinDir(cfg)
+
+	// v1.3.7: the import performs the same whole-directory swap — the
+	// same SHEYTAN-owned-location rule applies.
+	if err := refuseUnmanagedEngineDir(cfg, binDir); err != nil {
+		return result, err
+	}
+
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return result, err
 	}
@@ -772,7 +822,15 @@ func mergeCompanionFiles(oldDir, newDir string) []string {
 
 		_ = os.MkdirAll(filepath.Dir(target), 0o755)
 
-		if err := os.Rename(p, target); err == nil {
+		// v1.3.7: companions are COPIED, never moved. The v1.3.6 code
+		// os.Rename'd them out of oldDir BEFORE every rollback point —
+		// a failed update then RemoveAll'd the directory holding the
+		// (already-moved) only copy: shtn-engine-host* and metadata were
+		// permanently lost, breaking the "restored byte-for-byte"
+		// contract and silently deleting the native-engine host. A copy
+		// leaves the original inside oldDir for Rollback to restore; the
+		// duplicate dies with Commit's cleanup of oldDir.
+		if err := copyFileMode(p, target, info.Mode()); err == nil {
 			logging.Default().Info("updater",
 				"package swap: carried companion file into the new package: %s", rel)
 		}

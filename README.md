@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.3.5
+Current release:  v1.3.7
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -166,6 +166,7 @@ notes below are one-line headlines.
 
 | Version | Headline |
 |---|---|
+| v1.3.7 | Run settlement edge (idle/lastRun always recoverable), engine provisioning order offline-first, Repair honesty, transactional model-architecture auto-update, installer rollback + unmanaged-dir protections, Net Search server-side contract |
 | v1.3.0 | Runtime path correctness (one authoritative path resolver + malformed-tree migration), clean startup logging, universal scrolling, user-outcome Settings, first-class GitHub clone workflow |
 | v1.2.9 | Stabilization & security: cross-mode history authority boundaries, durable completion ordering, concurrent handoff safety, honest context budgeting, CI race gate |
 | v1.2.8 | Professional Chat + Agent workspaces on one runtime: mode-separated histories, cross-mode references, durable rolling summaries, context compaction, agent.md handoff |

@@ -31,7 +31,7 @@ type SubsystemFilter =
   | "Network"
   | "Tools"
   | "Context"
-  | "Research"
+  | "Net Search"
   | "System";
 
 const SEVERITIES: SeverityFilter[] = ["All", "Info", "Warning", "Error"];
@@ -42,7 +42,7 @@ const SUBSYSTEMS: SubsystemFilter[] = [
   "Network",
   "Tools",
   "Context",
-  "Research",
+  "Net Search",
   "System",
 ];
 
@@ -105,7 +105,7 @@ function subsystemMatches(category: string, filter: SubsystemFilter): boolean {
         c === "recall" ||
         c === "attachments"
       );
-    case "Research":
+    case "Net Search":
       return (
         c === "research" ||
         c === "web" ||

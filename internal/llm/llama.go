@@ -196,6 +196,13 @@ type LlamaServer struct {
 	// UpdateEngineNow runs the transaction from this archive instead
 	// of downloading — deterministic CI without a network.
 	testStagedArchive string
+
+	// pendingEngineUpdate holds the DEFERRED-COMMIT staged install of the
+	// auto-update-for-model path (v1.3.7). The compat ladder's next pass is
+	// the startup verification: it COMMITS when the engine reaches ready and
+	// a function-exit deferred rollback restores the last-known-good package
+	// when it does not. Touched only under switchMu (startLocked paths).
+	pendingEngineUpdate *updater.StagedInstall
 }
 
 // maxAutoRestarts bounds the watchdog's automatic recovery attempts per
@@ -389,11 +396,32 @@ func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
 		return binPath, nil
 	}
 
+	// 2) System Engine Discovery (Tier 0/1 quick pass) — BEFORE the
+	// offline gate and BEFORE any download (v1.3.7 ordering fix).
+	//
+	// The v1.3.6 order put netcheck.IsOffline() first, which REJECTED a
+	// usable local engine merely because the network was unavailable —
+	// the exact case the discovery tier exists for ("reuse an
+	// already-installed compatible engine instead of downloading").
+	// Discovery and import are entirely local (PATH / exe dir / known
+	// dirs / the persisted discovery cache + a validated copy); they
+	// need zero network. The effective order is now the documented one:
+	//
+	//      valid managed engine
+	//      → valid locally discovered/importable engine
+	//      → network download
+	//      → genuine failure
+	if imported := s.tryImportDiscoveredEngine(cfg); imported {
+		if _, err := os.Stat(binPath); err == nil {
+			return binPath, nil
+		}
+	}
+
 	if netcheck.IsOffline() {
 		return "", fmt.Errorf(
-			"llama.cpp server binary missing and you appear to be OFFLINE. "+
-				"Reconnect once so the server can be downloaded automatically, "+
-				"or place a prebuilt llama-server(.exe) into %s and retry",
+			"no llama.cpp server binary is installed and no usable local engine was discovered; "+
+				"the network appears to be OFFLINE, so the engine cannot be downloaded automatically. "+
+				"Reconnect once so the server can be fetched, or place a prebuilt llama-server(.exe) into %s and retry",
 			filepath.Dir(binPath),
 		)
 	}
@@ -403,14 +431,6 @@ func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
 	}
 
 	s.setState(StateDownloading)
-
-	// 2) System Engine Discovery (Tier 0/1 quick pass): reuse an
-	// already-installed compatible engine instead of downloading.
-	if imported := s.tryImportDiscoveredEngine(cfg); imported {
-		if _, err := os.Stat(binPath); err == nil {
-			return binPath, nil
-		}
-	}
 
 	// 3) Download through the single transactional installer.
 	ctx, cancel := context.WithTimeout(context.Background(), engineDownloadTimeout)
@@ -765,6 +785,10 @@ func (s *LlamaServer) startLocked() error {
 							"mmproj verified: engine serving with the paired projector "+filepath.Base(mmproj))
 					}
 
+					// v1.3.7: the ladder VERIFIED the engine — a pending
+					// model-architecture update commits exactly here.
+					s.commitPendingEngineUpdate()
+
 					s.setState(StateReady)
 					return nil
 				}
@@ -841,6 +865,10 @@ func (s *LlamaServer) startLocked() error {
 						s.setVision(vision.StateReady,
 							"mmproj verified: engine serving with the paired projector "+filepath.Base(mmproj))
 					}
+
+					// v1.3.7: the ladder VERIFIED the engine — a pending
+					// model-architecture update commits exactly here.
+					s.commitPendingEngineUpdate()
 
 					s.setState(StateReady)
 					return nil
@@ -933,6 +961,14 @@ func (s *LlamaServer) startLocked() error {
 			if pass == 0 &&
 				needsNewerEngine(lastErr) &&
 				s.updateEngineForModel(cfg) {
+				// v1.3.7: the deferred package swap is verified by the NEXT
+				// ladder pass (this very loop). Commit happens on the ready
+				// exits above; ANY other startLocked exit — launch failure,
+				// loader-class failure, vision-retry exhaustion — restores
+				// the previous package through this deferred rollback (a
+				// no-op once the update committed).
+				defer s.rollbackPendingEngineUpdate()
+
 				startLevel = 0
 				s.setState(StateStarting)
 				continue
@@ -1936,6 +1972,47 @@ func needsNewerEngine(err error) bool {
 	return false
 }
 
+// commitPendingEngineUpdate commits the deferred model-architecture
+// engine update once the compat ladder has VERIFIED the new engine
+// (StateReady). Called only from startLocked paths (switchMu held);
+// a no-op when no deferred update is pending. v1.3.7.
+func (s *LlamaServer) commitPendingEngineUpdate() {
+	if s.pendingEngineUpdate == nil {
+		return
+	}
+
+	staged := s.pendingEngineUpdate
+	s.pendingEngineUpdate = nil
+
+	staged.Commit()
+
+	logging.Default().Info("engine",
+		"model-architecture engine update verified ready — committed")
+}
+
+// rollbackPendingEngineUpdate restores the previous engine package after
+// the compat ladder FAILED to verify the deferred model-architecture
+// update (startLocked exit). Called only from startLocked paths
+// (switchMu held); a no-op when nothing is pending or the update already
+// committed. v1.3.7.
+func (s *LlamaServer) rollbackPendingEngineUpdate() {
+	if s.pendingEngineUpdate == nil {
+		return
+	}
+
+	staged := s.pendingEngineUpdate
+	s.pendingEngineUpdate = nil
+
+	if err := staged.Rollback(); err != nil {
+		logging.Default().Warn("engine",
+			"rollback of the unverified model-architecture engine update failed: %v", err)
+		return
+	}
+
+	logging.Default().Warn("engine",
+		"model-architecture engine update failed startup verification — previous package restored")
+}
+
 func (s *LlamaServer) updateEngineForModel(cfg *config.Config) bool {
 	if s.engineUpdateTried {
 		return false
@@ -1995,13 +2072,17 @@ func (s *LlamaServer) updateEngineForModel(cfg *config.Config) bool {
 
 	s.setState(StateDownloading)
 
-	if _, err := updater.UpdateEngineWithProgress(
-		ctx,
-		cfg,
-		nil,
-		latest,
-		s.publishDownloadProgress,
-	); err != nil {
+	// v1.3.7: the model-architecture auto-update now uses the SAME
+	// deferred-commit transactional install as every other engine update
+	// (the v1.3.6 path passed eng=nil, which selected the legacy
+	// stop/download/copy/restart choreography: InstallStaged committed
+	// IMMEDIATELY — no startup verification, no rollback, and the
+	// last-known-good package was deleted by Commit before the new binary
+	// had ever been launched). The ladder's next pass below IS the startup
+	// verification: commitPendingEngineUpdate commits on ready, the
+	// function-exit rollback restores the previous package on failure.
+	staged, err := s.runEngineInstall(ctx, cfg, latest, s.publishDownloadProgress)
+	if err != nil {
 		s.logf(
 			"engine auto-update failed: %v",
 			err,
@@ -2015,6 +2096,11 @@ func (s *LlamaServer) updateEngineForModel(cfg *config.Config) bool {
 
 		return false
 	}
+
+	// The deferred install swapped the new package in WITHOUT committing
+	// the tag: the ladder's verification pass decides (see the call site in
+	// the compat ladder).
+	s.pendingEngineUpdate = staged
 
 	next := s.src.Update(func(c *config.Config) {
 		c.EngineCompat = 0

@@ -10,13 +10,20 @@ package llm
 //   - it never runs on the startup path (spec §11: no startup disk crawl);
 //   - it re-runs the discovery order BEFORE falling back to any download:
 //     managed dir → persisted cache → Tier 1 → bounded Tier 2;
+//   - a present managed binary is trusted ONLY after the real preflight
+//     gate (StaticValidate + dependency closure + bounded --version probe)
+//     — os.Stat alone is NOT proof of a usable installation (v1.3.7);
 //   - a validated candidate is imported through the ONE provisioning
 //     authority (updater.ImportCandidate — closure-restricted, §11/§12);
 //   - the whole operation holds the lifecycle lock AND the cross-process
 //     ownership lease (spec §15/§16);
+//   - an engine that was stopped for the operation is RESTORED afterwards
+//     (v1.3.7: the v1.3.6 code left a previously-running engine stopped
+//     while reporting ok — the restart condition was inverted);
 //   - after a successful import the engine is restarted and verified —
-//     an engine that does not start after rediscovery is an ERROR, and
-//     the previous package state is honestly reported.
+//     an engine that does not start after rediscovery is an ERROR (the
+//     v1.3.6 code logged and swallowed it, reporting ok), and the
+//     previous package state is honestly reported.
 //
 // The scan itself is bounded (workers/duration/depth/candidates, see
 // engdiscovery.DefaultScanOptions) and access-denied safe.
@@ -85,30 +92,51 @@ func (s *LlamaServer) Rediscover() (string, error) {
 	s.stopping = false
 	s.mu.Unlock()
 
-	restartLastKnownGood := func() {
+	restartLastKnownGood := func() error {
 		if startErr := s.startLocked(); startErr != nil {
-			logging.Default().Warn("engine", "rediscover: engine restart failed: %v", startErr)
+			return fmt.Errorf("engine restart after rediscovery failed: %w", startErr)
 		}
+
+		return nil
 	}
 
-	// 1) QUICK ladder first (Tier 0 managed dir + cache, Tier 1): when a
-	// usable engine is already there, rediscovery is a no-op that
-	// reports honestly instead of touching anything.
+	// 1) QUICK ladder first (Tier 0 managed dir): when a VALID engine is
+	// already there, rediscovery is a no-op that reports honestly instead
+	// of touching anything. v1.3.7: presence alone (os.Stat) is NOT proof
+	// the installation is usable — the same preflight gate the boot path
+	// runs (format/arch sniff, dependency closure, bounded --version
+	// probe) decides. A present-but-broken package (wrong architecture,
+	// missing DLLs, loader-class probe failure) falls THROUGH to the
+	// repair ladder — that is exactly what the Repair action exists for.
 	if _, err := os.Stat(binPath); err == nil {
-		if !wasRunning {
-			restartLastKnownGood()
+		_, pfail := s.preflightBinary(cfg, binPath)
+
+		if pfail == nil {
+			// Valid package. Restore the engine state this operation
+			// interrupted: wasRunning means we stopped it above, so restart
+			// it; a deliberately-stopped engine stays stopped (preflight
+			// already proved the package executes).
+			if wasRunning {
+				if rerr := restartLastKnownGood(); rerr != nil {
+					return "", rerr
+				}
+			}
+
+			return fmt.Sprintf(
+				"managed engine already present and usable at %s — nothing to rediscover",
+				binPath,
+			), nil
 		}
 
-		return fmt.Sprintf(
-			"managed engine already present and usable at %s — nothing to rediscover",
-			binPath,
-		), nil
+		s.logf("rediscover: managed engine present but failed preflight validation — %s; searching for a replacement", pfail.Detail)
 	}
 
 	// 2) QuickFind (Tier 0b cache + Tier 1 cheap locations).
 	if s.tryImportDiscoveredEngine(cfg) {
 		if _, err := os.Stat(binPath); err == nil {
-			restartLastKnownGood()
+			if rerr := restartLastKnownGood(); rerr != nil {
+				return "", rerr
+			}
 
 			return "rediscovered engine imported from the quick discovery tier (cache/PATH/known locations)", nil
 		}
@@ -141,7 +169,9 @@ func (s *LlamaServer) Rediscover() (string, error) {
 		msg := "system discovery found no usable engine on this machine (Tier 0/1/2 exhausted)"
 
 		if wasRunning {
-			restartLastKnownGood()
+			if rerr := restartLastKnownGood(); rerr != nil {
+				return "", fmt.Errorf("%s; additionally, restoring the previous engine failed: %w", msg, rerr)
+			}
 		}
 
 		return msg, errors.New(msg)
@@ -153,7 +183,9 @@ func (s *LlamaServer) Rediscover() (string, error) {
 	result, ierr := updater.ImportCandidate(cfg, filepath.Dir(best.Path), filepath.Base(best.Path))
 	if ierr != nil {
 		if wasRunning {
-			restartLastKnownGood()
+			if rerr := restartLastKnownGood(); rerr != nil {
+				return "", fmt.Errorf("rediscovered candidate rejected: %v; additionally, restoring the previous engine failed: %w", ierr, rerr)
+			}
 		}
 
 		return "", fmt.Errorf("rediscovered candidate rejected: %w", ierr)
@@ -163,7 +195,12 @@ func (s *LlamaServer) Rediscover() (string, error) {
 		updater.RecordEngineTag(cfg, best.Tag)
 	}
 
-	restartLastKnownGood()
+	// The import succeeded: restart and VERIFY (the header contract — an
+	// engine that does not start after rediscovery is an ERROR, never a
+	// swallowed warning with an ok result).
+	if rerr := restartLastKnownGood(); rerr != nil {
+		return "", rerr
+	}
 
 	logging.Default().Info("engine", "rediscover imported: %s", result.Outcome)
 

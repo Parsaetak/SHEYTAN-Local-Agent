@@ -1,3 +1,84 @@
+# UPDATE.md — v1.3.7 Run Settlement, Provisioning Order & Installer Integrity
+
+**Release:** `v1.3.7` (canonical application version; single version
+hierarchy: package.json → release-version.mjs → config.go /
+build/config.yml / SIGNATURE)
+**Base:** `main @ 838e244` (`1.3.6`) · **Date:** 2026-09-24
+**Package:** `SHEYTAN-Local-Agent-v1.3.7-FINAL.zip` (complete repository
+tree)
+**ROADMAP.md:** untouched by this release.
+
+This release completes the v1.3.6 work: it root-fixes the one CI failure
+of the v1.3.6 push (Actions run 35749698189 —
+`TestStaleRunEventsFilteredByServer`: "idle sentinel carries no lastRun
+outcome") and closes the gaps the v1.3.6 engine/provisioning work left
+open.
+
+1. **Run settlement edge (the 35749698189 fix).** A run's terminal
+   VISIBILITY now implies a RECOVERABLE terminal outcome: `runLive`
+   owns a settlement channel closed exactly once by
+   `settleTerminal` (which `settle()` calls strictly AFTER recording
+   the outcome in the bounded registry), and the WebSocket idle
+   sentinel waits on that edge whenever the session's registered run is
+   terminal but not yet settled. A socket that attaches between the
+   orchestrator's final event and the durable settle-tail (reply
+   persist → summary roll → agent.md handoff → recall index →
+   continuum rollover) can never again receive a lastRun-less idle
+   sentinel it cannot finalise from. No timing hacks: the edge IS the
+   happens-before relationship, bounded by a 10-second safety budget so
+   a wedged settle-tail degrades instead of hanging the socket.
+
+2. **Engine provisioning order.** `ensureBinary` now runs
+   managed engine → locally discovered/importable engine → offline
+   gate → network download. A valid local engine on an offline machine
+   is imported and used (the v1.3.6 order refused it before ever
+   looking).
+
+3. **Rediscover/Repair honesty.** A present managed binary is trusted
+   only after the real preflight gate (format/arch, dependency closure,
+   bounded `--version` probe) — `os.Stat` alone is no longer proof of a
+   usable installation. A previously-running engine is restored after
+   the operation (the v1.3.6 restart condition was inverted and left it
+   stopped while reporting ok); a restart failure is an ERROR, never a
+   swallowed warning.
+
+4. **Model-architecture auto-update is transactional.** The compat
+   ladder's auto-update now uses the same deferred-commit install as
+   every other engine update: the ladder's verification pass commits on
+   ready; ANY other exit restores the previous package byte-for-byte.
+   The legacy path committed immediately and deleted last-known-good
+   before the new binary had ever been launched.
+
+5. **Installer integrity.** Companion files (the native engine host,
+   package metadata) are COPIED into the new package instead of moved —
+   a rolled-back update no longer destroys them. The transactional
+   directory swap is refused for a `llamaBinPath` outside the SHEYTAN
+   data root, so an automatic update can never delete user files that
+   happen to live beside a custom engine location.
+
+6. **Data-root residuals.** The installer broadcasts
+   `WM_SETTINGCHANGE` after retiring the machine
+   `SHEYTAN_DATA_DIR` (stale-environment children no longer resurrect
+   the AppData root for one launch), and the historical
+   `<AppRoot>\logs` directory folds into `<AppRoot>\data\logs` even
+   though the log catcher has already created the canonical directory
+   (verified merge, live `app.log` never overwritten, restart-safe).
+
+7. **Net Search server-side contract.** The explicit `netSearch`
+   request intent is now pinned by Go tests end-to-end (policy
+   authorization under every tool mode, offered-surface guarantee, and
+   the exactly-one-tool boundary). Stale Research remnants were removed
+   (LogViewer filter label, shortcuts help text, dead client exports,
+   dead `Config.ResearchDir`); the `research*` config keys keep their
+   documented backward compatibility.
+
+Every fix carries a regression test that fails on the corresponding
+v1.3.6 defect. The ownership/adoption machinery (englease, proc
+identity, adoption proof) was audited and verified already enforced
+everywhere — it is unchanged.
+
+---
+
 # UPDATE.md — v1.3.6 Engine Lifecycle, System Discovery, Net Search & Canonical Data Root
 
 **Release:** `v1.3.6` (canonical application version; single version
