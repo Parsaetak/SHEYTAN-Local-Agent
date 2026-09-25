@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { copyFile } from "node:fs/promises";
+import { join } from "node:path";
 import { startSheytan, type SheytanStack } from "./fixtures/sheytan-server";
 
 /**
@@ -13,6 +15,24 @@ import { startSheytan, type SheytanStack } from "./fixtures/sheytan-server";
  *   Selector shown → composer gated → user selects the model →
  *   Analyzing/Configuring/Loading (backend-authoritative) → engine
  *   ready → real streaming generation → persistence.
+ *
+ * v1.5.1 extends the real-stack coverage to the rest of the §9 list:
+ *
+ *   - automatic profile application (AUTO applies a measured-evidence
+ *     profile; the honest "not benchmarked" note is asserted — a green
+ *     run never claims a benchmark that did not run);
+ *   - Chat/Agent TASK selection (the surface's task travels with the
+ *     selection — switching surfaces and re-selecting re-tunes for THAT
+ *     surface, never the backend's silent default);
+ *   - explicit model change (a second model file, explicitly picked in
+ *     the Agent surface) + the previous-selection marker;
+ *   - persistence after reload (model, task and serving state survive).
+ *
+ * Winner/rollback behavior of the bounded calibration is proven by the
+ * deterministic Go control-contract tests (internal/calibration) — this
+ * stack runs the native C++ engine, which has no llama launch-arg
+ * profile surface to calibrate, so an honest e2e run asserts exactly
+ * the "not benchmarked" state instead of fabricating a pass.
  *
  * The fixture engine is the real C++ host executing the wide-context
  * synthetic fixture: generation is real (real logits/sampler/streaming);
@@ -167,4 +187,157 @@ test("after selection: send → real streaming → settles → persists (the §7
   await expect(page.locator(".message-row.from-user").last()).toContainText(marker, {
     timeout: 30_000,
   });
+});
+
+test("AUTO applies an evidence profile and reports it honestly (no fake benchmark)", async ({
+  page,
+}) => {
+  await selectTheModel(page);
+  await expect(composer(page)).toBeEnabled({ timeout: 90_000 });
+
+  // AUTO applied a real profile from the recommendation engine — the
+  // context is set, and the note states the honest truth for this stack
+  // (the native engine has no launch-arg surface to calibrate: the note
+  // must say "not benchmarked", never claim a winner that never ran).
+  const snap = await page.evaluate(async () => {
+    const [engine, config] = await Promise.all([
+      fetch("/api/engine").then((r) => r.json()),
+      fetch("/api/config").then((r) => r.json()),
+    ]);
+    return {
+      selection: engine.selection as {
+        phase: string;
+        performanceMode: string;
+        calibrated?: boolean;
+        calibrationNote?: string;
+        applied?: { context?: number };
+      },
+      numCtx: (config.llm as { numCtx?: number }).numCtx,
+      runtimeProfile: config.runtimeProfile as string,
+    };
+  });
+
+  expect(snap.selection.phase).toBe("ready");
+  expect(snap.selection.performanceMode).toBe("auto");
+  expect(snap.selection.applied?.context ?? 0).toBeGreaterThan(0);
+  expect(snap.numCtx ?? 0).toBeGreaterThan(0);
+
+  // The chat surface's selection tuned the CHAT task — the task the UI
+  // was on travels with the selection (spec §5).
+  expect(snap.runtimeProfile).toBe("chat");
+
+  expect(snap.selection.calibrated).toBeFalsy();
+  expect(snap.selection.calibrationNote).toContain("not benchmarked");
+});
+
+test("explicit model change on the Agent surface: task retunes + previous marker + reload persistence", async ({
+  page,
+}) => {
+  // A second REAL model file: the fixture generator's output copied
+  // under a new name (identical bytes, distinct model identity — the
+  // selection contract is about the USER's explicit choice, not about
+  // model diversity).
+  const modelsDir = join(stack.dataDir, "models");
+  await copyFile(
+    join(modelsDir, "e2e-wide.gguf"),
+    join(modelsDir, "e2e-second.gguf"),
+  );
+
+  // Reload first: proves the FIRST selection persisted (model + task),
+  // and the discovery now lists BOTH models.
+  await page.reload();
+  await expect(composer(page)).toBeEnabled({ timeout: 90_000 });
+
+  const before = await page.evaluate(async () => {
+    const config = await fetch("/api/config").then((r) => r.json());
+    return {
+      model: config.model as string,
+      runtimeProfile: config.runtimeProfile as string,
+    };
+  });
+  expect(before.model).toBe("e2e-wide.gguf");
+  expect(before.runtimeProfile).toBe("chat");
+
+  // Switch to the AGENT surface. The agent surface starts with NO
+  // session (an honest empty state) — create one the way a user does,
+  // so the composer arms for the assertions below.
+  await page.getByRole("tab", { name: "Agent" }).click();
+  await page.locator(".sidebar").getByRole("button", { name: "New session" }).click();
+  await expect(composer(page)).toBeEnabled({ timeout: 30_000 });
+
+  // The agent runtime panel exposes the model select; the chat rail is
+  // hidden in this mode, so exactly one select is visible.
+  const modelSelect = page.locator("select[aria-label='Model']:visible");
+  await expect(modelSelect).toBeVisible({ timeout: 30_000 });
+
+  // The freshly copied model must be discovered before it can be
+  // explicitly chosen.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(async () => {
+          const res = await fetch("/api/models");
+          const models = (await res.json()) as { local?: Array<{ id?: string }> };
+          return (models.local ?? []).some((m) => m.id === "e2e-second.gguf");
+        }),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+
+  // EXPLICIT user choice of the second model on the AGENT surface.
+  await modelSelect.selectOption("e2e-second.gguf");
+
+  // The selection flow settles on the new model, tuned for the AGENT
+  // task (spec §5: the surface's task travels with the selection).
+  await expect(composer(page)).toBeEnabled({ timeout: 90_000 });
+
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        const config = await fetch("/api/config").then((r) => r.json());
+        return config.model as string;
+      }),
+      { timeout: 30_000 },
+    )
+    .toBe("e2e-second.gguf");
+
+  const after = await page.evaluate(async () => {
+    const config = await fetch("/api/config").then((r) => r.json());
+    const engine = await fetch("/api/engine").then((r) => r.json());
+    const models = await fetch("/api/models").then((r) => r.json());
+    return {
+      model: config.model as string,
+      runtimeProfile: config.runtimeProfile as string,
+      loadedPath: (engine.loadedPath as string) ?? "",
+      phase: (engine.selection as { phase?: string })?.phase,
+      previous: (models.local as Array<{ id: string; previous?: boolean }>)
+        ?.find((m) => m.id === "e2e-wide.gguf")?.previous,
+    };
+  });
+
+  expect(after.model).toBe("e2e-second.gguf");
+  expect(after.runtimeProfile).toBe("agent");
+  expect(after.phase).toBe("ready");
+  expect(after.loadedPath).toContain("e2e-second.gguf");
+  // The previous-selection marker points at the outgoing model.
+  expect(after.previous).toBe(true);
+
+  // Full reload: the model change persisted (model, task, serving state).
+  await page.reload();
+  await expect(composer(page)).toBeEnabled({ timeout: 90_000 });
+
+  const reloaded = await page.evaluate(async () => {
+    const config = await fetch("/api/config").then((r) => r.json());
+    const engine = await fetch("/api/engine").then((r) => r.json());
+    return {
+      model: config.model as string,
+      runtimeProfile: config.runtimeProfile as string,
+      loadedPath: (engine.loadedPath as string) ?? "",
+      selectionRequired: engine.selectionRequired as boolean,
+    };
+  });
+  expect(reloaded.model).toBe("e2e-second.gguf");
+  expect(reloaded.runtimeProfile).toBe("agent");
+  expect(reloaded.loadedPath).toContain("e2e-second.gguf");
+  expect(reloaded.selectionRequired).toBeFalsy();
 });

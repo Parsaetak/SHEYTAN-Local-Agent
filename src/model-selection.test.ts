@@ -1,10 +1,16 @@
 // model-selection.test.ts — v1.5.0 unit tests for the model-first
 // selection contracts (the logic ModelPicker renders).
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
+  backendVerdict,
   classifyFit,
+  modelCardState,
   recommendedOnThisMachine,
   selectionBusy,
+  SELECTION_BUSY_PHASES,
+  SELECTION_PHASE_LABEL,
 } from "./model-selection.ts";
 
 test("selection busy phases: exactly the in-flight backend phases", () => {
@@ -68,5 +74,109 @@ test("recommended label: ONLY from measured recommendation evidence", () => {
   // Measured + safe → the ONLY shape that earns the label.
   if (!recommendedOnThisMachine({ class: "safe", hardwareMeasured: true })) {
     throw new Error("measured safe evidence must earn the label");
+  }
+});
+
+test("calibration state is visibly distinct from the final ready state", () => {
+  // The calibrating phase locks the picker AND carries its own label —
+  // it must never render as (or collapse into) "Ready".
+  if (SELECTION_PHASE_LABEL["calibrating"] !== "Calibrating") {
+    throw new Error('calibrating must be labeled "Calibrating"');
+  }
+  if (SELECTION_PHASE_LABEL["ready"] !== "Ready") {
+    throw new Error('ready must be labeled "Ready"');
+  }
+  if (SELECTION_PHASE_LABEL["calibrating"] === SELECTION_PHASE_LABEL["ready"]) {
+    throw new Error("calibrating and ready labels must differ");
+  }
+  // calibrating is an in-flight phase: the picker stays locked.
+  if (!SELECTION_BUSY_PHASES.has("calibrating")) {
+    throw new Error("calibrating must lock the picker");
+  }
+});
+
+test("backend verdict: ONLY a measured unsupported verdict exists", () => {
+  // No evidence / unmeasured hardware → no verdict at all.
+  if (backendVerdict(null) !== null) throw new Error("no evidence → no verdict");
+  if (backendVerdict(undefined) !== null) throw new Error("no evidence → no verdict");
+  if (backendVerdict({ class: "unsupported", hardwareMeasured: false })) {
+    throw new Error("unmeasured hardware → no verdict (a guess is not a verdict)");
+  }
+
+  // Measured verdicts pass through.
+  if (backendVerdict({ class: "safe", hardwareMeasured: true }) !== "safe") {
+    throw new Error("measured safe verdict must pass through");
+  }
+  if (backendVerdict({ class: "caution", hardwareMeasured: true }) !== "caution") {
+    throw new Error("measured caution verdict must pass through");
+  }
+  if (backendVerdict({ class: "unsupported", hardwareMeasured: true }) !== "unsupported") {
+    throw new Error("measured unsupported verdict must pass through");
+  }
+
+  // An unknown class is not a verdict.
+  if (backendVerdict({ class: "", hardwareMeasured: true }) !== null) {
+    throw new Error("empty class → no verdict");
+  }
+});
+
+test("over-RAM estimate alone does NOT create a hard incompatibility", () => {
+  // A huge sizing estimate with NO backend verdict → the card stays
+  // available (the estimate renders as a warning chip, the model stays
+  // selectable). The estimate is a sizing signal, not proof.
+  const hugeEstimateNoVerdict = modelCardState({
+    serving: false,
+    targeting: false,
+    verdict: null,
+  });
+  if (hugeEstimateNoVerdict !== "available") {
+    throw new Error("an estimate alone must never hard-block: got " + hugeEstimateNoVerdict);
+  }
+
+  // Even a measured "caution" verdict stays available.
+  if (modelCardState({ serving: false, targeting: false, verdict: "caution" }) !== "available") {
+    throw new Error("caution is a warning, not a block");
+  }
+
+  // ONLY the backend's authoritative unsupported verdict blocks.
+  if (modelCardState({ serving: false, targeting: false, verdict: "unsupported" }) !== "incompatible") {
+    throw new Error("measured unsupported → incompatible");
+  }
+
+  // Serving/targeting keep priority over the verdict.
+  if (modelCardState({ serving: true, targeting: false, verdict: "unsupported" }) !== "ready") {
+    throw new Error("serving wins over any verdict");
+  }
+  if (modelCardState({ serving: false, targeting: true, verdict: null }) !== "loading") {
+    throw new Error("targeting → loading");
+  }
+});
+
+test("recommended setup cannot silently select a model (source contract)", () => {
+  // v1.5.1 removed the "Use recommended setup" hidden auto-selection.
+  // This source contract keeps it removed: the picker must contain no
+  // auto-target logic (no sorting by estimated footprint, no
+  // first-evidence-safe pick) and no onboarding button that would call
+  // onUse outside an explicit card click.
+  const picker = readFileSync(
+    fileURLToPath(new URL("./ModelPicker.tsx", import.meta.url)),
+    "utf8",
+  );
+
+  for (const banned of [
+    /use recommended setup/i,
+    /applying recommended setup/i,
+    /estimatedMemoryBytes\s*[-+*/<>=]|sort\(\s*\([^)]*\)\s*=>\s*[^)]*estimatedMemoryBytes/,
+    /MAX_SAFE_INTEGER/,
+  ]) {
+    if (banned.test(picker)) {
+      throw new Error(`ModelPicker must not contain an implicit-selection pattern: ${banned}`);
+    }
+  }
+
+  // The ONLY onUse path is the explicit card button click.
+  const onUseCalls = [...picker.matchAll(/onUse\(/g)].length;
+  if (onUseCalls !== 1) {
+    throw new Error(`ModelPicker must call onUse exactly once (the explicit card click), found ${onUseCalls}`);
   }
 });

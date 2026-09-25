@@ -101,7 +101,10 @@ export function PerformanceModeCard({
     try {
       // The SAME backend selection flow for the CURRENT model — the
       // profile is recalculated from measured evidence (AUTO only).
-      await api.selectModel(config.model);
+      // v1.5.1: the CURRENTLY INTENDED task is preserved (sent back
+      // verbatim) — re-analysis must never silently retune a different
+      // surface's profile than the one the user is on (spec §5).
+      await api.selectModel(config.model, config.runtimeProfile || undefined);
       onReanalyzed?.();
     } catch (reanalyzeError) {
       setError(

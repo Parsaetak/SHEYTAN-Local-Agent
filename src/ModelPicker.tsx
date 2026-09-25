@@ -1,9 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 import { api, type Model } from "./api";
 import {
   SELECTION_PHASE_LABEL,
+  backendVerdict,
   classifyFit,
+  modelCardState,
   recommendedOnThisMachine,
   selectionBusy,
   type Fit,
@@ -52,10 +54,14 @@ function formatContext(tokens: number | undefined): string {
 
 // v1.1.9: explicit card states. The UI never guesses: "Ready" means the
 // backend is serving this model right now, "Loading" means a switch to
-// this exact model is in flight, "Incompatible" means the measured
-// estimate exceeds total host RAM (it cannot fit), and everything else
-// is "Available".
-type ModelState = "ready" | "loading" | "incompatible" | "available";
+// this exact model is in flight, and everything else is "Available".
+//
+// v1.5.1: "Incompatible" is RESERVED for the backend's authoritative
+// measured unsupported verdict. A RAM estimate above host memory is a
+// sizing signal — it renders as an honest memory-pressure warning chip
+// while the model stays fully selectable: an estimate is not proof of
+// runtime impossibility, and the model may still load (or fit with a
+// smaller context the recommendation engine calculates).
 // v1.5.0: classification is now TWO separate honest signals —
 //
 //   fit       — a MEASURED sizing hint: the backend's estimated
@@ -73,13 +79,13 @@ type ModelState = "ready" | "loading" | "incompatible" | "available";
 const FIT_LABEL: Record<Exclude<Fit, null>, string> = {
   fits: "Fits host RAM",
   tight: "Tight on host RAM",
-  over: "Exceeds host RAM",
+  over: "Over host RAM (estimate)",
 };
 
 const FIT_TITLE: Record<Exclude<Fit, null>, string> = {
   fits: "The backend's estimated footprint fits the host's measured RAM — a sizing hint, not a benchmark.",
-  tight: "The estimated footprint leaves little measured RAM headroom — expect pressure.",
-  over: "The estimated memory footprint exceeds the host's measured total RAM — the model cannot fit.",
+  tight: "The estimated footprint leaves little measured RAM headroom — expect memory pressure.",
+  over: "The estimated footprint exceeds the host's measured total RAM — memory pressure is likely and loading may fail or swap. This is a sizing estimate, not proof of impossibility: the recommendation engine's measured verdict is authoritative, and a smaller calculated context can still fit.",
 };
 
 
@@ -112,7 +118,6 @@ function ModelCard({
   onUse: (id: string) => void;
 }) {
   const fit = classifyFit(model.estimatedMemoryBytes, totalRamBytes);
-  const overRam = fit === "over";
   const ramEstimate = formatBytes(model.estimatedMemoryBytes);
   const vramEstimate = formatBytes(model.estimatedVRAMBytes);
   const ctxMax = formatContext(model.contextLength);
@@ -120,16 +125,15 @@ function ModelCard({
   // v1.2.0: the evidence-backed vision state (never a filename guess).
   const vision = visionBadge(model.visionState, model.visionReason, model.mmprojName);
 
-  // v1.1.9: explicit state machine per card (see ModelState above).
-  // v1.5.0: a live backend selection targeting THIS model also shows
-  // the loading state (the phase is backend-authoritative).
-  const state: ModelState = model.serving
-    ? "ready"
-    : (busy || selectionBusy) && active
-      ? "loading"
-      : overRam
-        ? "incompatible"
-        : "available";
+  // v1.5.1: the honest state machine (see model-selection.ts). The
+  // backend's measured unsupported verdict is the ONLY hard block; a
+  // live backend selection targeting THIS model shows the loading state.
+  const verdict = backendVerdict(evidence);
+  const state = modelCardState({
+    serving: model.serving === true,
+    targeting: (busy || selectionBusy) && active,
+    verdict,
+  });
 
   // Honest "selected" marker: configured but not yet being served.
   const selected = active && !model.serving;
@@ -155,7 +159,7 @@ function ModelCard({
     state === "ready"
       ? "This model is already being served."
       : state === "incompatible"
-        ? "The estimated memory footprint exceeds total host RAM."
+        ? "The recommendation engine measured this machine and classified the model as unsupported."
         : selectionBusy
           ? "A model selection is being applied."
           : busy
@@ -186,7 +190,7 @@ function ModelCard({
         ) : state === "incompatible" ? (
           <span
             className="model-chip class-incompatible"
-            title="Estimated memory exceeds total host RAM — the model cannot fit."
+            title="The backend's measured verdict is unsupported on this machine."
           >
             Incompatible
           </span>
@@ -223,7 +227,10 @@ function ModelCard({
           </span>
         ) : null}
 
-        {fit && fit !== "over" && state !== "incompatible" ? (
+        {/* v1.5.1: the fit hint renders for EVERY measured ratio — the
+            "over" verdict is an honest memory-pressure warning, not a
+            block. Only the backend's unsupported verdict blocks. */}
+        {fit && state !== "incompatible" ? (
           <span
             className={`model-chip class-fit-${fit}`}
             title={FIT_TITLE[fit]}
@@ -388,6 +395,7 @@ function ModelCard({
 const ModelPicker = function ModelPicker({
   activeModel,
   busy,
+  task,
   onUse,
   onClose,
 }: {
@@ -395,6 +403,9 @@ const ModelPicker = function ModelPicker({
   activeModel: string | null;
   /** True while a model switch is in flight. */
   busy: boolean;
+  /** v1.5.1: the active surface's task (chat | agent) — the
+      recommendation evidence is computed FOR THIS TASK. */
+  task?: string;
   /** Apply a model (owned by the caller — one implementation, shared). */
   onUse: (id: string) => void;
   /** When provided, the panel shows a close affordance. */
@@ -427,8 +438,9 @@ const ModelPicker = function ModelPicker({
     let cancelled = false;
     const controller = new AbortController();
 
+    // v1.5.1: the evidence is requested for the ACTIVE surface's task.
     void api
-      .modelsRecommendations(controller.signal)
+      .modelsRecommendations(task, controller.signal)
       .then((payload) => {
         if (!cancelled) {
           setEvidence(payload.recommendations);
@@ -445,7 +457,7 @@ const ModelPicker = function ModelPicker({
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [models?.local.map((m) => m.id).join("|")]);
+  }, [models?.local.map((m) => m.id).join("|"), task]);
 
   // v1.5.0: the backend-authoritative selection flow state. While a
   // selection is in flight the cards lock and the phase is shown as a
@@ -455,54 +467,14 @@ const ModelPicker = function ModelPicker({
   const selectionPhase = (selection?.phase ?? null) as SelectionPhase | null;
   const selectionInFlight = selectionBusy(selectionPhase);
 
-  // v1.2.0 first-run: one click applies the recommended setup. v1.5.0:
-  // the backend select flow owns the whole chain (analyze → configure
-  // atomically → load → verify); the button just picks the target and
-  // hands it to the SAME onUse path as a manual card click.
-  const [onboardingBusy, setOnboardingBusy] = useState(false);
-
-  const useRecommended = useCallback(async () => {
-    setOnboardingBusy(true);
-
-    try {
-      const serving =
-        models?.local.find((m) => m.serving) ??
-        models?.local.find(
-          (m) => m.serving === false && m.id === activeModel,
-        );
-
-      // v1.5.0: the recommendation EVIDENCE decides the target — the
-      // first model the recommendation engine classified as a safe fit
-      // for this machine; the smallest measured footprint is the
-      // fallback when nothing is evidence-classified.
-      const evidenceSafe =
-        models?.local.find(
-          (m) =>
-            !m.serving && evidence?.[m.id]?.hardwareMeasured === true && evidence[m.id]?.class === "safe",
-        ) ?? null;
-
-      const best =
-        evidenceSafe ??
-        models?.local
-          .filter((m) => !m.serving)
-          .sort((a, b) => {
-            const ra = a.estimatedMemoryBytes ?? Number.MAX_SAFE_INTEGER;
-            const rb = b.estimatedMemoryBytes ?? Number.MAX_SAFE_INTEGER;
-            return ra - rb;
-          })[0] ??
-        null;
-
-      const target = serving?.id ?? best?.id ?? null;
-
-      if (target) {
-        onUse(target);
-      }
-    } catch {
-      // surfaced through the runtime store error surfaces
-    } finally {
-      setOnboardingBusy(false);
-    }
-  }, [models, activeModel, evidence, onUse]);
+  // v1.5.1: the hidden auto-selection is GONE. The previous "Use
+  // recommended setup" action silently CHOSE a model (the first
+  // evidence-safe entry, or the smallest estimated footprint as a
+  // fallback) and loaded it — turning filename/size/ordering into a
+  // recommendation and violating the explicit-choice contract. The
+  // selector is the ONLY path to a loaded model: a user clicks a card.
+  // "Recommended for this machine" remains, strictly as EVIDENCE the
+  // user reads — never as a choice the UI makes (spec §4).
 
   const sorted = useMemo(() => {
     // Serving model first, then alphabetical — a stable, predictable list.
@@ -611,26 +583,6 @@ const ModelPicker = function ModelPicker({
                   Manual mode — your explicit settings are preserved.
                 </span>
               ) : null}
-            </div>
-          ) : null}
-
-          {localModels.length > 0 ? (
-            <div className="model-picker-onboarding">
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => void useRecommended()}
-                disabled={onboardingBusy || busy || selectionInFlight}
-                title="Pick the evidence-recommended model for this machine; SHEYTAN analyzes, configures and verifies it automatically."
-              >
-                {onboardingBusy ? "Applying recommended setup…" : "Use recommended setup"}
-              </button>
-
-              <span>
-                Analyzes this machine and the selected model, applies the
-                automatic configuration, verifies the engine, and starts the
-                conversation.
-              </span>
             </div>
           ) : null}
 

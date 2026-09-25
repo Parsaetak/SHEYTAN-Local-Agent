@@ -815,6 +815,16 @@ func (s *Server) handleLlama(w http.ResponseWriter, r *http.Request) {
 
                 switch body.Action {
                 case "start":
+                        // v1.5.1: the calibration exclusion gate — starting an
+                        // engine under an active calibration would race its
+                        // verified restart cycles (spec §2.4).
+                        if s.calibrating.Load() {
+                            writeErr(w, http.StatusConflict, fmt.Errorf(
+                                "an automatic calibration is in progress — engine start is locked until it settles",
+                            ))
+                            return
+                        }
+
                         // v1.5.0 MODEL-FIRST: an explicit engine start with
                         // no selected model is a clean 400 — never a silent
                         // boot of an arbitrary model (the Model Selector
@@ -898,6 +908,16 @@ func (s *Server) handleLlama(w http.ResponseWriter, r *http.Request) {
                         return
 
                 case "stop":
+                        // v1.5.1: the calibration exclusion gate — stopping the
+                        // engine mid-pass would kill the measurement and could
+                        // leave a candidate profile unverified (spec §2.4).
+                        if s.calibrating.Load() {
+                            writeErr(w, http.StatusConflict, fmt.Errorf(
+                                "an automatic calibration is in progress — engine stop is locked until it settles",
+                            ))
+                            return
+                        }
+
                         // v1.1.5: stop both engines (native bounded, errors
                         // logged only — the llama stop result is the
                         // authoritative one).
@@ -1248,6 +1268,17 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
                 writeJSON(w, s.redactedConfig())
 
         case http.MethodPut, http.MethodPost:
+                // v1.5.1: the calibration/model-change exclusion gate — runtime
+                // performance mutations are locked while a bounded calibration is
+                // actively changing the profile (spec §2.4, §7: prevent
+                // conflicting performance mutations).
+                if s.calibrating.Load() {
+                        writeErr(w, http.StatusConflict, fmt.Errorf(
+                                "an automatic calibration is in progress — performance changes are locked until it settles",
+                        ))
+                        return
+                }
+
                 // v1.1.4: bounded body — the config endpoint previously
                 // accepted unbounded request bodies.
                 r.Body = http.MaxBytesReader(w, r.Body, 1<<20)

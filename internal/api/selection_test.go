@@ -24,9 +24,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/calibration"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recommendation"
 )
 
 func writeModelFixture(t *testing.T, dir, name string) {
@@ -433,4 +439,296 @@ func TestModelsListMarksPreviousSelection(t *testing.T) {
 			t.Fatalf("model-a must carry the previous-selection marker: %+v", out.Local)
 		}
 	}
+}
+
+// TestSelectModelAppliesIntendedTask proves the selection task contract
+// (spec §5): the intended Chat/Agent task travels with the selection —
+// the backend never silently defaults the runtime profile while the UI
+// is on a different surface.
+func TestSelectModelAppliesIntendedTask(t *testing.T) {
+	server, cfg := newTestServer(t)
+	writeModelFixture(t, cfg.ModelsDir, "model-task.gguf")
+
+	// Agent surface: the UI sends task=agent.
+	code, body := postSelect(t, server, map[string]any{"model": "model-task.gguf", "task": "agent"})
+	if code != http.StatusOK {
+		t.Fatalf("agent select = %d, body=%v", code, body)
+	}
+	if got := liveRuntimeProfile(t, server); got != "agent" {
+		t.Fatalf("config runtime profile = %q, want agent", got)
+	}
+	if applied, _ := body["applied"].(map[string]any); applied["runtimeProfile"] != "agent" {
+		t.Fatalf("applied.runtimeProfile = %v, want agent", applied["runtimeProfile"])
+	}
+
+	// Chat surface: the UI sends task=chat.
+	code, body = postSelect(t, server, map[string]any{"model": "model-task.gguf", "task": "chat"})
+	if code != http.StatusOK {
+		t.Fatalf("chat select = %d, body=%v", code, body)
+	}
+	if got := liveRuntimeProfile(t, server); got != "chat" {
+		t.Fatalf("config runtime profile = %q, want chat", got)
+	}
+	if applied, _ := body["applied"].(map[string]any); applied["runtimeProfile"] != "chat" {
+		t.Fatalf("applied.runtimeProfile = %v, want chat", applied["runtimeProfile"])
+	}
+}
+
+// TestSelectModelChatAndAgentReceiveDifferentProfiles proves spec §5:
+// the SAME model selected for Chat and for Agent legitimately receives
+// different runtime profiles (agent targets a larger context base).
+func TestSelectModelChatAndAgentReceiveDifferentProfiles(t *testing.T) {
+	server, cfg := newTestServer(t)
+	writeModelFixture(t, cfg.ModelsDir, "model-both.gguf")
+
+	_, chat := postSelect(t, server, map[string]any{"model": "model-both.gguf", "task": "chat"})
+	chatCtx, _ := chat["applied"].(map[string]any)["context"].(float64)
+
+	_, agent := postSelect(t, server, map[string]any{"model": "model-both.gguf", "task": "agent"})
+	agentCtx, _ := agent["applied"].(map[string]any)["context"].(float64)
+
+	if chatCtx == 0 || agentCtx == 0 {
+		t.Fatalf("both selections must apply a context, chat=%v agent=%v", chatCtx, agentCtx)
+	}
+	if chatCtx == agentCtx {
+		t.Fatalf("chat and agent profiles must differ for the same model, both context=%v", chatCtx)
+	}
+
+	llm := getConfigMap(t, server)["llm"].(map[string]any)
+	if llm["numCtx"].(float64) != agentCtx {
+		t.Fatalf("live config context %v must match the last (agent) selection %v", llm["numCtx"], agentCtx)
+	}
+}
+
+// TestSelectBlockedWhileCalibrating proves the exclusion gate (spec
+// §2.4, §7): while a bounded calibration pass is active, model changes,
+// performance mutations and engine start/stop are ALL rejected with a
+// real 409 — never raced. Reads stay available.
+func TestSelectBlockedWhileCalibrating(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.ModelsDir = filepath.Join(cfg.DataDir, "models")
+	cfg.SessionsDir = filepath.Join(cfg.DataDir, "sessions")
+	cfg.Host = "127.0.0.1"
+	cfg.Port = 0
+	cfg.Provider = "local"
+	cfg.LlamaAutoStart = false
+	cfg.UpdateSchedule = "off"
+
+	writeModelFixture(t, cfg.ModelsDir, "model-gate.gguf")
+
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	t.Cleanup(srv.Close)
+
+	server := httptest.NewServer(srv.Handler())
+	t.Cleanup(server.Close)
+
+	// Arm the calibration/model-change exclusion gate.
+	srv.calibrating.Store(true)
+	defer srv.calibrating.Store(false)
+
+	// Model change → 409.
+	code, body := postSelect(t, server, map[string]any{"model": "model-gate.gguf"})
+	if code != http.StatusConflict {
+		t.Fatalf("select during calibration = %d, want 409 (%v)", code, body)
+	}
+
+	// Performance mutation → 409.
+	resp, err := http.Post(server.URL+"/api/config", "application/json", bytes.NewReader([]byte(`{"performanceMode":"manual"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("config mutation during calibration = %d, want 409", resp.StatusCode)
+	}
+
+	// Engine start/stop → 409.
+	for _, action := range []string{"start", "stop"} {
+		raw, _ := json.Marshal(map[string]any{"action": action})
+		resp, err := http.Post(server.URL+"/api/llama", "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("engine %s during calibration = %d, want 409", action, resp.StatusCode)
+		}
+	}
+
+	// Reads stay available (the state must stay observable).
+	resp, err = http.Get(server.URL + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("config READ during calibration = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestRetainedCalibrationReusedOnlyWithMatchingFingerprint proves spec
+// §6 end-to-end: a retained measured profile is reused only for the same
+// model file, the same machine/engine fingerprint AND the same task;
+// stale or corrupt records fall back to the evidence-based profile.
+func TestRetainedCalibrationReusedOnlyWithMatchingFingerprint(t *testing.T) {
+	server, cfg := newTestServer(t)
+	writeModelFixture(t, cfg.ModelsDir, "model-retained.gguf")
+
+	resolved, err := llm.ResolveModelPath(cfg.ModelsDir, "model-retained.gguf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk, err := calibration.ModelKey(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hwKey := calibration.HWKey(hardware.Collect(cfg))
+
+	retainedProfile := recommendation.Recommendation{
+		Task:           recommendation.TaskChat,
+		Context:        9999,
+		Threads:        4,
+		GPULayers:      7,
+		UBatchSize:     256,
+		FlashAttention: false,
+		KVCacheQuant:   "q8_0",
+	}
+
+	clearStore := func() {
+		t.Helper()
+		if err := os.Remove(filepath.Join(cfg.DataDir, calibration.StoreFileName)); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(clearStore)
+
+	t.Run("matching fingerprint reuses the measured profile", func(t *testing.T) {
+		rec := calibration.Record{
+			ModelPath:       resolved,
+			Winner:          "GPU offload",
+			Profile:         retainedProfile,
+			GenTokensPerSec: 42,
+			TTFTSeconds:     0.25,
+			MeasuredAt:      time.Now().UTC(),
+		}
+		if err := calibration.Retain(cfg.DataDir, mk, hwKey, rec); err != nil {
+			t.Fatalf("retain: %v", err)
+		}
+
+		code, body := postSelect(t, server, map[string]any{"model": "model-retained.gguf"})
+		if code != http.StatusOK {
+			t.Fatalf("select = %d, body=%v", code, body)
+		}
+
+		applied, _ := body["applied"].(map[string]any)
+		if applied["context"].(float64) != 9999 || applied["gpuLayers"].(float64) != 7 {
+			t.Fatalf("the retained measured profile must be applied, got %v", applied)
+		}
+		if body["calibrated"] != true {
+			t.Fatal("a retained measurement must report calibrated=true")
+		}
+		if note, _ := body["calibrationNote"].(string); !strings.Contains(note, "retained verified profile") {
+			t.Fatalf("the retained note must be surfaced, got %q", note)
+		}
+
+		clearStore()
+	})
+
+	t.Run("different machine fingerprint is stale", func(t *testing.T) {
+		rec := calibration.Record{
+			ModelPath:  resolved,
+			Winner:     "GPU offload",
+			Profile:    retainedProfile,
+			MeasuredAt: time.Now().UTC(),
+		}
+		if err := calibration.Retain(cfg.DataDir, mk, hwKey+"-DIFFERENT", rec); err != nil {
+			t.Fatal(err)
+		}
+
+		code, body := postSelect(t, server, map[string]any{"model": "model-retained.gguf"})
+		if code != http.StatusOK {
+			t.Fatalf("select = %d", code)
+		}
+		applied, _ := body["applied"].(map[string]any)
+		if applied["context"].(float64) == 9999 {
+			t.Fatal("a stale fingerprint must NOT reuse the retained profile")
+		}
+		if body["calibrated"] == true {
+			t.Fatal("a stale fingerprint must not claim calibrated=true")
+		}
+
+		clearStore()
+	})
+
+	t.Run("different task is stale", func(t *testing.T) {
+		stale := retainedProfile
+		stale.Task = recommendation.TaskAgent
+		rec := calibration.Record{
+			ModelPath:  resolved,
+			Winner:     "GPU offload",
+			Profile:    stale,
+			MeasuredAt: time.Now().UTC(),
+		}
+		if err := calibration.Retain(cfg.DataDir, mk, hwKey, rec); err != nil {
+			t.Fatal(err)
+		}
+
+		code, body := postSelect(t, server, map[string]any{"model": "model-retained.gguf"})
+		if code != http.StatusOK {
+			t.Fatalf("select = %d", code)
+		}
+		applied, _ := body["applied"].(map[string]any)
+		if applied["context"].(float64) == 9999 {
+			t.Fatal("a chat selection must not reuse an agent-tuned record")
+		}
+
+		clearStore()
+	})
+
+	t.Run("corrupt store fails closed", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(cfg.DataDir, calibration.StoreFileName), []byte("{corrupt"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		code, body := postSelect(t, server, map[string]any{"model": "model-retained.gguf"})
+		if code != http.StatusOK {
+			t.Fatalf("a corrupt store must not break selection, got %d", code)
+		}
+		applied, _ := body["applied"].(map[string]any)
+		if applied["context"].(float64) == 9999 {
+			t.Fatal("a corrupt store must never reuse anything")
+		}
+		if body["calibrated"] == true {
+			t.Fatal("a corrupt store must not claim calibrated=true")
+		}
+	})
+}
+
+// TestSelectInvalidTaskFallsBackToChat documents the backend contract:
+// an unknown task id never poisons the profile — it falls back to chat.
+func TestSelectInvalidTaskFallsBackToChat(t *testing.T) {
+	server, cfg := newTestServer(t)
+	writeModelFixture(t, cfg.ModelsDir, "model-task2.gguf")
+
+	code, body := postSelect(t, server, map[string]any{"model": "model-task2.gguf", "task": "gaming"})
+	if code != http.StatusOK {
+		t.Fatalf("select = %d", code)
+	}
+	if got := liveRuntimeProfile(t, server); got != string(recommendation.TaskChat) {
+		t.Fatalf("invalid task must fall back to chat, got %q", got)
+	}
+	if applied, _ := body["applied"].(map[string]any); applied["runtimeProfile"] != "chat" {
+		t.Fatalf("applied.runtimeProfile = %v, want chat", applied["runtimeProfile"])
+	}
+}
+
+// liveRuntimeProfile reads the runtime profile from the live config.
+func liveRuntimeProfile(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	got, _ := getConfigMap(t, server)["runtimeProfile"].(string)
+	return got
 }

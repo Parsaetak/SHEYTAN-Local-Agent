@@ -1352,15 +1352,20 @@ export const api = {
   },
 
   // v1.5.0: per-model recommendation evidence for the picker — the only
-  // source of the "Recommended for this machine" label.
-  modelsRecommendations(signal?: AbortSignal): Promise<ModelsRecommendationsResponse> {
-    return request<ModelsRecommendationsResponse>("/models/recommendations", { signal });
+  // source of the "Recommended for this machine" label. v1.5.1: the task
+  // travels with the request so the evidence is computed for the ACTIVE
+  // surface (chat vs agent), never the backend's silent default.
+  modelsRecommendations(task?: string, signal?: AbortSignal): Promise<ModelsRecommendationsResponse> {
+    const suffix = task ? `?task=${encodeURIComponent(task)}` : "";
+    return request<ModelsRecommendationsResponse>(`/models/recommendations${suffix}`, { signal });
   },
 
   // v1.5.0 MODEL-FIRST: select a model BEFORE any engine/model load. The
   // backend drives the whole chain (analyze → configure atomically →
   // load → verify → ready, plus the bounded AUTO calibration) and the
-  // returned state is backend-authoritative.
+  // returned state is backend-authoritative. v1.5.1: every surface sends
+  // its intended task explicitly (chat | agent) — the backend must never
+  // tune one task while the UI shows another.
   selectModel(model: string, task?: string): Promise<SelectionState> {
     return request<SelectionState>("/models/select", {
       method: "POST",

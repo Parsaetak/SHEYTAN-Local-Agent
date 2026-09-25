@@ -1,4 +1,5 @@
-// model-selection.ts — v1.5.0 the pure model-first selection logic.
+// model-selection.ts — v1.5.0 the pure model-first selection logic,
+// extended in v1.5.1 with the honest per-card state machine.
 //
 // Extracted from ModelPicker so the CONTRACTS are unit-testable:
 //
@@ -7,7 +8,12 @@
 //   - the fit hint is a MEASURED sizing verdict (estimated footprint vs
 //     measured host RAM) and never a "best model" claim;
 //   - "Recommended for this machine" requires the recommendation
-//     engine's measured evidence — never a filename/size heuristic.
+//     engine's measured evidence — never a filename/size heuristic;
+//   - a model card is "Incompatible" ONLY on the backend's measured
+//     unsupported verdict — a RAM estimate alone is a warning, never a
+//     hard block (spec §4);
+//   - there is NO implicit selection path: the picker has no helper
+//     that turns evidence or ordering into a model choice (spec §4).
 
 export type SelectionPhase =
   | "select"
@@ -102,4 +108,72 @@ export function recommendedOnThisMachine(
   evidence: ModelRecommendationEvidence | null | undefined,
 ): boolean {
   return evidence?.hardwareMeasured === true && evidence.class === "safe";
+}
+
+/** The backend's authoritative resource verdict for one model card. */
+export type BackendVerdict = "safe" | "caution" | "unsupported";
+
+/**
+ * backendVerdict extracts the recommendation engine's MEASURED resource
+ * verdict for a model (hardwareMeasured + class). It is the ONLY signal
+ * that may hard-block a model card. Returns null when the backend has
+ * no measured verdict for this machine — a sizing estimate is never a
+ * verdict.
+ */
+export function backendVerdict(
+  evidence: ModelRecommendationEvidence | null | undefined,
+): BackendVerdict | null {
+  if (evidence?.hardwareMeasured !== true) {
+    return null;
+  }
+
+  if (
+    evidence.class === "safe" ||
+    evidence.class === "caution" ||
+    evidence.class === "unsupported"
+  ) {
+    return evidence.class;
+  }
+
+  return null;
+}
+
+/** The v1.5.1 per-card state machine. */
+export type CardState = "ready" | "loading" | "incompatible" | "available";
+
+export interface CardStateInput {
+  /** The engine is serving this model right now. */
+  serving: boolean;
+  /** A selection/model operation is targeting THIS model. */
+  targeting: boolean;
+  /** The backend's measured verdict (null = none measured). */
+  verdict: BackendVerdict | null;
+}
+
+/**
+ * modelCardState — the honest card state machine (v1.5.1):
+ *
+ *   ready         — the engine is serving this model right now;
+ *   loading       — a selection targeting this exact model is in flight;
+ *   incompatible  — ONLY the backend's authoritative unsupported
+ *                   verdict blocks a model (spec §4);
+ *   available     — everything else. A RAM estimate above host memory is
+ *                   a WARNING (the fit chip), never a hard block: the
+ *                   estimate is a sizing signal, not proof of runtime
+ *                   impossibility.
+ */
+export function modelCardState(input: CardStateInput): CardState {
+  if (input.serving) {
+    return "ready";
+  }
+
+  if (input.targeting) {
+    return "loading";
+  }
+
+  if (input.verdict === "unsupported") {
+    return "incompatible";
+  }
+
+  return "available";
 }

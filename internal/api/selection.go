@@ -291,15 +291,19 @@ func (s *Server) selectModel(w http.ResponseWriter, r *http.Request) {
 
 	auto := cfg.EffectivePerformanceMode() == config.ModeAuto
 
-	// Retained calibration (same model fingerprint + same machine):
-	// the previously MEASURED verified profile wins over a fresh
-	// evidence-only calculation — reuse, don't re-benchmark.
+	// Retained calibration (same model fingerprint + same machine +
+	// same engine identity + same task profile): the previously
+	// MEASURED verified profile wins over a fresh evidence-only
+	// calculation — reuse, don't re-benchmark. Any identity mismatch
+	// (or a corrupt record) is a miss: the evidence-based profile is
+	// used instead (spec §6 — retained calibration is invalidated
+	// safely, failing closed).
 	var retained calibration.Record
 	haveRetained := false
 	if auto {
 		if mk, err := calibration.ModelKey(resolved); err == nil {
 			hw := in.HW
-			if rk, ok := calibration.Retained(cfg.DataDir, mk, calibration.HWKey(hw)); ok && rk.Winner != "" {
+			if rk, ok := calibration.Retained(cfg.DataDir, mk, calibration.HWKey(hw), task); ok {
 				retained = rk
 				haveRetained = true
 				rec = retained.Profile
@@ -366,7 +370,12 @@ func (s *Server) selectModel(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		s.updateSelection(func(x *selectionState) {
-			x.CalibrationNote = "selection applied — the engine starts on first use (auto-start is off)"
+			// Preserve an honest note set earlier in the flow (a
+			// retained verified profile, a calibration reason) — the
+			// auto-start hint only fills an empty note.
+			if x.CalibrationNote == "" {
+				x.CalibrationNote = "selection applied — the engine starts on first use (auto-start is off)"
+			}
 		})
 	}
 
@@ -615,9 +624,29 @@ type calibrationRunner struct {
 	restartsAtStart int
 }
 
-// ApplyProfile: atomic config apply + verified restart.
+// llamaServingModel is the model the llama engine is ACTUALLY serving
+// right now (the verified id when available, the spawned path otherwise).
+func llamaServingModel(l *llm.LlamaServer) string {
+	if v := l.VerifiedModel(); v != "" {
+		return v
+	}
+	return l.LoadedModel()
+}
+
+// ApplyProfile: run-abort check FIRST (a candidate must never displace a
+// user run), then the atomic config apply + verified restart, then the
+// model-serving verification (spec §2.2/§2.3/§2.13).
 func (cr *calibrationRunner) ApplyProfile(ctx context.Context, modelPath string, rec recommendation.Recommendation) error {
 	s := cr.s
+
+	// Abort the calibration when a run arrives while we are between
+	// candidates — the user's work wins over the benchmark. Checked
+	// BEFORE any config write: an aborted candidate must not leave
+	// its profile persisted (spec §2.7).
+	if s.anyRunActive() {
+		return fmt.Errorf("%w", calibration.ErrCalibrationAborted)
+	}
+
 	cfg := s.src.Load()
 
 	next := *cfg
@@ -627,12 +656,6 @@ func (cr *calibrationRunner) ApplyProfile(ctx context.Context, modelPath string,
 	}
 	s.src.Store(&next)
 
-	// Abort the calibration when a run arrives while we are between
-	// candidates — the user's work wins over the benchmark.
-	if s.anyRunActive() {
-		return fmt.Errorf("a run started — calibration aborted")
-	}
-
 	if err := s.llama.Restart(); err != nil {
 		return fmt.Errorf("restart with candidate profile: %w", err)
 	}
@@ -641,11 +664,19 @@ func (cr *calibrationRunner) ApplyProfile(ctx context.Context, modelPath string,
 		return fmt.Errorf("candidate did not reach verified ready (state %s)", s.llama.State())
 	}
 
+	// The candidate is only good when the engine is serving the
+	// EXPECTED model after the swap — a profile that boots a
+	// different model is a failed boot (spec §2.13, §8).
+	if serving := llamaServingModel(s.llama); serving != modelPath {
+		return fmt.Errorf("engine serves %q after the candidate swap, not the expected model", serving)
+	}
+
 	return nil
 }
 
 // MeasureGeneration: ONE short REAL generation through the live engine
-// client (the same serving path a user message takes).
+// client (the same serving path a user message takes). Never a fabricated
+// number: the sample is whatever the real engine reported.
 func (cr *calibrationRunner) MeasureGeneration(ctx context.Context, prompt string, maxTokens int) (llm.PerfStats, error) {
 	req := &llm.ChatRequest{
 		MaxTokens: maxTokens,
@@ -660,108 +691,146 @@ func (cr *calibrationRunner) MeasureGeneration(ctx context.Context, prompt strin
 	})
 }
 
-// EngineStable: alive and no watchdog restart since the pass started.
-func (cr *calibrationRunner) EngineStable() bool {
+// EngineStable: verified ready, the EXPECTED model still the one being
+// served, and no watchdog restart since the pass started (spec §2.13:
+// stability includes model-serving verification).
+func (cr *calibrationRunner) EngineStable(expectedModel string) bool {
 	s := cr.s
 	if !s.llama.VerifiedReady() {
+		return false
+	}
+	if llamaServingModel(s.llama) != expectedModel {
 		return false
 	}
 	return s.llama.Restarts() == cr.restartsAtStart
 }
 
-// startCalibration runs the bounded pass in a background worker and
-// retains the verified winner.
+// startCalibration arms the calibration/model-change exclusion gate and
+// starts the bounded pass in a background worker. The calibrating phase
+// is published SYNCHRONOUSLY — the selection response and the engine
+// snapshot never expose a phantom ready while the pass is about to
+// change the profile (spec §7: calibration state is honest and distinct
+// from the final ready state).
 func (s *Server) startCalibration(cfg *config.Config, modelPath string, base recommendation.Recommendation) {
 	if !s.calibrating.CompareAndSwap(false, true) {
 		return
 	}
 
+	// A run that is already active makes the whole pass moot — the
+	// user's work wins over the benchmark (spec §2.3). The gate is
+	// released before returning.
+	if s.anyRunActive() {
+		s.calibrating.Store(false)
+		s.updateSelection(func(x *selectionState) {
+			x.CalibrationNote = "calibration skipped — a run was active"
+		})
+		return
+	}
+
+	s.updateSelection(func(x *selectionState) {
+		x.Phase = phaseCalibrating
+		x.CalibrationNote = "measuring a small candidate set (bounded)"
+	})
+
 	go func() {
 		defer s.calibrating.Store(false)
+		s.runCalibration(cfg, modelPath, base)
+	}()
+}
 
-		// Any late run arrival makes the whole pass moot.
-		if s.anyRunActive() {
-			s.updateSelection(func(x *selectionState) {
-				x.CalibrationNote = "calibration skipped — a run was active"
-			})
+// runCalibration executes the bounded pass and settles the selection
+// state on the verified outcome: the winner (with ITS OWN measured
+// metrics), the baseline restore, or the supervised failure.
+func (s *Server) runCalibration(cfg *config.Config, modelPath string, base recommendation.Recommendation) {
+	hw := hardware.Collect(cfg)
+	cands := calibration.Candidates(base, hw, s.llama.Caps())
+
+	runner := &calibrationRunner{s: s}
+	runner.restartsAtStart = s.llama.Restarts()
+
+	ctx, cancel := context.WithTimeout(context.Background(), calibration.DefaultTotalBudget+calibration.DefaultBootBudget)
+	defer cancel()
+
+	sum := calibration.Calibrate(ctx, runner, modelPath, base, cands, calibration.DefaultTotalBudget)
+
+	s.updateSelection(func(x *selectionState) {
+		x.Calibration = &sum
+
+		// A supervised failure (the rollback itself failed) is NEVER
+		// ready or verified — the real reason is surfaced (spec §2.11).
+		if sum.Failed {
+			x.Phase = phaseFailed
+			x.Error = sum.Reason
+			x.Calibrated = false
+			x.CalibrationNote = ""
 			return
 		}
 
-		s.updateSelection(func(x *selectionState) {
-			x.Phase = phaseCalibrating
-			x.CalibrationNote = "measuring a small candidate set (bounded)"
-		})
+		if sum.Ran {
+			x.Calibrated = true
 
-		hw := hardware.Collect(cfg)
-		cands := calibration.Candidates(base, hw, s.llama.Caps())
-
-		runner := &calibrationRunner{s: s}
-		runner.restartsAtStart = s.llama.Restarts()
-
-		ctx, cancel := context.WithTimeout(context.Background(), calibration.DefaultTotalBudget+60*time.Second)
-		defer cancel()
-
-		sum := calibration.Calibrate(ctx, runner, modelPath, base, cands, calibration.DefaultTotalBudget)
-
-		s.updateSelection(func(x *selectionState) {
-			x.Calibration = &sum
-			if sum.Ran {
-				x.Calibrated = true
+			// The winner metrics come from the measurement whose
+			// candidate EQUALS sum.Winner — never Measurements[0]
+			// unless that IS the winner (spec §7).
+			if wm := sum.WinnerMeasurement; wm != nil {
+				x.CalibrationNote = fmt.Sprintf(
+					"verified winner %q (%.1f tok/s, first token %.2fs) from measured runs",
+					sum.Winner, wm.GenTokensPerSec, wm.TTFTSeconds,
+				)
+			} else {
 				x.CalibrationNote = fmt.Sprintf(
 					"verified winner %q from measured runs", sum.Winner,
 				)
-				if len(sum.Measurements) > 0 {
-					x.CalibrationNote = fmt.Sprintf(
-						"verified winner %q (%.1f tok/s, first token %.2fs) from measured runs",
-						sum.Winner, sum.Measurements[0].GenTokensPerSec, sum.Measurements[0].TTFTSeconds,
-					)
-				}
-			} else {
-				x.Calibrated = false
-				x.CalibrationNote = "evidence-based automatic profile — not benchmarked"
 			}
-			x.Phase = phaseReady
-		})
 
-		if !sum.Ran {
-			return
-		}
-
-		// Retain the verified profile for this model on this machine.
-		if mk, err := calibration.ModelKey(modelPath); err == nil {
-			winner := sum.Winner
-			profile := base
+			// The applied-profile block now describes the VERIFIED FINAL
+			// profile — the profile actually left running (spec §2.9).
 			if sum.WinnerProfile != nil {
-				profile = *sum.WinnerProfile
+				x.Applied = profileSummary(*sum.WinnerProfile)
 			}
-
-			var tokPerSec, ttft float64
-			for _, m := range sum.Measurements {
-				if m.Candidate == winner {
-					tokPerSec = m.GenTokensPerSec
-					ttft = m.TTFTSeconds
-					break
-				}
-			}
-
-			rec := calibration.Record{
-				ModelPath:       modelPath,
-				Winner:          winner,
-				Profile:         profile,
-				GenTokensPerSec: tokPerSec,
-				TTFTSeconds:     ttft,
-				MeasuredAt:      time.Now().UTC(),
-			}
-
-			if err := calibration.Retain(cfg.DataDir, mk, calibration.HWKey(hw), rec); err != nil {
-				logging.Default().Warn(
-					"calibration",
-					"retained profile could not be persisted (it stays active for this session): %v",
-					err,
-				)
-			}
+		} else {
+			x.Calibrated = false
+			x.CalibrationNote = "evidence-based automatic profile — not benchmarked"
 		}
-	}()
+		x.Phase = phaseReady
+	})
+
+	if !sum.Ran || sum.Failed {
+		return
+	}
+
+	// Retain the verified profile for this model on this machine, scoped
+	// to the task profile it was measured with (spec §6).
+	if mk, err := calibration.ModelKey(modelPath); err == nil {
+		winner := sum.Winner
+		profile := base
+		if sum.WinnerProfile != nil {
+			profile = *sum.WinnerProfile
+		}
+
+		var tokPerSec, ttft float64
+		if wm := sum.WinnerMeasurement; wm != nil {
+			tokPerSec = wm.GenTokensPerSec
+			ttft = wm.TTFTSeconds
+		}
+
+		rec := calibration.Record{
+			ModelPath:       modelPath,
+			Winner:          winner,
+			Profile:         profile,
+			GenTokensPerSec: tokPerSec,
+			TTFTSeconds:     ttft,
+			MeasuredAt:      time.Now().UTC(),
+		}
+
+		if err := calibration.Retain(cfg.DataDir, mk, calibration.HWKey(hw), rec); err != nil {
+			logging.Default().Warn(
+				"calibration",
+				"retained profile could not be persisted (it stays active for this session): %v",
+				err,
+			)
+		}
+	}
 }
 
 // modelRecommendation is the per-model evidence summary for the picker's

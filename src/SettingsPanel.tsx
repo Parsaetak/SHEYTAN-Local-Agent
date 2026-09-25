@@ -345,6 +345,33 @@ function SettingsPanel() {
       return;
     }
 
+    // v1.5.1: a local model change goes through the backend-authoritative
+    // model-first flow (resolve → analyze → configure atomically → load →
+    // verify → ready) — the SAME path the Model Picker uses — never a
+    // bare config write plus a blind engine cycle. The currently intended
+    // task profile is preserved (spec §5). Remote providers keep the
+    // plain config save (model selection is a local-engine concept).
+    if ((config?.provider ?? "local") === "local") {
+      setSaveState("loading");
+      setError(null);
+
+      try {
+        await api.selectModel(model, config?.runtimeProfile || undefined);
+        const nextConfig = await api.config();
+        setConfig(nextConfig);
+        resetResource("config");
+        setSaveState("saved");
+      } catch (selectError) {
+        setError(
+          selectError instanceof Error
+            ? selectError.message
+            : "Unable to switch the model.",
+        );
+        setSaveState("error");
+      }
+      return;
+    }
+
     await save({
       model,
     });

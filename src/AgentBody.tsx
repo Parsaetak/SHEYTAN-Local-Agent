@@ -80,6 +80,8 @@ const PHASE_LABELS: Record<string, string> = {
   "loading-model": "Loading model…",
   "checking-capabilities": "Checking capabilities…",
   "preparing-context": "Preparing context…",
+  "model-selection": "Waiting for a model choice…",
+  calibrating: "Calibrating performance…",
   stopping: "Stopping…",
   stopped: "Engine stopped",
   failed: "Engine failed",
@@ -330,7 +332,12 @@ function AgentBody() {
     setModelError(null);
 
     try {
-      await api.selectModel(nextModel);
+      // v1.5.1: the ACTIVE SURFACE's task travels with the selection —
+      // Chat selects with TaskChat, Agent with TaskAgent. The backend
+      // must never tune `chat` while the user is working in the Agent
+      // surface (spec §5): the same model may legitimately receive a
+      // different runtime profile per task.
+      await api.selectModel(nextModel, mode);
 
       const nextConfig = await api.config();
       setConfig(nextConfig);
@@ -600,6 +607,7 @@ function AgentBody() {
               config?.model ?? engine?.model ?? activeSession?.model ?? null
             }
             busy={modelBusy}
+            task={mode}
             onUse={(id) => {
               void switchModel(id).then((applied) => {
                 if (applied) {
