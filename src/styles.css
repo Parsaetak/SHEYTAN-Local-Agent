@@ -868,6 +868,27 @@ textarea:focus-visible {
   color: var(--error);
 }
 
+/* v1.6.0 (spec §7): the read-only automatic long-context indicator in
+   Settings → Performance. Replaces the editable context-size input. */
+.ctx-automatic-indicator {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  padding: 10px 12px;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--surface);
+}
+
+.ctx-automatic-indicator strong {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--text-soft);
+}
+
 .runtime-pill-degraded {
   border-color: var(--warning);
   color: var(--warning);
@@ -5390,4 +5411,44 @@ body::before {
 
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* v1.6.0 P0/P4 — the startup maintenance banner (truthful engine
+   maintenance lifecycle, spec §12). */
+.maintenance-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+
+  padding: 6px 10px;
+  margin: 6px 0;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.maintenance-banner-phase {
+  color: var(--text-soft);
+  letter-spacing: 0.02em;
+}
+
+.maintenance-banner-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.maintenance-banner-failed {
+  border-color: var(--warning);
+}
+
+.maintenance-banner-failed .maintenance-banner-phase {
+  color: var(--warning);
+}
+
+.maintenance-banner-done .maintenance-banner-phase {
+  color: var(--ok, #48bb76);
 }

@@ -840,3 +840,112 @@
   font-size: 11px;
   color: var(--text-dim, #9aa4b2);
 }
+
+/* v1.6.0 P3 — custom tools (Settings → Agent & Tools → My Tools). */
+.custom-tool-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+
+  padding: 14px;
+  margin-bottom: 14px;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+
+  background: var(--surface);
+}
+
+.custom-tool-params {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.custom-tool-param-row {
+  display: grid;
+  grid-template-columns: 140px 110px 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.custom-tool-param-row select,
+.custom-tool-param-row input {
+  min-width: 0;
+}
+
+.custom-tool-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.custom-tool-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  padding: 10px 12px;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--surface);
+}
+
+.custom-tool-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.custom-tool-card-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.custom-tool-desc {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.custom-tool-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.custom-tool-test-result {
+  padding: 8px 10px;
+
+  border-radius: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.custom-tool-test-ok {
+  background: rgba(72, 187, 120, 0.12);
+  color: var(--ok, #48bb76);
+}
+
+.custom-tool-test-fail {
+  background: rgba(229, 62, 62, 0.12);
+  color: var(--error, #e53e3e);
+}
+
+.settings-notice {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--ok, #48bb76);
+}
+
+.settings-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--error, #e53e3e);
+}

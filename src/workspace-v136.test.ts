@@ -10,6 +10,7 @@ import {
   getWorkspaceLayer,
   isWorkspaceView,
   parseWorkspaceHash,
+  viewModeBinding,
   visibleWorkspaceLayers,
 } from "./workspace.ts";
 
@@ -38,6 +39,46 @@ test("both modes still expose the surviving layers", () => {
   for (const mode of ["chat", "agent"] as const) {
     const layers = visibleWorkspaceLayers(mode);
     assert.ok(layers.length > 0);
-    assert.equal(layers[0].id, "agent");
+    // v1.6.0 (spec §6): CHAT leads the navigation — Chat and Agent are
+    // both TOP-LEVEL views (the internal segmented selector is gone).
+    assert.equal(layers[0].id, "chat");
+    assert.equal(layers[1].id, "agent");
   }
+});
+
+// v1.6.0 (spec §6): the top-level Chat/Agent navigation contract. Chat
+// and Agent are real views with their own hashes; the conversation-space
+// mode follows the view; shared layers never rebind the mode.
+test("chat and agent are top-level views with view→mode binding", () => {
+  assert.equal(isWorkspaceView("chat"), true);
+  assert.equal(getWorkspaceLayer("chat").id, "chat");
+  assert.equal(getWorkspaceLayer("chat").label, "Chat");
+
+  assert.equal(viewModeBinding("chat"), "chat");
+  assert.equal(viewModeBinding("agent"), "agent");
+  assert.equal(viewModeBinding("workspace"), null);
+  assert.equal(viewModeBinding("system"), null);
+  assert.equal(viewModeBinding("settings"), null);
+});
+
+// parseWorkspaceHash resolves #chat / #agent (and keeps the v1.3.6
+// invalid-hash fallback to the Agent view). The hash source is
+// window.location — stubbed here for the Node test runner.
+test("the #chat and #agent hashes resolve to their views", () => {
+  const originalWindow = (globalThis as Record<string, unknown>).window;
+
+  for (const [hash, expected] of [
+    ["#chat", "chat"],
+    ["#agent", "agent"],
+    ["#research", "agent"],
+    ["", "agent"],
+  ] as const) {
+    (globalThis as Record<string, unknown>).window = {
+      location: { hash },
+    };
+
+    assert.equal(parseWorkspaceHash(), expected, `hash ${hash || "(empty)"}`);
+  }
+
+  (globalThis as Record<string, unknown>).window = originalWindow;
 });

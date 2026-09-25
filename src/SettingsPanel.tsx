@@ -13,6 +13,9 @@ import {
 import { ensure as ensureResource, reset as resetResource } from "./resources";
 import { useResource } from "./useResource";
 
+// v1.6.0 P3: the My Tools card (Settings → Agent & Tools → My Tools).
+import MyToolsCard from "./MyToolsCard";
+
 import { FieldLabel } from "./settings-shared";
 import {
   ContextCard,
@@ -959,6 +962,11 @@ function SettingsPanel() {
               </span>
             </section>
 
+            {/* v1.6.0 P3 (spec §8): MY TOOLS — the custom tool builder.
+                Create → validate → save → register → test, all through
+                the backend's single custom-tools authority. */}
+            <MyToolsCard />
+
             <section className="settings-card">
               <div className="settings-card-heading">
                 <div>
@@ -1445,7 +1453,6 @@ function SettingsPanel() {
               config={config}
               perf={perf}
               save={save}
-              updateLocalLLM={updateLocalLLM}
               updateConfigLocal={updateConfigLocal}
             />
 

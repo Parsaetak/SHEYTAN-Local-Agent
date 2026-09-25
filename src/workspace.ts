@@ -1,4 +1,5 @@
 export type WorkspaceView =
+  | "chat"
   | "agent"
   | "workspace"
   | "lab"
@@ -33,7 +34,27 @@ const AGENT_LAYER: WorkspaceLayer = {
   modes: ["chat", "agent"],
 };
 
+// v1.6.0 (spec §6): CHAT is a real TOP-LEVEL view — not a segmented
+// selector inside the Agent workspace. Chat and Agent are two visible
+// surfaces over the SAME runtime (engine, memory, tools, sessions
+// infrastructure); only the presentation differs (Chat stays a calm,
+// lightweight conversation surface; Agent carries the engineering
+// machinery).
+const CHAT_LAYER: WorkspaceLayer = {
+  id: "chat",
+  label: "Chat",
+  eyebrow: "CHAT",
+  title: "Chat",
+  description: "Lightweight conversation with the local model",
+  icon: "◇",
+  modes: ["chat", "agent"],
+};
+
 export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
+  // v1.6.0 navigation contract (spec §6): CHAT | AGENT | WORKSPACE/LAB |
+  // SYSTEM | SETTINGS. The internal Chat|Agent segmented selector is
+  // GONE — the views themselves are the switch.
+  CHAT_LAYER,
   AGENT_LAYER,
   {
     // v1.2.4: the Workspace work-environment layer — current project,
@@ -82,7 +103,10 @@ export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
 ] as const;
 
 // v1.1.9: the navigation is mode-aware — Chat hides Agent machinery
-// (Coding Lab) without touching the layers themselves.
+// (Coding Lab) without touching the layers themselves. v1.6.0: with Chat
+// and Agent as top-level views the mode follows the active view (the
+// App binds chat-view → chat mode, agent-view → agent mode), so the
+// layer visibility rule still holds for every other surface.
 export function visibleWorkspaceLayers(
   mode: WorkspaceMode,
 ): readonly WorkspaceLayer[] {
@@ -105,6 +129,25 @@ export function parseWorkspaceHash(): WorkspaceView {
   const hash = window.location.hash.replace(/^#/, "").trim().toLowerCase();
 
   return isWorkspaceView(hash) ? hash : "agent";
+}
+
+// viewModeBinding (v1.6.0, spec §6): the conversation-space mode that a
+// top-level view implies. The Chat VIEW is the chat conversation space;
+// the Agent VIEW is the agent conversation space; every other layer
+// leaves the current space untouched (workspace/system/settings are
+// shared surfaces over the same runtime).
+export function viewModeBinding(
+  view: WorkspaceView,
+): WorkspaceMode | null {
+  if (view === "chat") {
+    return "chat";
+  }
+
+  if (view === "agent") {
+    return "agent";
+  }
+
+  return null;
 }
 
 // v1.2.4: persisted view state — the last visited layer is remembered and

@@ -1,3 +1,124 @@
+# UPDATE.md — v1.6.0 Startup Maintenance Gate, Top-Level Views, Custom Tools
+
+**Release:** `v1.6.0` (canonical application version; single version
+hierarchy: package.json → release-version.mjs → config.go /
+build/config.yml / SIGNATURE)
+**Base:** `main @ 8f7a2b3` (`v1.5.1`) · **Date:** 2026-09-26
+**Package:** `SHEYTAN-Local-Agent-v1.6.0-FINAL.zip` (complete repository
+tree)
+
+v1.6.0 repairs the v1.5.1 startup ordering defect, makes Chat and Agent
+real top-level views, removes the user-facing context-window control,
+ships a working custom tool system, and gives engine maintenance a
+truthful lifecycle surface. All changes preserve the v1.5.1 foundation:
+the same session architecture, the same downloader, the same engine
+updater, the same memory/context authorities.
+
+## IMPLEMENTED and TESTED
+
+1. **P0 — Startup maintenance gate (the ordering repair).**
+   `Server.EnsureSetup` previously prewarmed the engine and THEN started
+   the scheduled updater, whose immediate pass could stop the
+   freshly-booted engine mid-startup (the observed "engine ready →
+   updater stops engine → downloads" sequence). v1.6.0 introduces ONE
+   authoritative gate (`internal/api/maintenance.go`): the maintenance
+   decision — and any transactional update it requires — completes
+   BEFORE any engine process is started or prewarmed. The prewarm and
+   the scheduled updater's first pass (`updater.RunScheduledAfter`) are
+   released together, after, through explicit channel synchronization.
+   No sleeps, no timing assumptions. Regression tests in
+   `internal/api/maintenance_test.go` and
+   `internal/llm/maintenance_stop_test.go` prove the ordering (they fail
+   against the v1.5.1 ordering).
+
+   Cases covered: no-update startup (prewarm after check) · required
+   update (transaction completes before prewarm) · failed update with a
+   valid installed engine (last-known-good survives, startup continues,
+   failure surfaced) · failed update with an unusable engine (prewarm
+   BLOCKED with an explicit diagnostic) · no selected model (model-first
+   preserved: install-only, never a start) · repeated startup
+   (single-flight gate, exactly one prewarm) · deliberate maintenance
+   stop never classified as a crash · deterministic channel
+   synchronization only.
+
+   The gate exposes its explicit state at `GET /api/maintenance`
+   (CHECKING → MAINTENANCE_REQUIRED → DOWNLOADING → VERIFYING →
+   INSTALLING → READY_FOR_PREWARM, terminal DEFERRED / FAILED / BLOCKED)
+   and the UI renders the honest phase sequence
+   (`src/MaintenanceBanner.tsx`) instead of a generic "Updating…".
+
+2. **Honest compatibility diagnostics.** "reason unrecorded" is gone:
+   an unknown compatibility-fallback reason now reports the explicit
+   value `unknown` (log line, `CompatInfo` API, and the pre-v1.1.7
+   downgrade label). No fake specificity; accelerator honesty rules
+   unchanged.
+
+3. **P1 — Chat and Agent are top-level views.** The navigation is now
+   `CHAT | AGENT | WORKSPACE/LAB | SYSTEM | SETTINGS`. The internal
+   Chat|Agent segmented selector inside the Agent workspace is removed;
+   the active view IS the conversation space (`#chat` / `#agent`). The
+   store's per-mode session machinery is untouched: independent
+   histories, per-mode active session, cross-mode history references,
+   shared engine/memory/tool/research infrastructure — all preserved.
+
+4. **P2 — Automatic long context.** The user-facing context-window
+   controls are gone (the per-session context selector in the header,
+   the editable context-size input and history-window % in Settings, and
+   the context recommendation row). A read-only
+   `LONG CONTEXT · AUTOMATIC` indicator states the real concept. The
+   physical context handling is unchanged (contextplan, continuum,
+   chunking, summaries, memory, histref, per-session policies resolve
+   exactly as before), and historical saved values (config `numCtx`,
+   session `contextTokens`) still load — they are internal legacy
+   values, never user controls. Logical continuity remains unbounded
+   through history, summaries, retrieval, chunking, rollover, memory and
+   cross-mode references.
+
+5. **P3 — Custom tools (end-to-end, tested).** Settings → Agent & Tools
+   → My Tools → + Create Tool. Definitions persist atomically under
+   `<DataDir>/custom-tools` (the existing data root), are validated
+   (object-root input schema; string/number/integer/boolean/array/object
+   param types; HTTPS-only URLs; bounded timeout/output), are DISABLED
+   by default, and register as FIRST-CLASS tools in the ONE orchestrator
+   registry — `/api/tools` carries `source: builtin|custom`, toolset
+   selection picks them up when named, the agent loop executes them, and
+   the result returns to the model (E2E test:
+   `internal/agent/customtools_e2e_test.go`). Execution types: HTTP
+   (HTTPS-only, bounded, secret values never model-visible) and local
+   command (explicit permission, controlled environment, cancellable,
+   bounded). Tests: persistence, validation, registry, execution,
+   timeout, cancellation, output limits, disabled/invalid rejection,
+   API lifecycle, real agent-loop execution.
+
+6. **Version identity.** `v1.6.0` everywhere (package.json,
+   config.AppVersion, build/config.yml, SIGNATURE regenerated). No
+   codename.
+
+## PARTIALLY IMPLEMENTED (honest scope notes)
+
+* **AI-assisted tool builder (spec §10):** deferred — the manual tool
+  builder is complete and mandatory; the AI-assisted draft generation is
+  the first custom-tool UX surface to defer under time pressure, per the
+  spec's own priority rule. No fake button exists for it.
+* **Download Center (spec §11/§13):** the shared download experience
+  rides the EXISTING Download Manager surfaces (DownloadProgressPanel
+  with the truthful phase chain, measured bytes/speed/ETA, source/trust,
+  retries, verification) plus the new maintenance banner. A single
+  unified "Downloads Center" page aggregating every asset kind is not
+  built in this release; the per-surface truthful progress model is.
+
+## Backward compatibility
+
+Sessions, histories, memory, settings, model selections, engine state
+and context-related saved config from v1.5.1 all load without crashing
+or destructive migration. Legacy sessions without a mode follow the
+existing deterministic rule (agent space). The mode migration is
+deterministic: the persisted workspace mode resolves against the same
+per-mode memory; the view binding is additive (`#chat` is new, invalid
+hashes still resolve to Agent).
+
+---
+
 # UPDATE.md — v1.3.7 Run Settlement, Provisioning Order & Installer Integrity
 
 **Release:** `v1.3.7` (canonical application version; single version

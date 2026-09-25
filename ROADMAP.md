@@ -800,7 +800,39 @@ Focus: maximize effective capability of smaller local models.
 
 ---
 
-## v1.6 — Full Agent Engineering Loop
+## v1.6.0 — SHIPPED (2026-09-26): Startup Integrity, Top-Level Views, Custom Tools
+
+The shipped v1.6.0 re-prioritized the release around runtime integrity
+and honest UX (the v1.5.1 startup ordering defect and the v1.6 failure
+post-mortems drove this). Shipped and tested:
+
+* Startup maintenance gate — engine maintenance completes BEFORE any
+  engine start; prewarm and the scheduled updater's first pass are
+  released together after the decision (explicit synchronization, no
+  timing assumptions). Last-known-good engine survives failed updates;
+  an unusable engine blocks startup honestly.
+* Truthful compatibility diagnostics — every compatibility fallback
+  records a concrete reason; genuinely unknown reasons say `unknown`.
+* Chat and Agent as real top-level views (CHAT | AGENT | WORKSPACE/LAB |
+  SYSTEM | SETTINGS); the internal segmented selector is gone.
+  Independent per-mode histories, shared memory/tools/engine preserved.
+* Automatic long context — the user-facing context-window control is
+  removed; the physical window is managed automatically; logical
+  conversation continuity is unbounded through history, summaries,
+  retrieval, chunking, rollover and memory.
+* Custom tools — first-class tools in the ONE registry, created from
+  Settings → Agent & Tools → My Tools, validated/persisted/executed
+  end-to-end with explicit permissions, bounded timeouts and output.
+* Engine maintenance UX matches the real lifecycle (truthful phase
+  sequence via /api/maintenance + the maintenance banner).
+
+Deferred honestly: the AI-assisted tool builder (manual builder is
+complete) and a single unified Downloads Center page (per-surface
+truthful progress shipped instead).
+
+---
+
+## v1.7 — Full Agent Engineering Loop (moved forward from the old v1.6 slot)
 
 Focus: make the Coding Lab a production execution system.
 
@@ -819,7 +851,7 @@ Focus: make the Coding Lab a production execution system.
 
 ---
 
-## v1.7 — Internet + Repository Operations
+## v1.8 — Internet + Repository Operations
 
 Focus: make external knowledge a first-class engineering input.
 
@@ -837,7 +869,7 @@ Focus: make external knowledge a first-class engineering input.
 
 ---
 
-## v1.8 — Integrated IDE / Engineering Canvas
+## v1.9 — Integrated IDE / Engineering Canvas
 
 Focus: replace fragmented workflows with one application surface.
 
@@ -857,7 +889,7 @@ Focus: replace fragmented workflows with one application surface.
 
 ---
 
-## v1.9 — Self-Extending Tooling + Performance Intelligence
+## v1.10 — Self-Extending Tooling + Performance Intelligence
 
 Focus: make SHEYTAN able to extend and optimize itself safely.
 

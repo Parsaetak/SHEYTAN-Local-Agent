@@ -14,6 +14,7 @@ import {
 import { api, type EngineState, type RuntimeConfig } from "./api";
 import ComposerControls from "./ComposerControls";
 import { DownloadProgressPanel } from "./DownloadProgress";
+import { MaintenanceBanner } from "./MaintenanceBanner";
 import { initializeAgent } from "./agent-init";
 import MessageStream, { AttachmentChip } from "./MessageStream";
 import ActivityStream from "./ActivityStream";
@@ -666,6 +667,12 @@ function AgentBody() {
                 {PHASE_LABELS[engine.phase] ?? engine.phase}
               </span>
             )}
+
+            {/* v1.6.0 P0/P4 (spec §12): the startup maintenance gate's
+                REAL lifecycle — truthful phase sequence instead of a
+                generic "Updating…", and an engine restart during the
+                transaction is never presented as a crash. */}
+            <MaintenanceBanner />
 
             {/* v1.1.6 §11: never hide degraded startup behind a green
                 status — if "ready" could not be verified, say so. */}

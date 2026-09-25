@@ -1,5 +1,22 @@
 # SHEYTAN-Local-Agent — Agent Context
 
+> **v1.6.0 handoff note (2026-09-26):** this release added the startup
+> maintenance gate (`internal/api/maintenance.go` — engine maintenance
+> completes BEFORE any engine start; prewarm and the scheduled updater's
+> first pass are gated), top-level Chat/Agent views (`src/workspace.ts`,
+> ModeSwitch removed), automatic long context (user-facing context editor
+> removed; backend resolution unchanged), the custom tool system
+> (`internal/customtools/` + `/api/custom-tools` + `MyToolsCard`), and
+> truthful engine maintenance UX (`/api/maintenance` +
+> `src/MaintenanceBanner.tsx`). Read `UPDATE.md` (top section) and the
+> v1.6.0 section of `ARCHITECTURE.md` first; regression tests live in
+> `internal/api/maintenance_test.go`,
+> `internal/llm/maintenance_stop_test.go`,
+> `internal/customtools/customtools_test.go`,
+> `internal/api/customtools_api_test.go` and
+> `internal/agent/customtools_e2e_test.go`.
+
+
 > Persistent engineering handoff for the next agent working on this repository.
 
 Repository: https://github.com/Parsaetak/SHEYTAN-local-agent

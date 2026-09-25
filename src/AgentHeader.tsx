@@ -12,37 +12,30 @@ function formatTok(tokens: number): string {
   return String(tokens);
 }
 
-// v1.1.8: the top-level Chat / Agent segmented switch. Exactly one mode
-// is active; the mode decides which controls each surface exposes while
-// both keep using the same session and engine runtime underneath.
-const ModeSwitch = memo(function ModeSwitch() {
-  const mode = useRuntimeStore((state) => state.mode);
-  const setMode = useRuntimeStore((state) => state.setMode);
+// v1.6.0 (spec §7): the context-window UX concept is AUTOMATIC long
+// context. The physical window stays engine/model-bounded (contextplan,
+// continuum, chunking, summaries, memory, histref do the continuity),
+// but the user no longer manages it: there is NO editable context-size
+// choice anywhere. This read-only indicator states exactly that.
+function LongContextPill() {
+  const sessionContext = useRuntimeStore((state) => state.sessionContext);
+
+  const effective = sessionContext?.effective;
 
   return (
-    <div className="mode-switch" role="tablist" aria-label="Workspace mode">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === "chat"}
-        className={`mode-switch-option${mode === "chat" ? " active" : ""}`}
-        onClick={() => setMode("chat")}
-      >
-        Chat
-      </button>
-
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === "agent"}
-        className={`mode-switch-option${mode === "agent" ? " active" : ""}`}
-        onClick={() => setMode("agent")}
-      >
-        Agent
-      </button>
-    </div>
+    <span
+      className="ctx-pill"
+      title={
+        effective
+          ? `Automatic long context — the runtime manages the window (currently serving ${formatTok(effective)} tokens physically). Conversation continuity is unbounded through history, summaries, retrieval and memory.`
+          : "Automatic long context — the runtime manages the physical window; conversation continuity is unbounded through history, summaries, retrieval and memory."
+      }
+    >
+      <span className="ctx-pill-label">LONG CONTEXT</span>
+      <span className="ctx-usage-value">AUTOMATIC</span>
+    </span>
   );
-});
+}
 
 const AgentHeader = memo(function AgentHeader() {
   const activeSessionId = useRuntimeStore((state) => state.activeSessionId);
@@ -55,7 +48,6 @@ const AgentHeader = memo(function AgentHeader() {
 
   const sessionContext = useRuntimeStore((state) => state.sessionContext);
   const sessionContextError = useRuntimeStore((state) => state.sessionContextError);
-  const setSessionContext = useRuntimeStore((state) => state.setSessionContext);
 
   const engine = useRuntimeStore((state) => state.engine);
 
@@ -66,8 +58,6 @@ const AgentHeader = memo(function AgentHeader() {
   // engineering voice. Same session, different framing.
   const defaultTitle = mode === "chat" ? "New chat" : "Forge a new task";
 
-  const options = sessionContext?.options ?? [];
-
   const usage = sessionContext
     ? `${formatTok(sessionContext.used)} / ${formatTok(sessionContext.effective)}`
     : null;
@@ -75,55 +65,20 @@ const AgentHeader = memo(function AgentHeader() {
     ? Math.round(sessionContext.pressure * 100)
     : null;
 
-  // The selector reflects THIS chat's policy; when the policy was
-  // clamped (engine window smaller than requested), the effective value
-  // is what actually serves — shown as the fallback option.
-  const chosen = sessionContext?.sessionPolicy || sessionContext?.effective || 0;
-  const chosenInOptions = options.some((o) => o.tokens === chosen);
-
-  // v1.1.8: context engineering controls are Agent-surface tools. Chat
-  // stays minimal (model, conversation, input, send/stop, attachments).
-  const showContextControls = mode === "agent";
-
   return (
     <>
       <h1>{activeSession?.title || defaultTitle}</h1>
 
       <div className="header-actions">
-        <ModeSwitch />
+        {/* v1.6.0 (spec §6): the Chat|Agent segmented selector is REMOVED
+            — Chat and Agent are top-level views in the navigation. */}
 
-        {showContextControls && sessionContext && (
-          <label className="ctx-pill" title="Context window for THIS chat only">
-            <span className="ctx-pill-label">CONTEXT</span>
-            <select
-              className="ctx-select"
-              value={chosenInOptions ? chosen : ""}
-              onChange={(event) => {
-                const tokens = Number(event.target.value);
-                if (tokens > 0) void setSessionContext(tokens);
-              }}
-              aria-label="Context window"
-            >
-              {!chosenInOptions && (
-                <option value="">{formatTok(sessionContext.effective)}</option>
-              )}
-              {options.map((option) => (
-                <option
-                  key={option.tokens}
-                  value={option.tokens}
-                  disabled={!option.available}
-                  title={option.reason}
-                >
-                  {option.label}
-                  {option.engineClamped ? " ⌄" : ""}
-                  {option.classification === "caution" ? " (!)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+        {/* v1.6.0 (spec §7): read-only automatic long-context indicator.
+            The per-session context-size SELECT is gone; the backend keeps
+            resolving the physical window automatically. */}
+        <LongContextPill />
 
-        {showContextControls && usage && (
+        {usage && (
           <span
             className={`ctx-pill ctx-usage${
               pressurePct !== null && pressurePct >= 90 ? " ctx-critical" : ""
@@ -141,7 +96,7 @@ const AgentHeader = memo(function AgentHeader() {
           </span>
         )}
 
-        {showContextControls && sessionContextError && (
+        {sessionContextError && (
           <span className="ctx-pill ctx-usage ctx-critical" title={sessionContextError}>
             <span className="ctx-pill-label">CONTEXT</span>
             <span className="ctx-usage-value">unavailable</span>

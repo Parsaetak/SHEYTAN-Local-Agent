@@ -351,14 +351,13 @@ export function RecommendedCard({
       recommended: String(rec.cacheReuse || 0),
       patch: { cacheReuse: rec.cacheReuse },
     },
-    {
-      key: "context",
-      name: "Context size",
-      tip: "How much conversation the model can see at once. Bigger windows use more memory; beyond the model's trained limit quality degrades.",
-      current: String(config.llm.numCtx),
-      recommended: String(rec.context),
-      patch: rec.context ? { llm: { ...config.llm, numCtx: rec.context } } : null,
-    },
+    // v1.6.0 (spec §7): the "Context size" recommendation row is REMOVED
+    // from the user-facing profile table. The physical context remains
+    // engine/model-bounded and is derived AUTOMATICALLY by the selection
+    // and recommendation engine (measured evidence, applied with the
+    // runtime profile) — the user never manages a context number. Logical
+    // conversation continuity is unbounded through history, summaries,
+    // retrieval, chunking, rollover and memory.
   ];
 
   return (
@@ -966,26 +965,34 @@ export function EngineCard({
 }
 
 // ---------------------------------------------------------------------------
-// Context card
+// Context card — v1.6.0 (spec §7): AUTOMATIC LONG CONTEXT.
+//
+// The editable "Context size" input and the "History window %" control
+// are REMOVED: the user no longer manages the physical model context.
+// The runtime stays physically bounded (the selection/recommendation
+// engine derives the window from measured evidence and the engine's
+// verified limit — internally, automatically), while LOGICAL conversation
+// continuity is unbounded through history, summaries, retrieval,
+// chunking, rollover, memory and cross-mode references.
+//
+// Historical saved values (config.llm.numCtx, session context policies)
+// keep loading as internal legacy values — never user controls again.
 // ---------------------------------------------------------------------------
 
 export function ContextCard({
   config,
   perf,
   save,
-  updateLocalLLM,
   updateConfigLocal,
 }: {
   config: RuntimeConfig;
   perf: PerfSnapshot | null;
   save: PerformanceCardProps["save"];
-  updateLocalLLM: PerformanceCardProps["updateLocalLLM"];
   updateConfigLocal: <K extends keyof RuntimeConfig>(
     key: K,
     value: RuntimeConfig[K],
   ) => void;
 }) {
-  const rec = perf?.recommended;
   const verified = perf?.context?.total;
 
   return (
@@ -993,40 +1000,26 @@ export function ContextCard({
       <div className="settings-card-heading">
         <div>
           <span className="eyebrow">CONTEXT</span>
-          <h3>Memory window</h3>
+          <h3>Long context</h3>
         </div>
+        <span className="settings-card-value">AUTOMATIC</span>
       </div>
 
       <div className="settings-form-grid">
-        <label className="settings-field">
+        <div className="settings-field">
           <FieldLabel
-            name="Context size"
-            tip="How much conversation the model can see at once: bigger windows remember more but use more memory. Beyond the model's trained limit, quality degrades."
-            chips={
-              <>
-                {rec?.context ? (
-                  <Chip tone="accent">Recommended {rec.context}</Chip>
-                ) : null}
-                <RestartChip />
-              </>
-            }
+            name="Conversation continuity"
+            tip="SHEYTAN manages the context automatically: the physical window follows the model and engine limits, and long conversations continue without interruption through automatic summaries, retrieval, memory and cross-mode references. There is nothing to tune."
           />
-          <input
-            type="number"
-            min="512"
-            step="512"
-            value={config.llm.numCtx}
-            onChange={(event) =>
-              updateLocalLLM("numCtx", Number(event.target.value) || 0)
-            }
-            onBlur={() => void save({ llm: config.llm })}
-          />
-          <span className="runtime-hint">
-            {verified
-              ? `The running engine serves ${verified} tokens — larger values take effect after an engine restart.`
-              : "Start the engine to see the verified window."}
-          </span>
-        </label>
+          <div className="ctx-automatic-indicator">
+            <strong>LONG CONTEXT · AUTOMATIC</strong>
+            <span className="runtime-hint">
+              {verified
+                ? `The engine currently serves ${verified} tokens physically — managed automatically, no user tuning.`
+                : "Start the engine to see the verified window (read-only)."}
+            </span>
+          </div>
+        </div>
 
         <label className="inline-toggle">
           <input
@@ -1039,36 +1032,16 @@ export function ContextCard({
             }}
           />
           <span>
-            Continuum context
+            Automatic chapter rollover
             <span
               className="settings-tip"
-              data-tip="Automatically rolls long conversations into chapters so very long sessions stay inside the context window."
+              data-tip="Automatically rolls long conversations into chapters so very long sessions keep flowing — part of the automatic long-context system."
               tabIndex={0}
-              aria-label="Continuum tooltip"
+              aria-label="Automatic chapter rollover tooltip"
             >
               ?
             </span>
           </span>
-        </label>
-
-        <label className="settings-field">
-          <FieldLabel
-            name="History window %"
-            tip="How much of the context window recent conversation may occupy, leaving room for tools and the system prompt."
-          />
-          <input
-            type="number"
-            min="1"
-            max="100"
-            value={config.historyWindowPct}
-            onChange={(event) =>
-              updateConfigLocal(
-                "historyWindowPct",
-                Number(event.target.value) || 0,
-              )
-            }
-            onBlur={() => void save({ historyWindowPct: config.historyWindowPct })}
-          />
         </label>
       </div>
     </section>

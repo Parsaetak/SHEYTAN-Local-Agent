@@ -3249,3 +3249,75 @@ Work Log:
 
 Stage Summary:
 - v1.3.7 completes v1.3.6: the run/WebSocket settlement race (35749698189) root-fixed with a deterministic settlement edge + barrier; engine provisioning order, repair honesty, auto-update transaction, rollback companion preservation, unmanaged-dir swap refusal, data-root residuals and the Net Search server contract all closed with 20 new regression tests (every one verified to fail on the corresponding v1.3.6 defect). Architecture unchanged: runLive + outcome registry remain the one lifecycle authority; the engine lease/identity machinery is untouched. Deliverable: SHEYTAN-Local-Agent-v1.3.7-FINAL.zip (complete repository tree, .git and local state excluded).
+
+---
+
+# v1.6.0 — Startup Maintenance Gate, Top-Level Views, Custom Tools (2026-09-26)
+
+**Base:** `main @ 8f7a2b3` (`v1.5.1`) · **Target:** `v1.6.0`
+
+## Root cause fixed (P0)
+
+`Server.EnsureSetup` prewarmed the engine (v1.1.3 acceptance path) and
+THEN started `updater.RunScheduled`, whose immediate pass could decide an
+engine update was due and stop the freshly-booted engine mid-startup —
+the real-Windows sequence "engine starts → ready → updater stops engine
+→ downloads".
+
+## Changes
+
+1. **Startup maintenance gate** — `internal/api/maintenance.go` (new):
+   one authoritative coordinator. Phases CHECKING →
+   MAINTENANCE_REQUIRED → DOWNLOADING → VERIFYING → INSTALLING →
+   READY_FOR_PREWARM; terminal DEFERRED / FAILED / BLOCKED. Explicit
+   done-channel synchronization; `updater.RunScheduledAfter` (new)
+   holds the scheduled first pass behind the gate; `prewarmAfterGate`
+   releases exactly one prewarm after the gate (model-first preserved:
+   no selection → install-only nil-engine path, never a start).
+   FAILED = update failed but the installed engine passes static
+   validation (startup continues with the last-known-good engine);
+   BLOCKED = update failed AND validation failed (prewarm refused with
+   an explicit diagnostic). Surface: `GET /api/maintenance`.
+   Tests: `internal/api/maintenance_test.go` (ordering regression —
+   fails on the v1.5.1 code), `internal/llm/maintenance_stop_test.go`
+   (deliberate maintenance stop is never classified as a crash).
+2. **Honest compatibility diagnostics** — "reason unrecorded" →
+   `unknown` (log, CompatInfo, pre-1.1.7 label).
+3. **Top-level Chat/Agent views** — `src/workspace.ts` gains `chat` +
+   `viewModeBinding`; `src/App.tsx` binds view→mode and renders both
+   conversation surfaces; the ModeSwitch segmented selector is removed
+   from `AgentHeader.tsx`. Store per-mode session machinery untouched.
+4. **Automatic long context** — the header context selector, the
+   Settings context-size input and history-window % are removed;
+   read-only `LONG CONTEXT · AUTOMATIC` indicator instead. Legacy
+   values keep loading (internal).
+5. **Custom tools** — `internal/customtools/` (new package:
+   definitions, validation, atomic store under `<DataDir>/custom-tools`,
+   HTTP + command executors with bounds/permissions/cancellation);
+   `internal/api/customtools.go` (CRUD + test-execution API);
+   `orch.Register/Unregister` integration (`/api/tools` carries
+   `source: builtin|custom`); `src/MyToolsCard.tsx` (the builder UI).
+   Disabled-by-default creation; HTTPS-only; secrets never
+   model-visible. Tests: package suite (persistence, validation,
+   execution, timeout, cancellation, output cap, disabled/invalid
+   rejection), API lifecycle suite, and the real agent-loop E2E test
+   (`internal/agent/customtools_e2e_test.go`).
+6. **Maintenance-aware UI** — `src/MaintenanceBanner.tsx` renders the
+   truthful engine-maintenance phase sequence.
+7. **Version** — 1.6.0 across package.json / config.AppVersion /
+   build/config.yml / SIGNATURE (regenerated). No codename.
+
+## Verification
+
+- `go test ./internal/... -tags headless` — all packages PASS.
+- `go vet` on the touched packages — clean.
+- `npm run typecheck` — clean. `npm run test:units` — 113/113 PASS.
+- `npm run test:release` — PASS.
+- Frontend production build (`npm run build`) + embedded web sync — see
+  packaging step.
+
+## Honest scope notes
+
+- AI-assisted tool builder: DEFERRED (manual builder complete).
+- Unified Downloads Center page: DEFERRED in favor of the existing
+  truthful per-surface progress + the maintenance banner.

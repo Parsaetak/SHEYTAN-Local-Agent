@@ -338,7 +338,78 @@ export interface ToolInfo {
   // main Options list — kept for tooltips/debugging surfaces).
   detail?: string;
   enabled?: boolean;
+  // v1.6.0 P3 (spec §17): builtin vs custom — the ONE registry carries
+  // both with explicit source metadata.
+  source?: "builtin" | "custom";
 }
+
+// v1.6.0 P3 — custom tool definitions (Settings → Agent & Tools →
+// My Tools). The shape mirrors the backend's deterministic API view.
+export type CustomToolParam = {
+  name: string;
+  type: "string" | "number" | "integer" | "boolean" | "array" | "object";
+  required: boolean;
+  description?: string;
+  default?: unknown;
+  enum?: string[];
+};
+
+export type CustomToolDefinition = {
+  id: string;
+  name: string;
+  shortDescription: string;
+  description: string;
+  inputParameters: CustomToolParam[];
+  executionType: "http" | "command";
+  http?: {
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    url: string;
+    headers?: Record<string, string>;
+    bodyTemplate?: string;
+  };
+  command?: {
+    executable: string;
+    args?: string[];
+    workingDir?: string;
+  };
+  permission: "network" | "local" | "";
+  timeoutSeconds: number;
+  outputLimitBytes: number;
+  enabled: boolean;
+  registered?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type CustomToolTestResult = {
+  ok: boolean;
+  output?: string;
+  error?: string;
+  duration?: number;
+};
+
+// v1.6.0 P0 — the startup maintenance gate's explicit state
+// (GET /api/maintenance). The UI renders the REAL lifecycle phase,
+// never a generic "Updating…".
+export type MaintenanceStatus = {
+  phase:
+    | "CHECKING"
+    | "MAINTENANCE_REQUIRED"
+    | "DOWNLOADING"
+    | "VERIFYING"
+    | "INSTALLING"
+    | "READY_FOR_PREWARM"
+    | "DEFERRED"
+    | "BLOCKED"
+    | "FAILED";
+  reason?: string;
+  detail?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  prewarmPermitted: boolean;
+  updated: boolean;
+  targetTag?: string;
+};
 
 export interface LLMConfig {
   temperature: number;
@@ -1375,6 +1446,52 @@ export const api = {
 
   tools(signal?: AbortSignal): Promise<ToolInfo[]> {
     return request<ToolInfo[]>("/tools", { signal });
+  },
+
+  // v1.6.0 P3: custom tools CRUD + test execution. Every endpoint is
+  // the backend's single authority (validation, atomic persistence,
+  // registry integration).
+  customTools(signal?: AbortSignal): Promise<CustomToolDefinition[]> {
+    return request<CustomToolDefinition[]>("/custom-tools", { signal });
+  },
+
+  createCustomTool(
+    payload: Omit<CustomToolDefinition, "id" | "enabled">,
+  ): Promise<CustomToolDefinition> {
+    return request<CustomToolDefinition>("/custom-tools", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateCustomTool(
+    id: string,
+    payload: CustomToolDefinition,
+  ): Promise<CustomToolDefinition> {
+    return request<CustomToolDefinition>(`/custom-tools/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteCustomTool(id: string): Promise<void> {
+    return request<void>(`/custom-tools/${id}`, { method: "DELETE" });
+  },
+
+  testCustomTool(
+    id: string,
+    args: Record<string, unknown>,
+  ): Promise<CustomToolTestResult> {
+    return request<CustomToolTestResult>(`/custom-tools/${id}/test`, {
+      method: "POST",
+      body: JSON.stringify({ args }),
+    });
+  },
+
+  // v1.6.0 P0: the startup maintenance gate state — truthful engine
+  // maintenance lifecycle for the UI (spec §12).
+  maintenance(signal?: AbortSignal): Promise<MaintenanceStatus> {
+    return request<MaintenanceStatus>("/maintenance", { signal });
   },
 
   config(signal?: AbortSignal): Promise<RuntimeConfig> {

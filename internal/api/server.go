@@ -22,6 +22,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/customtools"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/gitclone"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
@@ -125,6 +126,37 @@ type Server struct {
         // engineStop terminates the engine event fan-out on Close.
         engineStop chan struct{}
         engineDone chan struct{}
+
+        // v1.6.0 P0 — THE STARTUP MAINTENANCE GATE (maintenance.go).
+        // One authoritative coordinator owns the startup decision
+        // "maintain the engine BEFORE ever starting it": the gate runs
+        // the maintenance check (and any transactional update) to
+        // completion, then releases BOTH the model prewarm and the
+        // scheduled updater's first pass. Repeated EnsureSetup calls
+        // reuse the same gate (no duplicate maintenance/prewarm).
+        gateMu sync.Mutex
+        gate    *maintenanceGate
+
+        // prewarmOnce bounds the automatic startup prewarm to exactly
+        // one per server lifetime (spec §5 test 6).
+        prewarmOnce sync.Once
+
+        // prewarmHook is a TEST seam standing in for
+        // stack.PrewarmLLM (nil in production).
+        prewarmHook func()
+
+        // seams holds the maintenance gate's test seams (nil in
+        // production — see maintenanceSeams).
+        seams *maintenanceSeams
+
+        // v1.6.0 P3: the custom tools store — definitions persist under
+        // <DataDir>/custom-tools and register as FIRST-CLASS tools in the
+        // ONE orchestrator registry (customtools.go).
+        ctStore *customtools.Store
+
+        // maintenanceSave persists the gate's LastUpdateCheck mutation
+        // (production wires config.Save; tests may stub it).
+        maintenanceSave func()
 }
 
 type runState struct {
@@ -312,6 +344,25 @@ func New(cfg *config.Config) (*Server, error) {
                 continuum:  continuum.NewManager(store, cfg.SessionsDir),
                 engineStop: make(chan struct{}),
                 engineDone: make(chan struct{}),
+
+                // v1.6.0 P3: the gate persists its LastUpdateCheck
+                // mutation through the live source + config file — set
+                // at construction (never raced by EnsureSetup).
+                maintenanceSave: func() {
+                        next := stack.Src.Load()
+                        _ = config.Save(next.ConfigPath(), next)
+                },
+        }
+
+        // v1.6.0 P3: open the custom tools store under the EXISTING
+        // application data root and register every ENABLED definition
+        // as a first-class tool in the ONE registry. A store failure is
+        // NON-FATAL (logged, surfaced through the API as unavailable).
+        if ctStore, ctErr := customtools.NewStore(cfg.DataDir); ctErr != nil {
+                logging.Default().Warn("api", "custom tools unavailable: %v", ctErr)
+        } else {
+                s.ctStore = ctStore
+                s.registerCustomTools()
         }
 
         // v1.1.3: the engine event bus fans authoritative state transitions
@@ -324,9 +375,18 @@ func New(cfg *config.Config) (*Server, error) {
         return s, nil
 }
 
-// EnsureSetup runs the installer, creates directories, prewarms the
-// local engine (launch → llama.cpp starts automatically → healthy model)
-// and starts the scheduled engine-update loop.
+// EnsureSetup runs the installer, creates directories, arms the STARTUP
+// MAINTENANCE GATE (v1.6.0 P0) and releases the model prewarm and the
+// scheduled engine-update loop strictly AFTER that gate completes.
+//
+// THE v1.5.1 DEFECT THIS REPAIRS: the prewarm used to fire here
+// directly and the scheduled updater started afterwards with an
+// immediate pass — so a due update could STOP the freshly-booted engine
+// mid-startup (the observed "engine ready → updater stops engine →
+// downloads" sequence). The gate now performs the maintenance decision
+// (and any transactional update) FIRST; prewarm and the updater's
+// first pass are released together, after, through explicit
+// synchronization — never sleeps or timing assumptions.
 func (s *Server) EnsureSetup() error {
         cfg := s.src.Load()
 
@@ -344,11 +404,20 @@ func (s *Server) EnsureSetup() error {
         // render immediately, deep facts land when the probe finishes.
         hardware.WarmDeep()
 
+        // v1.6.0 P0: THE STARTUP MAINTENANCE GATE — the engine maintenance
+        // decision (and any transactional update) completes BEFORE any
+        // engine process is started or prewarmed. The gate runs in the
+        // background so the HTTP surface boots immediately and /api/maintenance
+        // exposes its live phase; the prewarm below WAITS on the gate.
+        gate := s.startStartupMaintenance()
+
         // v1.1.3 — THE acceptance requirement: the application owns the engine
         // lifecycle. A clean launch must reach a healthy model without any
-        // manual llama.cpp intervention.
+        // manual llama.cpp intervention — but ONLY after the maintenance gate
+        // released startup permission (v1.6.0 P0 ordering invariant), and only
+        // with an explicit model selection (v1.5.0 model-first).
         if cfg.LlamaAutoStart && s.stack != nil {
-                s.stack.PrewarmLLM()
+                s.prewarmAfterGate()
         }
 
         // v1.1.4: the scheduled engine-update loop is live. RunScheduled was
@@ -356,12 +425,14 @@ func (s *Server) EnsureSetup() error {
         // had zero callers — the "update (scheduled: daily/weekly/monthly)"
         // contract in the CLI help was only ever honored by manual runs. It
         // respects the UpdateSchedule setting ("off" disables it) and
-        // short-circuits while offline.
+        // short-circuits while offline. v1.6.0: the FIRST pass waits on the
+        // startup maintenance gate — the loop can never race the prewarm it
+        // might interrupt.
         sched := strings.ToLower(strings.TrimSpace(cfg.UpdateSchedule))
         if sched != "off" && sched != "never" {
                 ctx, cancel := context.WithCancel(context.Background())
 
-                done := updater.RunScheduled(
+                done := updater.RunScheduledAfter(
                         ctx,
                         s.src,
                         s.llama,
@@ -371,6 +442,7 @@ func (s *Server) EnsureSetup() error {
                                 next := s.src.Load()
                                 _ = config.Save(next.ConfigPath(), next)
                         },
+                        gate.Done(),
                 )
 
                 s.updateCancel = cancel
@@ -411,6 +483,13 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("/api/abort", s.handleAbort)
         mux.HandleFunc("/api/feedback", s.handleFeedback)
         mux.HandleFunc("/api/tools", s.handleTools)
+
+        // v1.6.0 P3: custom tools — the user-facing surface for creating,
+        // listing, updating, testing and deleting local custom tools.
+        // The tools themselves surface through /api/tools with
+        // source="custom" metadata (the ONE registry).
+        mux.HandleFunc("/api/custom-tools", s.handleCustomTools)
+        mux.HandleFunc("/api/custom-tools/", s.handleCustomTool)
         mux.HandleFunc("/api/lab", s.handleLab)
         mux.HandleFunc("/api/lab/", s.handleLabTask)
         mux.HandleFunc("/api/research", s.handleResearch)
@@ -460,6 +539,10 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("/api/perf", s.handlePerf)
         mux.HandleFunc("/api/logs", s.handleLogs)
         mux.HandleFunc("/api/netcheck", s.handleNetcheck)
+
+        // v1.6.0 P0: the startup maintenance gate's explicit state —
+        // phase, reason, detail, prewarm permission (spec §4).
+        mux.HandleFunc("/api/maintenance", s.handleMaintenance)
 
         // v1.2.0: Environment Centre, verified health, the recommendation
         // engine and the application update surface.
@@ -1334,11 +1417,21 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
                         short = sd.ShortDescription()
                 }
 
-                out = append(out, map[string]any{
+                entry := map[string]any{
                         "name":        t.Name(),
                         "description": short,
                         "detail":      full,
-                })
+                }
+
+                // v1.6.0 P3 (spec §17): source metadata — builtin vs custom —
+                // through the ONE registry. No second registry exists.
+                if _, isCustom := any(t).(*customtools.Tool); isCustom {
+                        entry["source"] = "custom"
+                } else {
+                        entry["source"] = "builtin"
+                }
+
+                out = append(out, entry)
         }
 
         writeJSON(w, out)

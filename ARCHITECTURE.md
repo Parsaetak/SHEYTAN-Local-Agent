@@ -9,6 +9,72 @@
 > marked as future/planned. Nothing in Part II of this document is
 > implemented today.
 
+## v1.6.0 — Architecture changes shipped in this release
+
+Everything below is `IMPLEMENTED` and `TESTED` (test files cited; the
+Go suites and frontend unit suites cover each claim):
+
+1. **Startup maintenance gate** (`internal/api/maintenance.go`,
+   `internal/api/maintenance_test.go`,
+   `internal/llm/maintenance_stop_test.go`) — `TESTED`. One
+   authoritative coordinator runs the engine maintenance decision (and
+   any transactional update, through the existing
+   `LlamaServer.UpdateEngineNow` transaction and `updater`
+   authorities) BEFORE any engine process is started or prewarmed.
+   `EnsureSetup` arms the gate; the model prewarm
+   (`prewarmAfterGate`) and the scheduled updater's first pass
+   (`updater.RunScheduledAfter`) both synchronize on the gate's done
+   channel. Model-first is preserved (no selection → install-only,
+   never a start). Terminal states: `READY_FOR_PREWARM`, `DEFERRED`
+   (off / not due / offline), `FAILED` (update failed, installed engine
+   still valid → startup continues with it), `BLOCKED` (update failed
+   AND installed engine fails static validation → prewarm refused).
+   Exposed at `GET /api/maintenance`.
+
+2. **Top-level Chat/Agent views** (`src/workspace.ts`,
+   `src/App.tsx`, tests in `src/workspace-v136.test.ts`) — `TESTED`.
+   `WorkspaceView` gains `chat`; `viewModeBinding` binds the
+   conversation-space mode to the active view (shared layers never
+   rebind it). The Chat|Agent segmented selector
+   (`src/AgentHeader.tsx` ModeSwitch) is REMOVED. The store's
+   per-mode session machinery is unchanged — independent histories,
+   per-mode active sessions, cross-mode references, one shared runtime.
+
+3. **Automatic long context** (`src/SettingsPerformance.tsx`
+   ContextCard, `src/AgentHeader.tsx`) — `TESTED` (typecheck + unit
+   suites; backend context resolution unchanged and covered by the
+   existing sessioncontext tests). The editable context controls are
+   removed; a read-only `LONG CONTEXT · AUTOMATIC` indicator replaces
+   them. Historical `numCtx` / `contextTokens` values keep loading as
+   internal legacy values.
+
+4. **Custom tools** (`internal/customtools/`,
+   `internal/api/customtools.go`,
+   `internal/agent/customtools_e2e_test.go`,
+   `internal/api/customtools_api_test.go`) — `TESTED`. Definitions
+   persist atomically under `<DataDir>/custom-tools`; validation
+   enforces the schema contract (object-root, basic types, HTTPS-only,
+   permissions, bounds); the executor enforces disabled rejection,
+   run-time re-validation, bounded timeout/output, cancellation,
+   controlled child environment, and secret-never-model-visible.
+   Registration goes through the ONE orchestrator registry
+   (`Register`/`Unregister`); `/api/tools` carries `source:
+   builtin|custom`. The agent-loop E2E test proves the full path.
+
+5. **Honest engine diagnostics** (`internal/llm/llama.go`,
+   `internal/llm/capability.go`) — `TESTED`. Compatibility fallbacks
+   record concrete reasons; a genuinely unknown reason reports
+   `unknown` (never "unrecorded").
+
+6. **Maintenance-aware UI** (`src/MaintenanceBanner.tsx`,
+   `src/api.ts`) — `TESTED` (typecheck/lint; renders only real phases
+   from `/api/maintenance`).
+
+`PARTIALLY IMPLEMENTED` (honest scope): AI-assisted tool builder
+(deferred; the manual builder is complete) and a single unified
+Downloads Center page (per-surface truthful progress shipped instead;
+the downloader remains the one authority).
+
 This document has two jobs:
 
 1. State **what SHEYTAN actually implements today**, with evidence — so no

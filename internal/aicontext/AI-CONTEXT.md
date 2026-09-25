@@ -298,6 +298,17 @@ not just the file name.
 
 ## 3. Tool catalog
 
+### Custom tools (user-defined, v1.6.0)
+
+The user can create CUSTOM TOOLS in Settings → Agent & Tools → My Tools.
+They are first-class tools in the same registry as the built-ins below:
+you call them by name exactly like any built-in tool, with the input
+parameters declared in their schema. Two execution kinds exist (HTTP
+requests to HTTPS endpoints, and local commands the user explicitly
+authorized). Custom tools are disabled until the user enables them; a
+disabled tool simply is not offered. When a user names their custom tool
+in a request, treat it as an explicit capability request — call it.
+
 ### files — the complete file studio (v1.0.9)
 
 `{"action":"read","path":"notes.txt"}` — read a whole file, or CHUNK it:

@@ -13,7 +13,7 @@ Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.3.7
+Current release:  v1.6.0
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -22,6 +22,14 @@ Branch:           main
 ---
 
 # What SHEYTAN is
+
+## v1.6.0 highlights
+
+* **Startup maintenance gate** — engine maintenance (update/repair) completes BEFORE any engine process starts; a due update can no longer stop the freshly-booted engine mid-startup. Failed updates keep the last-known-good engine; a genuinely unusable engine blocks startup with an explicit diagnostic. The real lifecycle phase is visible (`/api/maintenance` + the maintenance banner), and compatibility fallbacks report truthful reasons (`unknown` when genuinely unknown — never "unrecorded").
+* **Chat and Agent are top-level views** — `CHAT | AGENT | WORKSPACE/LAB | SYSTEM | SETTINGS`. The internal segmented selector is gone; each view is its own conversation space with independent histories, per-mode active sessions and bounded cross-mode history references, over one shared runtime (engine, memory, tools, research).
+* **Automatic long context** — the user-facing context-window editor is removed. The physical window is managed automatically from the model and engine limits; logical conversation continuity is unbounded through history, summaries, retrieval, chunking, rollover and memory. A read-only `LONG CONTEXT · AUTOMATIC` indicator states the concept honestly.
+* **Custom tools** — Settings → Agent & Tools → My Tools → + Create Tool. Local custom tools become first-class citizens of the same registry as built-ins (`/api/tools` carries `source: builtin|custom`), with explicit permissions (network / local execution), HTTPS-only HTTP tools, bounded timeouts and output, cancellation, and disabled-by-default creation. Tested end-to-end: create → validate → register → model call → execution → result.
+* **Truthful downloads** — the existing Download Manager remains the single authority; every download surface shows the real phase chain (resolving → connecting → downloading → verifying → installing → ready), measured bytes/speed/ETA only when measurable, source/trust, retries and verification state.
 
 A single Windows-first desktop application that:
 

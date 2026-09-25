@@ -7,6 +7,7 @@ import {
   parseWorkspaceHash,
   rememberView,
   restoreView,
+  viewModeBinding,
   visibleWorkspaceLayers,
   type WorkspaceView,
 } from "./workspace";
@@ -104,9 +105,13 @@ function displayVersion(appVersion: string | null): string {
 function App() {
   const appVersion = useRuntimeStore((state) => state.app?.appVersion ?? null);
   const connection = useRuntimeStore((state) => state.connection);
-  // v1.1.9: the navigation is mode-aware — Chat hides Agent machinery
-  // (Coding Lab) so the primary surface stays minimal.
+  // v1.6.0 (spec §6): Chat and Agent are TOP-LEVEL views. The mode (the
+  // conversation space) follows the active view: the Chat view IS the
+  // chat space, the Agent view IS the agent space. The store's per-mode
+  // session machinery (independent histories, per-mode active session,
+  // cross-mode references) is untouched — only the switch became a view.
   const mode = useRuntimeStore((state) => state.mode);
+  const setMode = useRuntimeStore((state) => state.setMode);
 
   const [view, setView] = useState<WorkspaceView>(() => parseWorkspaceHash());
   const [helpOpen, setHelpOpen] = useState(false);
@@ -153,6 +158,15 @@ function App() {
     window.history.pushState(null, "", getWorkspaceHref(nextView));
     setView(nextView);
     rememberView(nextView);
+
+    // v1.6.0 (spec §6): the conversation space follows the view —
+    // switching to the Chat VIEW switches to the chat session space,
+    // switching to the Agent VIEW to the agent session space. Shared
+    // layers (workspace/system/settings) never touch the space.
+    const boundMode = viewModeBinding(nextView);
+    if (boundMode && boundMode !== mode) {
+      setMode(boundMode);
+    }
   }
 
   const layer = getWorkspaceLayer(view);
@@ -166,12 +180,25 @@ function App() {
     : (visibleLayers[0] ?? getWorkspaceLayer("agent"));
   const effectiveView = viewVisible ? view : activeLayer.id;
 
+  // v1.6.0 (spec §6): keep the conversation space in lockstep with the
+  // ACTIVE view — deep links (#chat), restored views and back/forward
+  // navigation all bind the mode exactly like an explicit click does.
+  // Shared layers keep the current space untouched.
+  useEffect(() => {
+    const boundMode = viewModeBinding(effectiveView);
+    if (boundMode && boundMode !== mode) {
+      setMode(boundMode);
+    }
+  }, [effectiveView, mode, setMode]);
+
   // v1.1.6 §13: a consistent SHEYTAN identity on every workspace layer
   // (window title / taskbar). "SHEYTAN", "SHEYTAN — Settings", … — never
   // generic shell or localhost strings.
   useEffect(() => {
     document.title =
-      effectiveView === "agent" ? "SHEYTAN" : `SHEYTAN — ${activeLayer.label}`;
+      effectiveView === "agent" || effectiveView === "chat"
+        ? "SHEYTAN"
+        : `SHEYTAN — ${activeLayer.label}`;
   }, [effectiveView, activeLayer.label]);
 
   // v1.2.4: global keyboard shortcuts (single listener, registered once).
@@ -260,7 +287,7 @@ function App() {
             ))}
           </nav>
 
-          {effectiveView === "agent" ? (
+          {effectiveView === "agent" || effectiveView === "chat" ? (
             <Suspense fallback={<SidebarLayerLoading />}>
               <AgentSidebar />
             </Suspense>
@@ -271,12 +298,12 @@ function App() {
           </div>
         </aside>
 
-        <main className="workspace" key={effectiveView}>
+        <main className="workspace" key={effectiveView === "chat" || effectiveView === "agent" ? "conversation" : effectiveView}>
           <section className="workspace-header view-transition-header">
             <div>
               <span className="eyebrow">{activeLayer.eyebrow}</span>
 
-              {effectiveView === "agent" ? (
+              {effectiveView === "agent" || effectiveView === "chat" ? (
                 <Suspense fallback={<h1>{activeLayer.title}</h1>}>
                   <AgentHeader />
                 </Suspense>
@@ -292,7 +319,7 @@ function App() {
                 backend payload) shows that panel's recovery card instead of
                 blanking the entire application. resetKey clears a stale
                 failure whenever the user switches views. */}
-            {effectiveView === "agent" ? (
+            {effectiveView === "chat" || effectiveView === "agent" ? (
               <PanelErrorBoundary label="Agent" resetKey="agent">
                 <Suspense fallback={<PanelLoading label="Agent" />}>
                   <AgentBody />
