@@ -6,7 +6,7 @@ import {
   getWorkspaceLayer,
   parseWorkspaceHash,
   rememberView,
-  restoreView,
+  resolveInitialView,
   viewModeBinding,
   visibleWorkspaceLayers,
   type WorkspaceView,
@@ -113,20 +113,13 @@ function App() {
   const mode = useRuntimeStore((state) => state.mode);
   const setMode = useRuntimeStore((state) => state.setMode);
 
-  const [view, setView] = useState<WorkspaceView>(() => parseWorkspaceHash());
+  // v1.6.0 repair (spec §10): the initial view resolves through the ONE
+  // deterministic path (explicit URL hash > remembered workspace view >
+  // Chat) at FIRST RENDER — no post-mount effect moves it, so a fresh
+  // install lands on Chat with the chat conversation space already
+  // bound by the store (which resolves through the same function).
+  const [view, setView] = useState<WorkspaceView>(() => resolveInitialView());
   const [helpOpen, setHelpOpen] = useState(false);
-
-  // v1.2.4: restore the last visited layer on restart when the URL carries
-  // no explicit hash (deep links still win).
-  useEffect(() => {
-    if (!window.location.hash) {
-      const stored = restoreView();
-      if (stored && stored !== "agent") {
-        window.history.replaceState(null, "", getWorkspaceHref(stored));
-        setView(stored);
-      }
-    }
-  }, []);
 
   useEffect(() => {
     function syncViewFromLocation() {
@@ -136,12 +129,15 @@ function App() {
     window.addEventListener("hashchange", syncViewFromLocation);
     window.addEventListener("popstate", syncViewFromLocation);
 
-    const normalizedView = parseWorkspaceHash();
-    const normalizedHref = getWorkspaceHref(normalizedView);
-
-    if (window.location.href !== normalizedHref) {
-      window.history.replaceState(null, "", normalizedHref);
-      setView(normalizedView);
+    // v1.6.0 repair (spec §11): normalize the boot URL to the resolved
+    // view's EXPLICIT hash — root and stale hashes stop being ambiguous
+    // (every view owns #<view>). The view itself is NOT re-resolved
+    // here: it was already resolved synchronously at first render, and
+    // re-running the resolution in an effect is exactly the post-mount
+    // view race this repair removes.
+    const canonicalHref = getWorkspaceHref(resolveInitialView());
+    if (window.location.href !== canonicalHref) {
+      window.history.replaceState(null, "", canonicalHref);
     }
 
     return () => {
@@ -266,17 +262,24 @@ function App() {
           {/* v1.1.9: mode-aware navigation — Chat surfaces Workspace,
               and Settings; Agent adds Coding Lab. One label per
               item, no repeated headings, no per-item descriptions. */}
-          <nav className="app-navigation m-stagger" aria-label="Workspace">
+          {/* v1.6.0 repair (spec §9.1): the top-level navigation exposes
+              REAL tab semantics — the Chat/Agent/Workspace/… switch is a
+              tablist of tabs (role="tab" + aria-selected), so the product
+              contract (and assistive tech) sees one selectable surface
+              set, not a pile of toggles. The buttons themselves are the
+              pre-existing controls — no second navigation system. */}
+          <nav className="app-navigation m-stagger" aria-label="Workspace" role="tablist">
             {visibleLayers.map((layer, index) => (
               <button
                 type="button"
                 key={layer.id}
+                role="tab"
+                aria-selected={effectiveView === layer.id}
                 className={`app-navigation-item m-press ${
                   effectiveView === layer.id ? "active" : ""
                 }`}
                 style={{ "--stagger-index": index } as CSSProperties}
                 onClick={() => changeView(layer.id)}
-                aria-pressed={effectiveView === layer.id}
               >
                 <span className="app-navigation-icon">{layer.icon}</span>
 

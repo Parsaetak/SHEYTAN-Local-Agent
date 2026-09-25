@@ -39,6 +39,16 @@ Go suites and frontend unit suites cover each claim):
    (`src/AgentHeader.tsx` ModeSwitch) is REMOVED. The store's
    per-mode session machinery is unchanged — independent histories,
    per-mode active sessions, cross-mode references, one shared runtime.
+   v1.6.0 repair: the navigation exposes REAL tab semantics on the
+   same buttons (`role="tablist"` + `role="tab"` + `aria-selected`,
+   replacing `aria-pressed`); the initial view resolves through ONE
+   deterministic path at first render — explicit URL hash >
+   remembered workspace view > Chat (`resolveInitialView`) — and the
+   store's boot mode resolves through the SAME function, so view and
+   mode never disagree at first paint; every view owns an explicit
+   hash (`#chat` … `#settings`, no agent→empty special case; root
+   normalizes to the resolved view's hash; stale hashes resolve to
+   Chat).
 
 3. **Automatic long context** (`src/SettingsPerformance.tsx`
    ContextCard, `src/AgentHeader.tsx`) — `TESTED` (typecheck + unit
@@ -57,9 +67,23 @@ Go suites and frontend unit suites cover each claim):
    permissions, bounds); the executor enforces disabled rejection,
    run-time re-validation, bounded timeout/output, cancellation,
    controlled child environment, and secret-never-model-visible.
+   Local commands run under per-invocation process-tree ownership
+   (v1.6.0 repair): on Windows each command is assigned to a
+   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object
+   (`proctree_windows.go`, the established `internal/sandbox` pattern)
+   so timeout/cancellation terminates the COMPLETE descendant tree —
+   not merely the direct child — and the inherited pipes close
+   promptly (verified: the timeout/cancellation/output-cap tests pass
+   on Linux and the package cross-compiles and vets clean under
+   `GOOS=windows`; the authoritative Windows run is CI-owned). The
+   non-Windows tracker is an explicit no-op preserving the passing
+   Linux/macOS semantics.
    Registration goes through the ONE orchestrator registry
    (`Register`/`Unregister`); `/api/tools` carries `source:
-   builtin|custom`. The agent-loop E2E test proves the full path.
+   builtin|custom`. The agent-loop E2E test proves the full path
+   (model/tool protocol handling through a deterministic HTTP fake
+   model — an honest scope statement, not a claim of a native local
+   model deciding to call the tool).
 
 5. **Honest engine diagnostics** (`internal/llm/llama.go`,
    `internal/llm/capability.go`) — `TESTED`. Compatibility fallbacks
@@ -120,6 +144,7 @@ stress suite; see the exact commands in `agent.md` §10.
 | Tool registry (17 tools when all features enabled) | `internal/tools`, `internal/lab`, `internal/research`, `internal/memory`, `internal/sandbox` | IMPLEMENTED + TESTED | `shell`, `files`, `codeExec`, `webSearch`, `git`, `browser`, `dataAnalysis`, `json`, `archive`, `fetch`, `diff`, `screenshot`, `linux`, `coding_lab`, `research`, `memory` + sandbox override |
 | Coding Lab (isolated workspace, lexical command policy, verification gates, bounded repair loop, snapshot-before-promote) | `internal/lab` | IMPLEMENTED + TESTED | policy is lexical + env-pinned, not a kernel sandbox (documented limitation) |
 | Code-exec sandbox governor (Windows Job Objects) | `internal/sandbox` | IMPLEMENTED + TESTED | memory/CPU configurable, fail-closed default ON |
+| Custom-tool command process-tree ownership (Windows Job Objects, per invocation) | `internal/customtools` | IMPLEMENTED + TESTED | KILL_ON_JOB_CLOSE + cancellation terminates the job; non-Windows is an explicit no-op (v1.6.0 repair) |
 | Attachments (content-addressed streaming staging, caps, normalization, bounded retrieval with provenance headers and measured stats) | `internal/attachments` | IMPLEMENTED + TESTED | sha256 staging streamed while hashed (RAM ≈ 16 KiB head + 128 KiB buffer, not the file size), symlink-safe; retrieval reads each object ≤1× per call with a 32 MiB retention cap and byte-range fallback (v1.1.5 Phase 3) |
 | Chunking (shared provenance chunk engine: paragraph-boundary splitting with full metadata, byte budgets, head+tail windowing, history windowing) | `internal/chunking` | IMPLEMENTED + TESTED | `ChunkText` (processing version v2): deterministic IDs, byte ranges, token estimates, total counts, optional overlap, UTF-8-safe splits; **not** structural/semantic repository chunking — see Part II §4 |
 | Context plan (explicit budget: system / tools / recall / attachments / history sections with priorities and pressure) | `internal/contextplan` | IMPLEMENTED + TESTED | the seed of the future budget taxonomy — see Part II §5 |

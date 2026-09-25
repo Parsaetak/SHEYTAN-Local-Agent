@@ -2004,6 +2004,37 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         hub.publish(a)
                 }
 
+                // v1.6.0 P0 ordering invariant (repair): maintenance
+                // completion < engine prewarm/start — the STARTUP gate owns
+                // that ordering for the boot prewarm, and the run gate must
+                // honor it too: a run submitted while the maintenance check
+                // (or transactional engine update) is still in flight WAITS
+                // for the gate instead of racing an engine start against the
+                // maintenance decision. Bounded by the run's own engine-gate
+                // deadline; a gate that never existed (setup-less callers)
+                // skips the wait.
+                if g := s.gateValue(); g != nil {
+                        select {
+                        case <-g.Done():
+                        case <-gateCtx.Done():
+                                gateCancel()
+
+                                settle("error", fmt.Sprintf(
+                                        "Engine unavailable: startup maintenance still in progress: %v",
+                                        gateCtx.Err(),
+                                ), false, "", "")
+
+                                publish(agent.Activity{
+                                        Type:      "error",
+                                        RunID:     runID,
+                                        Caption:   "Engine unavailable: startup maintenance still in progress",
+                                        Timestamp: time.Now(),
+                                })
+
+                                return
+                        }
+                }
+
                 if err := s.stack.EnsureLLMContext(gateCtx); err != nil {
                         gateCancel()
 

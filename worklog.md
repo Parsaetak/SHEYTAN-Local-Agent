@@ -3321,3 +3321,91 @@ the real-Windows sequence "engine starts → ready → updater stops engine
 - AI-assisted tool builder: DEFERRED (manual builder complete).
 - Unified Downloads Center page: DEFERRED in favor of the existing
   truthful per-surface progress + the maintenance banner.
+
+---
+
+# v1.6.0 — Failure-Resistant Repair Pass (2026-09-26)
+
+Continuation of the live engineering work after the v1.6.0 submission
+failed verification (Actions run 36194970444: Windows custom-tools job
+108269093954, Linux browser-E2E job 108269094053 — 5/24). Base for the
+pass: `main @ db2308a` (the failed v1.6.0 HEAD). The pass was surgical:
+INSPECT → REPRODUCE → ROOT CAUSE → MINIMAL FIX → TARGETED VERIFY →
+REGRESSION VERIFY. Code and observed test behavior were treated as
+authoritative over the v1.6.0 documentation's claims.
+
+## Root causes fixed
+
+1. **Windows custom-command cancellation (Job Objects).**
+   `internal/customtools/exec.go` used plain `exec.CommandContext`:
+   default cancellation kills only the direct child, so `cmd /C ping …`
+   left the grandchild alive holding the inherited pipe write-end and
+   `Wait` blocked ~30 s. New per-invocation process-tree tracker:
+   `proctree_windows.go` (CreateJobObject + KILL_ON_JOB_CLOSE +
+   AssignProcessToJobObject + TerminateJobObject, mirroring the
+   established `internal/sandbox` pattern) and `proctree_other.go`
+   (explicit no-op). `cmd.Cancel` terminates the job; `tree.close()`
+   always releases the handle. No taskkill, no sleeps, no grace
+   periods — correctness by process ownership.
+2. **`TestOutputIsCapped` fixture.** The ~8 KiB argv payload hit the
+   Windows command-line limit ("The command line is too long"). The
+   payload is now a FILE in the tool's private working directory read
+   back by a tiny command line (`cmd /C type` / `cat`) — real command,
+   real stdout, real capture, cap + truncation marker still asserted.
+3. **Top-level tab semantics.** The v1.6 shell exposed the navigation
+   as aria-pressed buttons; the v1.5.1 shell had real tabs (header
+   mode-switch). The SAME nav buttons now carry `role="tablist"` /
+   `role="tab"` / `aria-selected` (`src/App.tsx`).
+4. **Chat-first deterministic landing.** Empty hash resolved to Agent
+   while the store booted mode=chat — the view/mode first-paint race
+   behind the E2E cascade (`runtimeProfile: agent` vs `chat`, missing
+   Chat composer). New `resolveInitialView()` (hash > remembered view >
+   Chat) drives BOTH the App's first render and the store's boot mode
+   (`initialWorkspaceMode`); every view owns an explicit hash
+   (`workspaceHash`); root normalizes to the resolved view's hash;
+   stale hashes resolve to Chat. The restore effect (the race source)
+   is gone. `src/workspace-v136.test.ts` encodes the corrected
+   contract.
+5. **Run-gate P0 ordering + native convergence.** A run submitted
+   during the startup maintenance check raced an engine start against
+   the maintenance decision and errored through the llama.cpp fallback
+   while the armed native engine was ~25 ms–1.7 s from ready.
+   `internal/api/server.go` run gate now waits on the maintenance gate
+   (bounded by the 3-minute engine-gate deadline);
+   `EnsureLLMContext` waits for the in-flight native prewarm
+   (`nativePrewarmDone`) and re-checks the native early exit after a
+   llama.cpp failure — a run errors only when BOTH backends failed.
+
+## Verification (this host; real stack)
+
+- `go test ./internal/customtools` — PASS (incl. the three target
+  tests); `GOOS=windows go build` + `go vet` clean. The Windows suite
+  itself executes in the CI matrix (this host is Linux).
+- `go test ./internal/... -tags headless` — all packages PASS;
+  untagged `-run Test` on all 66 non-GUI packages PASS; `go vet`
+  clean (the root desktop shell needs the CI runner's GTK toolchain).
+- `npm run test:units` — 115/115 PASS (workspace contract updated to
+  the corrected product behavior). Typecheck + lint clean.
+  `npm run verify:web` — stable-asset contract satisfied.
+- Native engine: CMake build + CTest 12/12.
+- Browser E2E on the REAL stack (built frontend + headless server +
+  C++ native engine executing the wide-context GGUF fixture):
+  focused gate (chat/agent/sessions/model-first) 19/19, then the FULL
+  suite 24/24 PASS. On this host the GitHub API is rate-limited (the
+  llama.cpp release check fails → native engine serves all
+  generation); the run-gate convergence fix is what made the
+  cold-start agent runs pass.
+- Stress suite: 47/47, no hangs, no crashes.
+
+## Honesty notes
+
+- The agent-loop custom-tool E2E (`internal/agent/customtools_e2e_test.go`)
+  still uses the deterministic HTTP fake model — it proves the
+  model/tool protocol handling, registry, executor and follow-up
+  request, NOT a native local model independently deciding to call a
+  custom tool. No claim beyond that is made.
+- No GPU/NPU inference is claimed; accelerator resolution stays at
+  the measured CPU fallback with honest reasons.
+- The Windows custom-tools fix is verified by Linux execution +
+  Windows cross-compilation here; the authoritative Windows test run
+  is CI-owned.

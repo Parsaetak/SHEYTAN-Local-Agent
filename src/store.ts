@@ -30,6 +30,7 @@ import {
   resolveModeSwitchTarget,
 } from "./mode-sessions";
 import { activityWebSocketURL } from "./config";
+import { resolveInitialView, viewModeBinding } from "./workspace";
 import {
   isLivePhase,
   nextPhase,
@@ -71,6 +72,18 @@ export type WorkspaceMode = "chat" | "agent";
 const MODE_STORAGE_KEY = "sheytan.mode";
 
 function initialWorkspaceMode(): WorkspaceMode {
+  // v1.6.0 repair (spec §10): the boot conversation space follows the
+  // SAME deterministic initial-view resolution the App renders from
+  // (explicit URL hash > remembered workspace view > Chat), so the
+  // store's mode and the shell's view can never disagree at first
+  // paint. The legacy sheytan.mode key is honored only when the resolved
+  // view is a shared layer (workspace/system/settings) that does not
+  // bind a conversation space.
+  const bound = viewModeBinding(resolveInitialView());
+  if (bound) {
+    return bound;
+  }
+
   try {
     const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
     return stored === "agent" ? "agent" : "chat";

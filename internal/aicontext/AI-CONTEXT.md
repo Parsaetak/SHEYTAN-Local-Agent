@@ -305,7 +305,10 @@ They are first-class tools in the same registry as the built-ins below:
 you call them by name exactly like any built-in tool, with the input
 parameters declared in their schema. Two execution kinds exist (HTTP
 requests to HTTPS endpoints, and local commands the user explicitly
-authorized). Custom tools are disabled until the user enables them; a
+authorized). Every execution is bounded (timeout, output cap,
+cancellation — local commands run under process-tree ownership, so a
+canceled command's descendants terminate too) and honestly reported.
+Custom tools are disabled until the user enables them; a
 disabled tool simply is not offered. When a user names their custom tool
 in a request, treat it as an explicit capability request — call it.
 

@@ -1,6 +1,7 @@
 # SHEYTAN-Local-Agent — Agent Context
 
-> **v1.6.0 handoff note (2026-09-26):** this release added the startup
+> **v1.6.0 handoff note (2026-09-26, updated by the repair pass):** this
+> release added the startup
 > maintenance gate (`internal/api/maintenance.go` — engine maintenance
 > completes BEFORE any engine start; prewarm and the scheduled updater's
 > first pass are gated), top-level Chat/Agent views (`src/workspace.ts`,
@@ -8,13 +9,23 @@
 > removed; backend resolution unchanged), the custom tool system
 > (`internal/customtools/` + `/api/custom-tools` + `MyToolsCard`), and
 > truthful engine maintenance UX (`/api/maintenance` +
-> `src/MaintenanceBanner.tsx`). Read `UPDATE.md` (top section) and the
+> `src/MaintenanceBanner.tsx`). The repair pass (same date) fixed the
+> failed v1.6.0 submission: Windows custom-command process-tree
+> ownership (`internal/customtools/proctree_{windows,other}.go`, Job
+> Objects), the argv-based output-cap fixture (now file-based), real
+> tab semantics on the top-level navigation, Chat-first deterministic
+> landing (`resolveInitialView`: hash > remembered view > Chat, driving
+> both the App's first render and the store's boot mode), and the run
+> gate's maintenance-gate wait + native convergence
+> (`internal/api/server.go`, `internal/runtime/runtime.go`
+> `EnsureLLMContext`). Read `UPDATE.md` (top section) and the
 > v1.6.0 section of `ARCHITECTURE.md` first; regression tests live in
 > `internal/api/maintenance_test.go`,
 > `internal/llm/maintenance_stop_test.go`,
 > `internal/customtools/customtools_test.go`,
-> `internal/api/customtools_api_test.go` and
-> `internal/agent/customtools_e2e_test.go`.
+> `internal/api/customtools_api_test.go`,
+> `internal/agent/customtools_e2e_test.go` and
+> `src/workspace-v136.test.ts`.
 
 
 > Persistent engineering handoff for the next agent working on this repository.

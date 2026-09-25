@@ -122,13 +122,43 @@ export function getWorkspaceLayer(view: WorkspaceView): WorkspaceLayer {
 }
 
 export function parseWorkspaceHash(): WorkspaceView {
+  // v1.6.0 repair (spec §11): the default landing surface is CHAT — the
+  // old empty-hash → Agent special case made root ambiguous and left
+  // the store's chat mode fighting the agent view at boot. Unknown or
+  // stale hashes (e.g. the removed #research) resolve to the same
+  // default through the invalid-view fallback.
   if (typeof window === "undefined") {
-    return "agent";
+    return "chat";
   }
 
   const hash = window.location.hash.replace(/^#/, "").trim().toLowerCase();
 
-  return isWorkspaceView(hash) ? hash : "agent";
+  return isWorkspaceView(hash) ? hash : "chat";
+}
+
+// resolveInitialView (v1.6.0 repair, spec §10): the ONE deterministic
+// initial-view resolution path — no asynchronous effect may move the
+// view after first paint:
+//
+//     explicit URL hash  >  remembered workspace view  >  Chat default
+//
+// The App's first render AND the store's boot conversation-space mode
+// both resolve through this function, so the view and the mode can
+// never disagree at boot (fresh install → Chat view + chat mode).
+// A stale EXPLICIT hash (e.g. the removed #research) resolves to the
+// Chat default — never to remembered state.
+export function resolveInitialView(): WorkspaceView {
+  if (typeof window === "undefined") {
+    return "chat";
+  }
+
+  const hash = window.location.hash.replace(/^#/, "").trim().toLowerCase();
+
+  if (hash !== "") {
+    return isWorkspaceView(hash) ? hash : "chat";
+  }
+
+  return restoreView() ?? "chat";
 }
 
 // viewModeBinding (v1.6.0, spec §6): the conversation-space mode that a
@@ -173,7 +203,12 @@ export function restoreView(): WorkspaceView | null {
 }
 
 export function workspaceHash(view: WorkspaceView): string {
-  return view === "agent" ? "" : `#${view}`;
+  // v1.6.0 repair (spec §11): EVERY view has an explicit hash. The old
+  // agent → empty-hash special case made root ambiguous between "Agent"
+  // and "default landing page". Root now resolves through
+  // resolveInitialView (hash > remembered > Chat) and is normalized to
+  // the resolved view's explicit hash at boot.
+  return `#${view}`;
 }
 
 export function getWorkspaceHref(view: WorkspaceView): string {

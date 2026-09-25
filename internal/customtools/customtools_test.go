@@ -434,15 +434,35 @@ func sleepCommand(seconds int) *CommandExec {
 
 // --- output limits --------------------------------------------------------
 
+// fileReaderCommand returns a command that prints the contents of a file
+// in the current working directory: `cmd /C type <file>` on Windows,
+// `cat <file>` elsewhere. The large payload lives in the FILE — never in
+// argv — so the fixture stays far below Windows command-line length
+// limits while still producing real stdout through the real executor.
+func fileReaderCommand(filename string) (string, []string) {
+        if runtime.GOOS == "windows" {
+                return "cmd", []string{"/C", "type", filename}
+        }
+        return "cat", []string{filename}
+}
+
 func TestOutputIsCapped(t *testing.T) {
+        // Stage the large payload as a file in a private working directory.
+        dir := t.TempDir()
+
         big := strings.Repeat("x", 8192)
+        if err := os.WriteFile(filepath.Join(dir, "large-output.txt"), []byte(big+"\n"), 0o644); err != nil {
+                t.Fatalf("stage large fixture file: %v", err)
+        }
+
+        bin, binArgs := fileReaderCommand("large-output.txt")
 
         def := &Definition{
                 Name:        "chatty",
                 ShortDesc:   "Prints a lot",
                 Description: "Prints a lot of text.",
                 ExecType:    ExecCommand,
-                Command:     &CommandExec{Executable: echoBinary(), Args: []string{big}},
+                Command:     &CommandExec{Executable: bin, Args: binArgs, WorkingDir: dir},
                 Permission:  PermLocal,
                 TimeoutSec:  10,
                 OutputLimit: 1024,

@@ -14,6 +14,94 @@ truthful lifecycle surface. All changes preserve the v1.5.1 foundation:
 the same session architecture, the same downloader, the same engine
 updater, the same memory/context authorities.
 
+## v1.6.0 REPAIR PASS (2026-09-26)
+
+The initial v1.6.0 submission failed verification (Actions run
+36194970444: Windows custom-tools job 108269093954 — timeout,
+cancellation and output-cap tests; Linux browser-E2E job 108269094053 —
+5/24). The repair pass was surgical — code and observed test behavior
+are authoritative — and fixed four root causes:
+
+1. **Windows custom-command process-tree ownership.** Custom command
+   tools ran through `exec.CommandContext`, whose default cancellation
+   kills ONLY the direct child. A tool like `cmd /C ping …` left the
+   grandchild alive holding the inherited stdout/stderr pipe write-end,
+   so `Wait` blocked until the orphan exited on its own (~30 s instead
+   of the 1 s tool timeout). Custom commands now run under a
+   per-invocation Windows Job Object
+   (`internal/customtools/proctree_windows.go`, following the
+   established `internal/sandbox` pattern): the started process is
+   assigned to a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` job, descendants
+   inherit the job, and cancellation terminates the JOB — the whole
+   tree dies together with the pipes, promptly, by process ownership
+   rather than timing (no taskkill, no sleeps, no grace periods). The
+   non-Windows tracker is an explicit no-op (`proctree_other.go`) —
+   the passing Linux/macOS semantics are unchanged. Verified:
+   `TestCommandTimeoutIsEnforced`, `TestContextCancellationIsHonored`
+   and `TestOutputIsCapped` PASS on Linux; the package
+   cross-compiles and vets clean under `GOOS=windows`; the Windows
+   execution itself is CI-owned (this repair host is Linux — the
+   Windows suite runs in the Actions matrix).
+2. **The output-cap test fixture no longer abuses argv.**
+   `TestOutputIsCapped` passed its ~8 KiB payload as a command-line
+   argument, which on Windows exceeds the command-line limit ("The
+   command line is too long"). The fixture now writes the large
+   payload to a FILE in a private working directory and reads it back
+   with a tiny command line (`cmd /C type large-output.txt` on
+   Windows, `cat` elsewhere) — the assertion still proves the real
+   command → real stdout → real executor capture → cap enforced →
+   truncation marker chain.
+3. **The top-level navigation actually exposes tab semantics.** The
+   v1.6.0 shell rendered the Chat/Agent/Workspace/… switch as plain
+   buttons with `aria-pressed` — no `tablist`/`tab`/`aria-selected` —
+   while the v1.5.1 shell had exposed real tabs through the (removed)
+   header mode-switch. The navigation now exposes the intended
+   semantics on the SAME buttons (`role="tablist"` + `role="tab"` +
+   `aria-selected`), and activating a tab changes the actual view.
+4. **Chat-first deterministic landing.** `parseWorkspaceHash` mapped
+   the empty hash to Agent while the store's initial mode was Chat —
+   a fresh install booted `view=agent, mode=chat` and a post-mount
+   effect then flipped one side (exactly the inconsistency the E2E
+   failures cascaded from, including `runtimeProfile: agent` where
+   `chat` was expected). ONE deterministic resolution path now
+   decides the initial view at FIRST RENDER — explicit URL hash >
+   remembered workspace view > Chat (`resolveInitialView`) — and the
+   store's boot conversation-space mode resolves through the SAME
+   function, so view and mode can never disagree at first paint. Every
+   view owns an explicit hash (the old agent→empty special case is
+   gone; root normalizes to the resolved view's `#hash`); a stale
+   explicit hash (e.g. the removed `#research`) resolves to the Chat
+   default. The workspace unit contract
+   (`src/workspace-v136.test.ts`) encodes the corrected product
+   contract.
+5. **The run gate honors the P0 ordering invariant.** A run submitted
+   while the startup maintenance check was still in flight raced an
+   engine start against the maintenance decision (the observed
+   cold-start failure: the agent task errored through the llama.cpp
+   fallback while the armed native engine was ~25 ms–1.7 s from
+   ready). The run gate now WAITS on the maintenance gate (bounded by
+   the run's own 3-minute engine-gate deadline), and `EnsureLLMContext`
+   converges with the armed native backend: it waits for the in-flight
+   native prewarm to settle, and re-checks the native early exit after
+   a llama.cpp failure before surfacing any error — a run fails only
+   when BOTH backends genuinely failed. "The agent will retry on first
+   use" now actually holds on first use.
+
+Repair-pass verification (this host, real stack: built frontend +
+headless Go server + the C++ native engine executing the wide-context
+GGUF fixture): full browser E2E **24/24 PASS** (`chat`, `agent`,
+`sessions`, `model-first`, `composer`, `lab`); `go test
+./internal/... -tags headless` — all packages PASS; untagged `go test
+-run Test` on every non-GUI package PASS (`go vet` clean; the root
+desktop shell needs the CI runner's GTK toolchain on this host);
+`npm run test:units` 115/115 PASS; typecheck and lint clean;
+`npm run verify:web` stable-asset contract satisfied; native engine
+CMake build + CTest 12/12; the stress suite 47/47 (no hangs, no
+crashes). Note: this host's GitHub API is rate-limited, so the
+llama.cpp release check failed here and the native engine served all
+E2E generation — the run-gate convergence above is what made those
+runs pass. The Windows custom-tools suite executes in the CI matrix.
+
 ## IMPLEMENTED and TESTED
 
 1. **P0 — Startup maintenance gate (the ordering repair).**
@@ -114,8 +202,11 @@ and context-related saved config from v1.5.1 all load without crashing
 or destructive migration. Legacy sessions without a mode follow the
 existing deterministic rule (agent space). The mode migration is
 deterministic: the persisted workspace mode resolves against the same
-per-mode memory; the view binding is additive (`#chat` is new, invalid
-hashes still resolve to Agent).
+per-mode memory; the view binding is additive (`#chat` is new). The
+repair pass corrected one product contract: the default landing
+surface is CHAT (root / empty hash / stale hash → Chat; remembered
+view still restores on restart; explicit deep links still win) —
+invalid hashes previously resolved to Agent.
 
 ---
 

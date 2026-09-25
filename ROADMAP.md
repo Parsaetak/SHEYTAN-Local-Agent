@@ -816,6 +816,11 @@ post-mortems drove this). Shipped and tested:
 * Chat and Agent as real top-level views (CHAT | AGENT | WORKSPACE/LAB |
   SYSTEM | SETTINGS); the internal segmented selector is gone.
   Independent per-mode histories, shared memory/tools/engine preserved.
+  Repair pass: the navigation exposes real tab semantics
+  (`tablist`/`tab`/`aria-selected`), a fresh install lands on Chat
+  through one deterministic resolution (hash > remembered view > Chat)
+  with the mode bound at first paint, and every view owns an explicit
+  `#hash`.
 * Automatic long context — the user-facing context-window control is
   removed; the physical window is managed automatically; logical
   conversation continuity is unbounded through history, summaries,
@@ -823,6 +828,11 @@ post-mortems drove this). Shipped and tested:
 * Custom tools — first-class tools in the ONE registry, created from
   Settings → Agent & Tools → My Tools, validated/persisted/executed
   end-to-end with explicit permissions, bounded timeouts and output.
+  Repair pass: local commands run under per-invocation process-tree
+  ownership (Windows Job Objects — cancellation terminates the
+  complete descendant tree and the inherited pipes close promptly);
+  the output-cap test reads its large payload from a file instead of
+  argv.
 * Engine maintenance UX matches the real lifecycle (truthful phase
   sequence via /api/maintenance + the maintenance banner).
 

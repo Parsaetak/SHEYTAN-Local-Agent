@@ -153,6 +153,14 @@ type Stack struct {
 	// lifeMu guards the loop bookkeeping below (Start* vs Close races).
 	lifeMu sync.Mutex
 
+	// nativePrewarmDone closes when the in-flight native prewarm
+	// (start + model load) has fully settled — success or failure.
+	// v1.6.0 repair: the run gate (EnsureLLMContext) waits on it so a
+	// cold-start run converges with the ALREADY-BOOTING native engine
+	// instead of failing through the llama.cpp fallback while the armed
+	// backend is seconds from ready. Guarded by lifeMu.
+	nativePrewarmDone chan struct{}
+
 	// memDone / schedDone close when the memory-manager loop and the
 	// scheduler loop have fully exited after a Close.
 	memDone   chan struct{}
@@ -1224,12 +1232,22 @@ func (s *Stack) prewarmNative() {
 		return
 	}
 
+	// v1.6.0 repair: record the in-flight prewarm so EnsureLLMContext
+	// can wait for it (bounded by the run gate's own deadline). Each
+	// invocation records its own channel; a waiter that grabbed an older
+	// channel still re-checks the engine state after it closes.
+	done := make(chan struct{})
+	s.lifeMu.Lock()
+	s.nativePrewarmDone = done
+	s.lifeMu.Unlock()
+
 	// v1.2.5 lifecycle ownership: the prewarm is an OWNED worker bound
 	// to the stack lifecycle context — Close() cancels it and waits.
 	s.lifeWG.Add(1)
 
 	go func() {
 		defer s.lifeWG.Done()
+		defer close(done)
 
 		ctx, cancel := context.WithTimeout(
 			s.lifeCtx,
@@ -1390,6 +1408,35 @@ func (s *Stack) EnsureLLMContext(ctx context.Context) error {
 		return nil
 	}
 
+	// v1.6.0 repair (the cold-start native race): when the native
+	// backend is ENABLED but not serving YET, the boot prewarm may
+	// still be converging (host start + model load). The run gate's
+	// documented contract is to WAIT for a cold engine — bounded by the
+	// caller's deadline — so wait for the in-flight prewarm to settle
+	// and re-check the early exit BEFORE failing through the llama.cpp
+	// fallback: "the agent will retry on first use" must actually hold
+	// on first use. A settled-but-incapable native engine still falls
+	// through to the llama.cpp path below (unchanged behavior).
+	if s.Src.Load().NativeBackendEnabled() && s.Native != nil {
+		s.lifeMu.Lock()
+		prewarmDone := s.nativePrewarmDone
+		s.lifeMu.Unlock()
+
+		if prewarmDone != nil {
+			select {
+			case <-prewarmDone:
+				if backend := s.Engine(); backend != nil && backend.Name() == "native" {
+					return nil
+				}
+			case <-ctx.Done():
+				return fmt.Errorf(
+					"engine startup still in progress: %w",
+					ctx.Err(),
+				)
+			}
+		}
+	}
+
 	errCh := make(chan error, 1)
 
 	// v1.2.5 lifecycle ownership: the bounded boot helper is an OWNED
@@ -1404,6 +1451,20 @@ func (s *Stack) EnsureLLMContext(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		if err == nil {
+			return nil
+		}
+
+		// v1.6.0 repair (the cold-start native race, part 2): resolving
+		// the llama.cpp fallback takes real time (binary lookup, release
+		// checks) — during which the ARMED native engine (boot prewarm)
+		// may well have converged. Re-check the native early exit once
+		// before surfacing the failure: the run gate errors only when
+		// BOTH backends have genuinely failed.
+		if backend := s.Engine(); backend != nil && backend.Name() == "native" {
+			return nil
+		}
+
 		return err
 	case <-ctx.Done():
 		return fmt.Errorf(

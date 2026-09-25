@@ -481,7 +481,26 @@ func (t *Tool) runCommand(ctx context.Context, args map[string]any) ([]byte, err
                 cmdArgs = append(cmdArgs, a)
         }
 
+        // Process-tree ownership (v1.6.0 repair, spec §4): the command runs
+        // under a per-invocation process-tree tracker (a Windows Job Object;
+        // a no-op elsewhere). Killing only the direct child — the default
+        // exec.CommandContext behavior — leaves grandchildren alive, and a
+        // live grandchild keeps the inherited stdout/stderr pipe write-end
+        // open, so Wait blocks until the orphan exits on its own. Terminating
+        // the tree by ownership makes both the pipes and the processes go
+        // away together, promptly, with no timing heuristics.
+        tree := newProcessTree()
+        defer tree.close()
+
         cmd := exec.CommandContext(ctx, cfg.Executable, cmdArgs...)
+
+        // Cancellation terminates the COMPLETE tree, not only the direct
+        // child, then falls back to the standard direct-process kill (which
+        // also reports the already-exited case as os.ErrProcessDone).
+        cmd.Cancel = func() error {
+                tree.terminate()
+                return cmd.Process.Kill()
+        }
 
         // Controlled environment (spec §8): the child NEVER inherits the
         // app's ambient environment (API keys, proxies, secrets). A minimal,
@@ -507,9 +526,19 @@ func (t *Tool) runCommand(ctx context.Context, args map[string]any) ([]byte, err
         cmd.Stdout = limited
         cmd.Stderr = limited
 
-        if err := cmd.Run(); err != nil {
+        // Start → assign the process to its tree (descendants spawned after
+        // the assignment inherit it automatically) → Wait. A process that
+        // exits before the assignment is handled cleanly: attach is skipped
+        // and Wait still reports the process's own exit status.
+        runErr := cmd.Start()
+        if runErr == nil {
+                tree.attach(cmd.Process)
+                runErr = cmd.Wait()
+        }
+
+        if runErr != nil {
                 // Context state is checked FIRST: a timeout/cancel kills the
-                // child, which surfaces as a signal ExitError — the REAL cause
+                // tree, which surfaces as a signal ExitError — the REAL cause
                 // is the deadline, not the exit status.
                 if ctx.Err() != nil {
                         if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -519,11 +548,11 @@ func (t *Tool) runCommand(ctx context.Context, args map[string]any) ([]byte, err
                 }
 
                 var exitErr *exec.ExitError
-                if errors.As(err, &exitErr) {
+                if errors.As(runErr, &exitErr) {
                         // Honest failure with the bounded output excerpt.
                         return buf.Bytes(), fmt.Errorf("exit status %d: %s", exitErr.ExitCode(), boundOutput(buf.Bytes(), 512))
                 }
-                return nil, err
+                return nil, runErr
         }
 
         return buf.Bytes(), nil
