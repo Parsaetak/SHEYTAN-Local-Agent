@@ -1,6 +1,6 @@
 {
   "name": "sheytan-local-agent",
-  "version": "1.3.7",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,12 +13,14 @@
     "build:web": "tsc -b && vite build",
     "sync:web": "node scripts/sync-web.mjs",
     "verify:web": "node scripts/verify-static-assets.mjs",
+    "build:e2e": "npm run build && go build -tags headless -o e2e/.build/sheytan-e2e-server .",
+    "test:e2e": "playwright test -c e2e/playwright.config.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:units": "node --test src/run-phase.test.ts src/stream-accumulator.test.ts src/run-events.test.ts src/resources.test.ts src/mode-sessions.test.ts src/history-ref.test.ts src/parse-ended-at.test.ts src/scroll-contract.test.ts src/settings-sections.test.ts src/clone-url.test.ts src/repoindex-view.test.ts src/workspace-v136.test.ts src/net-search.test.ts src/version-contract.test.ts",
+    "test:units": "node --test src/run-phase.test.ts src/stream-accumulator.test.ts src/run-events.test.ts src/resources.test.ts src/mode-sessions.test.ts src/history-ref.test.ts src/parse-ended-at.test.ts src/scroll-contract.test.ts src/settings-sections.test.ts src/clone-url.test.ts src/repoindex-view.test.ts src/workspace-v136.test.ts src/net-search.test.ts src/version-contract.test.ts src/history-surface.test.ts",
     "test:release": "node --test scripts/release-version.test.mjs"
   },
   "dependencies": {
@@ -30,6 +32,7 @@
     "zustand": "5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "26.4.1",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",

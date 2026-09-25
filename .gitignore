@@ -68,3 +68,9 @@ Thumbs.db
 
 # Go module cache/proxies pulled by local tooling
 /vendor/
+
+# v1.4.0: browser E2E build products and per-run artifacts (the server
+# binary is built by npm run build:e2e; .artifacts holds the isolated
+# per-run stacks, traces and screenshots)
+/e2e/.build/
+/e2e/.artifacts/

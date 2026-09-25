@@ -306,6 +306,24 @@ type RuntimeState = {
   messages: ChatMessage[];
   streaming: { content: string; reasoning: string } | null;
 
+  // v1.4.0: the transcript surface must distinguish LOADING history,
+  // EMPTY history, LOADED history and LOADING FAILURE — a fetch in
+  // flight (or a failed fetch) previously rendered the same
+  // "conversation is empty" invitation, which claimed an empty history
+  // that was never established. `historyStatus` is per active session
+  // load; `historyError` carries the failure caption for the retry
+  // affordance. Loading-failure is NEVER converted into an empty
+  // conversation.
+  historyStatus: "loading" | "ready" | "error";
+  historyError: string | null;
+
+  // v1.4.0: the composer draft lives in the store, not component state.
+  // The workspace <main> remounts on every view switch; a component-
+  // local draft was silently destroyed by the Agent → Settings → Agent
+  // round trip. The store survives remounts (and mode switches).
+  composerDraft: string;
+  setComposerDraft: (v: string) => void;
+
   // v1.1.3: staged attachments for the composer.
   pendingAttachments: Attachment[];
   attachmentsUploading: boolean;
@@ -1676,6 +1694,15 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   messages: [],
   streaming: null,
 
+  // v1.4.0: explicit transcript surface states (see the interface
+  // comment). "ready" + zero messages = a genuinely empty history —
+  // the only state allowed to render the empty-conversation invite.
+  historyStatus: "ready",
+  historyError: null,
+
+  // v1.4.0: store-held composer draft (survives view-switch remounts).
+  composerDraft: "",
+
   pendingAttachments: [],
   attachmentsUploading: false,
 
@@ -1759,6 +1786,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       netSearchState: v ? "enabled" : "off",
       netSearchResultCount: null,
     });
+  },
+
+  // v1.4.0: the composer draft is store-held so a workspace view switch
+  // (which remounts the composer) cannot destroy what the user typed.
+  setComposerDraft: (v) => {
+    set({ composerDraft: v });
   },
 
   refreshPresets: async () => {
@@ -2007,6 +2040,24 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   },
 
   loadSession: async (id) => {
+    // v1.4.0: switching to a different session must show an explicit
+    // LOADING state — the previous session's messages are cleared and
+    // the history surface renders "loading history" until the page
+    // arrives (or fails). A failed fetch sets historyStatus "error" and
+    // NEVER renders the empty-conversation invitation for a history
+    // that was never established.
+    const switching = useRuntimeStore.getState().activeSessionId !== id;
+
+    if (switching) {
+      set({
+        messages: [],
+        historyStatus: "loading",
+        historyError: null,
+        olderHasMore: false,
+        olderNextBefore: null,
+      });
+    }
+
     try {
       // v1.2.8: LAZY HISTORY PAGING — load the newest page instead of the
       // whole transcript. Older pages fetch on demand (loadOlderMessages);
@@ -2035,12 +2086,26 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         messages: page.messages.map((entry) => entry.message),
         olderHasMore: page.hasMore,
         olderNextBefore: page.hasMore ? page.nextBefore : null,
+        historyStatus: "ready",
+        historyError: null,
       });
-    } catch {
-      // Session detail unavailable (fresh session not yet persisted) —
-      // an empty conversation is the correct view.
+    } catch (error) {
+      // v1.4.0: a failed history fetch is a LOADING FAILURE, not an
+      // empty conversation. The previous catch converted every error
+      // into `messages: []` — the "fresh session not yet persisted"
+      // case is real, but a dead backend or a network failure produced
+      // the identical fake-empty view. The empty transcript is now only
+      // ever established by a SUCCESSFUL page fetch (or a genuinely
+      // fresh session the backend confirms); failures surface as an
+      // explicit retryable error state.
       if (useRuntimeStore.getState().activeSessionId === id) {
-        set({ messages: [], olderHasMore: false, olderNextBefore: null });
+        set({
+          historyStatus: "error",
+          historyError:
+            error instanceof Error
+              ? error.message
+              : "Failed to load conversation history.",
+        });
       }
     }
 
@@ -2161,6 +2226,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       error: null,
       activity: [],
       messages: [],
+      // v1.4.0: a newly created session IS genuinely empty — the empty
+      // invite is truthful here without a history fetch.
+      historyStatus: "ready",
+      historyError: null,
       streaming: null,
       running: false,
       runPhase: "idle",
@@ -2206,6 +2275,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       error: null,
       activity: [],
       messages: [],
+      // v1.4.0: switching sessions enters the LOADING state — the
+      // transcript is unknown until the page fetch settles.
+      historyStatus: "loading",
+      historyError: null,
       streaming: null,
       running: false,
       runPhase: "idle",
@@ -2933,6 +3006,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       error: null,
       activity: [],
       messages: [],
+      // v1.4.0: a mode switch changes the conversation space — the
+      // transcript is unknown until the (mode-local) session's history
+      // is fetched.
+      historyStatus: nextActive ? "loading" : "ready",
+      historyError: null,
       streaming: null,
       running: false,
       runPhase: "idle",

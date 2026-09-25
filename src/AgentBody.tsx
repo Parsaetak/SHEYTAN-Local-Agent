@@ -162,7 +162,13 @@ function AgentBody() {
     (state) => state.releaseEnginePolling,
   );
 
-  const [message, setMessage] = useState("");
+  // v1.4.0: the composer draft moved to the runtime store. The
+  // workspace <main key> remounts this component on every view switch —
+  // a component-local draft was destroyed by the Agent → Settings →
+  // Agent round trip. The store-backed draft survives remounts and mode
+  // switches.
+  const message = useRuntimeStore((state) => state.composerDraft);
+  const setMessage = useRuntimeStore((state) => state.setComposerDraft);
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
   const [engineBusy, setEngineBusy] = useState(false);

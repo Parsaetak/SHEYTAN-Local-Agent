@@ -6,6 +6,7 @@ import rehypeHighlight from "rehype-highlight";
 import type { ChatMessage } from "./api";
 import { useRuntimeStore } from "./store";
 import { isLivePhase, PHASE_LABELS, type RunPhase } from "./run-phase";
+import { historySurfaceState } from "./history-surface";
 
 const MAX_RENDERED_MESSAGES = 200;
 
@@ -572,12 +573,54 @@ function EmptyConversation() {
   );
 }
 
+// v1.4.0: the transcript surface distinguishes the four real states.
+// "Loading history" and "loading failure" are NEVER rendered as the
+// empty-conversation invitation — an in-flight (or failed) fetch says
+// nothing about whether the history is empty.
+function HistoryLoading() {
+  return (
+    <div className="conversation-empty" data-history-state="loading">
+      <div className="activity-empty-mark">✦</div>
+      <strong>Loading conversation…</strong>
+      <span>Fetching this session's history from the backend.</span>
+    </div>
+  );
+}
+
+function HistoryError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="conversation-empty" data-history-state="error">
+      <div className="activity-empty-mark">!</div>
+      <strong>Could not load this conversation</strong>
+      <span>{message}</span>
+      <button type="button" className="text-button" onClick={onRetry}>
+        Retry loading history
+      </button>
+    </div>
+  );
+}
+
 function MessageStream() {
   const messages = useRuntimeStore((state) => state.messages);
   const streaming = useRuntimeStore((state) => state.streaming);
   const running = useRuntimeStore((state) => state.running);
   const runPhase = useRuntimeStore((state) => state.runPhase);
   const activity = useRuntimeStore((state) => state.activity);
+
+  // v1.4.0: the explicit transcript surface states — loading, error,
+  // ready — from the authoritative store (see store.ts loadSession).
+  const historyStatus = useRuntimeStore((state) => state.historyStatus);
+  const historyError = useRuntimeStore((state) => state.historyError);
+  const activeSessionId = useRuntimeStore(
+    (state) => state.activeSessionId,
+  );
+  const loadSession = useRuntimeStore((state) => state.loadSession);
 
   // v1.2.8: lazy history paging — "Load earlier" fetches the next older
   // page on demand; the browser never needs the whole transcript.
@@ -589,6 +632,15 @@ function MessageStream() {
   const endRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
+
+  // v1.4.0: ONE pure decision function (history-surface.ts) selects the
+  // transcript surface state; the UI and the unit tests share it.
+  const surface = historySurfaceState({
+    historyStatus,
+    messageCount: messages.length,
+    streaming: Boolean(streaming),
+    runLive: isLivePhase(runPhase),
+  });
 
   const visibleMessages = useMemo(
     () =>
@@ -699,9 +751,18 @@ function MessageStream() {
           </div>
         ) : null}
 
-        {visibleMessages.length === 0 &&
-        !streaming &&
-        !isLivePhase(runPhase) ? (
+        {surface === "error" ? (
+          <HistoryError
+            message={historyError ?? "The history fetch failed."}
+            onRetry={() => {
+              if (activeSessionId) {
+                void loadSession(activeSessionId);
+              }
+            }}
+          />
+        ) : surface === "loading" ? (
+          <HistoryLoading />
+        ) : surface === "empty" ? (
           <EmptyConversation />
         ) : (
           <>

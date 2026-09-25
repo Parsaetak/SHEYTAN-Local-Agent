@@ -18,6 +18,47 @@ concurrency:
 permissions:
   contents: read
 
+# GATE SEMANTICS (v1.4.0, § CI-integrity — the run 35996462352 repair).
+#
+# Every step in this pipeline is one of exactly three classes, and the
+# class determines what a failure means:
+#
+#   REQUIRED GATES (fail ⇒ job fails):
+#     - typecheck / lint / test:units / test:release — frontend source
+#       and release-metadata contracts.
+#     - npm run build + verify-static-assets + embedded-frontend checks
+#       — the production build contract.
+#     - go test ./internal/... (headless) and go test ./... — the Go
+#       suites, including the testfakes portability gate and every
+#       integration boundary exercised there.
+#     - go vet ./... — static analysis.
+#     - go test -race (audit) — the concurrency-heavy packages.
+#     - cmake configure/build + ctest — the native C++ engine.
+#     - stress suite (Linux), executable smoke probes, ZIP/installer
+#       structural verification.
+#     These run under `set -euo pipefail` (bash) or with per-command
+#     $LASTEXITCODE assertions (pwsh). A green job therefore means the
+#     gated verification genuinely passed — the v1.3.7 Windows job could
+#     be green while `go test` failed (four annotations on a green run);
+#     that failure-hiding class is repaired in v1.4.0 and every future
+#     native-command invocation must keep the assertion discipline.
+#
+#   OPTIONAL DIAGNOSTICS (informational, never gate):
+#     - Authenticode signature STATUS reporting (unsigned is expected
+#       until credentials exist; it is reported, never faked).
+#     - tool/version echo steps (node --version, cmake --version...).
+#
+#   ENVIRONMENT-SPECIFIC TESTS (fail or skip depending on the runner's
+#     ability to provide the real dependency; a skip is honest and
+#     loud, never a silent pass):
+#     - TestRealCppHost* native integration tests: the CI always builds
+#       the C++ host BEFORE the Go suites, so on CI these RUN for real;
+#       a developer machine without the build skips with the reason.
+#     - Live-model browser E2E (test:e2e with a provisioned engine):
+#       runs only when the environment provides a real engine+model;
+#       without one the E2E suite proves the full stack minus live
+#       generation and NEVER fabricates a green generation result.
+#
 # The release identity is NOT hardcoded here. package.json is the single
 # source of truth; the audit job resolves it at runtime
 # (scripts/release-version.mjs --env) and every other job consumes it via
@@ -367,21 +408,32 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          npm run typecheck
-          npm run lint
-          npm run test:units
+          # v1.4.0: native-command exit codes are asserted explicitly —
+          # npm failures must fail the job, not fall through to the next
+          # statement (the run 35996462352 failure-hiding class).
+          function Invoke-Gate {
+            param([scriptblock]$Command, [string]$Label)
+            & $Command
+            if ($LASTEXITCODE -ne 0) {
+              throw "[gate] $Label failed with exit code $LASTEXITCODE."
+            }
+          }
+
+          Invoke-Gate { npm run typecheck } "npm run typecheck"
+          Invoke-Gate { npm run lint } "npm run lint"
+          Invoke-Gate { npm run test:units } "npm run test:units"
 
           # v1.3.2: release-metadata regression suite (semver shapes,
           # drift/missing markers, whitespace/CRLF, --env identity,
           # workflow contract — the run 35542000811 failure class).
-          npm run test:release
+          Invoke-Gate { npm run test:release } "npm run test:release"
 
           # Production build contract: start from a CLEAN dist so no
           # previous-generation asset can survive into web/static.
           if (Test-Path "dist") {
             Remove-Item "dist" -Recurse -Force
           }
-          npm run build
+          Invoke-Gate { npm run build } "npm run build"
 
       - name: Verify embedded frontend
         shell: pwsh
@@ -440,17 +492,29 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          cmake --version
+          function Invoke-Gate {
+            param([scriptblock]$Command, [string]$Label)
+            & $Command
+            if ($LASTEXITCODE -ne 0) {
+              throw "[gate] $Label failed with exit code $LASTEXITCODE."
+            }
+          }
+
+          Invoke-Gate { cmake --version } "cmake --version"
 
           # Regression guard: never reuse a stale or path-mismatched cache.
           if (Test-Path "native/engine/build") {
             Remove-Item "native/engine/build" -Recurse -Force
           }
-          cmake -S native/engine -B native/engine/build --fresh
+          Invoke-Gate { cmake -S native/engine -B native/engine/build --fresh } "cmake configure (fresh)"
 
-          cmake --build native/engine/build --config Release
+          Invoke-Gate { cmake --build native/engine/build --config Release } "cmake --build (Release)"
 
-          ctest --test-dir native/engine/build -C Release --output-on-failure
+          # v1.4.0: a ctest failure must fail the job. The previous
+          # script continued past a failed ctest (native commands do not
+          # throw in pwsh), staged the built executable anyway, and the
+          # step ended green.
+          Invoke-Gate { ctest --test-dir native/engine/build -C Release --output-on-failure } "ctest (native suite)"
 
           # Stage the host executable where the Go integration tests
           # resolve it (<repo>/native/engine/build/shtn-engine-host.exe),
@@ -475,6 +539,14 @@ jobs:
 
           Write-Host "Native engine (C++) built and tested on Windows: $expected"
 
+      # v1.4.0 GATE-INTEGRITY REPAIR (run 35996462352): this step
+      # previously ran `go test` twice and `go vet` WITHOUT checking
+      # $LASTEXITCODE. In PowerShell, $ErrorActionPreference = "Stop"
+      # does NOT apply to native executables — a `go test` exit 1 was
+      # silently swallowed, the step exited with the LAST command's
+      # status, and the Windows job reported green while four error
+      # annotations sat on the run. Every mandatory verification command
+      # now asserts its own exit code; a failure fails the job.
       - name: Go verification
         shell: pwsh
         env:
@@ -482,11 +554,19 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
+          function Invoke-Gate {
+            param([scriptblock]$Command, [string]$Label)
+            & $Command
+            if ($LASTEXITCODE -ne 0) {
+              throw "[gate] $Label failed with exit code $LASTEXITCODE."
+            }
+          }
+
           go version
 
-          go test ./internal/... -tags headless -count=1
-          go test ./... -run Test -count=1
-          go vet ./...
+          Invoke-Gate { go test ./internal/... -tags headless -count=1 } "go test ./internal/... (headless)"
+          Invoke-Gate { go test ./... -run Test -count=1 } "go test ./... (full)"
+          Invoke-Gate { go vet ./... } "go vet ./..."
 
       - name: Generate Windows resources
         shell: pwsh
@@ -518,17 +598,27 @@ jobs:
             -Force `
             -Path $appRoot | Out-Null
 
+          # v1.4.0: each go build asserts its exit code — a failed first
+          # build must never be masked by a successful second one.
           go build `
             -trimpath `
             -ldflags="-s -w -H=windowsgui" `
             -o "$appRoot/SHEYTAN-LA.exe" `
             .
 
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] go build (SHEYTAN-LA.exe) failed with exit code $LASTEXITCODE."
+          }
+
           go build `
             -trimpath `
             -ldflags="-s -w" `
             -o "dist/windows/sheytan-version-smoke.exe" `
             .
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] go build (console smoke probe) failed with exit code $LASTEXITCODE."
+          }
 
       - name: Verify Windows executable
         shell: pwsh
@@ -1105,6 +1195,27 @@ jobs:
           go vet ./...
 
           go list -m github.com/wailsapp/wails/v3
+
+      # v1.4.0: the BROWSER E2E GATE (required). The real built frontend
+      # + the real headless Go server + the real HTTP API + the real
+      # WebSocket + the real session lifecycle + REAL native-engine
+      # generation (the C++ host built two steps above, executing the
+      # wide-context fixture generated from the canonical fixture
+      # writer). This is the layer that proves Chat/Agent actually work
+      # as a user drives them; a failure here fails the release.
+      - name: Browser E2E (real application stack)
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+
+          # The frontend is already built and embedded (web/static) by
+          # the verification steps above; build the headless server and
+          # run the Playwright suite against it.
+          npm run build:e2e
+          npx playwright install chromium --with-deps
+          npm run test:e2e
 
       - name: Stress suite
         shell: bash
