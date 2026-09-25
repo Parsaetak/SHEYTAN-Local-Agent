@@ -5306,3 +5306,88 @@ body::before {
   font-size: 0.72rem;
   font-family: var(--font-mono);
 }
+
+/* v1.5.0 MODEL-FIRST: selection flow surfaces. */
+
+.model-chip.class-previous {
+  border-color: rgba(255, 209, 102, 0.35);
+
+  color: var(--warning, #ffd166);
+}
+
+.model-chip.class-fit-fits {
+  border-color: var(--border-soft);
+
+  color: var(--text-muted);
+}
+
+.model-chip.class-fit-tight {
+  border-color: rgba(255, 209, 102, 0.35);
+
+  color: var(--warning, #ffd166);
+}
+
+/* The backend-authoritative selection status line: the phases the
+   engine actually reported, never a client-side guess. */
+.model-picker-selection {
+  display: flex;
+
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 4px;
+
+  padding: 8px 12px;
+  margin-bottom: 10px;
+
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+
+  font-size: 12px;
+}
+
+.model-picker-selection strong {
+  color: var(--accent-strong);
+
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.model-picker-selection span {
+  color: var(--text-muted);
+}
+
+.model-picker-selection.phase-failed {
+  border-color: rgba(255, 32, 32, 0.4);
+}
+
+.model-picker-selection.phase-failed strong {
+  color: var(--error);
+}
+
+.model-picker-selection .selection-error {
+  color: var(--error);
+}
+
+.model-picker-selection .selection-manual {
+  color: var(--warning, #ffd166);
+}
+
+/* The model-selection-required composer gate (fresh install): the
+   composer is disabled and points at the Model Selector. */
+.composer-selection-gate {
+  display: flex;
+
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+
+  padding: 8px 12px;
+
+  border: 1px dashed rgba(105, 167, 255, 0.35);
+  border-radius: 8px;
+
+  color: var(--text-muted);
+  font-size: 12px;
+}

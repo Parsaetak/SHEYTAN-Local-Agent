@@ -613,7 +613,21 @@ func RunScheduled(ctx context.Context, src *config.Source, eng Engine, notify fu
 
 			msg, updated, err := CheckAndApply(ctx, &mutable, eng)
 
-			src.Store(&mutable)
+			// v1.5.0 (the model-first selection race): apply ONLY the
+			// updater's own mutations to the CURRENT config. The previous
+			// wholesale src.Store(&mutable) re-published a snapshot taken
+			// BEFORE the network check — which can stall for seconds on an
+			// offline machine — so any concurrent config write (a model
+			// selection seconds after boot, exactly the model-first
+			// window; equally any settings save) was silently reverted in
+			// memory while its on-disk file kept the new value: the live
+			// source and config.json disagreed until the next write. The
+			// updater owns exactly ONE config field (LastUpdateCheck —
+			// engine tags live in the separate state file), and that is
+			// all it may publish.
+			src.Update(func(c *config.Config) {
+				c.LastUpdateCheck = mutable.LastUpdateCheck
+			})
 
 			if err != nil {
 				// v1.3.0: never emit a blank WARN. checkAndApply occasionally

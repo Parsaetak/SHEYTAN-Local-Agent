@@ -359,8 +359,11 @@ func TestRealCppHostModelLifecycle(t *testing.T) {
         }
 
         // Failed load: a garbage file fails cleanly, state walks to failed,
-        // and the engine stays alive.
-        garbage := filepath.Join(t.TempDir(), "garbage.gguf")
+        // and the engine stays alive. The garbage fixture goes into the SAME
+        // pre-created fixtureDir (v1.5.0 lifecycle audit): every temp-tree
+        // registration stays BEFORE the engine-stop cleanup, so the removal
+        // order can never invert on Windows.
+        garbage := filepath.Join(fixtureDir, "garbage.gguf")
         if err := os.WriteFile(garbage, []byte("definitely not a gguf file"), 0o644); err != nil {
                 t.Fatal(err)
         }

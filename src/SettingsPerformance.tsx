@@ -39,6 +39,153 @@ export interface PerformanceCardProps {
 }
 
 // ---------------------------------------------------------------------------
+// v1.5.0 — Performance mode (AUTO / MANUAL)
+// ---------------------------------------------------------------------------
+
+// PerformanceModeCard is the single runtime concept that decides who owns
+// the performance settings:
+//
+//   AUTO   — SHEYTAN calculates and applies the profile from measured
+//            hardware + the selected model (the ONE recommendation
+//            engine), recalculated on every model change, with a bounded
+//            real calibration whose verified winner is retained.
+//   MANUAL — explicit user values are preserved verbatim; model changes
+//            never overwrite them.
+//
+// The card states the honest auto-tuned summary ("Auto tuned — based on
+// measured hardware + selected model", or "not benchmarked" when no real
+// calibration ran) and offers Re-analyze, which drives the SAME backend
+// selection flow for the CURRENT model (recalculating the profile). It
+// never claims "optimal" without measured evidence.
+export function PerformanceModeCard({
+  config,
+  save,
+  onReanalyzed,
+}: {
+  config: RuntimeConfig;
+  save: (patch: Record<string, unknown>) => Promise<void>;
+  onReanalyzed?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mode = config.performanceMode === "manual" ? "manual" : "auto";
+
+  async function switchMode(next: "auto" | "manual") {
+    if (busy || next === mode) {
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      await save({ performanceMode: next });
+    } catch (modeError) {
+      setError(
+        modeError instanceof Error ? modeError.message : "Unable to save the performance mode.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reanalyze() {
+    if (busy || !config.model) {
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+
+    try {
+      // The SAME backend selection flow for the CURRENT model — the
+      // profile is recalculated from measured evidence (AUTO only).
+      await api.selectModel(config.model);
+      onReanalyzed?.();
+    } catch (reanalyzeError) {
+      setError(
+        reanalyzeError instanceof Error
+          ? reanalyzeError.message
+          : "Unable to re-analyze the current model.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="settings-card settings-card-wide">
+      <div className="settings-card-heading">
+        <div>
+          <span className="eyebrow">PERFORMANCE MODE</span>
+          <h3>Who owns the runtime settings</h3>
+        </div>
+        <Chip tone={mode === "auto" ? "good" : "warn"}>
+          {mode === "auto" ? "Auto tuned" : "Manual"}
+        </Chip>
+      </div>
+
+      <div className="settings-rows">
+        <div className="settings-row">
+          <div>
+            <FieldLabel
+              name="Performance mode"
+              tip="AUTO calculates and applies settings automatically from measured hardware + the selected model. MANUAL preserves your explicit values."
+            />
+            <div className="segmented" role="radiogroup" aria-label="Performance mode">
+              <button
+                type="button"
+                className={mode === "auto" ? "active" : ""}
+                onClick={() => void switchMode("auto")}
+                disabled={busy}
+                aria-pressed={mode === "auto"}
+              >
+                AUTO
+              </button>
+              <button
+                type="button"
+                className={mode === "manual" ? "active" : ""}
+                onClick={() => void switchMode("manual")}
+                disabled={busy}
+                aria-pressed={mode === "manual"}
+              >
+                MANUAL
+              </button>
+            </div>
+          </div>
+
+          <div className="settings-row-actions">
+            {mode === "auto" ? (
+              <>
+                <span className="runtime-hint">
+                  Auto tuned — based on measured hardware + selected model
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => void reanalyze()}
+                  disabled={busy || !config.model}
+                  title="Recalculate the automatic profile for the current model (measured hardware + engine capabilities)."
+                >
+                  Re-analyze
+                </button>
+              </>
+            ) : (
+              <span className="runtime-hint">
+                Manual — your explicit settings are preserved on model changes.
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {error ? <p className="settings-error">{error}</p> : null}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Engine profile status — "why compatibility mode?"
 // ---------------------------------------------------------------------------
 

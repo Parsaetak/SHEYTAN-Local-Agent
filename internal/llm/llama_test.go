@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
         "fmt"
         "net"
         "net/http"
@@ -567,7 +568,17 @@ func TestStopWithoutProcessIsSafe(t *testing.T) {
         }
 }
 
-func TestResolveModelPathPicksFirstAvailable(t *testing.T) {
+// TestResolveModelPathRequiresSelection is the v1.5.0 MODEL-FIRST
+// contract test (repaired from TestResolveModelPathPicksFirstAvailable,
+// which codified exactly the defect this release removes: an empty model
+// name resolving to an arbitrary "first .gguf in directory order").
+//
+// The new contract: NO implicit model selection, ever. An empty name
+// returns ErrNoModelSelected whether the models dir has zero, one or
+// many models; explicit names resolve exactly as before (absolute path
+// → exact case-fold match → substring → fuzzy) and unknown names still
+// fail with a helpful message.
+func TestResolveModelPathRequiresSelection(t *testing.T) {
         dir := t.TempDir()
 
         if err := os.WriteFile(dir+"/model-a.gguf", []byte("a"), 0o644); err != nil {
@@ -578,17 +589,22 @@ func TestResolveModelPathPicksFirstAvailable(t *testing.T) {
                 t.Fatal(err)
         }
 
-        path, err := ResolveModelPath(dir, "")
-        if err != nil {
-                t.Fatalf("resolve without name: %v", err)
+        // Empty name with models PRESENT: no implicit first-GGUF pick.
+        _, err := ResolveModelPath(dir, "")
+        if !errors.Is(err, ErrNoModelSelected) {
+                t.Fatalf("resolve without name must fail with ErrNoModelSelected, got: %v", err)
         }
 
-        if !strings.HasSuffix(path, ".gguf") {
-                t.Fatalf("unexpected path %s", path)
+        // Empty name with an EMPTY models dir: the same sentinel (with the
+        // honest "no models yet" detail).
+        empty := t.TempDir()
+        _, err = ResolveModelPath(empty, "")
+        if !errors.Is(err, ErrNoModelSelected) {
+                t.Fatalf("empty models dir without name must fail with ErrNoModelSelected, got: %v", err)
         }
 
-        // Exact (case-insensitive) match.
-        path, err = ResolveModelPath(dir, "MODEL-B.GGUF")
+        // Exact (case-insensitive) match — unchanged behavior.
+        path, err := ResolveModelPath(dir, "MODEL-B.GGUF")
         if err != nil {
                 t.Fatalf("resolve exact: %v", err)
         }
@@ -601,6 +617,11 @@ func TestResolveModelPathPicksFirstAvailable(t *testing.T) {
         _, err = ResolveModelPath(dir, "does-not-exist")
         if err == nil || !strings.Contains(err.Error(), "does-not-exist") {
                 t.Fatalf("unknown model must fail: %v", err)
+        }
+
+        // An absolute path still resolves directly.
+        if _, err := ResolveModelPath(dir, path); err != nil {
+                t.Fatalf("absolute path resolve: %v", err)
         }
 }
 

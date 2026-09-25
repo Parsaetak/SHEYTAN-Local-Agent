@@ -83,6 +83,12 @@ async function initializeAgentOnce(): Promise<void> {
     }
 
     void useRuntimeStore.getState().refreshModels();
+
+    // v1.5.0: the measured hardware snapshot feeds the Model Selector's
+    // sizing hints. refreshSysinfo existed since v1.1.x but was never
+    // called — the store's sysinfo stayed null and the picker's RAM
+    // classification was dormant. One call at init fixes the orphan.
+    void useRuntimeStore.getState().refreshSysinfo();
   } catch (error) {
     useRuntimeStore.setState({
       loading: false,

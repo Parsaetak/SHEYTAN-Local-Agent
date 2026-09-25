@@ -18,14 +18,16 @@ import { startSheytan, type SheytanStack } from "./fixtures/sheytan-server";
  * pipeline, never claims model quality.
  */
 
-let stack: SheytanStack;
+let stack: SheytanStack | undefined;
 
 test.beforeAll(async () => {
   stack = await startSheytan();
 });
 
 test.afterAll(async () => {
-  await stack.stop();
+  // v1.5.0: a failed beforeAll leaves stack undefined — the afterAll must
+  // never mask the PRIMARY startup failure with a secondary teardown error.
+  await stack?.stop();
 });
 
 test.beforeEach(async ({ page }) => {

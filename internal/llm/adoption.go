@@ -259,3 +259,12 @@ func (s *LlamaServer) proveEngineIdentity(cfg *config.Config, exePath string, pi
 
 	return true
 }
+
+// ExpectedEngineBinPath is the exported single engine-binary resolution
+// (delegates to expectedEngineBinPath). v1.5.0: the selection/calibration
+// flow uses it to decide whether the llama engine can be driven through
+// restart cycles — an engine that cannot be re-launched locally (e.g. an
+// adopted instance with no managed binary) must not be benchmarked.
+func ExpectedEngineBinPath(cfg *config.Config) string {
+	return expectedEngineBinPath(cfg)
+}

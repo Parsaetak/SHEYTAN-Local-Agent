@@ -1216,6 +1216,14 @@ func (s *Stack) prewarmNative() {
 		return
 	}
 
+	// v1.5.0 MODEL-FIRST: the native prewarm is an ENGINE+MODEL load —
+	// without an explicit selection it must not start the host at all
+	// (a model-less host process would still be an engine running before
+	// selection, and the selection flow owns the next start).
+	if s.Src.Load().Model == "" {
+		return
+	}
+
 	// v1.2.5 lifecycle ownership: the prewarm is an OWNED worker bound
 	// to the stack lifecycle context — Close() cancels it and waits.
 	s.lifeWG.Add(1)
@@ -1255,6 +1263,17 @@ func (s *Stack) EnsureLLM() error {
 		return nil
 	}
 
+	// v1.5.0 MODEL-FIRST: an engine load requires an explicit selection.
+	// Without one the gate fails honestly and immediately — the Model
+	// Selector owns the next step; no arbitrary "first .gguf" is ever
+	// loaded on the user's behalf.
+	if s.Src.Load().Model == "" {
+		return fmt.Errorf(
+			"%w — choose a model in the Model Selector first",
+			llm.ErrNoModelSelected,
+		)
+	}
+
 	// Phase 5 repair: when the native engine is the backend actually
 	// serving generation (selected AND generation-capable — the same
 	// single selection policy that routes requests), the llama gate
@@ -1284,6 +1303,13 @@ func (s *Stack) EnsureLLM() error {
 // Failures are logged and reflected in the engine state — never fatal,
 // because the user may only be browsing settings; a later explicit start
 // or the first message retries through EnsureLLM.
+//
+// v1.5.0 MODEL-FIRST: the prewarm only happens when a model is
+// EXPLICITLY selected. A fresh install (Model == "") reaches the Model
+// Selector with the engine idle — discovery lists local GGUFs without
+// loading any of them, and the engine/model load happens strictly after
+// the user's selection. The old behavior (boot whichever .gguf sorts
+// first) is gone.
 func (s *Stack) PrewarmLLM() {
 	if s.Src.Load().IsRemote() {
 		logging.Default().Info(
@@ -1291,6 +1317,15 @@ func (s *Stack) PrewarmLLM() {
 			"remote provider active: %s (model %s) — local engine not started",
 			remoteBaseURL(s.Src.Load()),
 			s.Src.Load().EffectiveModel(),
+		)
+
+		return
+	}
+
+	if s.Src.Load().Model == "" {
+		logging.Default().Info(
+			"runtime",
+			"no model selected — engine prewarm deferred; the Model Selector owns the next step (local models are listed, none is loaded)",
 		)
 
 		return
@@ -1337,6 +1372,15 @@ func (s *Stack) EnsureLLMContext(ctx context.Context) error {
 
 	if s.Llama.IsRunning() {
 		return nil
+	}
+
+	// v1.5.0 MODEL-FIRST: fail fast and honestly when nothing is
+	// selected — never boot an arbitrary model from the run gate.
+	if s.Src.Load().Model == "" {
+		return fmt.Errorf(
+			"%w — choose a model in the Model Selector first",
+			llm.ErrNoModelSelected,
+		)
 	}
 
 	// Phase 5 repair: the native-serving early exit (see EnsureLLM).

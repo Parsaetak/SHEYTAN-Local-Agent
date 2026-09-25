@@ -129,6 +129,11 @@ function AgentBody() {
   const running = useRuntimeStore((state) => state.running);
   const engine = useRuntimeStore((state) => state.engine);
 
+  // v1.5.0 MODEL-FIRST: a fresh install with no selected model. The
+  // composer gates on this honest backend signal and the Model Selector
+  // owns the next step (the engine never loads an arbitrary model).
+  const selectionRequired = engine?.selectionRequired === true;
+
   // v1.1.4: the toggle and the badge previously read DIFFERENT sources
   // (models.llamaRunning vs engine.state) and could disagree transiently.
   const engineAlive =
@@ -193,7 +198,12 @@ function AgentBody() {
   // Picker visibility: automatic when no usable model exists, overridable
   // by the user (null = follow the automatic state).
   const [pickerOverride, setPickerOverride] = useState<boolean | null>(null);
-  const needPicker = (models?.local ?? []).length === 0 || !config?.model;
+  // v1.5.0: selectionRequired (backend: no model selected) also forces
+  // the picker — the model-first flow.
+  const needPicker =
+    (models?.local ?? []).length === 0 ||
+    !config?.model ||
+    engine?.selectionRequired === true;
   const pickerOpen = pickerOverride ?? needPicker;
 
   useEffect(() => {
@@ -295,10 +305,24 @@ function AgentBody() {
     }
   }
 
-  // v1.1.8: returns success so the model picker can close itself only
-  // when the switch actually applied.
+  // v1.5.0 MODEL-FIRST: the switch goes through the backend selection
+  // flow — ONE call that resolves the model, applies the configuration
+  // atomically (the AUTO profile recalculated for the new model; MANUAL
+  // preserves explicit values), starts or swaps the engine without a
+  // wasteful stop/start when the model already matches, and verifies
+  // the selected model is actually serving. The old three-step client
+  // dance (patch config → stop → start) is gone.
   async function switchModel(nextModel: string): Promise<boolean> {
     if (!nextModel || nextModel === config?.model || modelBusy) {
+      return false;
+    }
+
+    // Changing the model while a run is active must be blocked — the
+    // backend enforces the same lock (409), the UI refuses up front.
+    if (running) {
+      setModelError(
+        "A run is active — model changes are locked while a generation is in flight.",
+      );
       return false;
     }
 
@@ -306,17 +330,11 @@ function AgentBody() {
     setModelError(null);
 
     try {
-      const nextConfig = await api.updateConfig({
-        model: nextModel,
-      });
+      await api.selectModel(nextModel);
 
+      const nextConfig = await api.config();
       setConfig(nextConfig);
 
-      if (engineAlive) {
-        await api.llama("stop");
-      }
-
-      await api.llama("start");
       await refreshModels();
 
       return true;
@@ -844,6 +862,26 @@ function AgentBody() {
           <div className="composer-drop-hint">Drop images or files to attach</div>
         ) : null}
 
+        {/* v1.5.0 MODEL-FIRST: no model selected yet — the honest gate.
+            The button opens the Model Selector; the composer unlocks as
+            soon as a selection is applied. */}
+        {selectionRequired ? (
+          <div className="composer-selection-gate" role="status">
+            <span>
+              Choose a model to start — local models are listed without
+              loading any of them; the engine starts after you select one.
+            </span>
+
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setPickerOverride(true)}
+            >
+              Choose model
+            </button>
+          </div>
+        ) : null}
+
         {pendingAttachments.length > 0 || attachmentsUploading ? (
           <div className="composer-attachments">
             {attachmentsUploading ? (
@@ -936,13 +974,15 @@ function AgentBody() {
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             placeholder={
-              !activeSessionId
-                ? "Create a session to begin..."
-                : chatMode
-                  ? "Message SHEYTAN..."
-                  : "Describe what SHEYTAN should forge..."
+              selectionRequired
+                ? "Choose a model to begin..."
+                : !activeSessionId
+                  ? "Create a session to begin..."
+                  : chatMode
+                    ? "Message SHEYTAN..."
+                    : "Describe what SHEYTAN should forge..."
             }
-            disabled={!activeSessionId || running}
+            disabled={!activeSessionId || running || selectionRequired}
             rows={1}
             onKeyDown={(event) => {
               // v1.2.0: Enter = send, Shift+Enter = newline. Ctrl/Cmd+Enter

@@ -1,6 +1,15 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { api, type Model } from "./api";
+import {
+  SELECTION_PHASE_LABEL,
+  classifyFit,
+  recommendedOnThisMachine,
+  selectionBusy,
+  type Fit,
+  type ModelRecommendationEvidence,
+  type SelectionPhase,
+} from "./model-selection";
 import { useRuntimeStore } from "./store";
 import { visionBadge } from "./vision";
 
@@ -47,73 +56,63 @@ function formatContext(tokens: number | undefined): string {
 // estimate exceeds total host RAM (it cannot fit), and everything else
 // is "Available".
 type ModelState = "ready" | "loading" | "incompatible" | "available";
+// v1.5.0: classification is now TWO separate honest signals —
+//
+//   fit       — a MEASURED sizing hint: the backend's estimated
+//               footprint against the host's measured total RAM. It
+//               answers "can this machine hold it?", nothing more.
+//   evidence  — the recommendation engine's verdict over measured
+//               hardware + GGUF facts + verified engine capabilities.
+//               "Recommended for this machine" is rendered ONLY when
+//               this evidence exists and classifies the model as safe.
+//
+// No label is ever derived from the filename, the file size alone, or a
+// client-side heuristic dressed up as a recommendation.
 
-// classification derives the honest suitability hint from measured
-// values: the model's estimated footprint against the HOST's total RAM.
-// It is a sizing hint, not a benchmark — the tooltip says exactly that.
-type Classification = "recommended" | "compatible" | "limited";
 
-function classify(model: Model, totalRamBytes: number | undefined) {
-  const need = model.estimatedMemoryBytes ?? 0;
-
-  if (need <= 0 || !totalRamBytes || totalRamBytes <= 0) {
-    return { classification: null as Classification | null, overRam: false };
-  }
-
-  const ratio = need / totalRamBytes;
-
-  if (ratio > 1) {
-    return { classification: null as Classification | null, overRam: true };
-  }
-
-  if (ratio <= 0.6) {
-    return {
-      classification: "recommended" as Classification,
-      overRam: false,
-    };
-  }
-
-  if (ratio <= 0.85) {
-    return {
-      classification: "compatible" as Classification,
-      overRam: false,
-    };
-  }
-
-  return { classification: "limited" as Classification, overRam: false };
-}
-
-const CLASS_LABEL: Record<Classification, string> = {
-  recommended: "Recommended",
-  compatible: "Compatible",
-  limited: "Limited",
+const FIT_LABEL: Record<Exclude<Fit, null>, string> = {
+  fits: "Fits host RAM",
+  tight: "Tight on host RAM",
+  over: "Exceeds host RAM",
 };
 
-const CLASS_TITLE: Record<Classification, string> = {
-  recommended: "Estimated footprint fits comfortably in host RAM.",
-  compatible: "Estimated footprint fits host RAM with little headroom.",
-  limited: "Estimated footprint exceeds comfortable host RAM — expect slowdowns.",
+const FIT_TITLE: Record<Exclude<Fit, null>, string> = {
+  fits: "The backend's estimated footprint fits the host's measured RAM — a sizing hint, not a benchmark.",
+  tight: "The estimated footprint leaves little measured RAM headroom — expect pressure.",
+  over: "The estimated memory footprint exceeds the host's measured total RAM — the model cannot fit.",
 };
+
+
 
 function ModelCard({
   model,
   active,
+  previous,
   busy,
+  selectionBusy,
   totalRamBytes,
   gpuAvailable,
+  evidence,
   canUse,
   onUse,
 }: {
   model: Model;
   /** The configured "next" model (config → engine → session). */
   active: boolean;
+  /** v1.5.0: the last-but-one selection (the "previous" marker). */
+  previous: boolean;
   busy: boolean;
+  /** v1.5.0: a backend selection flow is in flight (cards lock). */
+  selectionBusy: boolean;
   totalRamBytes: number | undefined;
   gpuAvailable: boolean;
+  /** v1.5.0: the recommendation engine's measured evidence (or null). */
+  evidence: ModelRecommendationEvidence | null;
   canUse: boolean;
   onUse: (id: string) => void;
 }) {
-  const { classification, overRam } = classify(model, totalRamBytes);
+  const fit = classifyFit(model.estimatedMemoryBytes, totalRamBytes);
+  const overRam = fit === "over";
   const ramEstimate = formatBytes(model.estimatedMemoryBytes);
   const vramEstimate = formatBytes(model.estimatedVRAMBytes);
   const ctxMax = formatContext(model.contextLength);
@@ -122,9 +121,11 @@ function ModelCard({
   const vision = visionBadge(model.visionState, model.visionReason, model.mmprojName);
 
   // v1.1.9: explicit state machine per card (see ModelState above).
+  // v1.5.0: a live backend selection targeting THIS model also shows
+  // the loading state (the phase is backend-authoritative).
   const state: ModelState = model.serving
     ? "ready"
-    : busy && active
+    : (busy || selectionBusy) && active
       ? "loading"
       : overRam
         ? "incompatible"
@@ -144,16 +145,22 @@ function ModelCard({
   }
 
   const useDisabled =
-    state === "ready" || state === "incompatible" || busy || !canUse;
+    state === "ready" ||
+    state === "incompatible" ||
+    busy ||
+    selectionBusy ||
+    !canUse;
 
   const useTitle =
     state === "ready"
       ? "This model is already being served."
       : state === "incompatible"
         ? "The estimated memory footprint exceeds total host RAM."
-        : busy
-          ? "A model operation is already running."
-          : undefined;
+        : selectionBusy
+          ? "A model selection is being applied."
+          : busy
+            ? "A model operation is already running."
+            : undefined;
 
   return (
     <article
@@ -192,19 +199,36 @@ function ModelCard({
           </span>
         ) : null}
 
-        {classification && state !== "incompatible" ? (
+        {previous && !model.serving && !selected ? (
           <span
-            className={`model-chip class-${classification}`}
+            className="model-chip class-previous"
+            title="The previously selected model — what this machine served before the current selection."
+          >
+            Previous
+          </span>
+        ) : null}
+
+        {/* v1.5.0: "Recommended for this machine" ONLY from the
+            recommendation engine's measured evidence — never from the
+            filename, the size, or a client-side heuristic. */}
+        {recommendedOnThisMachine(evidence) && state !== "incompatible" ? (
+          <span
+            className="model-chip class-recommended"
             title={
-              classification === "recommended"
-                ? CLASS_TITLE[classification] +
-                  " Based on this machine's measured RAM."
-                : CLASS_TITLE[classification]
+              (evidence?.reasons ?? []).join("\n") ||
+              "The recommendation engine classified this model as a safe fit for this machine's measured hardware."
             }
           >
-            {classification === "recommended"
-              ? "Recommended for your device"
-              : CLASS_LABEL[classification]}
+            Recommended for this machine
+          </span>
+        ) : null}
+
+        {fit && fit !== "over" && state !== "incompatible" ? (
+          <span
+            className={`model-chip class-fit-${fit}`}
+            title={FIT_TITLE[fit]}
+          >
+            {FIT_LABEL[fit]}
           </span>
         ) : null}
       </header>
@@ -385,61 +409,100 @@ const ModelPicker = function ModelPicker({
 
   const localModels = models?.local ?? [];
 
-  // v1.2.0 first-run: one click applies the recommended configuration and
-  // starts the engine. Only offered when a real recommendation exists.
+  // v1.5.0: the per-model recommendation evidence — fetched ONCE per
+  // picker open (one hardware probe shared across models on the
+  // backend). This is the ONLY source of the "Recommended for this
+  // machine" label; when the fetch fails the chips simply do not
+  // render (never a client-side fallback heuristic).
+  const [evidence, setEvidence] = useState<
+    Record<string, ModelRecommendationEvidence> | null
+  >(null);
+
+  useEffect(() => {
+    if (localModels.length === 0) {
+      setEvidence(null);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    void api
+      .modelsRecommendations(controller.signal)
+      .then((payload) => {
+        if (!cancelled) {
+          setEvidence(payload.recommendations);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEvidence(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models?.local.map((m) => m.id).join("|")]);
+
+  // v1.5.0: the backend-authoritative selection flow state. While a
+  // selection is in flight the cards lock and the phase is shown as a
+  // status line — the UI never invents a phase the backend did not
+  // report.
+  const selection = engineState?.selection ?? null;
+  const selectionPhase = (selection?.phase ?? null) as SelectionPhase | null;
+  const selectionInFlight = selectionBusy(selectionPhase);
+
+  // v1.2.0 first-run: one click applies the recommended setup. v1.5.0:
+  // the backend select flow owns the whole chain (analyze → configure
+  // atomically → load → verify); the button just picks the target and
+  // hands it to the SAME onUse path as a manual card click.
   const [onboardingBusy, setOnboardingBusy] = useState(false);
 
   const useRecommended = useCallback(async () => {
     setOnboardingBusy(true);
 
     try {
-      const payload = await api.recommendation("", "chat");
-      const rec = payload.recommended;
       const serving =
         models?.local.find((m) => m.serving) ??
         models?.local.find(
           (m) => m.serving === false && m.id === activeModel,
         );
 
+      // v1.5.0: the recommendation EVIDENCE decides the target — the
+      // first model the recommendation engine classified as a safe fit
+      // for this machine; the smallest measured footprint is the
+      // fallback when nothing is evidence-classified.
+      const evidenceSafe =
+        models?.local.find(
+          (m) =>
+            !m.serving && evidence?.[m.id]?.hardwareMeasured === true && evidence[m.id]?.class === "safe",
+        ) ?? null;
+
       const best =
+        evidenceSafe ??
         models?.local
           .filter((m) => !m.serving)
           .sort((a, b) => {
             const ra = a.estimatedMemoryBytes ?? Number.MAX_SAFE_INTEGER;
             const rb = b.estimatedMemoryBytes ?? Number.MAX_SAFE_INTEGER;
             return ra - rb;
-          })[0] ?? null;
+          })[0] ??
+        null;
 
       const target = serving?.id ?? best?.id ?? null;
 
-      if (rec) {
-        await api.updateConfig({
-          llm: {
-            numCtx: rec.context,
-            numThread: rec.threads,
-            numGpu: rec.gpuLayers,
-            ubatchSize: rec.ubatchSize,
-          },
-          gpuAutoOffload: rec.gpuAutoOffload,
-          flashAttention: rec.flashAttention,
-          kvCacheQuant: rec.kvCacheQuant,
-          visionMmprojOffload: rec.mmprojOffload,
-          runtimeProfile: rec.task,
-        });
-      }
-
       if (target) {
         onUse(target);
-      } else if (engineState?.state === "idle" || !engineAlive) {
-        await api.llama("start");
-        await refreshModels();
       }
     } catch {
       // surfaced through the runtime store error surfaces
     } finally {
       setOnboardingBusy(false);
     }
-  }, [models, activeModel, onUse, engineAlive, engineState, refreshModels]);
+  }, [models, activeModel, evidence, onUse]);
 
   const sorted = useMemo(() => {
     // Serving model first, then alphabetical — a stable, predictable list.
@@ -519,21 +582,54 @@ const ModelPicker = function ModelPicker({
         </div>
       ) : (
         <>
+          {/* v1.5.0: the backend-authoritative selection status — the
+              phases the engine actually reported (Select / Analyzing /
+              Configuring / Loading / Calibrating / Ready / Failed),
+              never a client-side guess. */}
+          {selection ? (
+            <div
+              className={`model-picker-selection phase-${selection.phase}`}
+              role="status"
+              aria-live="polite"
+              data-testid="selection-status"
+            >
+              <strong>
+                {SELECTION_PHASE_LABEL[selection.phase] ?? selection.phase}
+                {selection.model ? ` · ${selection.model}` : ""}
+              </strong>
+
+              {selection.phase === "failed" && selection.error ? (
+                <span className="selection-error">{selection.error}</span>
+              ) : null}
+
+              {selection.phase !== "failed" && selection.calibrationNote ? (
+                <span>{selection.calibrationNote}</span>
+              ) : null}
+
+              {selection.performanceMode === "manual" && selection.phase !== "failed" ? (
+                <span className="selection-manual">
+                  Manual mode — your explicit settings are preserved.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+
           {localModels.length > 0 ? (
             <div className="model-picker-onboarding">
               <button
                 type="button"
                 className="primary-button"
                 onClick={() => void useRecommended()}
-                disabled={onboardingBusy || busy}
-                title="Apply the recommended configuration for this machine, pick the smallest fitting model, and start the engine."
+                disabled={onboardingBusy || busy || selectionInFlight}
+                title="Pick the evidence-recommended model for this machine; SHEYTAN analyzes, configures and verifies it automatically."
               >
                 {onboardingBusy ? "Applying recommended setup…" : "Use recommended setup"}
               </button>
 
               <span>
-                Detects this device, applies the best-fitting configuration,
-                verifies the engine, and starts the conversation.
+                Analyzes this machine and the selected model, applies the
+                automatic configuration, verifies the engine, and starts the
+                conversation.
               </span>
             </div>
           ) : null}
@@ -544,9 +640,12 @@ const ModelPicker = function ModelPicker({
                 key={model.id}
                 model={model}
                 active={model.serving || model.id === activeModel}
+                previous={model.previous === true}
                 busy={busy}
+                selectionBusy={selectionInFlight}
                 totalRamBytes={totalRamBytes}
                 gpuAvailable={gpuAvailable}
+                evidence={evidence?.[model.id] ?? null}
                 canUse={engineAlive !== "downloading"}
                 onUse={onUse}
               />

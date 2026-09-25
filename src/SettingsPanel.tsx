@@ -21,6 +21,7 @@ import {
   LiveMetricsCard,
   LogsCard,
   NetworkCard,
+  PerformanceModeCard,
   RecommendedCard,
   type PerfBaseline,
 } from "./SettingsPerformance";
@@ -1399,6 +1400,13 @@ function SettingsPanel() {
         {/* ======================================================== */}
         {activeTab === "performance" ? (
           <>
+            {/* v1.5.0: the AUTO/MANUAL contract owns the whole tab's
+                semantics — it comes first. */}
+            <PerformanceModeCard
+              config={config}
+              save={save}
+              onReanalyzed={() => void resetResource("config")}
+            />
             <SimplePerformanceCard config={config} save={save} />
             <TaskProfileCard config={config} save={save} />
 

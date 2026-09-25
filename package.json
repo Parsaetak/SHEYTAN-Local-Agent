@@ -1,6 +1,6 @@
 {
   "name": "sheytan-local-agent",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -20,7 +20,7 @@
     "lint": "oxlint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test:units": "node --test src/run-phase.test.ts src/stream-accumulator.test.ts src/run-events.test.ts src/resources.test.ts src/mode-sessions.test.ts src/history-ref.test.ts src/parse-ended-at.test.ts src/scroll-contract.test.ts src/settings-sections.test.ts src/clone-url.test.ts src/repoindex-view.test.ts src/workspace-v136.test.ts src/net-search.test.ts src/version-contract.test.ts src/history-surface.test.ts",
+    "test:units": "node --test src/run-phase.test.ts src/stream-accumulator.test.ts src/run-events.test.ts src/resources.test.ts src/mode-sessions.test.ts src/history-ref.test.ts src/parse-ended-at.test.ts src/scroll-contract.test.ts src/settings-sections.test.ts src/clone-url.test.ts src/repoindex-view.test.ts src/workspace-v136.test.ts src/net-search.test.ts src/version-contract.test.ts src/history-surface.test.ts src/model-selection.test.ts",
     "test:release": "node --test scripts/release-version.test.mjs"
   },
   "dependencies": {

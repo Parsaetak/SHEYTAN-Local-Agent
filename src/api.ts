@@ -315,6 +315,9 @@ export interface Model {
   mmprojName?: string;
   mmprojSizeBytes?: number;
   mmprojVerified?: boolean;
+  // v1.5.0: the last-but-one selection (config.previousModel) — the
+  // picker's "previous selection" marker. Informational only.
+  previous?: boolean;
 }
 
 export interface ModelsResponse {
@@ -374,6 +377,13 @@ export interface RuntimeConfig {
 
   llmBaseUrl: string;
   model: string;
+
+  // v1.5.0: the automatic-performance posture ("auto" default | "manual").
+  // AUTO recalculates the runtime profile from measured evidence on every
+  // model change; MANUAL preserves explicit user values verbatim.
+  performanceMode?: "auto" | "manual";
+  // v1.5.0: the last-but-one selected model (informational marker).
+  previousModel?: string;
 
   provider: string;
   remoteBaseUrl: string;
@@ -752,7 +762,97 @@ export interface EngineSnapshot {
     evictions: number;
     hitRatio: number;
   };
+  // v1.5.0 MODEL-FIRST: true when a local install has NO selected model —
+  // the deterministic pre-selection state. The composer gates on it and
+  // the Model Selector owns the next step; the engine never loads an
+  // arbitrary model on its own.
+  selectionRequired?: boolean;
+  // v1.5.0: the backend-authoritative model-selection state machine
+  // (select → analyzing → configuring → loading → ready | failed, plus
+  // calibrating) once a selection flow has run.
+  selection?: SelectionState;
   timestamp: string;
+}
+
+// v1.5.0 MODEL-FIRST: the selection flow state — every phase transition
+// is decided by the backend; the UI only renders it.
+export type SelectionPhase =
+  | "select"
+  | "analyzing"
+  | "configuring"
+  | "loading"
+  | "calibrating"
+  | "ready"
+  | "failed";
+
+export interface SelectionAppliedProfile {
+  context?: number;
+  threads?: number;
+  threadsBatch?: number;
+  gpuLayers?: number;
+  gpuAutoOffload?: boolean;
+  flashAttention?: boolean;
+  kvCacheQuant?: string;
+  ubatchSize?: number;
+  runtimeProfile?: string;
+  predictedClass?: string;
+  predictedVramBytes?: number;
+}
+
+export interface SelectionCalibrationMeasurement {
+  candidate: string;
+  booted?: boolean;
+  measured?: boolean;
+  ttftSeconds?: number;
+  genTokensPerSec?: number;
+  promptTokensPerSec?: number;
+  totalSeconds?: number;
+  stable?: boolean;
+  note?: string;
+}
+
+export interface SelectionCalibration {
+  ran: boolean;
+  reason?: string;
+  winner?: string;
+  changed?: boolean;
+  measurements?: SelectionCalibrationMeasurement[];
+}
+
+export interface SelectionState {
+  phase: SelectionPhase;
+  model?: string;
+  modelPath?: string;
+  previousModel?: string;
+  performanceMode: "auto" | "manual";
+  applied?: SelectionAppliedProfile;
+  evidence?: string[];
+  calibrated?: boolean;
+  calibration?: SelectionCalibration;
+  calibrationNote?: string;
+  error?: string;
+  updatedAt: string;
+}
+
+// v1.5.0: the per-model recommendation evidence served by
+// /api/models/recommendations — the ONLY source of the picker's
+// "Recommended for this machine" label (never filename/size heuristics).
+export interface ModelRecommendationEvidence {
+  class?: string;
+  speed?: string;
+  context?: number;
+  gpuLayers?: number;
+  gpuAutoOffload?: boolean;
+  predictedVramBytes?: number;
+  reasons?: string[];
+  notes?: string[];
+  hardwareMeasured?: boolean;
+}
+
+export interface ModelsRecommendationsResponse {
+  task: string;
+  hardwareMeasured: boolean;
+  recommendations: Record<string, ModelRecommendationEvidence>;
 }
 
 // v1.1.5 Phase 1: native engine status block. The state vocabulary is
@@ -1249,6 +1349,23 @@ export const api = {
 
   models(signal?: AbortSignal): Promise<ModelsResponse> {
     return request<ModelsResponse>("/models", { signal });
+  },
+
+  // v1.5.0: per-model recommendation evidence for the picker — the only
+  // source of the "Recommended for this machine" label.
+  modelsRecommendations(signal?: AbortSignal): Promise<ModelsRecommendationsResponse> {
+    return request<ModelsRecommendationsResponse>("/models/recommendations", { signal });
+  },
+
+  // v1.5.0 MODEL-FIRST: select a model BEFORE any engine/model load. The
+  // backend drives the whole chain (analyze → configure atomically →
+  // load → verify → ready, plus the bounded AUTO calibration) and the
+  // returned state is backend-authoritative.
+  selectModel(model: string, task?: string): Promise<SelectionState> {
+    return request<SelectionState>("/models/select", {
+      method: "POST",
+      body: JSON.stringify({ model, task }),
+    });
   },
 
   tools(signal?: AbortSignal): Promise<ToolInfo[]> {

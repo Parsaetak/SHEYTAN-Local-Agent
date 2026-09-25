@@ -18,14 +18,16 @@ import { startSheytan, type SheytanStack } from "./fixtures/sheytan-server";
  * per-platform reality the production lab runner itself embraces.
  */
 
-let stack: SheytanStack;
+let stack: SheytanStack | undefined;
 
 test.beforeAll(async () => {
   stack = await startSheytan();
 });
 
 test.afterAll(async () => {
-  await stack.stop();
+  // v1.5.0: a failed beforeAll leaves stack undefined — the afterAll must
+  // never mask the PRIMARY startup failure with a secondary teardown error.
+  await stack?.stop();
 });
 
 function api(pathName: string): string {

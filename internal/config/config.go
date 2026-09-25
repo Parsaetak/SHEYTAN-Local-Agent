@@ -18,7 +18,7 @@ import (
 
 const (
 	AppName    = "SHEYTAN-Local-Agent"
-	AppVersion = "1.4.0"
+	AppVersion = "1.5.0"
 )
 
 // The product identity is version-only: AppName + AppVersion (synchronized
@@ -60,6 +60,30 @@ const (
 	// metrics; generation still falls back to llama.cpp.
 	BackendNative = "native"
 )
+
+// Performance-mode constants (v1.5.0). The mode decides who owns the
+// runtime profile: AUTO derives it from measured evidence (the ONE
+// recommendation engine) on every model change; MANUAL preserves the
+// user's explicit values verbatim.
+const (
+	// ModeAuto lets SHEYTAN calculate and apply the runtime profile
+	// automatically (the default).
+	ModeAuto = "auto"
+	// ModeManual preserves explicit user values; automatic profile
+	// application is suppressed.
+	ModeManual = "manual"
+)
+
+// EffectivePerformanceMode returns the normalized performance mode.
+// Anything that is not exactly MANUAL resolves to AUTO — the default
+// posture — so a corrupt or hand-edited value can never silently
+// disable automatic configuration.
+func (c *Config) EffectivePerformanceMode() string {
+	if c == nil || c.PerformanceMode != ModeManual {
+		return ModeAuto
+	}
+	return ModeManual
+}
 
 // LLMOptions mirrors the available local/remote sampling and runtime knobs.
 type LLMOptions struct {
@@ -217,6 +241,26 @@ type Config struct {
 	// behaviour on its own — the applied values live in the LLM/GPU
 	// fields above.
 	RuntimeProfile string `json:"runtimeProfile" yaml:"runtimeProfile"`
+
+	// PerformanceMode (v1.5.0) is the automatic-performance contract:
+	//
+	//   "auto"   — SHEYTAN calculates and applies the runtime profile
+	//              from measured hardware + engine capability + the
+	//              selected model (internal/recommendation — the ONE
+	//              tuning engine), recalculated on every model change,
+	//              and may run a bounded real calibration whose verified
+	//              winner is retained.
+	//   "manual" — explicit user values are preserved verbatim; model
+	//              changes never silently overwrite manual settings.
+	//
+	// The default is "auto"; invalid values normalize to "auto" on load.
+	PerformanceMode string `json:"performanceMode" yaml:"performanceMode"`
+
+	// PreviousModel (v1.5.0) records the last-but-one selected model —
+	// the Model Selector's "previous selection" marker. It is updated
+	// by the model-selection flow when the user switches models and is
+	// purely informational (never resolved or loaded).
+	PreviousModel string `json:"previousModel,omitempty" yaml:"previousModel,omitempty"`
 
 	// Accelerator (v1.2.6) is the REQUESTED accelerator profile:
 	// "auto" (default, evidence-based) | "gpu" | "npu" | "cpu".
@@ -423,6 +467,11 @@ func Default() *Config {
 		VisionEnabled: true,
 		VisionMMProj:  "",
 
+		// v1.5.0: automatic performance is the default posture —
+		// MANUAL is an explicit user opt-out that preserves
+		// hand-set values verbatim.
+		PerformanceMode: ModeAuto,
+
 		MaxWorkspaceMB:  512,
 		MaxSessionsKept: 100,
 		MaxLogMB:        50,
@@ -490,6 +539,14 @@ func Load(path string) (*Config, error) {
 	// ("Native", " NATIVE ") mean what they say; EffectiveEngineBackend
 	// still only accepts the exact canonical values.
 	cfg.EngineBackend = strings.ToLower(strings.TrimSpace(cfg.EngineBackend))
+
+	// v1.5.0: normalize the performance mode the same way — an absent,
+	// blank or misspelled value means AUTO (the documented default);
+	// MANUAL must be spelled exactly to take effect.
+	cfg.PerformanceMode = strings.ToLower(strings.TrimSpace(cfg.PerformanceMode))
+	if cfg.PerformanceMode != ModeManual {
+		cfg.PerformanceMode = ModeAuto
+	}
 
 	if cfg.DataDir == "" {
 		cfg.DataDir = Default().DataDir

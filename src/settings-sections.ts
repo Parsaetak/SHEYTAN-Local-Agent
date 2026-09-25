@@ -68,6 +68,9 @@ export const FIELD_PLACEMENT: Record<string, SettingsSectionId> = {
   numCtx: "performance",
   historyWindowPct: "performance",
   continuumEnabled: "performance",
+  // v1.5.0: the AUTO/MANUAL runtime concept owns the performance tab's
+  // semantics (the PerformanceModeCard renders it).
+  performanceMode: "performance",
 
   // Agent & Tools
   maxIterations: "agent",

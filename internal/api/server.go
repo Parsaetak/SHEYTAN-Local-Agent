@@ -98,6 +98,14 @@ type Server struct {
         runsMu sync.Mutex
         runs   map[string]*runState
 
+        // v1.5.0 MODEL-FIRST: the backend-authoritative model-selection
+        // state machine (selection.go). selectionMu guards the record;
+        // calibrating is the single-slot gate for the bounded automatic
+        // performance check.
+        selectionMu sync.Mutex
+        selection   *selectionState
+        calibrating atomic.Bool
+
         // outcomes (v1.2.6) is the bounded authoritative run-state registry:
         // the last few terminal outcomes per session, replayed on the idle
         // sentinel so a late-attaching socket can finalise deterministically
@@ -413,6 +421,18 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("/api/net-search", s.handleResearch)
         mux.HandleFunc("/api/models/open-folder", s.handleModelsFolder)
 
+        // v1.5.0 MODEL-FIRST: the explicit model-selection flow (the
+        // engine-start contract — select BEFORE load). GET returns the
+        // backend-authoritative selection state; POST drives the whole
+        // chain (analyze → configure atomically → load → verify → ready,
+        // plus the bounded AUTO calibration).
+        mux.HandleFunc("/api/models/select", s.handleModelsSelect)
+
+        // v1.5.0: per-model recommendation evidence for the picker — the
+        // "Recommended for this machine" chip requires this measured
+        // evidence, never a filename/size heuristic.
+        mux.HandleFunc("/api/models/recommendations", s.handleModelsRecommendations)
+
         // v1.2.8: history surfaces — picker search (cross-mode capable),
         // rolling session summaries and lazy history paging.
         mux.HandleFunc("/api/history/search", s.handleHistorySearch)
@@ -561,6 +581,12 @@ type modelInfo struct {
         // marker for the picker. The backend itself is reported once at
         // the response level.
         Serving bool `json:"serving,omitempty"`
+
+        // Previous (v1.5.0): true when this model is the LAST-BUT-ONE
+        // selection (config.previousModel) — the picker's "previous
+        // selection" marker. Purely informational; it never resolves or
+        // loads anything.
+        Previous bool `json:"previous,omitempty"`
 
         // v1.2.0: the evidence-based vision state machine + projector
         // evidence (state, reason, paired mmproj path/size). Embedded so
@@ -747,6 +773,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
                 }
         }
 
+        // v1.5.0: the "previous selection" marker (the model this selection
+        // replaced) — resolved by NAME equality like the picker's own
+        // active-model concept.
+        if prev := cfg.PreviousModel; prev != "" {
+                for i := range localInfos {
+                        if localInfos[i].ID == prev || localInfos[i].Name == prev {
+                                localInfos[i].Previous = true
+                        }
+                }
+        }
+
         writeJSON(w, map[string]any{
                 "local":        localInfos,
                 "loaded":       loadedInfos,
@@ -778,6 +815,18 @@ func (s *Server) handleLlama(w http.ResponseWriter, r *http.Request) {
 
                 switch body.Action {
                 case "start":
+                        // v1.5.0 MODEL-FIRST: an explicit engine start with
+                        // no selected model is a clean 400 — never a silent
+                        // boot of an arbitrary model (the Model Selector
+                        // owns the selection).
+                        if !s.src.Load().IsRemote() && s.src.Load().Model == "" {
+                                writeErr(w, http.StatusBadRequest, fmt.Errorf(
+                                        "%w — pick a model first (POST /api/models/select)",
+                                        llm.ErrNoModelSelected,
+                                ))
+                                return
+                        }
+
                         // v1.1.5: when the native path is enabled, the
                         // engine toggle brings BOTH engines up: the native
                         // engine AND the llama.cpp engine.

@@ -95,6 +95,17 @@ type engineSnapshot struct {
 	// renders the REAL engine truth (Ready/Starting/Updating/Failed,
 	// exact failure reason) instead of a generic spinner.
 	Diagnostics *llm.EngineDiagnostics `json:"diagnostics,omitempty"`
+
+	// v1.5.0 MODEL-FIRST: the deterministic selection state. A local
+	// install with NO selected model reports SelectionRequired — the
+	// UI gates the composer on it and the Model Selector owns the next
+	// step; the engine never loads an arbitrary model on its own.
+	SelectionRequired bool `json:"selectionRequired,omitempty"`
+
+	// Selection is the backend-authoritative model-selection state
+	// machine (select → analyzing → configuring → loading → ready |
+	// failed, plus calibrating) once a selection flow has started.
+	Selection *selectionState `json:"selection,omitempty"`
 }
 
 // nativeEngineSnapshot is the native engine status block (local reads
@@ -181,6 +192,22 @@ func (s *Server) engineSnapshot() engineSnapshot {
 	snap.Model = s.src.Load().DisplayModel()
 	snap.Vision = s.llama.VisionActive()
 
+	// v1.5.0 MODEL-FIRST: a local install with no selected model is in
+	// the deterministic pre-selection state — an explicit phase for the
+	// UI (the composer gates on it; the Model Selector owns the next
+	// step). It is NOT an engine failure: the engine stays idle and no
+	// arbitrary model is ever loaded on the user's behalf.
+	if s.src.Load().Model == "" {
+		snap.SelectionRequired = true
+	}
+
+	// v1.5.0 MODEL-FIRST: the selection state rides along once a
+	// selection flow has actually run (s.selection != nil); the
+	// pre-selection state is fully described by SelectionRequired.
+	s.selectionMu.Lock()
+	snap.Selection = s.selection
+	s.selectionMu.Unlock()
+
 	// v1.2.3: live download progress for the UI (nil outside downloads).
 	if dp := s.llama.DownloadProgress(); dp != nil {
 		p := *dp
@@ -208,6 +235,11 @@ func (s *Server) engineSnapshot() engineSnapshot {
 		snap.Verified = s.llama.VerifiedReady() && snap.VerifiedContext > 0
 	}
 	snap.Phase = enginePhase(snap.State, snap.Verified, s.src.Load().IsRemote())
+	if snap.SelectionRequired {
+		// The deterministic pre-selection phase: the Model Selector
+		// owns the next step (distinct from a mere idle engine).
+		snap.Phase = "model-selection"
+	}
 	snap.Degraded = snap.Backend == "llama" && snap.State == llm.StateReady && !snap.Verified
 
 	// When native serves, LoadedPath/Logs were already sourced from

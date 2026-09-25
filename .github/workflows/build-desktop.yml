@@ -1196,6 +1196,23 @@ jobs:
 
           go list -m github.com/wailsapp/wails/v3
 
+      # v1.5.0 (run 36083843376): the E2E fixture generator is a REAL
+      # Python program (e2e/make-e2e-model.py → the canonical GGUF writer
+      # in native/engine/tests/reference/make_fixture.py) with a REAL
+      # third-party dependency: numpy, used for the tensor payload and
+      # fp16 K/V semantics. The ubuntu-24.04 system python3 is externally
+      # managed (PEP 668) and carries no numpy, so the fixture generation
+      # step failed with "python3 required" even though python3 itself
+      # existed. GitHub recommends explicitly provisioning the Python
+      # version instead of relying on the runner image; the setup-python
+      # toolchain is pip-installable, so numpy is provisioned explicitly
+      # and the generator is smoke-probed BEFORE the suite runs — a
+      # missing dependency must fail HERE, loudly, not inside a test.
+      - name: Setup Python 3.13 (E2E fixture generator)
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
       # v1.4.0: the BROWSER E2E GATE (required). The real built frontend
       # + the real headless Go server + the real HTTP API + the real
       # WebSocket + the real session lifecycle + REAL native-engine
@@ -1209,6 +1226,15 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
+
+          # The fixture generator's dependency is provisioned explicitly
+          # (numpy) and proven working before any test executes — the
+          # Linux environment is fixed, the fixture is never disabled.
+          python3 -m pip install --quiet numpy
+          python3 - <<'PY'
+          import numpy  # noqa: F401 — the generator's only third-party dep
+          print("fixture-generator python OK:", __import__("sys").version)
+          PY
 
           # The frontend is already built and embedded (web/static) by
           # the verification steps above; build the headless server and

@@ -7,6 +7,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -133,7 +134,31 @@ func TestEngineToggleStartReportsLlamaState(t *testing.T) {
 	// The POST /api/llama action contract is unchanged: the response
 	// carries the llama engine state; native failures never leak into
 	// the response path (they surface in /api/engine).
+	//
+	// v1.5.0 model-first repair: an engine start now requires a
+	// SELECTED model (a start with no selection is a clean 400 — never
+	// an arbitrary model boot). To keep proving the ORIGINAL contract
+	// (a missing llama binary fails with 500 and native failures never
+	// leak), the test selects a model fixture first; the selection
+	// itself is exercised end-to-end by selection_test.go.
 	server := newNativeTestServer(t, "native")
+
+	modelFixture := filepath.Join(t.TempDir(), "toggle-model.gguf")
+	if err := os.WriteFile(modelFixture, []byte("GGUF toggle fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	patch := fmt.Sprintf(`{"model": %q}`, modelFixture)
+	preq, err := http.NewRequest(http.MethodPut, server.URL+"/api/config", jsonReader(patch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	preq.Header.Set("Content-Type", "application/json")
+	presp, err := http.DefaultClient.Do(preq)
+	if err != nil {
+		t.Fatalf("PUT /api/config: %v", err)
+	}
+	presp.Body.Close()
 
 	body := `{"action":"start"}`
 	resp, err := http.Post(server.URL+"/api/llama", "application/json", jsonReader(body))

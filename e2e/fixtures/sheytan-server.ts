@@ -94,7 +94,7 @@ async function waitForHealth(baseURL: string, timeoutMs: number): Promise<void> 
   throw new Error(`[e2e] the real server never became healthy: ${lastErr}`);
 }
 
-export async function startSheytan(): Promise<SheytanStack> {
+export async function startSheytan(options: SheytanOptions = {}): Promise<SheytanStack> {
   requireFile("server binary", SERVER_BIN);
   requireFile("embedded frontend", path.join(REPO_ROOT, "web", "static", "index.html"));
   requireFile("native engine host", ENGINE_BIN);
@@ -108,18 +108,86 @@ export async function startSheytan(): Promise<SheytanStack> {
   fs.mkdirSync(modelsDir, { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
 
+  // v1.5.0 (run 36083843376): PARTIAL-STARTUP RESOURCE OWNERSHIP. Every
+  // resource created from here on is tracked and torn down by this fixture
+  // itself when a LATER step fails, so a failed startSheytan() never leaks
+  // processes and never surfaces a SECONDARY teardown error — the primary
+  // startup failure stays the failure the suite reports.
+  let child: ChildProcess | undefined;
+  const cleanupCreated = (): void => {
+    if (child) {
+      stopChild(child);
+      child = undefined;
+    }
+  };
+
+  try {
+    return await startSheytanStack({
+      dataDir,
+      modelsDir,
+      binDir,
+      noModel: options.noModel,
+      onSpawn: (c) => (child = c),
+    });
+  } catch (err) {
+    // Startup failed: clean every resource that was actually created,
+    // then re-throw the PRIMARY failure untouched.
+    cleanupCreated();
+    throw err;
+  }
+}
+
+interface StartOptions {
+  dataDir: string;
+  modelsDir: string;
+  binDir: string;
+  onSpawn: (child: ChildProcess) => void;
+  /** When true the generated config carries model:"" — the model-first flow (the app must show the selector and must NOT prewarm an arbitrary GGUF). */
+  noModel?: boolean;
+}
+
+export interface SheytanOptions {
+  /** Start with NO selected model: config.model = "" (the fresh-install model-first flow). */
+  noModel?: boolean;
+}
+
+async function startSheytanStack(opts: StartOptions): Promise<SheytanStack> {
+  const { dataDir, modelsDir, binDir, onSpawn } = opts;
+
   // The wide-context fixture model (real llama graph, ctx=4096).
+  //
+  // v1.5.0: the generator's stdout/stderr is CAPTURED and attached to
+  // the failure when generation fails — the previous single-line
+  // "(python3 required)" message masked the real cause (on the
+  // ubuntu-24.04 runner it was a missing numpy for the externally
+  // managed system python3, not a missing python3). A diagnostic must
+  // be collected, never guessed.
   const modelPath = path.join(modelsDir, "e2e-wide.gguf");
   const gen = spawn(process.platform === "win32" ? "python" : "python3", [
     path.join(REPO_ROOT, "e2e", "make-e2e-model.py"),
     modelPath,
   ]);
-  const genCode: number = await new Promise((resolve) => {
-    gen.on("error", () => resolve(-1));
-    gen.on("exit", (code) => resolve(code ?? -1));
+  const genLog: string[] = [];
+  gen.stdout?.on("data", (d) => genLog.push(String(d)));
+  gen.stderr?.on("data", (d) => genLog.push(String(d)));
+  const genOutcome = await new Promise<{ code: number; spawnError?: Error }>((resolve) => {
+    gen.on("error", (err) => resolve({ code: -1, spawnError: err }));
+    gen.on("exit", (code) => resolve({ code: code ?? -1 }));
   });
-  if (genCode !== 0 || !fs.existsSync(modelPath)) {
-    throw new Error("[e2e] the fixture model could not be generated (python3 required)");
+  if (genOutcome.code !== 0 || !fs.existsSync(modelPath)) {
+    const detail = genLog.join("").trim();
+    const cause = genOutcome.spawnError
+      ? `python could not be spawned: ${genOutcome.spawnError.message}`
+      : genOutcome.code !== 0
+        ? `generator exited with code ${genOutcome.code}`
+        : "generator exited successfully but wrote no model file";
+    throw new Error(
+      "[e2e] the fixture model could not be generated.\n" +
+        `  cause: ${cause}\n` +
+        `  generator output:\n${detail || "    (no output)"}\n` +
+        "  the generator needs python3 with numpy (CI provisions both " +
+        "via actions/setup-python@v7 + pip install numpy)",
+    );
   }
 
   fs.copyFileSync(ENGINE_BIN, path.join(binDir, path.basename(ENGINE_BIN)));
@@ -136,7 +204,11 @@ export async function startSheytan(): Promise<SheytanStack> {
         host: "127.0.0.1",
         port,
         provider: "local",
-        model: "e2e-wide.gguf",
+        // v1.5.0: model-first startup — the fixture MAY boot with no
+        // selected model (the fresh-install flow). The server must then
+        // reach "model selection required" WITHOUT loading an arbitrary
+        // first GGUF; the selector flow picks one explicitly.
+        model: opts.noModel ? "" : "e2e-wide.gguf",
         engineBackend: "native",
         nativeEnginePath: path.join(binDir, path.basename(ENGINE_BIN)),
         llamaHost: "127.0.0.1",
@@ -155,6 +227,7 @@ export async function startSheytan(): Promise<SheytanStack> {
     // can be terminated together.
     detached: process.platform !== "win32",
   });
+  onSpawn(child);
 
   const serverLog: string[] = [];
   child.stdout?.on("data", (d) => serverLog.push(String(d)));
@@ -186,10 +259,31 @@ export async function startSheytan(): Promise<SheytanStack> {
     child,
     log: () => serverLog.join(""),
     stop: async () => {
+      // v1.5.0: STATE-BASED teardown, not an arbitrary sleep — wait for
+      // the server process to actually exit (bounded) so the isolated
+      // data dir is consistent and no engine host leaks past the suite.
       stopChild(child);
-      await new Promise((r) => setTimeout(r, 400));
+      await waitForExit(child, 15_000);
     },
   };
+}
+
+// waitForExit resolves when the child has exited (state, not a timer).
+// A bounded timeout keeps a wedged child from hanging the suite; the
+// kill inside stopChild is the backstop.
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, timeoutMs);
+    function done(): void {
+      child.removeListener("exit", done);
+      clearTimeout(timer);
+      resolve();
+    }
+    child.on("exit", done);
+  });
 }
 
 function stopChild(child: ChildProcess): void {

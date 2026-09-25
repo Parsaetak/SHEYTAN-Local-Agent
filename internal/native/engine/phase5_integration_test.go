@@ -81,6 +81,26 @@ func nativeFixturePath(t *testing.T, name string) string {
 }
 
 // startRealHost boots the REAL C++ host binary and returns the engine.
+//
+// v1.5.0 (run 36083843376) — THE GENERIC REAL-HOST LIFECYCLE CONTRACT:
+// Go runs t.Cleanup registrations in LIFO order. Any t.TempDir() acquired
+// AFTER startRealHost registers its tree removal to run BEFORE the engine
+// stop — on Windows the host process still holds the loaded GGUF open at
+// that moment, the removal fails with "Access is denied", and an
+// otherwise-PASSING test is marked failed during cleanup
+// (TestRealCppHostPhase5UnsupportedModel was exactly this defect).
+//
+// The lifecycle rule is therefore structural, not advisory:
+//
+//      tests that write GGUF fixtures into a temp tree MUST acquire that tree
+//      through startRealHostWithScratch (or create t.TempDir() BEFORE
+//      startRealHost), so the engine stop — registered LATER — always runs
+//      FIRST and the temp tree is removed only after the host process has
+//      been asked to shut down, been killed if needed, and been fully
+//      reaped (Stop waits for the reap goroutine).
+//
+// No sleeps, no retry loops, no swallowed cleanup errors: the ordering
+// itself is what makes the removal safe.
 func startRealHost(t *testing.T) *Engine {
         t.Helper()
 
@@ -105,6 +125,22 @@ func startRealHost(t *testing.T) *Engine {
         })
 
         return e
+}
+
+// startRealHostWithScratch boots the REAL C++ host with a scratch
+// directory whose removal is registered BEFORE the engine-stop cleanup —
+// the generic lifecycle-safe way for real-host tests that write their own
+// GGUF fixtures. The scratch tree is deleted only after the engine is
+// stopped and reaped; model files written into it may be loaded freely.
+func startRealHostWithScratch(t *testing.T) (*Engine, string) {
+        t.Helper()
+
+        // Registered FIRST → runs LAST (LIFO): the tree outlives the engine.
+        scratch := t.TempDir()
+
+        e := startRealHost(t)
+
+        return e, scratch
 }
 
 // loadRealFixture loads one of the fixture models on the engine.
@@ -514,8 +550,18 @@ func TestRealCppHostPhase5ContextOverflow(t *testing.T) {
 // NON-llama model loads fine (Phase 2 semantics) but reports
 // generation-capable=0 with the inspectable reason; generation returns
 // the explicit unsupported error (the router maps this to llama.cpp).
+//
+// v1.5.0 (run 36083843376): the BPE fixture GGUF is written into the
+// LIFECYCLE-SAFE scratch directory from startRealHostWithScratch — its
+// removal is registered BEFORE the engine-stop cleanup, so on Windows
+// the host process (which holds the successfully-loaded GGUF open) is
+// stopped and reaped FIRST and the temp tree is deleted only afterwards.
+// The previous form (t.TempDir() AFTER startRealHost) inverted that
+// LIFO order: the tree removal ran while the GGUF was still locked,
+// failed with "Access is denied", and failed the whole test during
+// cleanup on the Windows runner.
 func TestRealCppHostPhase5UnsupportedModel(t *testing.T) {
-        e := startRealHost(t)
+        e, scratch := startRealHostWithScratch(t)
 
         ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
         defer cancel()
@@ -523,7 +569,7 @@ func TestRealCppHostPhase5UnsupportedModel(t *testing.T) {
         // The Phase 4 BPE fixture declares llama metadata but has NO llama
         // tensors beyond a dummy token_embd — generation must be rejected
         // with a clear reason.
-        model := writeBPEGGUF(t, t.TempDir(), "bpe.gguf")
+        model := writeBPEGGUF(t, scratch, "bpe.gguf")
 
         if err := e.LoadModel(ctx, ModelSpec{Path: model}); err != nil {
                 t.Fatalf("load: %v", err)
