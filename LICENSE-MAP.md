@@ -1,6 +1,8 @@
 # LICENSE-MAP.md — the component classification authority
 
-**Version:** 1.0 (introduced with v1.6.1)
+**Version:** 1.1 (v1.6.2 audit: no classification changed — all v1.6.2
+work landed in already-classified proprietary components; third-party
+exclusions re-verified)
 **Maintainer:** Parsaetak — https://github.com/Parsaetak
 
 This file is the single authority for which license governs which

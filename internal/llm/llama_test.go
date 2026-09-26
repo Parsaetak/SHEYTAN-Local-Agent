@@ -34,15 +34,24 @@ import (
 // every custom variable), so a mode marker CANNOT be used there — the
 // help text must be self-describing from the argv alone.
 func TestMain(m *testing.M) {
-        if os.Getenv("SHEYTAN_FAKE_LLAMA") == "1" {
-                runFakeLlamaServer()
-
+        // The deterministic loader-failure mode reproduces the failure on
+        // EVERY invocation (preflight --version, capability probes and real
+        // server launches alike) — the semantics of the pre-v1.6.2
+        // env-marker-first order. The boot must be refused at preflight,
+        // before any model launch.
+        if os.Getenv("GO_FAKE_LLAMA_MODE") == "loader-fail" {
+                reproduceLoaderFailure(os.Args)
                 return
         }
 
-        // Capability-probe dispatch. `go test` never starts this binary
-        // with one of these as the first flag, so the normal test run is
-        // unaffected.
+        // Capability-probe dispatch (v1.6.2): the probes are
+        // ARGV-triggered and must win over the fake-server env marker —
+        // the runtime backend verification now enumerates devices on
+        // the SAME binary that is also spawned as the serving fake
+        // engine (the marker env is inherited by the enumeration
+        // subprocess, and the probes must still answer). The serving
+        // path never starts with one of these flags as argv[1] (it
+        // starts with --model/--host), so the order is unambiguous.
         if len(os.Args) > 1 {
                 switch os.Args[1] {
                 case "--help":
@@ -61,6 +70,12 @@ func TestMain(m *testing.M) {
 
                         return
                 }
+        }
+
+        if os.Getenv("SHEYTAN_FAKE_LLAMA") == "1" {
+                runFakeLlamaServer()
+
+                return
         }
 
         os.Exit(m.Run())
@@ -108,6 +123,59 @@ func runFakeEngineDeviceProbe() {
         }
 }
 
+// reproduceLoaderFailure is the deterministic loader-failure mode
+// (v1.3.6 spec §5, v1.6.2 extraction): the binary records the launch
+// (count file), prints the textual NTSTATUS evidence to stderr, and
+// exits with a classifiable code:
+//   Windows — the REAL 0xC0000139 exit status;
+//   Unix    — exit code 57 (not classifiable by code) so the
+//             TEXTUAL fallback classification is exercised.
+//
+// v1.6.2: TestMain reproduces this on EVERY invocation when
+// GO_FAKE_LLAMA_MODE=loader-fail — including the preflight --version
+// and capability --list-devices probes — preserving the semantics of
+// the pre-v1.6.2 env-marker-first dispatch order (the loader failure
+// must reproduce at preflight so the boot is refused before any model
+// launch).
+func reproduceLoaderFailure(args []string) {
+        // Only REAL server launches count as launches — capability
+        // probes (--help) and preflight probes (--version) carry no
+        // --port flag and must not pollute the launch-count evidence.
+        launchedAsServer := false
+
+        for _, a := range args {
+                if a == "--port" {
+                        launchedAsServer = true
+                        break
+                }
+        }
+
+        if launchedAsServer {
+                if countFile := os.Getenv("SHEYTAN_FAKE_LAUNCH_COUNT"); countFile != "" {
+                        f, err := os.OpenFile(countFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+                        if err == nil {
+                                _, _ = f.WriteString("launch\n")
+                                _ = f.Close()
+                        }
+                }
+        }
+
+        fmt.Fprintln(os.Stderr, "loader error: STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139) — the procedure entry point ggml_backend_sched_alloc could not be located")
+
+        if runtime.GOOS == "windows" {
+                // 0xC0000139 = STATUS_ENTRYPOINT_NOT_FOUND = -1073741511
+                // as int32. The v1.3.7 fixture mistakenly exited with
+                // -1073741515 (0xC0000135, DLL-not-found): the exit code
+                // IS classifiable on Windows, so the structured
+                // FailureClass surfaced dll-not-found while the test
+                // asserted the entry-point class — a genuine fixture
+                // defect, not a test over-assertion (run 35996462352).
+                os.Exit(-1073741511)
+        }
+
+        os.Exit(57)
+}
+
 // runFakeLlamaServer serves /health (200) and optionally /v1/chat/completions
 // until killed. GO_FAKE_LLAMA_MODE=crash makes it exit shortly after becoming
 // healthy, driving the watchdog's bounded auto-restart.
@@ -129,49 +197,10 @@ func runFakeLlamaServer() {
                 _ = os.WriteFile(out, []byte(strings.Join(args, "\n")), 0o644)
         }
 
-        // v1.3.6 (spec §5): deterministic loader-failure mode. The binary
-        // records the launch (count file), prints the textual NTSTATUS
-        // evidence to stderr, and exits with a classifiable code:
-        //   Windows — the REAL 0xC0000139 exit status;
-        //   Unix    — exit code 57 (not classifiable by code) so the
-        //             TEXTUAL fallback classification is exercised.
+        // v1.3.6 (spec §5): deterministic loader-failure mode.
         if mode == "loader-fail" {
-                // Only REAL server launches count as launches — capability
-                // probes (--help) and preflight probes (--version) carry no
-                // --port flag and must not pollute the launch-count evidence.
-                launchedAsServer := false
-
-                for _, a := range args {
-                        if a == "--port" {
-                                launchedAsServer = true
-                                break
-                        }
-                }
-
-                if launchedAsServer {
-                        if countFile := os.Getenv("SHEYTAN_FAKE_LAUNCH_COUNT"); countFile != "" {
-                                f, err := os.OpenFile(countFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-                                if err == nil {
-                                        _, _ = f.WriteString("launch\n")
-                                        _ = f.Close()
-                                }
-                        }
-                }
-
-                fmt.Fprintln(os.Stderr, "loader error: STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139) — the procedure entry point ggml_backend_sched_alloc could not be located")
-
-                if runtime.GOOS == "windows" {
-                        // 0xC0000139 = STATUS_ENTRYPOINT_NOT_FOUND = -1073741511
-                        // as int32. The v1.3.7 fixture mistakenly exited with
-                        // -1073741515 (0xC0000135, DLL-not-found): the exit code
-                        // IS classifiable on Windows, so the structured
-                        // FailureClass surfaced dll-not-found while the test
-                        // asserted the entry-point class — a genuine fixture
-                        // defect, not a test over-assertion (run 35996462352).
-                        os.Exit(-1073741511)
-                }
-
-                os.Exit(57)
+                reproduceLoaderFailure(args)
+                return
         }
 
         // v1.3.7: model-architecture failure modes for the auto-update ladder

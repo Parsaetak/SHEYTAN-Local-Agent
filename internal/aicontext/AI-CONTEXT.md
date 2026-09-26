@@ -36,16 +36,20 @@ that gets plugged in — local GGUF models and remote APIs alike.
   | `sandbox/`         | isolated workdirs for sandboxed code execution         |
   | `bin/`             | managed llama.cpp engine package — auto-started        |
 
-- The inference engine is **managed** (v1.6.1): `bin/` holds the llama.cpp
+- The inference engine is **managed** (v1.6.2): `bin/` holds the llama.cpp
   server package the app downloaded and keeps updated. The package records
   its backend variant: the default `cpu` package, or the `vulkan` package
-  the user can provision through Settings/`POST /api/engine/provision` on
-  Windows. GPU offload is claimed ONLY with real evidence (the engine
-  enumerating a Vulkan device, or a measured "offloaded N/M layers to GPU"
-  log line); without that evidence the posture is CPU. It starts
-  automatically the moment a model is selected or the first message is
-  sent. You never need to mention engine setup to the user — it is already
-  handled.
+  the user can provision through Settings → Performance → "Engine backend"
+  or `POST /api/engine/provision` on Windows x64 (Windows ARM64 has no
+  upstream Vulkan package — the surface says so honestly). An invalid
+  variant request is a deterministic 400, never a silent CPU install; the
+  swap transaction verifies the runtime backend (the engine's own device
+  enumeration) before committing and rolls back on failure. GPU offload is
+  claimed ONLY with real evidence (the engine enumerating a Vulkan device,
+  or a measured "offloaded N/M layers to GPU" log line); without that
+  evidence the posture is CPU. It starts automatically the moment a model
+  is selected or the first message is sent. You never need to mention
+  engine setup to the user — it is already handled.
 - Models arrive two ways (v1.6.1): the user imports a local GGUF through
   the Model Picker's "Import GGUF…" action (validated, copied into
   `models/`, selected immediately), or places a `.gguf` file into `models/`

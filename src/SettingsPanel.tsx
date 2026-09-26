@@ -19,6 +19,7 @@ import MyToolsCard from "./MyToolsCard";
 import { FieldLabel } from "./settings-shared";
 import {
   ContextCard,
+  EngineBackendCard,
   EngineCard,
   EngineProfileCard,
   LiveMetricsCard,
@@ -1446,6 +1447,11 @@ function SettingsPanel() {
             <TaskProfileCard config={config} save={save} />
 
             <EngineProfileCard perf={perf} />
+
+            {/* v1.6.2: the REAL Settings surface for engine-variant
+                provisioning (Settings → API → updater transaction →
+                restart → health/backend verification → UI state). */}
+            <EngineBackendCard />
 
             <RecommendedCard config={config} perf={perf} save={save} />
 

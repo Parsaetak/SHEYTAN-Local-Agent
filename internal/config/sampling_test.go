@@ -184,11 +184,29 @@ func TestLoadRepairsInvalidSamplingFromDisk(t *testing.T) {
         }
 
         notes := TakeSamplingNotes(cfg)
-        if len(notes) != 3 {
-                t.Fatalf("loader must report each repair, got %v", notes)
+        // v1.6.2: three repairs plus ONE persistence report (the repaired
+        // values are written back so the next launch needs no repair).
+        if len(notes) != 4 {
+                t.Fatalf("loader must report each repair plus the persistence outcome, got %v", notes)
+        }
+        if !strings.Contains(notes[len(notes)-1], "persisted") {
+                t.Fatalf("the final note must report the v1.6.2 persistence, got %v", notes)
         }
         if TakeSamplingNotes(cfg) != nil {
                 t.Fatal("notes must drain exactly once")
+        }
+
+        // v1.6.2: the corruption must not require the same repair on the
+        // NEXT launch — reload and expect zero repair notes.
+        cfg2, err := Load(path)
+        if err != nil {
+                t.Fatalf("reload after persistence: %v", err)
+        }
+        if notes2 := TakeSamplingNotes(cfg2); len(notes2) != 0 {
+                t.Fatalf("a persisted repair must not repeat on reload, got %v", notes2)
+        }
+        if cfg2.LLM.RepeatPenalty != def.RepeatPenalty || cfg2.LLM.Temperature != def.Temperature || cfg2.LLM.TopP != def.TopP {
+                t.Fatalf("reloaded values must stay repaired: %+v", cfg2.LLM)
         }
 }
 

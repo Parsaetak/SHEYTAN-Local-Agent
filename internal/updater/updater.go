@@ -205,6 +205,17 @@ func SetLatestTagForTest(fn func(ctx context.Context) (string, error)) {
         latestTagProbe = fn
 }
 
+// releaseListProbe is the swappable release-LIST source behind the
+// v1.6.2 variant-aware resolver (tests inject a deterministic list;
+// production always pages the real GitHub API).
+var releaseListProbe func(ctx context.Context) ([]ghRelease, error)
+
+// SetReleaseListForTest overrides the release-list source (tests only).
+// The injected list must be NEWEST-FIRST, exactly like the API pages.
+func SetReleaseListForTest(fn func(ctx context.Context) ([]ghRelease, error)) {
+        releaseListProbe = fn
+}
+
 func LatestTag(ctx context.Context) (string, error) {
         if latestTagProbe != nil {
                 return latestTagProbe(ctx)
@@ -245,6 +256,16 @@ func IsNoAssetError(err error) bool {
 // latestTagFromAPI pages the GitHub release list (newest first) and returns
 // the first tag whose assets include our platform build.
 func latestTagFromAPI(ctx context.Context) (string, error) {
+        return pageReleasesForAsset(ctx, AssetName)
+}
+
+// pageReleasesForAsset pages the GitHub release list (newest first) and
+// returns the first tag whose assets include the asset named by
+// want(tag) ("" = this platform never has an asset at that tag). It is
+// the single release-paging authority shared by the CPU-oriented
+// LatestTag and the v1.6.2 variant-aware resolver — no second lister,
+// no divergent rules.
+func pageReleasesForAsset(ctx context.Context, want func(tag string) string) (string, error) {
         urls := []string{
                 "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30",
                 "https://api.github.com/repos/ggerganov/llama.cpp/releases?per_page=30",
@@ -277,7 +298,7 @@ func latestTagFromAPI(ctx context.Context) (string, error) {
                         lastErr = fmt.Errorf("HTTP %d from %s", resp.StatusCode, u)
                         continue
                 }
-                if tag := firstWithAsset(releases); tag != "" {
+                if tag := firstReleaseWithAsset(releases, want); tag != "" {
                         return tag, nil
                 }
                 lastErr = errNoAsset
@@ -286,6 +307,26 @@ func latestTagFromAPI(ctx context.Context) (string, error) {
                 lastErr = errNoAsset
         }
         return "", lastErr
+}
+
+// firstReleaseWithAsset walks a newest-first release list and returns
+// the first tag carrying the asset named by want(tag).
+func firstReleaseWithAsset(releases []ghRelease, want func(tag string) string) string {
+        for _, r := range releases {
+                if r.TagName == "" {
+                        continue
+                }
+                name := want(r.TagName)
+                if name == "" {
+                        continue
+                }
+                for _, a := range r.Assets {
+                        if a.Name == name {
+                                return r.TagName
+                        }
+                }
+        }
+        return ""
 }
 
 var _ = fmt.Sprintf // keep fmt when stubs are trimmed
@@ -310,24 +351,30 @@ func FirstWithAsset(releases []ghRelease) string {
         return firstWithAsset(releases)
 }
 
+// FirstWithVariantAsset is the v1.6.2 variant-aware export: it walks a
+// newest-first release list and returns the first tag whose assets
+// include the EXACT variant asset for this platform ("" when no release
+// in the list serves it). It is the deterministic core of the
+// variant-aware release resolution.
+func FirstWithVariantAsset(releases []ghRelease, v AssetVariant) string {
+        return firstWithVariantAsset(releases, v)
+}
+
 // firstWithAsset walks a newest-first release list and returns the first
 // tag carrying the platform asset (v1.0.3).
 func firstWithAsset(releases []ghRelease) string {
-        for _, r := range releases {
-                if r.TagName == "" {
-                        continue
-                }
-                want := AssetName(r.TagName)
-                if want == "" {
-                        continue
-                }
-                for _, a := range r.Assets {
-                        if a.Name == want {
-                                return r.TagName
-                        }
-                }
-        }
-        return ""
+        return firstWithVariantAsset(releases, VariantCPU)
+}
+
+// firstWithVariantAsset walks a newest-first release list and returns
+// the first tag carrying the platform asset for the requested BACKEND
+// VARIANT — the exact asset-name match against the release payload
+// ("a tag has it because the release says it has it", never because a
+// CPU-oriented scan named the tag).
+func firstWithVariantAsset(releases []ghRelease, v AssetVariant) string {
+        return firstReleaseWithAsset(releases, func(tag string) string {
+                return AssetNameForVariant(tag, v)
+        })
 }
 
 // atomFeed is the subset of the GitHub releases Atom feed we need.

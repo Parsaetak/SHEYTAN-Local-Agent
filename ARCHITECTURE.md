@@ -9,6 +9,57 @@
 > marked as future/planned. Nothing in Part II of this document is
 > implemented today.
 
+## v1.6.2 — Architecture changes shipped in this release
+
+Everything below is `IMPLEMENTED` and `TESTED` (deterministic unit /
+race / CI-gate evidence; test files cited; the Windows-runtime hand
+validation is tracked as ROADMAP NEXT item 1):
+
+1. **Strict engine-variant parsing** (`internal/updater/variant.go`
+   `ParseAssetVariant`/`ValidateAssetVariant`,
+   `internal/updater/variant_strict_test.go`,
+   `internal/api/engine_variant_strict_test.go`): explicit API/user
+   variant requests accept exactly cpu/vulkan (+ documented aliases)
+   after controlled normalization; empty/unknown values are a
+   deterministic 400. The naming layer is fail-closed (an invalid
+   variant never yields a CPU asset name). Legacy manifests still read
+   back leniently as cpu.
+2. **Variant-aware release resolution** (`ResolveDownloadURLForVariant`
+   + `FirstWithVariantAsset` + `SetReleaseListForTest`/
+   `SetVariantExistsForTest` seams): the newest release is selected
+   because its payload CONTAINS the exact variant asset (verified),
+   never because a CPU-oriented scan named the tag. Network failures
+   are preserved verbatim and never reported as "no prebuilt asset".
+3. **Architecture-aware support matrix** (`supportedVariantsFor`):
+   windows/amd64 = cpu+vulkan; windows/arm64 = cpu only (upstream
+   b11191 serves no win-vulkan-arm64 asset — verified); other
+   platforms cpu-only (their upstream packages are .tar.gz, not
+   consumable by the zip installer — documented limitation).
+4. **GGUF import concurrency lock** (`internal/llm/importlock.go` +
+   platform `importlock_*.go`, tests in
+   `internal/llm/importmodel_concurrency_test.go` and
+   `importlock_unix_test.go`/`importlock_windows_test.go`): exclusive
+   per-models-directory lock (in-process mutex + cross-process
+   flock/LockFileEx) held across destination choice AND copy. The
+   Stat→choose→Rename race (reproduced with -race: two same-filename
+   imports overwrote each other's completed file) is closed.
+5. **Runtime backend verification in the provisioning transaction**
+   (`internal/llm/llama.go` `verifyRuntimeBackendForVariant`, tests in
+   `internal/llm/variant_runtime_v162_test.go`): engine-sourced
+   evidence (--list-devices enumeration) gates the commit; a
+   verification that cannot execute rolls back to last-known-good.
+6. **Extra-args sampling gate + persisted repairs**
+   (`internal/config/sampling.go` `ValidateExtraArgs` +
+   `internal/config/config.go` `persistRepairedSamplingFields`, tests
+   in `internal/config/sampling_test.go` and
+   `internal/llm/extraargs_gate_v162_test.go`): malformed numeric
+   extra arguments fail pre-spawn with zero engine spawns; repaired
+   values persist atomically (file-sourced corruption only).
+7. **Settings engine-backend surface** (`src/SettingsPerformance.tsx`
+   `EngineBackendCard`, `src/engine-backend.ts` + its test,
+   `src/api.ts` engineProvision/engineProvisionState): the REAL
+   Settings → API → transaction → verification → UI chain.
+
 ## v1.6.1 — Architecture changes shipped in this release
 
 Everything below is `IMPLEMENTED` and `TESTED` (test files cited; the

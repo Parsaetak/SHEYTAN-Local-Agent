@@ -568,29 +568,37 @@ jobs:
           Invoke-Gate { go test ./... -run Test -count=1 } "go test ./... (full)"
           Invoke-Gate { go vet ./... } "go vet ./..."
 
-      # v1.6.1 — WINDOWS VULKAN PROVISIONING VALIDATION (gated):
-      # The deterministic variant contract (asset naming, manifest
-      # identity, loud refusal on unserved variants) runs as part of the
-      # Go suites above. This step additionally verifies the REAL
-      # upstream Vulkan asset is reachable for the pinned engine tag, so
-      # the "Vulkan must be real" promise cannot drift into a naming-only
-      # fiction: a HEAD probe of llama-<tag>-bin-win-vulkan-x64.zip must
-      # answer 2xx/3xx. The probe is a REQUIRED gate — a missing Vulkan
-      # package would silently reduce every Windows install to CPU.
-      - name: Validate Windows Vulkan engine asset (pinned tag)
+      # v1.6.2 — WINDOWS ENGINE VARIANT ASSET VALIDATION through the
+      # AUTHORITATIVE production resolver (no duplicated release-tag
+      # knowledge: the v1.6.1 step hard-coded $tag = "b10642" and could
+      # drift from the code). The gate is the same Go code the app ships
+      # (internal/updater): ResolveDownloadURLForVariant pins the exact
+      # variant asset (pinned tag first, else the newest release that
+      # actually contains it), verifies the exact asset name for the
+      # platform, HEAD-checks reachability (2xx/3xx), verifies the
+      # support matrix advertises only servable variants, and proves an
+      # explicitly unsupported variant is REFUSED — never a silent CPU
+      # fallback. It runs on the Windows x64 runner, where the full
+      # resolution contract is enforced.
+      #
+      # HONESTY NOTE: this verifies ASSET RESOLUTION AND REACHABILITY.
+      # HTTP reachability is NOT successful runtime execution — the
+      # runtime backend truth is verified by the engine's own device
+      # enumeration inside the provisioning transaction (see
+      # internal/llm/llama.go verifyRuntimeBackendForVariant and its
+      # regression suite).
+      - name: Validate engine variant assets (authoritative resolver)
         shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          SHEYTAN_CI_VARIANT_GATE: "1"
         run: |
-          $tag = "b10642"
-          $url = "https://github.com/ggml-org/llama.cpp/releases/download/$tag/llama-$tag-bin-win-vulkan-x64.zip"
-          Write-Host "[vulkan-gate] HEAD $url"
-          try {
-            $resp = Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 5 -UseBasicParsing -TimeoutSec 60
-            Write-Host "[vulkan-gate] asset reachable (HTTP $([int]$resp.StatusCode)) — the Windows Vulkan engine package is real"
-            if ($resp.StatusCode -lt 200 -or $resp.StatusCode -ge 400) {
-              throw "[gate] Vulkan asset answered HTTP $([int]$resp.StatusCode)"
-            }
-          } catch {
-            throw "[gate] the pinned llama.cpp Vulkan asset is not reachable at $url — update DefaultEngineTag or the variant asset naming (internal/updater/variant.go): $($_.Exception.Message)"
+          $ErrorActionPreference = "Stop"
+
+          go test ./internal/updater -run TestCIVariantAssetContract -count=1 -v
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] the authoritative engine-variant asset contract failed — the resolver no longer resolves a reachable variant asset (check internal/updater/variant.go and DefaultEngineTag)."
           }
 
       - name: Generate Windows resources

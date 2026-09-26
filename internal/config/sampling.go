@@ -33,6 +33,8 @@ package config
 import (
         "fmt"
         "math"
+        "strconv"
+        "strings"
 )
 
 // SamplingProblem is one invalid sampling value: everything the user (or
@@ -213,6 +215,16 @@ var samplingIntRules = []intRule{
                 rule: "batch size must be a positive number",
                 fix:  "set a positive value, e.g. 512 (Settings → Performance)",
         },
+        // v1.6.2 audit: max tokens / prediction length is REQUEST-side
+        // (n_predict on the completions API, never a launch flag), but the
+        // same deterministic contract applies: -1 is the documented
+        // "unlimited" and anything below it is never meaningful.
+        {
+                field: "llm.maxTokens", opt: "n_predict",
+                min: -1,
+                rule: "max tokens must be -1 (unlimited) or a non-negative count",
+                fix:  "set -1 for unlimited or a positive count, e.g. 1024 (Settings → Sampling → Max tokens)",
+        },
 }
 
 // renderFloat renders a float the way the launch arguments would (the
@@ -276,6 +288,8 @@ func ValidateSamplingOptions(o LLMOptions) []SamplingProblem {
                         v = o.NumCtx
                 case "llm.numBatch":
                         v = o.NumBatch
+                case "llm.maxTokens":
+                        v = o.MaxTokens
                 }
 
                 if !r.valid(v) {
@@ -374,6 +388,8 @@ func NormalizeSamplingOptions(o *LLMOptions) []string {
                         v = o.NumCtx
                 case "llm.numBatch":
                         v = o.NumBatch
+                case "llm.maxTokens":
+                        v = o.MaxTokens
                 }
 
                 if !r.valid(v) {
@@ -391,6 +407,8 @@ func NormalizeSamplingOptions(o *LLMOptions) []string {
                                 o.NumCtx = def.LLM.NumCtx
                         case "llm.numBatch":
                                 o.NumBatch = def.LLM.NumBatch
+                        case "llm.maxTokens":
+                                o.MaxTokens = def.LLM.MaxTokens
                         }
                 }
         }
@@ -420,4 +438,172 @@ func (e *SamplingProblemsError) Error() string {
         }
 
         return out
+}
+
+// extraArgNumericRules are the llama.cpp launch flags that take a NUMERIC
+// value and whose values SHEYTAN can validate deterministically BEFORE
+// the process spawns. The v1.6.2 audit of every argument actually emitted
+// by buildArgsWithCaps and related paths found the remaining gap: the raw
+// user extra arguments (llamaExtraArgs) were passed through verbatim, so a
+// malformed numeric value ("--temp abc", "--top-k 1e", "--temp nan")
+// reached the engine's own parser, failed deterministically, and fed the
+// compatibility/repair machinery — the exact storm shape the v1.6.1 gate
+// closed for first-class fields.
+//
+// The rule set is deliberately CONSERVATIVE: only flags whose numeric
+// contract is known are linted (they are the flags the launcher itself
+// emits); unknown flags pass through untouched — the engine's own parser
+// stays the authority for everything else, and valid user values are
+// never reshaped.
+type extraArgRule struct {
+        integer bool
+        // range-checks reuse the float rule contract where the flag is one
+        // of the managed sampling options (nil = numeric-parse check only)
+        rule *floatRule
+}
+
+var extraArgNumericRules = map[string]extraArgRule{
+        // Managed sampling options (full range contract).
+        "--temp": {rule: &floatRule{
+                field: "llamaExtraArgs --temp", opt: "--temp", min: 0,
+                rule: "temperature must be a finite number of at least 0",
+                fix:  "pass a non-negative number, e.g. --temp 0.7",
+        }},
+        "--top-p": {rule: &floatRule{
+                field: "llamaExtraArgs --top-p", opt: "--top-p", min: 0, max: 1, hasMax: true,
+                rule: "top-p must be a finite number between 0 and 1",
+                fix:  "pass a value in [0, 1], e.g. --top-p 0.95",
+        }},
+        "--min-p": {rule: &floatRule{
+                field: "llamaExtraArgs --min-p", opt: "--min-p", min: 0, max: 1, hasMax: true,
+                rule: "min-p must be a finite number between 0 and 1",
+                fix:  "pass a value in [0, 1], e.g. --min-p 0.05",
+        }},
+        "--repeat-penalty": {rule: &floatRule{
+                field: "llamaExtraArgs --repeat-penalty", opt: "--repeat-penalty", min: 0, minExclusive: true,
+                rule: "repeat-penalty must be finite and greater than 0 (1.0 disables the penalty)",
+                fix:  "pass a positive value, e.g. --repeat-penalty 1.1",
+        }},
+        "--presence-penalty": {rule: &floatRule{
+                field: "llamaExtraArgs --presence-penalty", opt: "--presence-penalty", noMin: true,
+                rule: "presence penalty must be a finite number",
+                fix:  "pass a finite number, e.g. --presence-penalty 0.5",
+        }},
+        "--frequency-penalty": {rule: &floatRule{
+                field: "llamaExtraArgs --frequency-penalty", opt: "--frequency-penalty", noMin: true,
+                rule: "frequency penalty must be a finite number",
+                fix:  "pass a finite number, e.g. --frequency-penalty 0.5",
+        }},
+        "--mirostat-tau": {rule: &floatRule{
+                field: "llamaExtraArgs --mirostat-tau", opt: "--mirostat-tau", min: 0,
+                rule: "mirostat-tau must be a finite number of at least 0",
+                fix:  "pass a non-negative number, e.g. --mirostat-tau 5.0",
+        }},
+        "--mirostat-eta": {rule: &floatRule{
+                field: "llamaExtraArgs --mirostat-eta", opt: "--mirostat-eta", min: 0,
+                rule: "mirostat-eta must be a finite number of at least 0",
+                fix:  "pass a non-negative number, e.g. --mirostat-eta 0.1",
+        }},
+
+        // Integer-valued launch options the launcher itself emits or that
+        // have an unambiguous integer contract (numeric-parse check; the
+        // engine's parser rejects non-integers deterministically).
+        "--top-k":         {integer: true},
+        "--repeat-last-n": {integer: true},
+        "--mirostat":      {integer: true},
+        "--ctx-size":      {integer: true},
+        "--batch-size":    {integer: true},
+        "--ubatch-size":   {integer: true},
+        "--threads":       {integer: true},
+        "--threads-batch": {integer: true},
+        "--n-gpu-layers":  {integer: true},
+        "--seed":          {integer: true},
+        "--cache-reuse":   {integer: true},
+        "--n-predict":     {integer: true},
+        "--draft-max":     {integer: true},
+        "--port":          {integer: true},
+}
+
+// ValidateExtraArgs lints the raw user extra-argument string
+// (llamaExtraArgs) against the known numeric launch-flag contract.
+// It returns one SamplingProblem per violation; empty means the string
+// is safe to hand to the engine as far as SHEYTAN can determine
+// deterministically. Both "--flag value" and "--flag=value" forms are
+// handled; unknown flags are not linted (the engine's parser decides).
+func ValidateExtraArgs(extra string) []SamplingProblem {
+        tokens := strings.Fields(extra)
+
+        var problems []SamplingProblem
+
+        for i := 0; i < len(tokens); i++ {
+                flag := tokens[i]
+
+                rule, known := extraArgNumericRules[flag]
+                value := ""
+                hasValue := false
+
+                if !known {
+                        // "--flag=value" form of a known numeric flag.
+                        if eq := strings.Index(flag, "="); eq > 2 {
+                                if r, k := extraArgNumericRules[flag[:eq]]; k {
+                                        rule, known = r, true
+                                        value, hasValue = flag[eq+1:], true
+                                }
+                        }
+                        if !known {
+                                continue // not ours to judge — engine authority
+                        }
+                } else if i+1 < len(tokens) {
+                        value, hasValue = tokens[i+1], true
+                        i++ // consumed the value token
+                }
+
+                if !hasValue || strings.TrimSpace(value) == "" {
+                        problems = append(problems, SamplingProblem{
+                                Field: "llamaExtraArgs",
+                                Option: flag,
+                                Got:   value,
+                                Rule:  "the numeric option is missing its value",
+                                Fix:   fmt.Sprintf("pass a value, e.g. %s <number> (Settings → Advanced → Extra engine arguments)", flag),
+                        })
+                        continue
+                }
+
+                if rule.integer {
+                        if _, err := strconv.Atoi(strings.TrimSpace(value)); err != nil {
+                                problems = append(problems, SamplingProblem{
+                                        Field: "llamaExtraArgs",
+                                        Option: flag,
+                                        Got:   value,
+                                        Rule:  "the option requires an integer value",
+                                        Fix:   fmt.Sprintf("pass an integer, e.g. %s 512 (Settings → Advanced → Extra engine arguments)", flag),
+                                })
+                        }
+                        continue
+                }
+
+                v, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+                if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+                        problems = append(problems, SamplingProblem{
+                                Field: "llamaExtraArgs",
+                                Option: flag,
+                                Got:   value,
+                                Rule:  "the option requires a finite number",
+                                Fix:   fmt.Sprintf("pass a finite number, e.g. %s 0.8 (Settings → Advanced → Extra engine arguments)", flag),
+                        })
+                        continue
+                }
+
+                if rule.rule != nil && !rule.rule.valid(v) {
+                        problems = append(problems, SamplingProblem{
+                                Field: "llamaExtraArgs",
+                                Option: flag,
+                                Got:   value,
+                                Rule:  rule.rule.rule,
+                                Fix:   rule.rule.fix,
+                        })
+                }
+        }
+
+        return problems
 }

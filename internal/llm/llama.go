@@ -296,12 +296,20 @@ func (e *InvalidSamplingConfigError) Error() string {
 // before the engine download/provision path, before the capability probe
 // and long before the compatibility ladder. See internal/config/sampling.go
 // for the defect narrative and the exact rule set.
+//
+// v1.6.2 audit closure: the raw user extra arguments (llamaExtraArgs) are
+// linted here too — a malformed numeric argument in the extra string is
+// as deterministic as a bad repeatPenalty and must fail the same way
+// (zero spawns, no ladder, no accelerator downgrade for a config typo).
 func validateSamplingForLaunch(cfg *config.Config) error {
         if cfg == nil {
                 return nil
         }
 
-        if problems := config.ValidateSamplingOptions(cfg.LLM); len(problems) > 0 {
+        problems := config.ValidateSamplingOptions(cfg.LLM)
+        problems = append(problems, config.ValidateExtraArgs(cfg.LlamaExtraArgs)...)
+
+        if len(problems) > 0 {
                 return &InvalidSamplingConfigError{Problems: problems}
         }
 
@@ -2773,7 +2781,13 @@ func (s *LlamaServer) UpdateEngineVariantNow(
 
         // The gate: refuse impossible variants BEFORE stopping anything —
         // an explicit VULKAN request on an unserved platform must not
-        // bounce the running engine for nothing.
+        // bounce the running engine for nothing. v1.6.2: the typed value
+        // itself is validated STRICTLY first — an unknown variant string
+        // that reached this layer is a caller bug, never a CPU request.
+        if err := updater.ValidateAssetVariant(variant); err != nil {
+                return "", err
+        }
+
         if !updater.VariantSupported(variant) {
                 return "", fmt.Errorf(
                         "engine variant %q cannot be provisioned on %s — upstream llama.cpp publishes no prebuilt package for this platform; keep the CPU engine or point llamaBinPath at a self-built %s llama-server",
@@ -2865,13 +2879,113 @@ func (s *LlamaServer) UpdateEngineVariantNow(
                 )
         }
 
+        // v1.6.2 — RUNTIME BACKEND VERIFICATION before commit: the health
+        // endpoint proves the process serves; it does NOT prove which
+        // backend family the package really carries. A filename, a
+        // manifest field or an on-disk ggml-vulkan.dll is not runtime
+        // evidence either. The engine's OWN --list-devices enumeration
+        // (devices.go) is the authoritative signal — the same authority
+        // the accelerator surface uses for GPU claims.
+        verifyNote, verifyErr := s.verifyRuntimeBackendForVariant(cfg, variant)
+
+        if verifyErr != nil {
+                logging.Default().Warn("updater",
+                        "%s engine installed and started but runtime backend verification failed (%v) — rolling back to the previous package",
+                        variant, verifyErr)
+
+                if rbErr := staged.Rollback(); rbErr != nil {
+                        s.setState(StateFailed)
+
+                        return "", fmt.Errorf(
+                                "%s engine installed but runtime backend verification failed: %v; rollback also failed: %w",
+                                variant, verifyErr, rbErr,
+                        )
+                }
+
+                if startErr2 := s.startLocked(); startErr2 != nil {
+                        logging.Default().Warn("updater",
+                                "last-known-good restart after verification rollback also failed: %v", startErr2)
+                }
+
+                s.setState(StateFailed)
+
+                return "", fmt.Errorf(
+                        "%s engine installed and started but runtime backend verification failed: %w (previous package restored)",
+                        variant, verifyErr,
+                )
+        }
+
         staged.Commit()
 
         logging.Default().Info("updater",
-                "engine %s (%s backend) verified and committed — GPU/Vulkan claims are backed by a real backend package",
-                tag, variant)
+                "engine %s (%s backend) verified and committed — runtime backend verification: %s",
+                tag, variant, verifyNote)
 
-        return staged.Result().Outcome, nil
+        outcome := staged.Result().Outcome
+        if verifyNote != "" {
+                outcome = outcome + " — " + verifyNote
+        }
+
+        return outcome, nil
+}
+
+// verifyRuntimeBackendForVariant produces the RUNTIME backend evidence
+// for a freshly installed engine package, from the engine itself — never
+// from the asset filename, the install manifest or a backend DLL's
+// presence on disk.
+//
+//   CPU:    the serving health check already proves the base runtime;
+//           there is no additional CPU-specific runtime signal to collect
+//           ("--list-devices" enumerates accelerators, not the CPU).
+//
+//   Vulkan: the engine's own device enumeration (EnumerateEngineDevices →
+//           llama-server --list-devices) is the authority. Three honest
+//           outcomes:
+//             - Vulkan device(s) enumerated → CONFIRMED runtime backend;
+//             - enumeration supported but no Vulkan device on this
+//               machine → the package is committed (it still runs on CPU;
+//               that is exactly what was requested) with an explicit
+//               note that GPU offload stays unavailable here;
+//             - enumeration not implemented by this build → committed
+//               with the backend identity honestly attributed to the
+//               install manifest (the accelerator surface keeps
+//               executionVerified evidence-gated regardless).
+//
+//   A verification that cannot EXECUTE (the enumeration invocation
+//   itself errors) is a package-integrity failure: the caller rolls
+//   back to the last-known-good package.
+func (s *LlamaServer) verifyRuntimeBackendForVariant(cfg *config.Config, variant updater.AssetVariant) (string, error) {
+        if variant != updater.VariantVulkan {
+                return "cpu runtime verified by the serving health check", nil
+        }
+
+        bin := updater.EngineBinaryPath(cfg)
+
+        devices, supported, err := enumerateEngineDevices(bin)
+        if err != nil {
+                return "", fmt.Errorf("engine backend enumeration failed: %w", err)
+        }
+
+        if !supported {
+                return "this engine build does not support device enumeration — the Vulkan backend identity is recorded from the install manifest only; GPU_VULKAN execution claims stay evidence-gated", nil
+        }
+
+        vulkan := 0
+        example := ""
+        for _, d := range devices {
+                if strings.HasPrefix(d.Backend, "Vulkan") {
+                        vulkan++
+                        if example == "" {
+                                example = d.Backend + ": " + d.Name
+                        }
+                }
+        }
+
+        if vulkan == 0 {
+                return "the Vulkan engine package is installed and healthy, but the engine enumerated no Vulkan device on this machine — GPU offload stays unavailable until a Vulkan-capable device/driver is present (CPU fallback continues to serve)", nil
+        }
+
+        return fmt.Sprintf("the engine enumerated %d Vulkan device(s) (e.g. %s) — the Vulkan backend is real at runtime", vulkan, example), nil
 }
 
 // runtimeOS is a tiny seam so the unsupported-variant error text stays

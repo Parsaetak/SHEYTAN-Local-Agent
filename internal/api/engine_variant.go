@@ -44,7 +44,17 @@ func (s *Server) handleEngineProvision(w http.ResponseWriter, r *http.Request) {
                         return
                 }
 
-                variant := updater.NormalizeAssetVariant(body.Variant)
+                // v1.6.2 STRICT VARIANT PARSING: an explicit request with an
+                // empty or unknown variant is a DETERMINISTIC 400 — it can
+                // never be normalized to CPU provisioning (the v1.6.1
+                // defect: {"variant":"banana"} silently installed CPU).
+                // The lenient legacy reader stays reserved for manifest
+                // reads inside the updater.
+                variant, perr := updater.ParseAssetVariant(body.Variant)
+                if perr != nil {
+                        writeErr(w, http.StatusBadRequest, perr)
+                        return
+                }
 
                 // An explicit request for an unsupported variant is a 400 with the
                 // actionable reason — NOT a silent CPU install.

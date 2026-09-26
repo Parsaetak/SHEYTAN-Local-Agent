@@ -19,7 +19,7 @@ import (
 
 const (
         AppName    = "SHEYTAN-Local-Agent"
-        AppVersion = "1.6.1"
+        AppVersion = "1.6.2"
 )
 
 // The product identity is version-only: AppName + AppVersion (synchronized
@@ -520,6 +520,11 @@ func Default() *Config {
 func Load(path string) (*Config, error) {
         cfg := Default()
 
+        // fileExisted tracks whether the config FILE is the value source
+        // (v1.6.2: repaired sampling values are persisted back only when
+        // the file — not the environment — carried the corruption).
+        fileExisted := false
+
         data, err := os.ReadFile(path)
         if err != nil {
                 if os.IsNotExist(err) {
@@ -546,6 +551,10 @@ func Load(path string) (*Config, error) {
         if err := json.Unmarshal(data, cfg); err != nil {
                 return nil, fmt.Errorf("parse config: %w", err)
         }
+
+        // The file was the value source (fresh files that never existed
+        // return earlier — environment-only configurations never persist).
+        fileExisted = true
 
         // v1.1.5: normalize the engine-backend opt-in so hand-edited configs
         // ("Native", " NATIVE ") mean what they say; EffectiveEngineBackend
@@ -611,7 +620,109 @@ func Load(path string) (*Config, error) {
         // defense; the API patch layer rejects bad input outright.
         cfg.SamplingNotes = NormalizeSamplingOptions(&cfg.LLM)
 
+        // v1.6.2 audit closure: persist the REPAIRED values back into the
+        // config file atomically, so the same corruption does not require
+        // the identical repair on every launch. ONLY the fields that were
+        // parser-invalid IN THE FILE are rewritten (see
+        // persistRepairedSamplingFields) — environment-introduced values
+        // are never baked into the file, and read-only/external configs
+        // (missing file, unwritable file) degrade to the historical
+        // repair-in-memory behavior with an honest note.
+        if len(cfg.SamplingNotes) > 0 && fileExisted {
+                if perr := persistRepairedSamplingFields(path, &cfg.LLM); perr != nil {
+                        cfg.SamplingNotes = append(cfg.SamplingNotes, fmt.Sprintf(
+                                "could not persist the repaired values (%v) — they apply to this session only",
+                                perr,
+                        ))
+                } else {
+                        cfg.SamplingNotes = append(cfg.SamplingNotes,
+                                "repaired values persisted to the config file (no repeated repair on next launch)")
+                }
+        }
+
         return cfg, nil
+}
+
+// persistRepairedSamplingFields rewrites ONLY the parser-invalid LLM
+// fields inside the config file at path, leaving every other stored
+// value byte-identical in meaning (the file is re-marshaled from its own
+// JSON tree; only the repaired keys change). The write is atomic
+// (temp+rename, the Save discipline).
+func persistRepairedSamplingFields(path string, repaired *LLMOptions) error {
+        data, err := os.ReadFile(path)
+        if err != nil {
+                return err
+        }
+
+        var tree map[string]any
+        if err := json.Unmarshal(data, &tree); err != nil {
+                return err
+        }
+
+        rawLLM, ok := tree["llm"].(map[string]any)
+        if !ok {
+                // No llm object in the file: the corruption came from the
+                // environment, not the file — nothing to repair on disk.
+                return nil
+        }
+
+        var fileLLM LLMOptions
+        if err := json.Unmarshal(data, &struct{ LLM *LLMOptions }{&fileLLM}); err != nil {
+                return err
+        }
+
+        // Only fields that are invalid IN THE FILE are rewritten.
+        for _, p := range ValidateSamplingOptions(fileLLM) {
+                switch p.Field {
+                case "llm.repeatPenalty":
+                        rawLLM["repeatPenalty"] = repaired.RepeatPenalty
+                case "llm.temperature":
+                        rawLLM["temperature"] = repaired.Temperature
+                case "llm.topP":
+                        rawLLM["topP"] = repaired.TopP
+                case "llm.minP":
+                        rawLLM["minP"] = repaired.MinP
+                case "llm.presencePenalty":
+                        rawLLM["presencePenalty"] = repaired.PresencePenalty
+                case "llm.frequencyPenalty":
+                        rawLLM["frequencyPenalty"] = repaired.FrequencyPenalty
+                case "llm.mirostatTau":
+                        rawLLM["mirostatTau"] = repaired.MirostatTau
+                case "llm.mirostatEta":
+                        rawLLM["mirostatEta"] = repaired.MirostatEta
+                case "llm.topK":
+                        rawLLM["topK"] = repaired.TopK
+                case "llm.repeatLastN":
+                        rawLLM["repeatLastN"] = repaired.RepeatLastN
+                case "llm.numCtx":
+                        rawLLM["numCtx"] = repaired.NumCtx
+                case "llm.numBatch":
+                        rawLLM["numBatch"] = repaired.NumBatch
+                case "llm.maxTokens":
+                        rawLLM["maxTokens"] = repaired.MaxTokens
+                case "llm.mirostat":
+                        rawLLM["mirostat"] = repaired.Mirostat
+                }
+        }
+
+        tree["llm"] = rawLLM
+
+        out, err := json.MarshalIndent(tree, "", "  ")
+        if err != nil {
+                return err
+        }
+
+        tmp := path + ".tmp"
+        if err := os.WriteFile(tmp, out, 0o644); err != nil {
+                return err
+        }
+
+        if err := os.Rename(tmp, path); err != nil {
+                _ = os.Remove(tmp)
+                return err
+        }
+
+        return nil
 }
 
 // MigrateLegacy copies legacy ~/.sheytan data into the portable root.

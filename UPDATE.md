@@ -1,21 +1,56 @@
-# UPDATE.md — v1.6.1 Maintenance, Update & Rollback Behavior
+# UPDATE.md — v1.6.2 Maintenance, Update & Rollback Behavior
 
-**Release:** `v1.6.1` (canonical application version; single version
+**Release:** `v1.6.2` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 4b1f79f` (`v1.6.0-Final`) · **Date:** 2026-09-26
-**Package:** `SHEYTAN-Local-Agent-v1.6.1-FINAL.zip` (complete repository
+**Base:** `main @ 20cb09a` (`v1.6.1`) · **Date:** 2026-09-26
+**Package:** `SHEYTAN-Local-Agent-v1.6.2-FINAL.zip` (complete repository
 tree)
 
-v1.6.1 is a correctness, capability and governance release: the
-deterministic sampling gate (invalid configuration never spawns the
-engine), first-class local GGUF import, readable normal logs, REAL
-Windows Vulkan engine provisioning, and the conservative mixed licensing
-model. The v1.6.0 foundation is preserved: the same maintenance gate,
-the same transactional updater, the same selection state machine, the
-same session architecture.
+v1.6.2 is a correctness release over v1.6.1: strict variant parsing,
+variant-aware release resolution, an architecture-aware support matrix,
+the GGUF import race fix, runtime backend verification inside the
+provisioning transaction, the extra-args sampling-gate closure with
+persisted repairs, and the real Settings engine-backend surface. The
+v1.6.0/v1.6.1 foundation is preserved: the same maintenance gate, the
+same transactional updater, the same selection state machine, the same
+session architecture.
 
 ---
+
+## v1.6.2 — Maintenance / update / rollback behavior
+
+The v1.6.1 maintenance/update/rollback contract is UNCHANGED. What
+v1.6.2 changes inside the engine-variant provisioning transaction:
+
+1. **Strict variant identity.** `POST /api/engine/provision` parses the
+   requested variant STRICTLY (`ParseAssetVariant`): empty/unknown
+   values answer a deterministic 400 and can never become CPU
+   provisioning. The lenient legacy reader is confined to install
+   manifest reads.
+2. **Variant-aware release resolution.** A variant swap resolves the
+   pinned tag when its exact variant asset exists, else the NEWEST
+   release whose payload actually contains that asset — a release
+   shipping CPU only is never returned for a Vulkan request, and the
+   current engine tag is preserved when it still serves the variant
+   (no silent release downgrade).
+3. **Runtime backend verification before commit.** The transaction is
+   stop → staged install → startup/health → RUNTIME BACKEND
+   VERIFICATION → commit. Verification evidence comes from the
+   engine's own `--list-devices` enumeration: Vulkan device(s)
+   enumerated (commit, evidence recorded in the outcome), no Vulkan
+   device on the machine (commit + honest note; CPU fallback keeps
+   serving), enumeration unsupported by the build (commit +
+   manifest-only attribution), enumeration cannot execute (ROLLBACK
+   to the last-known-good package, byte-for-byte, same as a startup
+   failure).
+4. **CI contract.** The release workflow no longer hard-codes the
+   engine tag: the Windows job runs the authoritative resolver gate
+   (`SHEYTAN_CI_VARIANT_GATE=1 go test ./internal/updater -run
+   TestCIVariantAssetContract`) verifying exact variant asset
+   resolution, reachability, matrix honesty, unsupported-variant
+   refusal and no silent CPU fallback. HTTP reachability is
+   explicitly NOT treated as runtime execution evidence.
 
 ## v1.6.1 — Maintenance / update / rollback behavior
 

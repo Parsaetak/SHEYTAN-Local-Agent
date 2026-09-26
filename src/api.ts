@@ -388,6 +388,24 @@ export type CustomToolTestResult = {
   duration?: number;
 };
 
+// v1.6.2 — the engine backend-variant provisioning surface
+// (GET/POST /api/engine/provision). The POST drives the full updater
+// transaction (stop → staged install → startup/health → runtime backend
+// verification → commit / rollback) and can therefore take minutes on a
+// slow link — callers pass a generous timeout.
+export type EngineProvisionState = {
+  installedVariant: string;
+  supportedVariants: string[];
+  platform: string;
+};
+
+export type EngineProvisionResult = {
+  ok: boolean;
+  variant: string;
+  installedVariant: string;
+  outcome: string;
+};
+
 // v1.6.0 P0 — the startup maintenance gate's explicit state
 // (GET /api/maintenance). The UI renders the REAL lifecycle phase,
 // never a generic "Updating…".
@@ -1535,6 +1553,25 @@ export const api = {
   // maintenance lifecycle for the UI (spec §12).
   maintenance(signal?: AbortSignal): Promise<MaintenanceStatus> {
     return request<MaintenanceStatus>("/maintenance", { signal });
+  },
+
+  engineProvisionState(signal?: AbortSignal): Promise<EngineProvisionState> {
+    return request<EngineProvisionState>("/engine/provision", { signal });
+  },
+
+  engineProvision(variant: string, signal?: AbortSignal): Promise<EngineProvisionResult> {
+    return request<EngineProvisionResult>(
+      "/engine/provision",
+      {
+        method: "POST",
+        body: JSON.stringify({ variant }),
+        signal,
+      },
+      // The transaction downloads a full engine package, swaps it,
+      // restarts the engine and verifies the runtime backend — minutes,
+      // not seconds (DEFAULT_TIMEOUT_MS is 15 s).
+      10 * 60_000,
+    );
   },
 
   config(signal?: AbortSignal): Promise<RuntimeConfig> {

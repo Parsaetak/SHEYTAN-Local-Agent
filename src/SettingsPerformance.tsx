@@ -1,6 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api, type LLMConfig, type NetDiagResult, type PerfSnapshot, type RuntimeConfig } from "./api";
+import {
+  engineBackendSummary,
+  provisionBusyLabel,
+  variantLabel,
+  type BackendAction,
+} from "./engine-backend";
 import {
   Chip,
   FieldLabel,
@@ -1044,6 +1050,154 @@ export function ContextCard({
           </span>
         </label>
       </div>
+    </section>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// v1.6.2 — Engine backend (variant) provisioning card
+// ---------------------------------------------------------------------------
+
+// EngineBackendCard is the REAL Settings surface for engine-variant
+// provisioning (previously API-only — ROADMAP/AI-CONTEXT disagreed on
+// this; v1.6.2 wires the surface completely instead of a UI claim
+// without a backend transaction):
+//
+//   Settings → API (GET/POST /api/engine/provision) → updater
+//   transaction (stop → staged install → startup/health → runtime
+//   backend verification → commit / rollback) → UI state.
+//
+// The card derives every label from engine-backend.ts (unit-tested);
+// it never invents capability — the platform support matrix comes from
+// the backend, and the GPU/Vulkan execution truth stays evidence-gated
+// in the accelerator surface regardless of which package is installed.
+export function EngineBackendCard() {
+  const [installed, setInstalled] = useState<string | null>(null);
+  const [supported, setSupported] = useState<string[]>([]);
+  const [platform, setPlatform] = useState<string>("");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [busyVariant, setBusyVariant] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .engineProvisionState()
+      .then((state) => {
+        if (!alive) return;
+        setInstalled(state.installedVariant);
+        setSupported(state.supportedVariants ?? []);
+        setPlatform(state.platform ?? "");
+        setLoadError(null);
+      })
+      .catch((err: unknown) => {
+        if (!alive) return;
+        setLoadError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function provision(action: BackendAction) {
+    if (busyVariant) return;
+    setBusyVariant(action.variant);
+    setActionError(null);
+    setOutcome(null);
+    try {
+      const result = await api.engineProvision(action.variant);
+      setOutcome(result.outcome);
+      const state = await api.engineProvisionState();
+      setInstalled(state.installedVariant);
+      setSupported(state.supportedVariants ?? []);
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyVariant(null);
+    }
+  }
+
+  const summary =
+    installed === null ? null : engineBackendSummary(installed, supported);
+
+  return (
+    <section className="settings-card">
+      <div className="settings-card-heading">
+        <div>
+          <span className="eyebrow">ENGINE — BACKEND</span>
+          <h3>Engine backend</h3>
+        </div>
+      </div>
+
+      <p className="settings-note">
+        The managed llama.cpp engine ships as backend packages. The swap is a
+        verified transaction: the engine stops, the new package is staged and
+        verified (startup health plus the engine&rsquo;s own backend/device
+        enumeration), and any failure rolls back to the current package. GPU
+        offload claims stay evidence-gated — installing the Vulkan package
+        does not by itself claim a working GPU.
+      </p>
+
+      {loadError ? (
+        <p className="settings-error">
+          Engine backend state unavailable: {loadError}
+        </p>
+      ) : installed === null ? (
+        <p className="settings-note">Reading the installed engine backend…</p>
+      ) : (
+        <>
+          <div className="settings-form-grid">
+            <div className="settings-field">
+              <FieldLabel
+                name="Installed backend"
+                tip="The backend family of the engine package currently installed (recorded in the install manifest)."
+              />
+              <Chip tone={installed === "vulkan" ? "good" : "neutral"}>
+                {variantLabel(installed)}
+              </Chip>
+            </div>
+            <div className="settings-field">
+              <FieldLabel
+                name="Platform"
+                tip="The OS/architecture the support matrix is evaluated for."
+              />
+              <Chip tone="neutral">{platform || "—"}</Chip>
+            </div>
+          </div>
+
+          <p className="settings-note">
+            {summary ? summary.summary : ""}
+          </p>
+
+          {summary
+            ? summary.actions.map((action) => (
+                <div key={action.variant} className="settings-field">
+                  <button
+                    type="button"
+                    className="settings-inline-action"
+                    disabled={busyVariant !== null}
+                    onClick={() => void provision(action)}
+                  >
+                    {busyVariant === action.variant
+                      ? provisionBusyLabel(action.variant)
+                      : action.label}
+                  </button>
+                  <p className="settings-note">{action.hint}</p>
+                </div>
+              ))
+            : null}
+
+          {outcome ? (
+            <p className="settings-note">Result: {outcome}</p>
+          ) : null}
+
+          {actionError ? (
+            <p className="settings-error">Provisioning failed: {actionError}</p>
+          ) : null}
+        </>
+      )}
     </section>
   );
 }

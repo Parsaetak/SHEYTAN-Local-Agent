@@ -1,5 +1,30 @@
 # SHEYTAN-Local-Agent — Agent Context
 
+> **v1.6.2 handoff note (2026-09-26):** this release is a correctness
+> pass over v1.6.1, reproduced-first: strict engine-variant parsing
+> (`internal/updater/variant.go` — `ParseAssetVariant`; invalid
+> variants are a deterministic 400 at `POST /api/engine/provision`,
+> never CPU; the v1.6.1 silent-CPU defect was reproduced then fixed),
+> variant-aware release resolution (the newest release that ACTUALLY
+> contains the exact variant asset — a CPU-only release is skipped for
+> Vulkan requests), an architecture-aware support matrix (Windows x64
+> cpu+vulkan, Windows ARM64 cpu-only per the verified b11191 asset
+> list), the GGUF import race fix (`internal/llm/importlock.go` —
+> per-models-directory exclusive lock, in-process + cross-process,
+> -race-verified; the overwrite defect was reproduced then fixed),
+> runtime backend verification inside the provisioning transaction
+> (`verifyRuntimeBackendForVariant` — the engine's own device
+> enumeration gates the commit; a failed verification rolls back), the
+> extra-args sampling-gate closure (`ValidateExtraArgs` — malformed
+> numeric arguments never spawn the engine) with atomically persisted
+> repairs, the real Settings engine-backend card, and corrected
+> upstream/Linux facts (b11191 publishes Linux cpu+vulkan as .tar.gz —
+> the zip installer does not consume them yet; ROADMAP NEXT item 2).
+> CI no longer hard-codes the engine tag — the Windows job runs the
+> authoritative resolver gate. Read `ROADMAP.md` FIRST (its §0 is the
+> authoritative forward handoff), then `UPDATE.md` (top section) and
+> the v1.6.2 section of `ARCHITECTURE.md`.
+
 > **v1.6.1 handoff note (2026-09-26):** this release shipped the
 > deterministic sampling gate (`internal/config/sampling.go` — the
 > authoritative validation module; `internal/llm/llama.go`

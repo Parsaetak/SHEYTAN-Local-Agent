@@ -38,7 +38,6 @@ import (
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 )
-
 // ImportResult describes one completed import.
 type ImportResult struct {
         // Name is the final file name inside the managed models directory.
@@ -65,6 +64,13 @@ const importCopyChunk = 1 << 20
 // directory. The source path may be anywhere on disk (or an external
 // volume) — it is never modified. onProgress, when non-nil, receives the
 // running copied/total byte counts.
+//
+// v1.6.2 CONCURRENCY: the whole destination-choice + copy window runs
+// under the exclusive per-models-directory import lock (importlock.go)
+// — two simultaneous imports can never overwrite or steal each other's
+// destination. The copy itself is unchanged: streaming, file-based,
+// atomically placed. Validation still happens BEFORE the lock (a bad
+// source fails fast without serializing behind a legitimate import).
 func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*ImportResult, error) {
         src = strings.TrimSpace(src)
         if src == "" {
@@ -102,6 +108,16 @@ func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*
         if err := os.MkdirAll(modelsDir, 0o755); err != nil {
                 return nil, fmt.Errorf("import: models dir: %w", err)
         }
+
+        // v1.6.2: serialize the Stat → choose destination → copy → Rename
+        // window across processes AND goroutines (importlock.go). Held
+        // until return via defer — a failed or cancelled import releases
+        // it with its cleaned-up .tmp.
+        releaseLock, lockErr := lockModelsDir(modelsDir)
+        if lockErr != nil {
+                return nil, lockErr
+        }
+        defer releaseLock()
 
         // --- duplicate-safe destination naming ------------------------------
         base := filepath.Base(abs)
