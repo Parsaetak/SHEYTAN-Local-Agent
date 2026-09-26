@@ -10,192 +10,179 @@ The v2.0.0.0 release is the point at which SHEYTAN-LA should be considered a com
 
 ---
 
-# 0. ENGINEERING STATUS — read this first (v1.6.2, 2026-09-26)
+# 0. ENGINEERING STATUS — read this first (v1.7.0, 2026-09-26)
 
 This section is the AUTHORITATIVE forward handoff: the next AI agent
 session can continue from this file alone. Read this section, then
-`agent.md`, then the v1.6.2 sections of `ARCHITECTURE.md` /
+`agent.md`, then the v1.7.0 sections of `ARCHITECTURE.md` /
 `UPDATE.md` / `worklog.md`. Every item is explicitly marked
 **COMPLETED / CURRENT / NEXT / FUTURE**, and every verification claim
-names its evidence class (deterministic unit / race / CI-gate /
-runtime / manual). Nothing planned is marked completed.
+names its evidence class (deterministic unit / race / E2E / CI-gate /
+runtime). Nothing planned is marked completed. Stale v1.6.2 claims
+(test counts, runtimes, hardware statements) are NOT inherited — the
+evidence below comes from fresh v1.7.0 runs only.
 
 ## COMPLETED
 
-Only work actually VERIFIED in v1.6.2 (all evidence from this session's
-fresh runs, on Linux amd64 unless noted):
+Only work actually VERIFIED in v1.7.0 (all evidence from this
+session's fresh runs, Linux amd64 build host):
 
-* **COMPLETED (v1.6.2, reproduced then fixed, deterministic tests)** —
-  P0 strict engine-variant parsing: `ParseAssetVariant`
-  (internal/updater/variant.go) accepts exactly cpu/vulkan + documented
-  aliases and rejects empty/unknown; `POST /api/engine/provision`
-  answers a deterministic 400 for invalid variants. The v1.6.1 defect
-  ({"variant":"banana"} silently provisioned CPU with a 200) was
-  REPRODUCED by a test before the fix and is now a regression test
-  (internal/api/engine_variant_strict_test.go). The lenient
-  `NormalizeAssetVariant` survives ONLY for legacy manifest reads.
-* **COMPLETED (v1.6.2, deterministic probe-injected tests)** — P0
-  variant-aware release resolution: `ResolveDownloadURLForVariant`
-  returns the pinned tag when its exact variant asset is verified, else
-  the NEWEST release whose payload actually contains the exact variant
-  asset (FirstWithVariantAsset). Tests pin: pinned-has-variant, pinned-
-  lacks/newer-serves, newest-release-CPU-only-is-SKIPPED (the v1.6.1
-  defect), no-matching-variant, invalid-variant, network-failure-
-  preserved-verbatim, CPU backward compatibility. Current engine tag is
-  preserved when it still serves the variant (no silent downgrade).
-* **COMPLETED (v1.6.2, deterministic matrix tests)** — P0
-  architecture-aware support matrix: windows/amd64 advertises
-  cpu+vulkan; windows/arm64 does NOT advertise vulkan (verified
-  upstream: b11191 has no llama-b11191-bin-win-vulkan-arm64 asset);
-  linux/darwin stay cpu-only (upstream serves .tar.gz there — see
-  CURRENT STATE limitations). Matrix and asset-naming are proven to
-  agree for every GOOS/GOARCH combination tested.
-* **COMPLETED (v1.6.2, CI contract rewritten)** — P0 CI: the workflow
-  no longer hard-codes `$tag = "b10642"`. The Windows job runs
-  `SHEYTAN_CI_VARIANT_GATE=1 go test ./internal/updater -run
-  TestCIVariantAssetContract` — the SAME production resolver verifying
-  exact variant asset resolution, exact asset reachability (HEAD
-  2xx/3xx), matrix honesty, unsupported-variant refusal and no silent
-  CPU fallback. Verified live on Linux (honest no-asset branch) in this
-  session; the full branch runs on the Windows CI runner. The step
-  states explicitly that HTTP reachability is NOT runtime execution.
-* **COMPLETED (v1.6.2, reproduced then fixed, go test -race)** — P0
-  GGUF import concurrency: exclusive per-models-directory lock
-  (internal/llm/importlock.go: in-process mutex + cross-process
-  flock/LockFileEx on `<models>/.import.lock`, kernel-released on
-  process death). The race (two concurrent same-filename imports
-  overwrote each other's completed file; same bytes produced 0
-  duplicates) was REPRODUCED with -race before the fix. Now: different
-  bytes → distinct collision-safe files; same bytes → exactly one
-  duplicate result and one file; failed import → no .tmp residue;
-  source never modified; refused (lock-held) imports place nothing.
-* **COMPLETED (v1.6.2, deterministic tests incl. real fake-engine
-  chain)** — P1 Vulkan runtime truth: the provisioning transaction is
-  stop → staged install → startup/health → RUNTIME BACKEND
-  VERIFICATION → commit. Verification evidence comes from the engine's
-  own --list-devices enumeration (never filename/manifest/DLL
-  presence): Vulkan devices enumerated (commit, evidence recorded),
-  no Vulkan device (commit + honest note, CPU fallback serves),
-  enumeration unsupported (commit + manifest-only attribution),
-  enumeration cannot execute (ROLLBACK to last-known-good). Tests run
-  the REAL chain: fake engine installed via the archive seam, started,
-  health-checked, enumerated, committed.
-* **COMPLETED (v1.6.2, deterministic tests, zero-spawn proofs)** — P1
-  sampling contract audit closure: every launch argument emitted by
-  buildArgsWithCaps and related paths audited. Raw user extra args
-  (llamaExtraArgs) are now linted pre-spawn (config.ValidateExtraArgs):
-  malformed numeric arguments (--temp abc, --top-k 1.5, --min-p=2)
-  fail with ZERO engine spawns, never enter the compatibility ladder,
-  never trigger accelerator downgrades; valid values and unknown flags
-  pass through verbatim. maxTokens joins the deterministic contract.
-  Repaired sampling values are PERSISTED atomically into the config
-  file (only fields invalid IN the file; env-introduced corruption is
-  never baked in; read-only/external configs degrade to in-memory
-  repair with an honest note) — one repair, verified by a reload test.
-* **COMPLETED (v1.6.2, frontend unit tests + typecheck)** — P1
-  Settings surface: Settings → Performance → "Engine backend" card is
-  REAL (GET/POST /api/engine/provision → updater transaction →
-  restart → health/backend verification → UI state; 10-minute request
-  timeout; honest evidence-gated hints). src/engine-backend.test.ts
-  covers the state derivation (122/122 unit tests green incl. the 7
-  new). ROADMAP/AI-CONTEXT no longer disagree.
-* **COMPLETED (v1.6.2, documentation)** — stale llama.cpp/Linux
-  statements corrected everywhere: upstream b11191 PUBLISHES Linux
-  cpu+vulkan packages as .tar.gz (llama-b11191-bin-ubuntu-x64.tar.gz,
-  llama-b11191-bin-ubuntu-vulkan-x64.tar.gz) — the zip-based installer
-  does not consume them (the honest limitation, tracked in NEXT). The
-  old "Linux binaries removed" claim is gone. Version metadata
-  consistent at 1.6.2 (package.json → release-version.mjs → config.go
-  / build/config.yml / SIGNATURE; `--check` green).
+* **COMPLETED (v1.7.0, deterministic rollback-instant probe tests + full
+  package suite)** — P0 Windows transactional rollback hardening. The
+  verification-failure path of `UpdateEngineVariantNow` (and every
+  equivalent transactional engine-update path) now STOPS AND REAPS the
+  candidate engine BEFORE any rollback filesystem mutation:
+  `stopCandidateForRollback` (internal/llm/llama.go) uses the
+  lifecycle-owned Stop (SIGTERM → bounded grace → Kill → deterministic
+  reap on exitDone), cancels any armed watchdog, and resets the
+  deliberate-stop marker. Regression suite
+  (internal/llm/variant_rollback_v170_test.go) proves at the EXACT
+  rollback instant: candidate process stopped and reaped, engine port
+  free, previous package byte-identical (tree hash), previous
+  manifest/variant authoritative, last-known-good restarts healthy,
+  no orphaned process after the final stop, and the commit path never
+  enters the rollback seam. Rollback failures now carry explicit
+  restart evidence, and `StateFailed` is set only when nothing serves.
+  The full internal/llm suite passed fresh (the v1.6.2 Windows CI
+  failure class — "rename ...bin.update-old ...bin: Access is denied"
+  under a live candidate — is structurally eliminated on every
+  platform; no sleeps, no taskkill, no timing hacks).
+* **COMPLETED (v1.7.0, deterministic unit + race + API tests)** — P1
+  chronological task scheduling + automation. The ONE scheduler
+  (internal/scheduler) gained: the v1.7.0 task model (enable/pause,
+  once / interval / daily / weekly at LOCAL time, linked skills,
+  task-scoped tools, task types, last-run pointer, run history,
+  next-due), RunNow (async, bounded, deterministic refusal),
+  Pause/Resume (resume recomputes NextDue — no stale burst),
+  CancelRun, UpdateTask (revalidated, timeline reset on schedule
+  change), Runs, NotifyEvent and ShutdownSettle. The v1.2.9
+  durable-claim guarantee is extended to EVERY schedule kind: claims
+  persist before execution; a crash cannot replay a claimed deadline;
+  concurrent runs of one task are rejected; missed deadlines run
+  exactly once with the next occurrence strictly after the claim.
+  Covered by internal/scheduler/automation_test.go (incl. claim
+  persisted while a run is IN FLIGHT) and the real HTTP paths in
+  internal/api/automation_api_test.go (lifecycle, validation,
+  deterministic errors, chronological run history).
+* **COMPLETED (v1.7.0, deterministic tests)** — P1 Markdown SKILL.md
+  packages with progressive disclosure (internal/skills/markdown.go):
+  frontmatter + body parsing/validation (path-safe ids, bounded size,
+  no reference escapes), metadata-first discovery, bodies loaded only
+  for matching tasks, declared references only when required, scopes
+  global/workspace/task with task > workspace > global precedence,
+  malformed packages skipped honestly. Convergence into the SAME Skill
+  authority via ToSkill (the JSON path is untouched and regression-
+  green). Agent-facing skill_create is validated, task-scoped, and
+  refuses global creation; PromoteTaskSkill enforces the existing
+  VERIFIED-learning rule (claimed/partial evidence refused).
+* **COMPLETED (v1.7.0, deterministic tests + real agent-loop E2E)** —
+  P1 task-scoped agent-created tools
+  (internal/customtools/tasktools.go): TaskDefinition + TaskStore under
+  the existing custom-tools root, full lifecycle CREATE → VALIDATE →
+  OPTIONAL APPROVAL → REGISTER → EXECUTE → CAPTURE → CLEAN UP, disabled
+  AND unapproved by default, executed through the ONE orchestrator
+  registry with the SAME schema validation, executors, permission
+  controls, timeouts, output limits and secret-redaction rules. E2E
+  (internal/agent/tasktool_e2e_test.go): approved task tool offered →
+  executed → result in the follow-up turn → unregistered at teardown;
+  unapproved tools never offered.
+* **COMPLETED (v1.7.0, deterministic tests)** — P1 first-class
+  task/run artifacts (internal/artifacts/taskmeta.go): durable
+  TaskRegistry (registry.jsonl) with task/run/source/type/path/size/
+  version/hash provenance; atomic, path-safe, bounded (8 MiB)
+  creation; per-path version history where the superseded file is
+  archived so EVERY version stays readable; restart-safe sequence
+  numbers; task teardown cleanup. The agent-facing artifact_create
+  operation is task-scoped (refuses outside a task run), and the API
+  serves list/create/content/versions with a deny-by-default sandbox
+  CSP (HTML served as inert source; SVG only through <img>; no
+  artifact JavaScript in the application origin).
+* **COMPLETED (v1.7.0, real-loop integration E2E)** — P1 integration of
+  schedules + skills + tools + artifacts
+  (internal/runtime/automation.go + automation_test.go): the runtime's
+  taskRunner installs the task context, task-scoped tools and the
+  bounded linked/task-skill block for the run, then the REAL agent loop
+  calls artifact_create and the artifact lands in the durable registry
+  with full provenance; the run output echoes the registered artifact
+  count. Genuine event emitters wired where subsystems already know
+  the event: boot = startup, real tool file-writes = file_change,
+  succeeded clone = git_change, failed Lab verification = test_failure
+  (hooks at the ONE settlement/creation points — no synthetic events).
+  UI: the Automation surface (src/AutomationPanel.tsx +
+  AutomationArtifactViewer.tsx) renders the chronological timeline
+  FROM PERSISTED SCHEDULER STATE with Run now / Pause / Resume /
+  Cancel / Delete, next-run, status, duration, trigger, linked
+  skills/tools, artifact viewer (Markdown first-class), scoped-tool
+  approval gate; frontend typecheck + unit tests green.
 
 ## CURRENT STATE
 
-* **Current version:** v1.6.2 (single version hierarchy: package.json →
+* **Current version:** v1.7.0 (single version hierarchy: package.json →
   release-version.mjs → config.go / build/config.yml / SIGNATURE;
   release-metadata consistency check green).
-* **Verified architecture:** Go API + runtime (engine lifecycle with
-  the maintenance gate, the sampling gate and the new extra-args gate;
-  model-first selection state machine; transactional variant-aware
-  engine provisioning WITH runtime backend verification), React/TS
-  frontend (top-level CHAT | AGENT | WORKSPACE/LAB | SYSTEM | SETTINGS
-  views; Settings → Performance now includes the Engine backend card),
-  managed llama.cpp engine + native C++ engine backend contract,
-  portable install-local data root with the migration chain,
-  conservative mixed licensing (unchanged from v1.6.1).
-* **Verified runtime state (this session, Linux amd64 host):** full Go
-  test suites green (`go test ./...`, `go vet ./...`, `-race` on the
-  import/variant/updater concurrency paths); frontend 122/122 unit +
-  typecheck + lint + production build green. The reproduction-first
-  evidence for every P0 fix is recorded in worklog.md (v1.6.2
-  section).
-* **Evidence classification (honest):**
-  - Deterministic unit/race/CI-gate evidence: everything in COMPLETED
-    above (runs on every CI pass).
-  - Runtime evidence on Windows (real Vulkan hardware, real
-    transaction, real backend enumeration): NOT executed by hand in
-    this session — the session host is Linux without a GPU. The CI
-    Windows job runs the resolver/asset gate; the runtime transaction
-    is covered by the fake-engine chain tests. A hand-executed Windows
-    Vulkan validation remains NEXT item 1.
-  - Browser E2E was RE-RUN in this session with the real native C++
-    engine: 24/24 passed (model-first, chat, agent settlement,
-    sessions, composer attachments, lab). The native C++ engine suite
-    passed 12/12 and the stress suite 47/47 (0 hangs, 0 crashes).
-    Windows-runtime hand validation (real GPU Vulkan transaction) was
-    NOT executed on this host (no GPU) — that alone stays NEXT item 1.
+* **Verified architecture:** everything v1.6.2 shipped (engine
+  lifecycle with maintenance/sampling/extra-args gates, model-first
+  selection state machine, transactional variant-aware provisioning
+  with runtime backend verification and NOW hardened rollback) plus the
+  v1.7.0 automation layer (scheduler + SKILL.md + task tools + task
+  artifacts + event emitters + /api/automation surface + Automation
+  UI).
+* **Fresh verification evidence (this session, Linux amd64 host):**
+  full `internal/llm` suite green; `internal/scheduler`,
+  `internal/skills`, `internal/artifacts`, `internal/customtools`
+  green (scheduler additionally under `-race`); automation API tests
+  green over real HTTP; agent task-tool loop E2E green; runtime
+  integration E2E green; frontend `npm run typecheck` + unit tests +
+  lint green. `go build -tags headless ./...` green. The FULL
+  `go test -tags headless ./internal/...` sweep and the remaining
+  regression battery are recorded in the packaging section of
+  worklog.md — consult worklog.md for the exact fresh numbers; no
+  count from v1.6.2 is quoted as current.
+* **Windows/Linux differences (honest):** the Windows rollback failure
+  class is fixed by construction and regression-guarded on Linux via
+  the rollback-instant probe; Windows still locks running executables
+  (that is WHY the fix exists) — the Windows CI job must re-run green
+  on the Actions runner, and a hand-executed Windows Vulkan
+  transaction remains untested on this host (no GPU, no Windows).
 * **Known limitations:**
-  - Linux engine download: upstream publishes .tar.gz packages; the
-    zip-based transactional installer cannot consume them. Linux users
-    self-build or use the native engine (documented in README).
-  - Windows-only execution surfaces (Vulkan transaction against real
-    hardware, comdlg32 picker, Job-Object process trees) are verified
-    by deterministic tests + the CI matrix, not by hand this session.
-  - The GGUF import's typed-path fallback is the only non-Windows
-    input path (no GTK file-dialog integration).
-  - AUTO does not auto-provision the Vulkan variant when evidence
-    appears while a CPU package is installed — explicit policy, see
-    NEXT item 4.
-  - Only `internal/humanize/` is Apache-2.0-designated (conservative
+  - Linux engine download still blocked by upstream .tar.gz packaging
+    (zip-only installer; documented since v1.6.2).
+  - ci_failure / build_failure triggers remain DECLARED kinds with no
+    genuine emitters yet (no synthetic events were invented) — see
+    NEXT.
+  - Task-run reports carry provenance through the output echo +
+    artifact registry (per-run artifact grouping in the UI timeline
+    uses the registry's runId).
+  - AUTO still does not auto-provision the Vulkan variant (unchanged
+    v1.6.2 policy, see NEXT).
+  - Only internal/humanize/ is Apache-2.0-designated (conservative
     mixed licensing; LICENSE-MAP.md is the classification authority).
 
 ## NEXT (ordered, concrete, actionable)
 
-1. **NEXT — Windows runtime validation of the v1.6.2 surfaces.** On a
-   real Windows machine (or the Actions Windows runner with a GPU):
-   run `POST /api/engine/provision {"variant":"vulkan"}` end-to-end,
-   capture the engine's --list-devices Vulkan enumeration in the
-   transaction outcome, verify `executionVerified=true` flows through
-   `/api/perf`, exercise the Settings "Engine backend" card once, and
-   record the evidence in worklog.md. Also re-run the browser E2E
-   suite and record the fresh count (the v1.6.1 "24/24" number is
-   stale and must not be quoted without a re-run).
-2. **NEXT — tar.gz engine packages for Linux.** Upstream b11191
-   publishes llama-<tag>-bin-ubuntu[-vulkan]-x64.tar.gz (and arm64).
-   Extend the transactional installer's archive seam
-   (InstallStagedFromArchiveDeferredWithVariant) to consume .tar.gz
-   alongside .zip, then flip the Linux matrix to advertise the
-   variants the assets actually serve (re-verify against the release
-   list, same as the Windows Vulkan evidence). This unblocks Linux
-   engine downloads AND Linux Vulkan provisioning.
-3. **NEXT — import flow E2E + Settings guards.** Add a browser-E2E
-   spec driving the "Import GGUF…" button (native picker stubbed
-   through the typed-path fallback on Linux CI); mirror the
-   repeat-penalty on-blur normalization for the other sampling fields
-   in src/SettingsPanel.tsx.
-4. **NEXT — AUTO variant-provisioning policy.** Decide + implement:
-   when the accelerator resolution carries VERIFIED Vulkan evidence
-   and the installed package is CPU on Windows x64, either (a) propose
-   the swap through the maintenance gate with user consent, or (b)
-   auto-provision through UpdateEngineVariantNow with rollback safety.
-   Tests for both the decision and the transaction. Do NOT make AUTO
-   claim Vulkan while a CPU package is installed.
-5. **NEXT — deferred v1.6.0 items:** the AI-assisted custom-tool
-   builder (manual builder is complete) and the unified Downloads
-   Center page.
-6. **NEXT — Stop/presence of a `--device` override UI** (small):
-   expose the deterministic device selection the launcher already
-   performs (llama.go deterministicDevice) in Settings → Performance
-   next to the Engine backend card, read-only first.
+1. **NEXT — Windows CI re-validation of the v1.7.0 rollback fix.** Push
+   v1.7.0, confirm Actions run green on windows-latest
+   (go test ./internal/... incl. TestVariantTransactionRollsBack...,
+   TestVariantRollbackStopsCandidateBeforeRestore), then hand-run one
+   real Vulkan provisioning on a Windows machine with a GPU and record
+   the evidence in worklog.md.
+2. **NEXT — genuine ci_failure / build_failure emitters.** The
+   scheduler's event taxonomy is ready; wire the existing subsystems
+   that genuinely observe those conditions (native C++ build results,
+   pipeline/codeExec verification outcomes) to NotifyEvent, with tests
+   asserting only real events fire.
+3. **NEXT — per-run artifact grouping in the timeline.** Add RunID to
+   scheduler.Report at execute() time (persisted) so the UI can group
+   artifacts strictly under their run entries end to end.
+4. **NEXT — tar.gz engine packages for Linux** (carried from v1.6.2,
+   still blocked): extend the installer's archive seam to .tar.gz and
+   re-verify the matrix against the real release list.
+5. **NEXT — AUTO variant-provisioning policy** (carried from v1.6.2):
+   decide propose-with-consent vs auto-provision; never claim Vulkan
+   while a CPU package is installed.
+6. **NEXT — deferred v1.6.x items** (carried): AI-assisted custom-tool
+   builder, unified Downloads Center, --device override UI in
+   Settings → Performance, import-flow browser E2E.
 
 ## FUTURE (strategic, not yet started)
 
@@ -206,10 +193,11 @@ fresh runs, on Linux amd64 unless noted):
   IDE/engineering canvas, self-writing tool system, multi-agent
   architecture, system/runtime intelligence.** See §5, §9–§13 — these
   remain PLANNED (Part II discipline: nothing there is implemented).
-* **FUTURE — broader Apache-2.0 designation.** Candidate components
-  (only with maintainer sign-off and the LICENSE-MAP.md reclassification
-  procedure): `internal/chunking`, `internal/histref` — currently
-  proprietary by conservative default.
+  The v1.7.0 automation layer is the scheduling foundation §5 builds
+  on — it does NOT implement §5.
+* **FUTURE — broader Apache-2.0 designation** (only with maintainer
+  sign-off via LICENSE-MAP.md reclassification): internal/chunking,
+  internal/histref.
 * **FUTURE — non-Windows native file pickers** (GTK/Zenity) for the
   import flow on Linux desktops.
 

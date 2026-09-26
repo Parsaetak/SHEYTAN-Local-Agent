@@ -18,6 +18,7 @@ import (
         "time"
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
@@ -153,6 +154,12 @@ type Server struct {
         // <DataDir>/custom-tools and register as FIRST-CLASS tools in the
         // ONE orchestrator registry (customtools.go).
         ctStore *customtools.Store
+
+        // v1.7.0: the Automation / Tasks surfaces — task-scoped custom
+        // tools (the SAME customtools executor) and the durable
+        // task/run artifact registry (the SAME artifacts tracker root).
+        taskTools   *customtools.TaskStore
+        artRegistry *artifacts.TaskRegistry
 
         // maintenanceSave persists the gate's LastUpdateCheck mutation
         // (production wires config.Save; tests may stub it).
@@ -378,6 +385,32 @@ func New(cfg *config.Config) (*Server, error) {
                 s.registerCustomTools()
         }
 
+        // v1.7.0: the task-scoped tool layer and the durable artifact
+        // registry. The RUNTIME owns the instances (task runs write
+        // through them); the API shares them when a stack exists and
+        // opens its own otherwise (tests without a stack). Both are
+        // NON-FATAL when unavailable (the API reports them honestly).
+        if s.stack != nil {
+                s.taskTools = s.stack.TaskTools
+                s.artRegistry = s.stack.Artifacts
+        }
+
+        if s.taskTools == nil {
+                if taskTools, ttErr := customtools.NewTaskStore(cfg.DataDir); ttErr != nil {
+                        logging.Default().Warn("api", "task tools unavailable: %v", ttErr)
+                } else {
+                        s.taskTools = taskTools
+                }
+        }
+
+        if s.artRegistry == nil {
+                artRegistry := artifacts.NewTaskRegistry(cfg.DataDir)
+                if err := artRegistry.Load(); err != nil {
+                        logging.Default().Warn("api", "artifact registry: %v", err)
+                }
+                s.artRegistry = artRegistry
+        }
+
         // v1.1.3: the engine event bus fans authoritative state transitions
         // to every WebSocket as they happen.
         go func() {
@@ -506,6 +539,16 @@ func (s *Server) Handler() http.Handler {
         // source="custom" metadata (the ONE registry).
         mux.HandleFunc("/api/custom-tools", s.handleCustomTools)
         mux.HandleFunc("/api/custom-tools/", s.handleCustomTool)
+
+        // v1.7.0: the Automation / Tasks surface — one scheduler API for
+        // tasks, runs, scoped tools and artifacts (the chronological
+        // timeline is served FROM PERSISTED SCHEDULER STATE, never a
+        // UI-only construct).
+        mux.HandleFunc("/api/automation/tasks", s.handleAutomation)
+        mux.HandleFunc("/api/automation/tasks/", s.handleAutomation)
+        mux.HandleFunc("/api/automation/task-tools/", s.handleAutomationTaskTool)
+        mux.HandleFunc("/api/automation/artifacts", s.handleAutomationArtifacts)
+        mux.HandleFunc("/api/automation/artifacts/", s.handleAutomationArtifacts)
         mux.HandleFunc("/api/lab", s.handleLab)
         mux.HandleFunc("/api/lab/", s.handleLabTask)
         mux.HandleFunc("/api/research", s.handleResearch)

@@ -19,6 +19,7 @@ import { useRuntimeStore } from "./store";
 const AgentBody = lazy(() => import("./AgentBody"));
 const AgentHeader = lazy(() => import("./AgentHeader"));
 const AgentSidebar = lazy(() => import("./AgentSidebar"));
+const AutomationPanel = lazy(() => import("./AutomationPanel"));
 const LabPanel = lazy(() => import("./LabPanel"));
 const SettingsPanel = lazy(() => import("./SettingsPanel"));
 const SystemPanel = lazy(() => import("./SystemPanel"));
@@ -338,6 +339,12 @@ function App() {
               <PanelErrorBoundary label="Coding Lab" resetKey="lab">
                 <Suspense fallback={<PanelLoading label="Coding Lab" />}>
                   <LabPanel />
+                </Suspense>
+              </PanelErrorBoundary>
+            ) : effectiveView === "automation" ? (
+              <PanelErrorBoundary label="Automation" resetKey="automation">
+                <Suspense fallback={<PanelLoading label="Automation" />}>
+                  <AutomationPanel />
                 </Suspense>
               </PanelErrorBoundary>
             ) : effectiveView === "system" ? (

@@ -1360,6 +1360,129 @@ export interface NetDiagResult {
   totalMs: number;
 }
 
+// v1.7.0 — Automation / Tasks: the scheduler surface (task CRUD, runs,
+// task-scoped tools, task artifacts). Shapes mirror internal/scheduler
+// (Task, Report, Schedule) and internal/artifacts (Meta); optional fields
+// arrive omitted ("omitempty"). Backend quirk the UI must tolerate: Go
+// zero time.Time values are NOT omitted by omitempty, so `nextDue` and
+// scheduleV17.at can arrive as "0001-01-01T00:00:00Z" and mean "unset".
+
+export type AutomationTrigger =
+  | "manual"
+  | "timer"
+  | "startup"
+  | "file_change"
+  | "git_change"
+  | "test_failure"
+  | "ci_failure"
+  | "build_failure"
+  | "scheduled_maintenance";
+
+export type AutomationScheduleKind = "once" | "interval" | "daily" | "weekly";
+
+export interface AutomationSchedule {
+  kind?: AutomationScheduleKind;
+  at?: string; // RFC3339 (once schedules)
+  timeOfDay?: string; // "HH:MM" local wall-clock (daily/weekly)
+  weekday?: number; // 0=Sunday … 6=Saturday (weekly)
+}
+
+// AutomationRunReport is one settled run (GET …/runs, task.lastRun).
+export interface AutomationRunReport {
+  taskId: string;
+  taskName: string;
+  trigger: string;
+  startedAt: string;
+  durationMs: number;
+  ok: boolean;
+  output?: string;
+  err?: string;
+  canceled?: boolean;
+}
+
+export interface AutomationTask {
+  id: string;
+  name: string;
+  trigger: AutomationTrigger;
+  prompt: string;
+  intervalSeconds?: number;
+  maxRuntimeSeconds?: number;
+  enabled: boolean;
+  paused?: boolean;
+  scheduleV17?: AutomationSchedule;
+  linkedSkills?: string[];
+  taskTools?: string[];
+  taskTypes?: string[];
+  lastRun?: AutomationRunReport;
+  nextDue?: string;
+  created: string;
+  running: boolean;
+}
+
+// AutomationTaskInput is the create/update body (POST/PUT …/tasks).
+export interface AutomationTaskInput {
+  id?: string;
+  name: string;
+  trigger: AutomationTrigger;
+  prompt: string;
+  intervalSeconds?: number;
+  maxRuntimeSeconds?: number;
+  scheduleKind?: AutomationScheduleKind;
+  at?: string; // RFC3339 (once)
+  timeOfDay?: string; // "HH:MM" (daily/weekly)
+  weekday?: number; // 0..6 (weekly)
+}
+
+// AutomationTaskTool is one task-scoped tool definition (the SAME
+// customtools contract plus task ownership and the approval gate).
+// Safe defaults: created disabled + unapproved; Approve flips both.
+export interface AutomationTaskTool {
+  id: string;
+  name: string;
+  taskId: string;
+  approved: boolean;
+  enabled: boolean;
+  shortDescription?: string;
+  description?: string;
+  executionType?: string;
+  permission?: string;
+  timeoutSeconds?: number;
+  outputLimitBytes?: number;
+}
+
+export type AutomationArtifactKind =
+  | "doc"
+  | "code"
+  | "data"
+  | "chart"
+  | "image"
+  | "archive"
+  | "diagnostics"
+  | "other";
+
+export interface AutomationArtifact {
+  id: string;
+  taskId: string;
+  runId?: string;
+  source: string;
+  created: string;
+  kind: AutomationArtifactKind;
+  title?: string;
+  path: string;
+  relPath: string;
+  size: number;
+  version: number;
+  hash?: string;
+  isCurrent?: boolean;
+}
+
+export interface AutomationArtifactInput {
+  taskId: string;
+  filename: string;
+  content: string;
+  title?: string;
+}
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
 const uploadTimeoutMs = 2 * 60_000;
@@ -1985,6 +2108,164 @@ export const api = {
       },
       LONG_OPERATION_TIMEOUT_MS,
     );
+  },
+
+  // --- v1.7.0 Automation / Tasks -------------------------------------------
+
+  automationTasks(signal?: AbortSignal): Promise<AutomationTask[]> {
+    return request<AutomationTask[]>("/automation/tasks", { signal });
+  },
+
+  automationTask(id: string, signal?: AbortSignal): Promise<AutomationTask> {
+    return request<AutomationTask>(
+      `/automation/tasks/${encodeURIComponent(id)}`,
+      { signal },
+    );
+  },
+
+  createAutomationTask(payload: AutomationTaskInput): Promise<AutomationTask> {
+    return request<AutomationTask>("/automation/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateAutomationTask(
+    id: string,
+    payload: AutomationTaskInput,
+  ): Promise<AutomationTask> {
+    return request<AutomationTask>(`/automation/tasks/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteAutomationTask(id: string): Promise<{ deleted: boolean }> {
+    return request(`/automation/tasks/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  // Run now is asynchronous by default (?wait=1 blocks for the report —
+  // reserved for callers that want the settled result; the panel never
+  // blocks). Conflicts (paused / already running) surface as errors.
+  runAutomationTask(
+    id: string,
+    wait = false,
+  ): Promise<AutomationRunReport | { started: boolean; taskId: string }> {
+    return request(
+      `/automation/tasks/${encodeURIComponent(id)}/run${wait ? "?wait=1" : ""}`,
+      { method: "POST" },
+      LONG_OPERATION_TIMEOUT_MS,
+    );
+  },
+
+  pauseAutomationTask(id: string): Promise<{ paused: boolean }> {
+    return request(`/automation/tasks/${encodeURIComponent(id)}/pause`, {
+      method: "POST",
+    });
+  },
+
+  resumeAutomationTask(id: string): Promise<{ resumed: boolean }> {
+    return request(`/automation/tasks/${encodeURIComponent(id)}/resume`, {
+      method: "POST",
+    });
+  },
+
+  cancelAutomationTask(id: string): Promise<{ canceled: boolean }> {
+    return request(`/automation/tasks/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    });
+  },
+
+  automationTaskRuns(id: string, limit = 50): Promise<AutomationRunReport[]> {
+    return request<AutomationRunReport[]>(
+      `/automation/tasks/${encodeURIComponent(id)}/runs?limit=${limit}`,
+    );
+  },
+
+  automationTaskTools(id: string): Promise<AutomationTaskTool[]> {
+    return request<AutomationTaskTool[]>(
+      `/automation/tasks/${encodeURIComponent(id)}/tools`,
+    );
+  },
+
+  approveAutomationTaskTool(toolId: string): Promise<AutomationTaskTool> {
+    return request<AutomationTaskTool>(
+      `/automation/task-tools/${encodeURIComponent(toolId)}/approve`,
+      { method: "POST" },
+    );
+  },
+
+  automationArtifacts(taskId: string): Promise<AutomationArtifact[]> {
+    const params = new URLSearchParams();
+    params.set("task", taskId);
+    return request<AutomationArtifact[]>(
+      `/automation/artifacts?${params.toString()}`,
+    );
+  },
+
+  createAutomationArtifact(
+    payload: AutomationArtifactInput,
+  ): Promise<AutomationArtifact> {
+    return request<AutomationArtifact>("/automation/artifacts", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  automationArtifact(id: string): Promise<AutomationArtifact> {
+    return request<AutomationArtifact>(
+      `/automation/artifacts/${encodeURIComponent(id)}`,
+    );
+  },
+
+  deleteAutomationArtifact(id: string): Promise<{ deleted: boolean }> {
+    return request(`/automation/artifacts/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  automationArtifactVersions(id: string): Promise<AutomationArtifact[]> {
+    return request<AutomationArtifact[]>(
+      `/automation/artifacts/${encodeURIComponent(id)}/versions`,
+    );
+  },
+
+  // Artifact content is RAW (markdown/text/image bytes), never JSON —
+  // this path bypasses the JSON request wrapper on purpose. The backend
+  // answers with a deny-all sandbox CSP; the UI never evaluates it.
+  async automationArtifactContent(id: string, signal?: AbortSignal): Promise<string> {
+    const response = await fetch(
+      `${API_BASE}/automation/artifacts/${encodeURIComponent(id)}/content`,
+      { signal },
+    );
+
+    if (!response.ok) {
+      const text = await response.text();
+
+      let message = text;
+
+      try {
+        const parsed = JSON.parse(text) as { error?: string };
+
+        if (parsed.error) {
+          message = parsed.error;
+        }
+      } catch {
+        // Raw body (the content endpoint only speaks raw).
+      }
+
+      throw new Error(message || `Artifact content failed (HTTP ${response.status})`);
+    }
+
+    return response.text();
+  },
+
+  // The content endpoint URL for <img src> (SVG/images — the content is
+  // NEVER inlined into the application DOM) and download links.
+  automationArtifactContentURL(id: string): string {
+    return `${API_BASE}/automation/artifacts/${encodeURIComponent(id)}/content`;
   },
 
   // v1.3.6 (spec §21/§26): the standalone research client is removed —

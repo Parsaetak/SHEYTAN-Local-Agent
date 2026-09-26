@@ -9,6 +9,69 @@
 > marked as future/planned. Nothing in Part II of this document is
 > implemented today.
 
+## v1.7.0 — Architecture changes shipped in this release
+
+Everything below is `IMPLEMENTED` and `TESTED` (deterministic unit /
+race / E2E evidence; test files cited):
+
+1. **Windows transactional rollback hardening**
+   (`internal/llm/llama.go`, `internal/llm/variant_rollback_v170_test.go`):
+   the variant provisioning transaction stops and reaps the candidate
+   engine BEFORE any rollback filesystem mutation
+   (`stopCandidateForRollback`: lifecycle-owned SIGTERM → bounded grace
+   → Kill → deterministic reap; watchdog cancelled; deliberate-stop
+   marker reset). The Windows rollback failure class ("Access is
+   denied" under a live candidate locking its own executable tree) is
+   structurally eliminated; a package-level probe fires at the EXACT
+   rollback instant and proves: candidate stopped, package
+   byte-identical, manifest authoritative, LKG restart healthy, no
+   orphans, commit path untouched. Rollback branches report explicit
+   restart evidence; `StateFailed` only when nothing serves.
+2. **Chronological automation layer** (`internal/scheduler/automation.go`,
+   `automation_test.go`, `internal/api/automation.go`,
+   `automation_api_test.go`): the ONE scheduler extends to the v1.7.0
+   task model (pause gate; once / interval / daily / weekly at LOCAL
+   time; linked skills; task tools; last run; run history) with
+   RunNow / Pause / Resume / CancelRun / UpdateTask / Runs /
+   NotifyEvent / ShutdownSettle. The durable-claim guarantee covers
+   every schedule kind (claim persisted before execution; no crash
+   replay; concurrent runs rejected; missed deadlines run exactly
+   once). `/api/automation/*` serves tasks, runs, scoped tools and
+   artifacts from persisted state.
+3. **Markdown SKILL.md packages** (`internal/skills/markdown.go`,
+   `markdown_test.go`): progressive disclosure — metadata-first
+   discovery, bodies on match, references on demand; scopes
+   global / workspace / task with nearest-scope precedence; validated
+   agent-facing `skill_create` (task-scoped); promotion through the
+   existing VERIFIED-learning rule; full JSON-skill compatibility and
+   convergence into one Skill authority.
+4. **Task-scoped custom tools** (`internal/customtools/tasktools.go`,
+   `internal/agent/tasktool_e2e_test.go`): same definitions, executors
+   and bounds as global custom tools, plus task/run ownership and an
+   explicit approval gate; registered into the ONE orchestrator
+   registry for the run and unregistered at teardown; real
+   model→tool→executor→result loop E2E with honest refusal paths.
+5. **First-class task/run artifacts** (`internal/artifacts/taskmeta.go`,
+   `taskmeta_test.go`, `internal/tools/artifact_create.go`): durable
+   TaskRegistry with full provenance (task, run, source tool, kind,
+   path, size, version, hash); atomic path-safe bounded creation;
+   per-path version history with archived superseded files (every
+   version readable); restart-safe; API serves
+   list/create/content/versions with a deny-by-default sandbox CSP
+   (HTML inert source; SVG via <img>; no artifact JS in the app
+   origin); Markdown rendered first-class in the UI.
+6. **The four systems connected** (`internal/runtime/automation.go`,
+   `automation_test.go`): the runtime task runner installs the task
+   context, task-scoped tools and the bounded skill block around each
+   run; the agent loop creates artifacts into the durable registry;
+   run outputs carry the artifact provenance echo; genuine event
+   emitters fire where subsystems already know the event (boot =
+   startup; real file writes = file_change; succeeded clone =
+   git_change; failed Lab verification = test_failure). UI:
+   `src/AutomationPanel.tsx` + `src/AutomationArtifactViewer.tsx`
+   render the chronological timeline from persisted scheduler state
+   with full task actions and the artifact viewer.
+
 ## v1.6.2 — Architecture changes shipped in this release
 
 Everything below is `IMPLEMENTED` and `TESTED` (deterministic unit /

@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.6.2
+Current release:  v1.7.0
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -22,6 +22,15 @@ Branch:           main
 ---
 
 # What SHEYTAN is
+
+## v1.7.0 highlights
+
+* **P0 — Windows transactional rollback hardening** — the engine-variant provisioning transaction now STOPS AND REAPS the candidate engine before any rollback filesystem mutation (lifecycle-owned stop: SIGTERM → bounded grace → Kill → deterministic reap; watchdog cancelled). The Windows "rename ...bin.update-old ...bin: Access is denied" rollback failure class — a running candidate locking its own executable tree — is structurally impossible, proven by a deterministic rollback-instant probe regression suite (candidate stopped, package byte-identical, manifest authoritative, LKG restart healthy, no orphans, commit path never touches the rollback seam). No sleeps, no taskkill, no timing hacks; Linux behavior unchanged.
+* **P1 — chronological tasks + scheduling + automation** — the one scheduler grew a real Automation/Tasks system: a durable task model (enable/pause, once/interval/daily/weekly at LOCAL time, linked skills, task-scoped tools, run history, next-due), Run now / pause / resume / cancel / delete, and the v1.2.9 durable-claim guarantee extended to every schedule kind (a crash can never replay a claimed deadline; missed deadlines run exactly once). A coherent `/api/automation/*` surface serves everything from persisted state.
+* **P1 — Markdown SKILL.md packages with progressive disclosure** — skills can now live as `skills/<id>/SKILL.md` (frontmatter + procedure body + optional references): metadata-first discovery, bodies loaded only for matching tasks, references only when required — the whole library is never injected. Global / workspace / task scopes; agent-facing `skill_create` (validated, task-scoped); promotion to the global library strictly through the existing VERIFIED-learning rule. The JSON skill path is untouched.
+* **P1 — task-scoped agent-created tools** — the one customtools system gained task ownership: CREATE → VALIDATE → OPTIONAL APPROVAL → REGISTER → EXECUTE → CAPTURE → CLEAN UP, disabled and unapproved by default, executed through the same registry/executor/permission/bounds machinery, with a real model→tool→executor→result E2E and deterministic teardown.
+* **P1 — first-class task/run artifacts** — the artifact layer gained a durable registry (task, run, source tool, type, path, size, version, hash) with atomic, path-safe, bounded creation via `artifact_create`, per-path version history where every version stays readable, and an artifact viewer that renders Markdown first-class while sandboxing HTML/SVG (deny-by-default CSP; no artifact JavaScript in the application origin).
+* **P1 — the four systems connected** — task → schedule/event → agent run → task skills → task tools → artifacts → chronological history is wired through the EXISTING scheduler/agent/skills/customtools/artifacts authorities, with genuine event emitters (boot = startup, real file writes = file_change, succeeded clones = git_change, failed Lab verifications = test_failure) — no synthetic events, no parallel registries.
 
 ## v1.6.2 highlights
 

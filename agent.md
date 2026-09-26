@@ -1,5 +1,37 @@
 # SHEYTAN-Local-Agent — Agent Context
 
+> **v1.7.0 handoff note (2026-09-26):** this release hardens the
+> engine transaction and ships the automation layer. (1) The
+> provisioning transaction's rollback paths now stop and reap the
+> candidate engine BEFORE any restore
+> (`internal/llm/llama.go` `stopCandidateForRollback` — lifecycle-owned
+> stop, watchdog cancelled, deterministic reap; the Windows
+> "Access is denied" rollback failure class is structurally closed;
+> `internal/llm/variant_rollback_v170_test.go` proves the contract at
+> the exact rollback instant, including byte-identical restore,
+> authoritative manifest, healthy LKG restart and zero orphans).
+> (2) The ONE scheduler grew the v1.7.0 Automation/Tasks system
+> (`internal/scheduler/automation.go`): pause gate, once / interval /
+> daily / weekly at LOCAL time, linked skills, task-scoped tools,
+> RunNow / Pause / Resume / Cancel / UpdateTask / Runs / NotifyEvent /
+> ShutdownSettle, durable claims extended to every schedule kind
+> (no crash replay, missed deadlines run exactly once) and the
+> `/api/automation/*` surface. (3) Markdown SKILL.md packages with
+> progressive disclosure (`internal/skills/markdown.go` — scopes
+> global/workspace/task, metadata-first, agent-facing `skill_create`,
+> VERIFIED-rule-gated promotion; JSON path untouched). (4) Task-scoped
+> custom tools (`internal/customtools/tasktools.go` — disabled and
+> unapproved by default, ONE registry, real loop E2E). (5) First-class
+> task/run artifacts (`internal/artifacts/taskmeta.go` +
+> `internal/tools/artifact_create.go` — atomic, path-safe, bounded,
+> versioned, sandboxed viewer). (6) The systems are wired at the
+> runtime (`internal/runtime/automation.go`) with genuine emitters
+> (startup / file_change / git_change / test_failure) — ci_failure and
+> build_failure remain declared kinds with no emitters yet (ROADMAP
+> NEXT 2). Read `ROADMAP.md` FIRST (its §0 is the authoritative
+> forward handoff), then `UPDATE.md` (top section) and the v1.7.0
+> section of `ARCHITECTURE.md`.
+
 > **v1.6.2 handoff note (2026-09-26):** this release is a correctness
 > pass over v1.6.1, reproduced-first: strict engine-variant parsing
 > (`internal/updater/variant.go` — `ParseAssetVariant`; invalid

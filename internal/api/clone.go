@@ -193,6 +193,13 @@ func (s *Server) finalizeClone(job *gitclone.Job, envelope *cloneStatusEnvelope,
 	switch final.State {
 	case gitclone.StateSucceeded:
 		logging.Default().Info("workspace", "clone completed: %s (head=%s)", final.RepoName, final.Head)
+
+		// v1.7.0: a succeeded clone IS a genuine git_change event for the
+		// automation scheduler (real application-generated event — the
+		// subsystem that produced it knows it happened).
+		if s.stack != nil {
+			s.stack.NotifyGitChange()
+		}
 		if openAfter {
 			// Re-check the run gate at switch time (a run may have
 			// started while the download was running).

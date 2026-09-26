@@ -2681,9 +2681,25 @@ func (s *LlamaServer) UpdateEngineNow(
                         "engine %s installed but startup verification failed (%v) — rolling back to the previous package",
                         tag, startErr)
 
+                // v1.7.0: stop/reap any candidate remnant BEFORE the rollback
+                // touches the bin tree (a no-op when startLocked's own failure
+                // path already killed the child — but it also cancels an armed
+                // watchdog, so a delayed auto-restart can never race the
+                // rollback rename with a fresh process holding Windows locks).
+                s.stopCandidateForRollback("startup-verification rollback")
+
+                if probe := variantRollbackProbe; probe != nil {
+                        probe()
+                }
+
                 if rbErr := staged.Rollback(); rbErr != nil {
                         logging.Default().Warn("updater",
                                 "rollback to previous engine package failed: %v", rbErr)
+
+                        if startErr2 := s.startLocked(); startErr2 != nil {
+                                logging.Default().Warn("updater",
+                                        "last-known-good restart after failed rollback also failed: %v", startErr2)
+                        }
 
                         s.setState(StateFailed)
 
@@ -2693,12 +2709,23 @@ func (s *LlamaServer) UpdateEngineNow(
                         )
                 }
 
-                if startErr2 := s.startLocked(); startErr2 != nil {
+                restartErr2 := s.startLocked()
+                if restartErr2 != nil {
                         logging.Default().Warn("updater",
-                                "last-known-good restart after rollback also failed: %v", startErr2)
+                                "last-known-good restart after rollback also failed: %v", restartErr2)
+
+                        // v1.7.0: failed is honest ONLY when nothing serves — a
+                        // successful restart stays ready (the LKG engine owns the
+                        // port again and /health verified it).
+                        s.setState(StateFailed)
                 }
 
-                s.setState(StateFailed)
+                if restartErr2 != nil {
+                        return "", fmt.Errorf(
+                                "engine %s installed but startup verification failed: %v (previous package restored; last-known-good restart failed: %v)",
+                                tag, startErr, restartErr2,
+                        )
+                }
 
                 return "", fmt.Errorf(
                         "engine %s installed but startup verification failed: %w (previous package restored)",
@@ -2750,6 +2777,43 @@ func (s *LlamaServer) runEngineInstallVariant(
         }
 
         return updater.InstallStagedDeferredWithVariant(ctx, cfg, tag, variant, onProgress)
+}
+
+// variantRollbackProbe, when non-nil, is invoked by the variant
+// provisioning transaction at the moment the rollback path is about to
+// restore the previous package — AFTER the candidate engine has been
+// stopped and reaped, BEFORE the first filesystem mutation. Regression
+// coverage uses it to prove the no-live-process invariant deterministically
+// (the Windows "Access is denied" rollback class happens exactly when a
+// running candidate still owns the managed bin tree).
+var variantRollbackProbe func()
+
+// stopCandidateForRollback stops the just-started candidate engine and
+// reaps it BEFORE a rollback may touch the managed bin tree.
+//
+// v1.7.0 (Windows rollback hardening): on Windows a running llama-server
+// holds its executable image and DLL closure locked inside the managed
+// bin dir — a Rollback() attempted under those locks fails
+// ("rename ...bin.update-old ...bin: Access is denied") and leaves the
+// installation half-restored. Stop() is the lifecycle-owned stop
+// (SIGTERM → bounded grace → Kill → deterministic reap on exitDone): when
+// it returns, the child has been observed exiting and its file handles
+// are released. No sleeps, no taskkill, no polling loops — and a process
+// that already exited (startLocked's failure path killed it) makes this a
+// no-op, so the same call is correct on every path and every platform.
+func (s *LlamaServer) stopCandidateForRollback(phase string) {
+        if stopErr := s.Stop(); stopErr != nil {
+                logging.Default().Warn("updater",
+                        "candidate engine stop before %s: %v (proceeding — reap is best-effort)", phase, stopErr)
+        }
+
+        // The deliberate candidate stop is complete and the transaction owns
+        // the lifecycle again: clear the deliberate-shutdown marker so the
+        // last-known-good restart is a legitimate NEW episode — the same reset
+        // the pre-install stop performs before the boot attempt.
+        s.mu.Lock()
+        s.stopping = false
+        s.mu.Unlock()
 }
 
 // UpdateEngineVariantNow is the v1.6.1 backend-variant provisioning
@@ -2857,6 +2921,15 @@ func (s *LlamaServer) UpdateEngineVariantNow(
                         "%s engine installed but startup verification failed (%v) — rolling back to the previous package",
                         variant, startErr)
 
+                // v1.7.0: stop/reap any candidate remnant BEFORE the rollback
+                // touches the bin tree (same Windows-lock discipline as the
+                // verification-failure path; also cancels an armed watchdog).
+                s.stopCandidateForRollback("startup-verification rollback")
+
+                if probe := variantRollbackProbe; probe != nil {
+                        probe()
+                }
+
                 if rbErr := staged.Rollback(); rbErr != nil {
                         s.setState(StateFailed)
 
@@ -2866,12 +2939,21 @@ func (s *LlamaServer) UpdateEngineVariantNow(
                         )
                 }
 
-                if startErr2 := s.startLocked(); startErr2 != nil {
+                restartErr2 := s.startLocked()
+                if restartErr2 != nil {
                         logging.Default().Warn("updater",
-                                "last-known-good restart after rollback also failed: %v", startErr2)
+                                "last-known-good restart after rollback also failed: %v", restartErr2)
+
+                        // v1.7.0: failed only when nothing serves (see above).
+                        s.setState(StateFailed)
                 }
 
-                s.setState(StateFailed)
+                if restartErr2 != nil {
+                        return "", fmt.Errorf(
+                                "%s engine installed but startup verification failed: %v (previous package restored; last-known-good restart failed: %v)",
+                                variant, startErr, restartErr2,
+                        )
+                }
 
                 return "", fmt.Errorf(
                         "%s engine installed but startup verification failed: %w (previous package restored)",
@@ -2893,7 +2975,31 @@ func (s *LlamaServer) UpdateEngineVariantNow(
                         "%s engine installed and started but runtime backend verification failed (%v) — rolling back to the previous package",
                         variant, verifyErr)
 
+                // v1.7.0 — STOP THE CANDIDATE BEFORE THE ROLLBACK. The
+                // verification ran against a RUNNING candidate engine; on
+                // Windows that process owns locked executables/DLLs inside the
+                // managed bin tree, and a rollback attempted under those locks
+                // fails with "rename ...bin.update-old ...bin: Access is
+                // denied". Lifecycle-owned stop (SIGTERM → bounded grace →
+                // Kill → deterministic reap), then — and only then — the
+                // byte-for-byte restore. It also cancels any watchdog the
+                // candidate's death may have armed, so no delayed auto-restart
+                // can race the rollback.
+                s.stopCandidateForRollback("runtime-verification rollback")
+
+                if probe := variantRollbackProbe; probe != nil {
+                        probe()
+                }
+
                 if rbErr := staged.Rollback(); rbErr != nil {
+                        // Rollback failed even with no live process: surface the
+                        // original verification failure PLUS the rollback
+                        // evidence, and still try to bring the engine back up.
+                        if startErr2 := s.startLocked(); startErr2 != nil {
+                                logging.Default().Warn("updater",
+                                        "last-known-good restart after failed verification rollback also failed: %v", startErr2)
+                        }
+
                         s.setState(StateFailed)
 
                         return "", fmt.Errorf(
@@ -2902,12 +3008,24 @@ func (s *LlamaServer) UpdateEngineVariantNow(
                         )
                 }
 
-                if startErr2 := s.startLocked(); startErr2 != nil {
+                // Restore → restart last-known-good → health: startLocked owns
+                // the full boot (preflight → launch → /health ready), so a nil
+                // return here IS the restart-health evidence.
+                restartErr := s.startLocked()
+                if restartErr != nil {
                         logging.Default().Warn("updater",
-                                "last-known-good restart after verification rollback also failed: %v", startErr2)
+                                "last-known-good restart after verification rollback also failed: %v", restartErr)
+
+                        // v1.7.0: failed only when nothing serves (see above).
+                        s.setState(StateFailed)
                 }
 
-                s.setState(StateFailed)
+                if restartErr != nil {
+                        return "", fmt.Errorf(
+                                "%s engine installed and started but runtime backend verification failed: %v (previous package restored; last-known-good restart failed: %v)",
+                                variant, verifyErr, restartErr,
+                        )
+                }
 
                 return "", fmt.Errorf(
                         "%s engine installed and started but runtime backend verification failed: %w (previous package restored)",

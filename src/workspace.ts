@@ -3,6 +3,7 @@ export type WorkspaceView =
   | "agent"
   | "workspace"
   | "lab"
+  | "automation"
   | "system"
   | "settings";
 
@@ -75,6 +76,19 @@ export const WORKSPACE_LAYERS: readonly WorkspaceLayer[] = [
     title: "Autonomous engineering",
     description: "Execute, verify, and repair",
     icon: "◆",
+    modes: ["agent"],
+  },
+  {
+    // v1.7.0: the Automation layer — scheduled/event tasks, the
+    // chronological run timeline, task-scoped tools and artifacts.
+    // Agent machinery (tasks execute agent runs), so Chat stays a calm
+    // conversation surface without it (same rule as Coding Lab).
+    id: "automation",
+    label: "Automation",
+    eyebrow: "AUTOMATION",
+    title: "Automation & Tasks",
+    description: "Schedules, runs, tools, artifacts",
+    icon: "⏱",
     modes: ["agent"],
   },
   // v1.3.6 (spec §21/§22): the Research workspace LAYER is removed —

@@ -1,4 +1,4 @@
-<!-- sheytan-context-version: 12 -->
+<!-- sheytan-context-version: 13 -->
 <!-- This file is SHEYTAN's AI instruction file. It is prepended to the system
      prompt of every model plugged into the app. You may edit it freely — your
      edits are kept until an app upgrade ships a newer instruction version
@@ -35,7 +35,21 @@ that gets plugged in — local GGUF models and remote APIs alike.
   | `browser-profile/` | persistent Chromium profile used by the browser tool   |
   | `sandbox/`         | isolated workdirs for sandboxed code execution         |
   | `bin/`             | managed llama.cpp engine package — auto-started        |
+  | `scheduler/`       | automation tasks + run reports (v1.7.0)                |
+  | `skills/`          | global SKILL.md + JSON skill packages (v1.7.0)         |
+  | `task-skills/`     | task-scoped temporary skills (v1.7.0)                  |
+  | `custom-tools/`    | custom tool definitions + task-scoped tools (v1.7.0)   |
+  | `task-artifacts/`  | durable task/run artifacts + version history (v1.7.0)  |
 
+- **Automation / Tasks (v1.7.0):** tasks you create (through the
+  Automation view or the API) run on a schedule (once, interval, daily
+  or weekly at the LOCAL time), on events (a failed Lab verification,
+  a succeeded clone, a file a tool wrote, app startup), or on demand.
+  Each run is bounded, its history is persisted, and anything you
+  produce for the task should go through `artifact_create` — artifacts
+  are versioned, tracked and visible to the user. Task-scoped skills
+  (`skill_create`) let you reuse a proven procedure within the task;
+  they only reach the global library through verified promotion.
 - The inference engine is **managed** (v1.6.2): `bin/` holds the llama.cpp
   server package the app downloaded and keeps updated. The package records
   its backend variant: the default `cpu` package, or the `vulkan` package

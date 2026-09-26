@@ -1,27 +1,51 @@
-# UPDATE.md — v1.6.2 Maintenance, Update & Rollback Behavior
+# UPDATE.md — v1.7.0 Maintenance, Update & Rollback Behavior
 
-**Release:** `v1.6.2` (canonical application version; single version
+**Release:** `v1.7.0` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 20cb09a` (`v1.6.1`) · **Date:** 2026-09-26
-**Package:** `SHEYTAN-Local-Agent-v1.6.2-FINAL.zip` (complete repository
+**Base:** `main @ 2c4e8bb` (`v1.6.2`) · **Date:** 2026-09-26
+**Package:** `SHEYTAN-Local-Agent-v1.7.0-FINAL.zip` (complete repository
 tree)
 
-v1.6.2 is a correctness release over v1.6.1: strict variant parsing,
-variant-aware release resolution, an architecture-aware support matrix,
-the GGUF import race fix, runtime backend verification inside the
-provisioning transaction, the extra-args sampling-gate closure with
-persisted repairs, and the real Settings engine-backend surface. The
-v1.6.0/v1.6.1 foundation is preserved: the same maintenance gate, the
-same transactional updater, the same selection state machine, the same
-session architecture.
+v1.7.0 is a hardening + automation release over v1.6.2: the Windows
+transactional rollback repair (candidate stop/reap before any restore),
+the chronological Automation/Tasks system over the one scheduler,
+Markdown SKILL.md packages with progressive disclosure, task-scoped
+agent-created tools, first-class task/run artifacts with versioning and
+a sandboxed viewer, and the integration of schedules + skills + tools +
+artifacts through the existing authorities. Every v1.6.2 subsystem
+(maintenance gate, transactional updater, selection state machine,
+session architecture, strict variant parsing) is preserved and its
+tests remain green.
 
 ---
 
-## v1.6.2 — Maintenance / update / rollback behavior
+## v1.7.0 — Maintenance / update / rollback behavior
 
-The v1.6.1 maintenance/update/rollback contract is UNCHANGED. What
-v1.6.2 changes inside the engine-variant provisioning transaction:
+The v1.6.2 maintenance/update/rollback contract is UNCHANGED. What
+v1.7.0 changes inside the engine-variant provisioning transaction: the
+verification-failure and startup-failure rollback paths now STOP AND
+REAP the candidate engine before the restore (lifecycle-owned stop —
+no sleeps, no taskkill, no polling). On Windows a running candidate
+locks its own executable tree; the v1.6.2 rollback therefore failed
+with "rename ...bin.update-old ...bin: Access is denied" and left a
+half-restored installation. v1.7.0 closes that class: the rollback
+runs against a fully reaped candidate, cancels any watchdog that could
+race the restore, reports explicit rollback/restart evidence in the
+error, and marks the engine failed only when nothing actually serves.
+A rollback-failure branch now also attempts the last-known-good
+restart before surfacing the combined error. Regression coverage
+proves the contract at the exact rollback instant on every platform
+(internal/llm/variant_rollback_v170_test.go): candidate stopped and
+reaped, previous package byte-identical, previous manifest/variant
+authoritative, last-known-good restart healthy, no orphaned process,
+and the commit path never touches the rollback seam.
+
+### Historical: v1.6.2 behavior (preserved)
+
+The v1.6.1 maintenance/update/rollback contract is otherwise
+UNCHANGED. What v1.6.2 changed inside the engine-variant provisioning
+transaction:
 
 1. **Strict variant identity.** `POST /api/engine/provision` parses the
    requested variant STRICTLY (`ParseAssetVariant`): empty/unknown

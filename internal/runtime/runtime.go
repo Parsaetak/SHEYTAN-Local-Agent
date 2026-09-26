@@ -15,10 +15,12 @@ import (
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/ctxtelemetry"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/customtools"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
@@ -119,6 +121,14 @@ type Stack struct {
 	// Sched is the local autonomous event/task foundation (manual /
 	// startup / timer triggers in this release).
 	Sched *scheduler.Scheduler
+
+	// v1.7.0: the Automation / Tasks authorities — task-scoped custom
+	// tools, the durable task/run artifact registry and the Markdown
+	// SKILL.md layer (progressive disclosure). One instance each, shared
+	// with the API surface.
+	TaskTools      *customtools.TaskStore
+	Artifacts      *artifacts.TaskRegistry
+	MarkdownSkills *skills.MarkdownStore
 
 	// Linux (v1.0.6) is the built-in Linux-like shell used by BOTH the agent
 	// (the `linux` tool) and the Terminal view — one shared instance so the
@@ -405,7 +415,7 @@ func NewStack(cfg *config.Config) *Stack {
 	// full reliability and verification machinery.
 	sched := scheduler.New(
 		filepath.Join(cfg.DataDir, "scheduler"),
-		scheduleRunner(orch),
+		taskRunner(stack, orch, scheduleRunner(orch)),
 		func(task scheduler.Task, report scheduler.Report) {
 			summary := fmt.Sprintf("Scheduled task %q (%s): ok=%v in %s",
 				task.Name, report.Trigger, report.OK,
@@ -417,6 +427,11 @@ func NewStack(cfg *config.Config) *Stack {
 		logging.Default().Warn("runtime", "scheduler tasks: %v", err)
 	}
 	stack.Sched = sched
+
+	// v1.7.0: wire the automation layer (task-scoped tools/artifacts/
+	// skills + the genuine startup/file_change emitters) AFTER the
+	// scheduler exists.
+	wireAutomation(stack)
 
 	orch.Register(tools.Screenshot{})
 
