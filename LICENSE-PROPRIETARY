@@ -1,0 +1,88 @@
+PARSAETAK PROPRIETARY LICENSE
+=============================
+Version 1.1 · Last updated: 2026-09-26
+
+Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights
+reserved.
+
+SCOPE OF THIS LICENSE
+---------------------
+This license governs every component of SHEYTAN-Local-Agent classified as
+"Proprietary" in LICENSE-MAP.md — the SHEYTAN-specific proprietary
+mechanisms, the product-specific implementation, the assets and designs,
+and all other explicitly classified material. Components explicitly
+designated as open in LICENSE-MAP.md are governed by LICENSE-APACHE
+instead. The classification in LICENSE-MAP.md is authoritative.
+
+IMPORTANT — READ CAREFULLY. By installing, copying, or otherwise using
+SHEYTAN-Local-Agent ("the Software") you agree to be bound by the terms of
+this agreement. If you do not agree, do not install or use the Software.
+
+1. GRANT OF LICENSE
+   Subject to the terms below, Parsaetak ("the Licensor") grants you a
+   personal, non-exclusive, non-transferable, revocable license to install
+   and run the Software on computers you own or control, for any lawful
+   personal or commercial purpose.
+
+2. INTELLECTUAL PROPERTY
+   The Proprietary components of the Software — their source code,
+   binaries, documentation, icons, and designs — are and remain the
+   exclusive property of Parsaetak and its contributors. No ownership
+   rights are transferred to you by this license. This license attaches
+   to the concrete expressions classified in LICENSE-MAP.md (actual code,
+   documentation, assets, and implementations); it does not assert that
+   abstract ideas, techniques, algorithms, or functionality described by
+   those expressions are themselves protected intellectual property.
+
+3. TRADEMARK
+   "SHEYTAN", "SHEYTAN-Local-Agent", and the SHEYTAN logo are trademarks
+   of Parsaetak. You may not use the marks (or confusingly similar marks)
+   to name or promote products, forks, or derivative works without prior
+   written permission. Referring to the Software by its name for the
+   purpose of description, review, or interoperability is permitted.
+
+4. DISTRIBUTION
+   You may NOT redistribute, sublicense, sell, rent, lease, or host the
+   Proprietary components of the Software (in whole or in part, original
+   or modified) without prior written permission. Sharing an unmodified
+   official release archive for non-commercial personal use is permitted,
+   provided all files — including this license and LICENSE-MAP.md —
+   remain intact.
+
+5. DERIVATIVE WORKS
+   You may modify the Software for your own personal use. You may NOT
+   distribute modified versions, rebranded builds, or extractions of the
+   Proprietary source code without prior written permission.
+
+6. LOCAL-FIRST PRIVACY
+   The Software is designed to run inference and tool execution locally on
+   your machine, with all data stored inside the application folder. When
+   the optional remote provider mode is enabled, prompts you submit are
+   sent to the third-party endpoint you configure; the Licensor is not
+   responsible for how third parties handle that data. Local logs (tool
+   calls, LLM calls, crashes) stay on your disk until you choose to export
+   them.
+
+7. ACCEPTABLE USE
+   You agree to use the Software only in compliance with applicable law.
+   You are solely responsible for commands the agent executes on your
+   behalf, including any file, shell, browser, git, or network operations.
+
+8. DISCLAIMER OF WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+   CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN
+   CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+9. TERMINATION
+   This license terminates automatically if you breach any term. Upon
+   termination you must stop using the Software and delete all copies.
+
+10. CHANGES
+   The Licensor may revise this agreement for future releases. Continued
+   use after an update constitutes acceptance of the revised terms.
+
+Contact for licensing and trademark inquiries:
+  Parsaetak — https://github.com/Parsaetak

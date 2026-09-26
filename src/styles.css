@@ -2943,6 +2943,27 @@ body::before {
   color: var(--text-muted);
 }
 
+/* v1.6.1: the typed-path import fallback (hosts without the native
+   picker) — one input + action row under the picker header. */
+.model-picker-import-path {
+  display: flex;
+
+  gap: 8px;
+
+  padding: 8px 12px;
+
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+
+  background: var(--surface);
+}
+
+.model-picker-import-path input {
+  flex: 1;
+
+  min-width: 0;
+}
+
 .model-card {
   display: flex;
 

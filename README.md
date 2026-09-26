@@ -9,11 +9,11 @@ SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built
 
 **SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
 
-Licensed under the **Parsaetak Proprietary License v1.1** (see `LICENSE`).
+Licensed under a **conservative mixed model** — Apache-2.0 for explicitly designated open components, the **Parsaetak Proprietary License v1.1** for SHEYTAN-specific material (see `LICENSE` + `LICENSE-MAP.md`).
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.6.0
+Current release:  v1.6.1
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -22,6 +22,14 @@ Branch:           main
 ---
 
 # What SHEYTAN is
+
+## v1.6.1 highlights
+
+* **P0 — deterministic sampling gate** — the in-the-wild `--repeat-penalty 0` failure ("repeat-penalty must be finite and greater than 0") is now refused BEFORE any engine process starts: one authoritative validation module (`internal/config/sampling.go`) runs at config load (safe repair to the documented default, reported), at the Settings PATCH API (rejected with an actionable 400), on environment overrides, at the engine boot gate (classified `InvalidSamplingConfigError` — a DETERMINISTIC configuration failure, never an accelerator/compatibility verdict) and on the launch arguments themselves. The compatibility ladder and repair loop are never entered for invalid values: the pre-fix behavior spawned the engine 4+ times for one bad value. Proven by tests that count real spawns (0 after the fix).
+* **First-class local GGUF import** — "place a file in the folder yourself" is replaced by an import workflow with the same engineering standard as every model operation: GGUF header validation before any bytes move (the same `ReadModelCard` authority the picker uses), streaming 1 MiB-chunk file copy (never whole-model RAM), atomic final placement (hidden `.import-*.tmp` staging + rename, size-verified), safe duplicate handling (same size + SHA-256 = duplicate report; different content = fresh `-1` name, never an overwrite), and the source is copied, never moved — arbitrary external model paths stay the user's. The picker exposes "Import GGUF…" (native Windows file dialog; typed-path fallback elsewhere) and immediately selects the imported model through the existing selection state machine. Migrated `model`/`draftModel`/`visionMmproj` paths pointing inside a retired runtime root are re-anchored onto the canonical root.
+* **Readable normal logs** — unchanged per-poll accelerator resolutions log at DEBUG (Advanced diagnostics keeps the evidence; only CHANGED resolutions log at INFO), the device-enumeration warning deduplicates the same way, and the updater's stale-file reporting aggregates dozens of per-filename lines into one line per package swap (per-file detail stays at DEBUG + in diagnostics). Actionable startup/update/engine errors stay visible; no secrets, tokens, headers or model contents are ever logged.
+* **Real Windows Vulkan provisioning** — the engine package carries a recorded backend VARIANT (manifest `variant: cpu|vulkan`); the transactional installer provisions the real upstream Vulkan asset (`llama-<tag>-bin-win-vulkan-x64.zip`) through the same staged/leased/rollback-safe authority as every engine update (`POST /api/engine/provision`). An explicit VULKAN request that cannot be provisioned fails loudly — never a silent CPU install; AUTO keeps selecting Vulkan only on runtime evidence (engine enumeration or a measured offload line), `executionVerified` stays evidence-gated, and a CI gate HEAD-checks the pinned Vulkan asset so the promise cannot drift into a naming fiction.
+* **Conservative mixed licensing + governance** — `LICENSE` (routing), `LICENSE-APACHE`, `LICENSE-PROPRIETARY`, `LICENSE-MAP.md` (the component classification authority — open only by explicit designation), `NOTICE.md` (third-party attribution), `CONTRIBUTING.md`, `SECURITY.md`; SPDX headers on the Apache-designated component.
 
 ## v1.6.0 highlights
 
@@ -174,6 +182,11 @@ notes below are one-line headlines.
 
 | Version | Headline |
 |---|---|
+| v1.6.1 | P0 sampling gate (deterministic config failures never spawn the engine), first-class GGUF import, readable normal logs, real Windows Vulkan engine provisioning (variant manifests, no silent CPU fallback), conservative mixed licensing + governance |
+| v1.6.0 | Startup maintenance gate, top-level Chat/Agent views, automatic long context, custom tools, truthful downloads |
+| v1.5.1 | Honest model-card compatibility verdicts, selection-flow hardening |
+| v1.5.0 | MODEL-FIRST startup: backend-authoritative selection state machine, recommendation engine, retained calibration |
+| v1.4.0 | CI-integrity repair, release contract, testfakes portability gate |
 | v1.3.7 | Run settlement edge (idle/lastRun always recoverable), engine provisioning order offline-first, Repair honesty, transactional model-architecture auto-update, installer rollback + unmanaged-dir protections, Net Search server-side contract |
 | v1.3.0 | Runtime path correctness (one authoritative path resolver + malformed-tree migration), clean startup logging, universal scrolling, user-outcome Settings, first-class GitHub clone workflow |
 | v1.2.9 | Stabilization & security: cross-mode history authority boundaries, durable completion ordering, concurrent handoff safety, honest context budgeting, CI race gate |
@@ -331,6 +344,8 @@ SHEYTAN-Local-Agent/
 ```
 
 The engine binary downloads automatically when the machine is online; drop a prebuilt `llama-server(.exe)` into `bin/` for offline installs. NOTE: llama.cpp stopped publishing prebuilt LINUX binaries — on Linux the automatic download therefore cannot succeed any more; build `llama-server` from source and set `llamaBinPath`, or select the native engine (`engineBackend: "native"`). The engine still scans recent upstream releases and self-heals automatically if prebuilt Linux binaries return.
+
+**Models** are imported first-class: `Import GGUF…` in the Model Picker (or `POST /api/models/import`) validates the GGUF header, streams the file into `models/` atomically (duplicate-safe, source untouched) and selects it through the normal selection flow. Placing a `.gguf` file into `models/` by hand still works. On Windows the engine package carries a recorded backend variant (`cpu` or `vulkan`) — `POST /api/engine/provision {"variant":"vulkan"}` swaps in the real Vulkan engine package transactionally; an explicit Vulkan request that cannot be provisioned fails loudly and never silently installs CPU.
 
 # Configuration
 

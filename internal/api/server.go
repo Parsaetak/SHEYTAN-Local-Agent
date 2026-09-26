@@ -157,6 +157,19 @@ type Server struct {
         // maintenanceSave persists the gate's LastUpdateCheck mutation
         // (production wires config.Save; tests may stub it).
         maintenanceSave func()
+
+        // v1.6.1 LOG DISCIPLINE: /api/perf is polled every few seconds and
+        // recomputes the accelerator resolution each time. Logging the
+        // full resolution at INFO on every poll flooded app.log with
+        // hundreds of identical lines (the v1.6.0 "unreadable normal
+        // logs" complaint). accelMu + lastAccelDesc cache the last
+        // logged description: an UNCHANGED resolution logs at DEBUG (kept
+        // for Advanced diagnostics), only a CHANGED resolution logs at
+        // INFO. The same discipline applies to the device-enumeration
+        // warning.
+        accelMu             sync.Mutex
+        lastAccelDesc       string
+        lastAccelEnumWarn   string
 }
 
 type runState struct {
@@ -477,6 +490,9 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("/api/llama", s.handleLlama)
         mux.HandleFunc("/api/engine", s.handleEngine)
         mux.HandleFunc("/api/engine/rediscover", s.handleEngineRediscover)
+        // v1.6.1: backend-variant provisioning (real Vulkan engine
+        // packages — never a silent CPU fallback for explicit requests).
+        mux.HandleFunc("/api/engine/provision", s.handleEngineProvision)
         mux.HandleFunc("/api/attachments", s.handleAttachments)
         mux.HandleFunc("/api/attachments/", s.handleAttachments)
         mux.HandleFunc("/api/run", s.handleRun)
@@ -506,6 +522,15 @@ func (s *Server) Handler() http.Handler {
         // chain (analyze → configure atomically → load → verify → ready,
         // plus the bounded AUTO calibration).
         mux.HandleFunc("/api/models/select", s.handleModelsSelect)
+
+        // v1.6.1: first-class local GGUF import — validate the header,
+        // stream the file into the managed models directory atomically,
+        // then (by default) drive the SAME selection chain as
+        // /api/models/select. /api/models/import/pick opens the native
+        // platform file dialog (Windows) so the user never has to find
+        // the folder manually.
+        mux.HandleFunc("/api/models/import", s.handleModelsImport)
+        mux.HandleFunc("/api/models/import/pick", s.handleModelsImportPick)
 
         // v1.5.0: per-model recommendation evidence for the picker — the
         // "Recommended for this machine" chip requires this measured
@@ -1298,6 +1323,19 @@ func (s *Server) mergeConfigPatch(data []byte) (*config.Config, error) {
         var updated config.Config
         if err := json.Unmarshal(merged, &updated); err != nil {
                 return nil, err
+        }
+
+        // v1.6.1 (P0): the sampling-value gate on the LIVE configuration. A
+        // patch carrying a parser-invalid sampling value (repeatPenalty=0, a
+        // negative temperature, a non-finite topP…) is REJECTED with an
+        // actionable diagnostic instead of being stored — the stored value
+        // would be handed to the engine as a launch argument and rejected
+        // there ("repeat-penalty must be finite and greater than 0"), after
+        // which the failure fed the compatibility ladder (the v1.6.0 retry
+        // storm). Validation lives in internal/config/sampling.go — the same
+        // authority the engine boot gate uses.
+        if problems := config.ValidateSamplingOptions(updated.LLM); len(problems) > 0 {
+                return nil, &config.SamplingProblemsError{Problems: problems}
         }
 
         s.src.Store(&updated)

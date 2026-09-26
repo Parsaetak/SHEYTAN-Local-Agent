@@ -10,6 +10,146 @@ The v2.0.0.0 release is the point at which SHEYTAN-LA should be considered a com
 
 ---
 
+# 0. ENGINEERING STATUS — read this first (v1.6.1, 2026-09-26)
+
+This section is the forward engineering plan. Every item is explicitly
+marked **completed / current / next / future**. The next agent session
+should read this section, then `agent.md`, then the v1.6.1 sections of
+`ARCHITECTURE.md` / `UPDATE.md` / `worklog.md`.
+
+## COMPLETED
+
+* **COMPLETED (v1.6.1, verified)** — P0 deterministic sampling gate:
+  `internal/config/sampling.go` is the single validation authority;
+  invalid sampling values (the in-the-wild `repeatPenalty: 0`) are
+  repaired at config Load, rejected at the Settings PATCH API, and
+  refused at the engine boot gate BEFORE any engine process, the
+  download path, or the compatibility ladder. Classified
+  `InvalidSamplingConfigError`; retry-storm reproduction counted 4 real
+  engine spawns pre-fix, 0 post-fix.
+* **COMPLETED (v1.6.1, verified with the real GGUF fixture)** —
+  first-class local GGUF import: header validation, streaming copy,
+  atomic placement, duplicate-safe naming, source never modified;
+  `POST /api/models/import` + native Windows picker + the picker UI;
+  retired-root model-path re-anchoring (`internal/config/modelpaths.go`).
+* **COMPLETED (v1.6.1, verified)** — log discipline: accelerator
+  resolutions and enumeration warnings log at INFO only on CHANGE
+  (DEBUG otherwise); updater stale-file reporting aggregated to one line
+  per package swap; secret policy audited (no credentials/tokens/
+  headers/model contents logged).
+* **COMPLETED (v1.6.1, deterministic tests + Windows CI gate)** — real
+  Windows Vulkan engine provisioning: variant-aware assets
+  (`llama-<tag>-bin-win-vulkan-x64.zip`), manifest records
+  `variant: cpu|vulkan`, transactional `UpdateEngineVariantNow` +
+  `POST /api/engine/provision`; explicit VULKAN never silently falls
+  back to CPU; AUTO stays evidence-gated; CI HEAD-checks the pinned
+  Vulkan asset.
+* **COMPLETED (v1.6.1)** — conservative mixed licensing + governance:
+  `LICENSE`/`LICENSE-APACHE`/`LICENSE-PROPRIETARY`/`LICENSE-MAP.md`
+  (the classification authority; `internal/humanize/` is the designated
+  Apache-2.0 component) + `NOTICE.md`/`CONTRIBUTING.md`/`SECURITY.md`.
+* **COMPLETED (v1.6.1, regression evidence)** — full verification
+  matrix: 53 Go packages green (headless), `-race` green on the
+  concurrency-heavy packages, native C++ engine 13/13, frontend
+  115/115 unit + typecheck + lint + production build + stable-asset
+  contract, browser E2E 24/24 (real C++ engine + real GGUF generation),
+  release-metadata consistency check green.
+
+## CURRENT STATE
+
+* **Current version:** v1.6.1 (single version hierarchy: package.json →
+  release-version.mjs → config.go / build/config.yml / SIGNATURE).
+* **Current verified architecture:** Go API + runtime (engine lifecycle
+  with the maintenance gate and the new sampling gate; model-first
+  selection state machine; transactional variant-aware engine
+  provisioning), React/TS frontend (top-level CHAT | AGENT |
+  WORKSPACE/LAB | SYSTEM | SETTINGS views), managed llama.cpp engine +
+  native C++ engine backend contract, portable install-local data root
+  with the migration chain, conservative mixed licensing.
+* **Known limitations (honest):**
+  - Windows-only execution surfaces (the Vulkan provisioning
+    transaction, the comdlg32 model picker, Job-Object process trees)
+    are verified by deterministic tests + the CI matrix; they were not
+    hand-executed on a Windows machine in the v1.6.1 session (the
+    session host is Linux). The CI Windows job is the runtime authority.
+  - The GGUF import's typed-path fallback is the only non-Windows input
+    path (no GTK file-dialog integration); the backend endpoint itself
+    is platform-independent.
+  - The engine variant provisioning is API-only
+    (`POST /api/engine/provision`); no Settings UI surface yet.
+  - AUTO does not yet auto-provision the Vulkan variant when evidence
+    appears while a CPU package is installed — the user (or a client)
+    triggers the swap explicitly. This is a policy decision, not an
+    oversight.
+  - Only `internal/humanize/` is Apache-2.0-designated; the map's open
+    set is intentionally minimal (conservative default).
+  - llama.cpp publishes no prebuilt Linux engine binaries: on Linux the
+    automatic engine download cannot succeed (native engine or a
+    self-built llama-server remain the documented paths).
+* **Remaining known issues:**
+  - The Settings panel's other numeric sampling fields rely on the
+    backend 400 for invalid input (only repeat-penalty normalizes
+    client-side on blur).
+  - No browser-E2E spec exercises the import button flow yet (the Go
+    API tests cover the chain with the real fixture).
+
+## NEXT (ordered, concrete, actionable)
+
+1. **NEXT — Windows runtime validation of the v1.6.1 surfaces.** On a
+   real Windows machine (or the Actions Windows runner with a GPU):
+   run the Vulkan provisioning transaction end-to-end
+   (`POST /api/engine/provision {"variant":"vulkan"}`), capture the
+   engine's `--list-devices` Vulkan enumeration + the offload line,
+   verify `executionVerified=true` flows through `/api/perf`, and
+   record the evidence in `worklog.md`. Also exercise the comdlg32
+   model picker once. Everything is already CI-gated; this item closes
+   the "CI-verified vs hand-verified" gap.
+2. **NEXT — v1.7: Full Agent Engineering Loop** (the roadmap's next
+   release slot, unchanged): reproduction workflows, automated
+   build/test discovery, failure classification, repair plans,
+   incremental test execution, regression detection, patch review, safe
+   promotion, artifact production, verification reports. Exit
+   condition: a real coding task from request to verified completion
+   without manual orchestration. See §4 of this file.
+3. **NEXT — import flow E2E + Settings guards.** Add a browser-E2E spec
+   driving the "Import GGUF…" button (native picker stubbed through the
+   typed-path fallback on Linux CI); mirror the repeat-penalty
+   on-blur normalization for the other sampling fields in
+   `src/SettingsPanel.tsx`.
+4. **NEXT — AUTO variant-provisioning policy.** Decide + implement:
+   when the accelerator resolution carries VERIFIED Vulkan evidence and
+   the installed package is CPU on Windows, either (a) propose the swap
+   through the maintenance gate with user consent, or (b) auto-provision
+   through `UpdateEngineVariantNow` with rollback safety. Tests for
+   both the decision and the transaction. Do NOT make AUTO claim Vulkan
+   while a CPU package is installed.
+5. **NEXT — deferred v1.6.0 items:** the AI-assisted custom-tool builder
+   (manual builder is complete) and the unified Downloads Center page.
+6. **NEXT — engine-variant Settings surface.** Expose the installed
+   variant + provisioning action in Settings → Performance (backend is
+   complete: `GET/POST /api/engine/provision`).
+
+## FUTURE (strategic, not yet started)
+
+* **FUTURE — v1.8+: Internet + Repository Operations** (web search
+  extraction depth, GitHub repository operations beyond cloning). See §6.
+* **FUTURE — v1.9/v2.0 track: durable request/job queue, integrated
+  IDE/engineering canvas, self-writing tool system, multi-agent
+  architecture, system/runtime intelligence.** See §5, §9–§13 — these
+  remain PLANNED (Part II discipline: nothing there is implemented).
+* **FUTURE — broader Apache-2.0 designation.** Candidate components
+  (only with maintainer sign-off and the LICENSE-MAP.md reclassification
+  procedure): `internal/chunking`, `internal/histref` — currently
+  proprietary by conservative default.
+* **FUTURE — non-Windows native file pickers** (GTK/Zenity) for the
+  import flow on Linux desktops.
+
+The rest of this file is the strategic roadmap (v2.0 end state,
+principles, capability pillars and the version plan) — its historical
+goals remain authoritative and are deliberately preserved.
+
+---
+
 # 1. v2.0.0.0 End State
 
 By `v2.0.0.0`, SHEYTAN-LA must be able to execute a complete software-engineering task locally from request to verified delivery.
@@ -797,6 +937,46 @@ Focus: maximize effective capability of smaller local models.
 * Model-aware context strategies.
 
 **Exit condition:** large repositories remain usable even with relatively small local models.
+
+---
+
+## v1.6.1 — SHIPPED (2026-09-26): P0 Sampling Gate, GGUF Import, Log Discipline, Real Vulkan, Mixed Licensing
+
+The shipped v1.6.1 was a correctness/capability/governance release driven
+by the in-the-wild `--repeat-penalty 0` engine failure (the value fed the
+compatibility ladder and produced a retry storm of engine spawns).
+Shipped and tested (full verification matrix in `worklog.md` §v1.6.1):
+
+* Deterministic sampling gate — one validation authority
+  (`internal/config/sampling.go`) applied at config load (safe repair,
+  reported), env overrides, the Settings PATCH API (actionable 400), the
+  engine boot gate (BEFORE any engine process / download / ladder;
+  classified `InvalidSamplingConfigError` — a configuration failure,
+  never an accelerator/compatibility verdict) and the launch arguments
+  (numeric range rules). Invalid values never spawn the engine (real
+  spawn-count evidence: 4 pre-fix → 0 post-fix).
+* First-class local GGUF import — header validation before any bytes
+  move, streaming 1 MiB copy, atomic placement, duplicate-safe naming,
+  source never modified; API + native Windows picker + picker UI;
+  retired-root model-path re-anchoring. Verified with the real in-repo
+  GGUF fixture.
+* Log discipline — accelerator resolutions/enumeration warnings log at
+  INFO only on change; updater stale-file reporting aggregated; secrets
+  never logged (audited).
+* Real Windows Vulkan provisioning — backend-variant engine packages
+  (manifest `variant: cpu|vulkan`), the real upstream Vulkan asset
+  through the SAME transactional installer, engine-owned
+  `UpdateEngineVariantNow` + `POST /api/engine/provision`; explicit
+  VULKAN never silently falls back to CPU; AUTO stays evidence-gated; a
+  Windows CI gate HEAD-checks the pinned Vulkan asset.
+* Conservative mixed licensing + governance files (LICENSE-APACHE,
+  LICENSE-PROPRIETARY, LICENSE-MAP.md as the classification authority,
+  NOTICE.md, CONTRIBUTING.md, SECURITY.md; SPDX headers on the
+  Apache-designated component).
+
+Deferred honestly: the AUTO variant-provisioning policy (NEXT item 4 in
+§0), the engine-variant Settings surface (NEXT item 6), and the import
+button browser-E2E spec (NEXT item 3).
 
 ---
 

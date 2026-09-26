@@ -383,25 +383,10 @@ func latestTagFromAtom(ctx context.Context) (string, error) {
 
 // AssetName returns the prebuilt llama.cpp asset name for this OS/arch at
 // the given tag, or "" when no prebuilt asset exists for the platform.
+// v1.6.1: this is the CPU variant alias — variant-aware callers use
+// AssetNameForVariant (the Windows Vulkan package has its own asset).
 func AssetName(tag string) string {
-        var arch string
-        switch runtime.GOARCH {
-        case "amd64":
-                arch = "x64"
-        case "arm64":
-                arch = "arm64"
-        default:
-                return ""
-        }
-        switch runtime.GOOS {
-        case "windows":
-                return fmt.Sprintf("llama-%s-bin-win-cpu-%s.zip", tag, arch)
-        case "darwin":
-                return fmt.Sprintf("llama-%s-bin-macos-%s.zip", tag, arch)
-        case "linux":
-                return fmt.Sprintf("llama-%s-bin-ubuntu-%s.zip", tag, arch)
-        }
-        return ""
+        return AssetNameForVariant(tag, VariantCPU)
 }
 
 // AssetURL builds the download URL for the prebuilt asset at a tag.

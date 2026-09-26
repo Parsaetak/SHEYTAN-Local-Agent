@@ -45,6 +45,7 @@ import (
         "context"
         "encoding/json"
         "fmt"
+        "math"
         "os"
         "os/exec"
         "path/filepath"
@@ -411,6 +412,25 @@ func argProblems(args []string, caps *EngineCaps) []string {
 
         var problems []string
 
+        // v1.6.1 (P0): per-option numeric RANGE contracts, mirroring the
+        // engine's own argument parser. Type checks alone let
+        // "--repeat-penalty 0" through (0 parses fine as a float) — the
+        // engine then rejected it and the failure was mis-fed into the
+        // option-repair/compat ladder. The rules below reject the same
+        // values the parser does, BEFORE any process spawns.
+        floatRanges := map[string]struct {
+            min, max     float64
+            minExclusive bool
+            rule         string
+        }{
+            "--repeat-penalty":   {0, math.Inf(1), true, "repeat-penalty must be finite and greater than 0"},
+            "--temp":             {0, math.Inf(1), false, "temperature must be a finite number of at least 0"},
+            "--top-p":            {0, 1, false, "top-p must be between 0 and 1"},
+            "--min-p":            {0, 1, false, "min-p must be between 0 and 1"},
+            "--mirostat-tau":     {0, math.Inf(1), true, "mirostat-tau must be finite and greater than 0"},
+            "--mirostat-eta":     {0, math.Inf(1), true, "mirostat-eta must be finite and greater than 0"},
+        }
+
         for i := 0; i < len(args); i++ {
                 arg := args[i]
                 if !strings.HasPrefix(arg, "-") || arg == "-" {
@@ -474,9 +494,18 @@ func argProblems(args []string, caps *EngineCaps) []string {
                                                         "%s requires an integer, got %q", arg, next))
                                         }
                                 case "float":
-                                        if _, err := strconv.ParseFloat(next, 64); err != nil {
+                                        v, ferr := strconv.ParseFloat(next, 64)
+                                        if ferr != nil || math.IsNaN(v) || math.IsInf(v, 0) {
                                                 problems = append(problems, fmt.Sprintf(
-                                                        "%s requires a number, got %q", arg, next))
+                                                        "%s requires a finite number, got %q", arg, next))
+                                        } else if rng, ok := floatRanges[arg]; ok {
+                                                bad := v < rng.min || v > rng.max ||
+                                                        (rng.minExclusive && v == rng.min)
+                                                if bad {
+                                                        problems = append(problems, fmt.Sprintf(
+                                                                "%s %s — got %q (fix the value; no compatibility mode can make an invalid value work)",
+                                                                arg, rng.rule, next))
+                                                }
                                         }
                                 }
                         }

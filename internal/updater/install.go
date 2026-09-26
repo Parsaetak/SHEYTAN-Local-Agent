@@ -149,13 +149,16 @@ func EngineBinaryPath(cfg *config.Config) string {
 
 // installManifest records the committed package identity beside the
 // binary (spec §2: verify executable identity; spec §34: real recorded
-// tag + hash, not bookkeeping guesses).
+// tag + hash, not bookkeeping guesses). v1.6.1: Variant records the
+// backend family the package carries ("cpu" | "vulkan") — a v1.6.0-era
+// manifest without the field reads back as "cpu".
 type installManifest struct {
-        Tag         string `json:"tag"`
-        SHA256      string `json:"sha256"`
-        Size        int64  `json:"size"`
-        InstalledAt string `json:"installedAt"`
-        Source      string `json:"source"`
+        Tag         string        `json:"tag"`
+        SHA256      string        `json:"sha256"`
+        Size        int64         `json:"size"`
+        InstalledAt string        `json:"installedAt"`
+        Source      string        `json:"source"`
+        Variant     AssetVariant  `json:"variant,omitempty"`
 }
 
 const installManifestName = "engine-install.json"
@@ -214,6 +217,21 @@ func InstallStagedDeferred(
         tag string,
         onProgress func(downloader.Progress),
 ) (*StagedInstall, error) {
+        return InstallStagedDeferredWithVariant(ctx, cfg, tag, VariantCPU, onProgress)
+}
+
+// InstallStagedDeferredWithVariant is InstallStagedDeferred for a
+// specific BACKEND VARIANT (v1.6.1: the Windows Vulkan engine package).
+// Same transactional choreography, same lease/install-lock discipline —
+// only the upstream asset differs, and the manifest records which
+// variant was installed.
+func InstallStagedDeferredWithVariant(
+        ctx context.Context,
+        cfg *config.Config,
+        tag string,
+        variant AssetVariant,
+        onProgress func(downloader.Progress),
+) (*StagedInstall, error) {
         installMu <- struct{}{}
         defer func() { <-installMu }()
 
@@ -228,9 +246,11 @@ func InstallStagedDeferred(
 
         defer release.Release()
 
-        url := AssetURL(tag)
+        url := AssetURLForVariant(tag, variant)
         if url == "" {
-                return nil, fmt.Errorf("no prebuilt llama.cpp asset for %s/%s", runtime.GOOS, runtime.GOARCH)
+                return nil, fmt.Errorf(
+                        "no prebuilt llama.cpp %s engine asset for %s/%s — the %s backend variant is not served by upstream releases for this platform",
+                        variant, runtime.GOOS, runtime.GOARCH, variant)
         }
 
         binDir := EngineBinDir(cfg)
@@ -239,7 +259,7 @@ func InstallStagedDeferred(
         }
 
         // 1) DISCOVER + DOWNLOAD to staging (never the live directory).
-        logging.Default().Info("updater", "downloading engine %s from %s", tag, url)
+        logging.Default().Info("updater", "downloading engine %s (%s backend) from %s", tag, variant, url)
 
         archive, err := downloadEngineArchiveStaged(ctx, url, tag, binDir, onProgress)
         if err != nil {
@@ -248,7 +268,7 @@ func InstallStagedDeferred(
 
         defer os.Remove(archive)
 
-        return stageFromArchive(cfg, tag, archive, url)
+        return stageFromArchive(cfg, tag, archive, url, variant)
 }
 
 // InstallStagedFromArchiveDeferred is the archive-seam variant of
@@ -256,6 +276,17 @@ func InstallStagedDeferred(
 func InstallStagedFromArchiveDeferred(
         cfg *config.Config,
         tag string,
+        archivePath string,
+) (*StagedInstall, error) {
+        return InstallStagedFromArchiveDeferredWithVariant(cfg, tag, VariantCPU, archivePath)
+}
+
+// InstallStagedFromArchiveDeferredWithVariant is the variant-aware
+// archive seam (deterministic tests without a network).
+func InstallStagedFromArchiveDeferredWithVariant(
+        cfg *config.Config,
+        tag string,
+        variant AssetVariant,
         archivePath string,
 ) (*StagedInstall, error) {
         installMu <- struct{}{}
@@ -272,7 +303,7 @@ func InstallStagedFromArchiveDeferred(
 
         defer release.Release()
 
-        return stageFromArchive(cfg, tag, archivePath, "archive://"+filepath.Base(archivePath))
+        return stageFromArchive(cfg, tag, archivePath, "archive://"+filepath.Base(archivePath), variant)
 }
 
 // StagedInstall is a validated engine package that has been atomically
@@ -286,6 +317,7 @@ type StagedInstall struct {
         url      string
         binDir   string
         oldDir   string
+        variant  AssetVariant
         result   InstallResult
         manifest installManifest
 }
@@ -365,7 +397,7 @@ func refuseUnmanagedEngineDir(cfg *config.Config, binDir string) error {
 // the byte-identity verification of the swapped-in package; COMMIT and
 // CLEANUP are the caller's decision via StagedInstall.Commit/Rollback
 // (spec §7). Caller holds installMu and the install lease.
-func stageFromArchive(cfg *config.Config, tag, archive, url string) (*StagedInstall, error) {
+func stageFromArchive(cfg *config.Config, tag, archive, url string, variant AssetVariant) (*StagedInstall, error) {
         binDir := EngineBinDir(cfg)
 
         // v1.3.7: the directory swap only ever touches SHEYTAN-owned
@@ -438,7 +470,7 @@ func stageFromArchive(cfg *config.Config, tag, archive, url string) (*StagedInst
         // Merge-back: ONLY allowlisted non-engine companions (native host,
         // license/metadata files) survive the package swap. Stale DLLs and
         // foreign binaries can never re-enter the new package (spec §12).
-        mergeCompanionFiles(oldDir, binDir)
+        logDroppedCompanions(mergeCompanionFiles(oldDir, binDir))
 
         // 5) VERIFY INSTALLED BINARY — byte identity must match the staged,
         // validated candidate.
@@ -458,11 +490,12 @@ func stageFromArchive(cfg *config.Config, tag, archive, url string) (*StagedInst
                 url:    url,
                 binDir: binDir,
                 oldDir: oldDir,
+                variant: variant,
                 result: InstallResult{
                         BinPath: installedPath,
                         SHA256:  installedIdent.SHA256,
                         Tag:     tag,
-                        Outcome: fmt.Sprintf("engine installed: llama.cpp %s", tag),
+                        Outcome: fmt.Sprintf("engine installed: llama.cpp %s (%s backend)", tag, variant),
                 },
                 manifest: installManifest{
                         Tag:         tag,
@@ -470,6 +503,7 @@ func stageFromArchive(cfg *config.Config, tag, archive, url string) (*StagedInst
                         Size:        installedIdent.Size,
                         InstalledAt: time.Now().UTC().Format(time.RFC3339),
                         Source:      url,
+                        Variant:     variant,
                 },
         }
 
@@ -601,7 +635,7 @@ func ImportCandidate(cfg *config.Config, candidateDir, binaryRelPath string) (In
                 return result, fmt.Errorf("activate imported engine: %w", err)
         }
 
-        mergeCompanionFiles(oldDir, binDir)
+        logDroppedCompanions(mergeCompanionFiles(oldDir, binDir))
 
         installedPath := filepath.Join(binDir, filepath.Base(found))
         _ = os.Chmod(installedPath, 0o755)
@@ -820,7 +854,13 @@ func mergeCompanionFiles(oldDir, newDir string) []string {
                 if !isCompanionFile(base) {
                         dropped = append(dropped, rel)
 
-                        logging.Default().Warn("updater",
+                        // v1.6.1 LOG DISCIPLINE: a real llama.cpp package carries dozens
+                        // of backend DLLs — one WARN line per stale file turned every
+                        // package swap into a wall of noise. The per-file evidence
+                        // stays available at DEBUG (Advanced diagnostics) and through
+                        // the returned diagnostics; the normal log gets ONE aggregated
+                        // line per swap.
+                        logging.Default().Debug("updater",
                                 "package swap: stale engine file NOT carried into the new package: %s", rel)
 
                         return nil
@@ -851,6 +891,26 @@ func mergeCompanionFiles(oldDir, newDir string) []string {
         })
 
         return dropped
+}
+
+// logDroppedCompanions emits ONE aggregated line per package swap for the
+// stale files the new package does not carry forward (v1.6.1 log
+// discipline: dozens of per-file WARN lines made the update log unusable;
+// the per-file evidence remains at DEBUG inside mergeCompanionFiles and
+// in the returned diagnostics).
+func logDroppedCompanions(dropped []string) {
+        if len(dropped) == 0 {
+                return
+        }
+
+        sample := dropped
+        if len(sample) > 5 {
+                sample = sample[:5]
+        }
+
+        logging.Default().Warn("updater",
+                "package swap: dropped %d stale engine file(s) not carried into the new package (stale DLLs, foreign binaries — the new package owns its own closure; first: %s)",
+                len(dropped), strings.Join(sample, ", "))
 }
 
 // isCompanionFile is the swap carry-over allowlist (spec §12). DLLs and

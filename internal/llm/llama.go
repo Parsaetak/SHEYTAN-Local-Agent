@@ -268,6 +268,46 @@ func NewLlamaServer(src *config.Source) *LlamaServer {
         }
 }
 
+// InvalidSamplingConfigError is the v1.6.1 P0 classification: the launch
+// was refused because a sampling value in the configuration is
+// parser-invalid (the in-the-wild "--repeat-penalty 0" rejection).
+//
+// It is DETERMINISTIC: no compatibility level, option repair, engine
+// update or accelerator fallback can ever make the value work, so the
+// compatibility ladder and the retry loop are never entered for it. The
+// message names the field, the violated rule and the fix so the user can
+// act immediately.
+type InvalidSamplingConfigError struct {
+        Problems []config.SamplingProblem
+}
+
+func (e *InvalidSamplingConfigError) Error() string {
+        out := "engine start refused — invalid sampling configuration (fix these values, then start again):"
+
+        for _, p := range e.Problems {
+                out += "\n  " + p.String()
+        }
+
+        return out
+}
+
+// validateSamplingForLaunch is the authoritative pre-launch gate: it runs
+// BEFORE any engine process exists — before the ownership lease decision,
+// before the engine download/provision path, before the capability probe
+// and long before the compatibility ladder. See internal/config/sampling.go
+// for the defect narrative and the exact rule set.
+func validateSamplingForLaunch(cfg *config.Config) error {
+        if cfg == nil {
+                return nil
+        }
+
+        if problems := config.ValidateSamplingOptions(cfg.LLM); len(problems) > 0 {
+                return &InvalidSamplingConfigError{Problems: problems}
+        }
+
+        return nil
+}
+
 // SubscribeEvents registers a channel receiving every engine state
 // transition. The returned func unsubscribes. Channels are buffered;
 // slow consumers drop transitions rather than block the engine.
@@ -549,6 +589,29 @@ func (s *LlamaServer) startLocked() error {
         // v1.1.4: one consistent snapshot for the whole boot. A concurrent
         // Settings PATCH can no longer produce a half-old, half-new launch.
         cfg := s.src.Load()
+
+        // v1.6.1 (P0): the DETERMINISTIC CONFIGURATION GATE — the first
+        // thing the boot does. A parser-invalid sampling value (the
+        // in-the-wild repeatPenalty=0 that produced "error while handling
+        // argument \"--repeat-penalty\": repeat-penalty must be finite and
+        // greater than 0") is refused HERE: before the ownership lease,
+        // before the engine download path, before the capability probe and
+        // long before the compatibility ladder — none of which can ever
+        // make an invalid value work. This is a configuration failure,
+        // NEVER an accelerator/compatibility incompatibility: no ladder
+        // descent, no option-repair loop, no compat-level persistence, no
+        // retry storm. One classified, actionable error.
+        if serr := validateSamplingForLaunch(cfg); serr != nil {
+                s.mu.Lock()
+                s.detail = serr.Error()
+                s.mu.Unlock()
+
+                s.setState(StateFailed)
+
+                logging.Default().Error("engine", "%v", serr)
+
+                return serr
+        }
 
         // v1.3.6 (spec §16): claim the cross-process ownership lease BEFORE
         // any boot/adoption decision. One installation has exactly ONE
@@ -2657,16 +2720,163 @@ func (s *LlamaServer) runEngineInstall(
         tag string,
         onProgress func(downloader.Progress),
 ) (*updater.StagedInstall, error) {
+        return s.runEngineInstallVariant(ctx, cfg, tag, updater.VariantCPU, onProgress)
+}
+
+// runEngineInstallVariant is the backend-variant-aware install seam
+// (v1.6.1: the Windows Vulkan engine package). Same deferred-commit
+// contract; the manifest records the variant.
+func (s *LlamaServer) runEngineInstallVariant(
+        ctx context.Context,
+        cfg *config.Config,
+        tag string,
+        variant updater.AssetVariant,
+        onProgress func(downloader.Progress),
+) (*updater.StagedInstall, error) {
         s.mu.Lock()
         archive := s.testStagedArchive
         s.mu.Unlock()
 
         if archive != "" {
-                return updater.InstallStagedFromArchiveDeferred(cfg, tag, archive)
+                return updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, archive)
         }
 
-        return updater.InstallStagedDeferred(ctx, cfg, tag, onProgress)
+        return updater.InstallStagedDeferredWithVariant(ctx, cfg, tag, variant, onProgress)
 }
+
+// UpdateEngineVariantNow is the v1.6.1 backend-variant provisioning
+// transaction: stop the engine (Windows file locks), provision the
+// requested backend variant through the SAME staged installer and lease
+// discipline as UpdateEngineNow, restart, verify, commit — or roll the
+// previous package back byte-for-byte.
+//
+// An explicit VULKAN request that cannot be provisioned on this platform
+// fails LOUDLY with an actionable error; it NEVER silently installs the
+// CPU package instead (the caller decides whether CPU is an acceptable
+// fallback — AUTO does, an explicit request does not).
+func (s *LlamaServer) UpdateEngineVariantNow(
+        ctx context.Context,
+        variant updater.AssetVariant,
+        onProgress func(downloader.Progress),
+) (string, error) {
+        s.switchMu.Lock()
+        defer s.switchMu.Unlock()
+
+        cfg := s.src.Load()
+
+        lease, leaseErr := englease.Acquire(engineLeaseDir(cfg), englease.OwnerLease, "engine-owner")
+        if leaseErr != nil {
+                return "", fmt.Errorf("engine variant provisioning refused: %w", leaseErr)
+        }
+
+        defer lease.Release()
+
+        // The gate: refuse impossible variants BEFORE stopping anything —
+        // an explicit VULKAN request on an unserved platform must not
+        // bounce the running engine for nothing.
+        if !updater.VariantSupported(variant) {
+                return "", fmt.Errorf(
+                        "engine variant %q cannot be provisioned on %s — upstream llama.cpp publishes no prebuilt package for this platform; keep the CPU engine or point llamaBinPath at a self-built %s llama-server",
+                        variant, runtimeOS(), variant,
+                )
+        }
+
+        // Already there: report the no-op honestly.
+        if updater.InstalledEngineVariant(cfg) == variant {
+                return fmt.Sprintf("engine already carries the %s backend variant", variant), nil
+        }
+
+        // Prefer the CURRENT engine tag (same release, different backend
+        // build) — the variant swap must not silently downgrade the
+        // release. Resolve a fresh tag only when the current one does not
+        // carry the variant asset.
+        tag := updater.InstalledEngineTag(cfg)
+        if tag == "" || !updater.VariantExists(ctx, tag, variant) {
+                _, resolved, rerr := updater.ResolveDownloadURLForVariant(ctx, variant)
+                if rerr != nil {
+                        return "", fmt.Errorf("resolve %s engine release: %w", variant, rerr)
+                }
+                tag = resolved
+        }
+
+        wasRunning := s.IsRunning()
+
+        s.mu.Lock()
+        s.stopping = true
+        s.mu.Unlock()
+
+        if wasRunning {
+                s.setState(StateUpdating)
+
+                logging.Default().Info("updater", "stopping engine for transactional %s variant provisioning (%s)", variant, tag)
+
+                if err := s.Stop(); err != nil {
+                        s.mu.Lock()
+                        s.stopping = false
+                        s.mu.Unlock()
+
+                        return "", fmt.Errorf("stop engine before variant provisioning: %w", err)
+                }
+        } else {
+                s.setState(StateUpdating)
+        }
+
+        s.mu.Lock()
+        s.stopping = false
+        s.mu.Unlock()
+
+        staged, err := s.runEngineInstallVariant(ctx, cfg, tag, variant, onProgress)
+        if err != nil {
+                logging.Default().Warn("updater",
+                        "%s engine provisioning failed (%v) — restarting last-known-good engine", variant, err)
+
+                if startErr := s.startLocked(); startErr != nil {
+                        logging.Default().Warn("updater",
+                                "last-known-good restart also failed: %v", startErr)
+                }
+
+                return "", fmt.Errorf("install %s engine: %w", variant, err)
+        }
+
+        if startErr := s.startLocked(); startErr != nil {
+                logging.Default().Warn("updater",
+                        "%s engine installed but startup verification failed (%v) — rolling back to the previous package",
+                        variant, startErr)
+
+                if rbErr := staged.Rollback(); rbErr != nil {
+                        s.setState(StateFailed)
+
+                        return "", fmt.Errorf(
+                                "%s engine installed but startup verification failed: %v; rollback also failed: %w",
+                                variant, startErr, rbErr,
+                        )
+                }
+
+                if startErr2 := s.startLocked(); startErr2 != nil {
+                        logging.Default().Warn("updater",
+                                "last-known-good restart after rollback also failed: %v", startErr2)
+                }
+
+                s.setState(StateFailed)
+
+                return "", fmt.Errorf(
+                        "%s engine installed but startup verification failed: %w (previous package restored)",
+                        variant, startErr,
+                )
+        }
+
+        staged.Commit()
+
+        logging.Default().Info("updater",
+                "engine %s (%s backend) verified and committed — GPU/Vulkan claims are backed by a real backend package",
+                tag, variant)
+
+        return staged.Result().Outcome, nil
+}
+
+// runtimeOS is a tiny seam so the unsupported-variant error text stays
+// testable on every platform.
+func runtimeOS() string { return goOS }
 
 // SetStagedArchiveForTest points UpdateEngineNow at a local archive
 // (test-only seam; production always downloads through InstallStaged).

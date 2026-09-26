@@ -157,7 +157,7 @@ test("recommended setup cannot silently select a model (source contract)", () =>
   // This source contract keeps it removed: the picker must contain no
   // auto-target logic (no sorting by estimated footprint, no
   // first-evidence-safe pick) and no onboarding button that would call
-  // onUse outside an explicit card click.
+  // onUse outside an explicit user action.
   const picker = readFileSync(
     fileURLToPath(new URL("./ModelPicker.tsx", import.meta.url)),
     "utf8",
@@ -174,9 +174,19 @@ test("recommended setup cannot silently select a model (source contract)", () =>
     }
   }
 
-  // The ONLY onUse path is the explicit card button click.
+  // v1.6.1: the ALLOWED onUse call sites are enumerated — every one is an
+  // EXPLICIT user action, never a heuristic:
+  //   1. the model card's "Use model" button click;
+  //   2. the GGUF import flow (the user picked/typed a model file to
+  //      import — selecting it is the requested outcome of that action,
+  //      driven through the same selection API).
+  // Adding another call site requires updating this contract with the
+  // same justification: user-initiated, no footprint/filename/ordering
+  // heuristics involved.
   const onUseCalls = [...picker.matchAll(/onUse\(/g)].length;
-  if (onUseCalls !== 1) {
-    throw new Error(`ModelPicker must call onUse exactly once (the explicit card click), found ${onUseCalls}`);
+  if (onUseCalls !== 2) {
+    throw new Error(
+      `ModelPicker must call onUse exactly twice (the explicit card click + the explicit import flow), found ${onUseCalls}`,
+    );
   }
 });

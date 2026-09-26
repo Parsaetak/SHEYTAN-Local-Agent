@@ -418,6 +418,78 @@ const ModelPicker = function ModelPicker({
   const engineAlive = useRuntimeStore((state) => state.engine?.state);
   const engineState = useRuntimeStore((state) => state.engine);
 
+  // v1.6.1: the first-class local GGUF import. "Import GGUF…" opens the
+  // native platform file picker (Windows) or a path field (everywhere
+  // else), imports through the backend's validated streaming path, then
+  // IMMEDIATELY selects the imported model through the existing
+  // selection flow (onUse → /api/models/select). No silent folder
+  // hunting: the empty state is now an actionable import.
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [manualPath, setManualPath] = useState("");
+  const [showManualPath, setShowManualPath] = useState(false);
+
+  const runImport = async (path: string) => {
+    if (!path || importing) {
+      return;
+    }
+
+    setImporting(true);
+    setImportError(null);
+    setImportNote(null);
+
+    try {
+      const result = await api.importModel(path);
+
+      setImportNote(
+        result.duplicate
+          ? `${result.name} was already imported — selecting it.`
+          : `Imported ${result.name}${
+              result.architecture ? ` (${result.architecture} · ${result.quantization ?? "?"})` : ""
+            } — selecting it.`,
+      );
+
+      await refreshModels();
+
+      // Immediately select through the EXISTING selection flow.
+      onUse(result.name);
+    } catch (error) {
+      setImportError(
+        error instanceof Error ? error.message : "Import failed.",
+      );
+    } finally {
+      setImporting(false);
+      setManualPath("");
+      setShowManualPath(false);
+    }
+  };
+
+  const onImportClick = async () => {
+    if (importing) {
+      return;
+    }
+
+    // The native picker is Windows-only; every other host falls back to
+    // the typed-path field (the backend import endpoint works anywhere).
+    try {
+      const picked = await api.pickModelFiles();
+
+      if (picked.canceled || picked.paths.length === 0) {
+        return;
+      }
+
+      // Multi-select: import each, select the last (the user's final pick).
+      for (const path of picked.paths) {
+        await runImport(path);
+      }
+
+      return;
+    } catch {
+      setShowManualPath(true);
+    }
+  };
+
   const localModels = models?.local ?? [];
 
   // v1.5.0: the per-model recommendation evidence — fetched ONCE per
@@ -506,6 +578,16 @@ const ModelPicker = function ModelPicker({
           <button
             type="button"
             className="text-button"
+            onClick={() => void onImportClick()}
+            disabled={busy || importing || selectionInFlight}
+            title="Pick a GGUF file anywhere on this machine — it is validated and copied into the managed models folder, then selected."
+          >
+            {importing ? "Importing…" : "Import GGUF…"}
+          </button>
+
+          <button
+            type="button"
+            className="text-button"
             onClick={() => void refreshModels()}
             disabled={busy}
           >
@@ -528,6 +610,55 @@ const ModelPicker = function ModelPicker({
         </div>
       </header>
 
+      {/* v1.6.1: the import surface — status, errors, and the typed-path
+          fallback for hosts without the native picker. */}
+      {importNote ? (
+        <div
+          className="model-picker-selection phase-ready"
+          role="status"
+          aria-live="polite"
+          data-testid="import-status"
+        >
+          <strong>{importNote}</strong>
+        </div>
+      ) : null}
+
+      {importError ? (
+        <div
+          className="model-picker-selection phase-failed"
+          role="alert"
+          data-testid="import-error"
+        >
+          <span className="selection-error">{importError}</span>
+        </div>
+      ) : null}
+
+      {showManualPath ? (
+        <form
+          className="model-picker-import-path"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runImport(manualPath.trim());
+          }}
+        >
+          <input
+            type="text"
+            placeholder="Absolute path to a .gguf file on this machine"
+            value={manualPath}
+            onChange={(event) => setManualPath(event.target.value)}
+            disabled={importing}
+            data-testid="import-path-input"
+          />
+          <button
+            type="submit"
+            className="secondary-button"
+            disabled={importing || manualPath.trim() === ""}
+          >
+            Import
+          </button>
+        </form>
+      ) : null}
+
       {sorted.length === 0 && modelsLoading ? (
         <div className="model-picker-skeleton" aria-busy="true" aria-live="polite">
           <strong>Loading models…</strong>
@@ -540,9 +671,20 @@ const ModelPicker = function ModelPicker({
           <strong>Choose a model</strong>
 
           <span>
-            Place a GGUF model in the models folder, then refresh. No valid
-            model is configured yet, so requests cannot run.
+            Import a GGUF file from anywhere on this machine — it is
+            validated and copied into the managed models folder, then
+            selected. No valid model is configured yet, so requests
+            cannot run.
           </span>
+
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => void onImportClick()}
+            disabled={importing}
+          >
+            {importing ? "Importing…" : "Import a GGUF model"}
+          </button>
 
           <button
             type="button"

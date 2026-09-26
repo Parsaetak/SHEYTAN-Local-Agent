@@ -1606,7 +1606,22 @@ function SettingsPanel() {
                     onChange={(event) =>
                       updateLocalLLM("repeatPenalty", numberValue(event))
                     }
-                    onBlur={() => void save({ llm: config.llm })}
+                    onBlur={() => {
+                      // v1.6.1: the engine rejects "--repeat-penalty 0"
+                      // outright (must be finite and greater than 0) — a
+                      // cleared or malformed field must never be saved as 0.
+                      // Normalize to the documented default exactly like
+                      // config.Load does, then save that.
+                      const rp = config.llm.repeatPenalty;
+                      if (!Number.isFinite(rp) || rp <= 0) {
+                        updateLocalLLM("repeatPenalty", 1.1);
+                        void save({
+                          llm: { ...config.llm, repeatPenalty: 1.1 },
+                        });
+                        return;
+                      }
+                      void save({ llm: config.llm });
+                    }}
                   />
                 </label>
 

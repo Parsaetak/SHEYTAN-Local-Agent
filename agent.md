@@ -1,5 +1,36 @@
 # SHEYTAN-Local-Agent — Agent Context
 
+> **v1.6.1 handoff note (2026-09-26):** this release shipped the
+> deterministic sampling gate (`internal/config/sampling.go` — the
+> authoritative validation module; `internal/llm/llama.go`
+> `startLocked` refuses invalid sampling values BEFORE any engine
+> process, the compatibility ladder, or the download path — classified
+> `InvalidSamplingConfigError`, never a compat/accelerator verdict; the
+> Settings PATCH API rejects invalid values with an actionable 400),
+> the first-class local GGUF import (`internal/llm/importmodel.go` +
+> `POST /api/models/import` + `POST /api/models/import/pick` + the
+> picker's "Import GGUF…" flow — header validation, streaming copy,
+> atomic placement, duplicate-safe, source untouched; migrated
+> model-path re-anchoring in `internal/config/modelpaths.go`), the
+> v1.6.1 log discipline (`internal/api/perf.go` — accelerator
+> resolutions log at INFO only when CHANGED; `internal/updater/
+> install.go` — stale-file reporting aggregated to one line per swap),
+> REAL Windows Vulkan engine provisioning (`internal/updater/variant.go`
+> — variant-aware assets + manifest identity;
+> `LlamaServer.UpdateEngineVariantNow` + `POST /api/engine/provision`;
+> explicit VULKAN never silently falls back to CPU; AUTO stays
+> evidence-gated), and the conservative mixed licensing model
+> (`LICENSE`, `LICENSE-APACHE`, `LICENSE-PROPRIETARY`, `LICENSE-MAP.md`
+> — the classification authority, `NOTICE.md`, `CONTRIBUTING.md`,
+> `SECURITY.md`). Regression evidence: the full Go suite (53 packages,
+> headless), `go test -race` on the concurrency-heavy packages, the
+> native C++ engine suite (13/13), the frontend suite (115 unit tests,
+> typecheck, lint, production build + static-asset contract) and the
+> browser E2E suite (24/24 with the real C++ engine and real GGUF
+> generation). Read `ROADMAP.md` FIRST for what comes next, then
+> `UPDATE.md` (top section) and the v1.6.1 section of
+> `ARCHITECTURE.md`.
+
 > **v1.6.0 handoff note (2026-09-26, updated by the repair pass):** this
 > release added the startup
 > maintenance gate (`internal/api/maintenance.go` — engine maintenance

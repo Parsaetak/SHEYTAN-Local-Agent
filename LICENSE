@@ -1,75 +1,59 @@
 
-SHEYTAN™ END-USER LICENSE AGREEMENT
-===================================
-Version 1.1 · Last updated: 2026-08-26
+SHEYTAN™ LICENSE — CONSERVATIVE MIXED MODEL
+===========================================
+Version 1.0 · Introduced with SHEYTAN-Local-Agent v1.6.1
 
-Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights reserved.
+Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights
+reserved.
 
-IMPORTANT — READ CAREFULLY. By installing, copying, or otherwise using
-SHEYTAN-Local-Agent ("the Software") you agree to be bound by the terms of
-this agreement. If you do not agree, do not install or use the Software.
+SHEYTAN-Local-Agent ("the Software") is distributed under a deliberately
+CONSERVATIVE mixed licensing model: every file in this repository and
+every artifact built from it carries exactly one of the two licenses
+below, recorded in LICENSE-MAP.md (the classification authority).
 
-1. GRANT OF LICENSE
-   Subject to the terms below, Parsaetak ("the Licensor") grants you a
-   personal, non-exclusive, non-transferable, revocable license to install
-   and run the Software on computers you own or control, for any lawful
-   personal or commercial purpose.
+  1. LICENSE-APACHE      — Apache License 2.0, for the explicitly
+                           designated OPEN components listed in
+                           LICENSE-MAP.md §Open components.
 
-2. INTELLECTUAL PROPERTY
-   The Software and all of its source code, binaries, documentation, icons,
-   and design are and remain the exclusive property of Parsaetak and its
-   contributors. No ownership rights are transferred to you by this
-   license.
+  2. LICENSE-PROPRIETARY — the Parsaetak Proprietary License v1.1, for
+                           the SHEYTAN-specific proprietary mechanisms,
+                           the product-specific implementation, the
+                           assets and designs, and every other component
+                           explicitly classified as Proprietary in
+                           LICENSE-MAP.md.
 
-3. TRADEMARK
-   "SHEYTAN", "SHEYTAN-Local-Agent", and the SHEYTAN logo are trademarks of
-   Parsaetak. You may not use the marks (or confusingly similar marks) to
-   name or promote products, forks, or derivative works without prior
-   written permission. Referring to the Software by its name for the
-   purpose of description, review, or interoperability is permitted.
+HOW TO DETERMINE THE LICENSE OF A FILE
+--------------------------------------
+  1. Open LICENSE-MAP.md and find the component the file belongs to.
+     The map's classification is authoritative.
+  2. Files inside an Apache-2.0-designated component carry an
+     "SPDX-License-Identifier: Apache-2.0" header.
+  3. Everything not explicitly classified as open in LICENSE-MAP.md is
+     Proprietary under LICENSE-PROPRIETARY — the conservative default:
+     material is open ONLY by explicit designation, never by omission.
 
-4. DISTRIBUTION
-   You may NOT redistribute, sublicense, sell, rent, lease, or host the
-   Software (in whole or in part, original or modified) without prior
-   written permission. Sharing an unmodified official release archive for
-   non-commercial personal use is permitted, provided all files — including
-   this license — remain intact.
+This mixed model classifies ACTUAL material — code, documentation,
+assets, implementations, and other legally relevant files. It does not
+assert that abstract ideas, techniques, or functionality are inherently
+protected intellectual property; protection attaches only to the
+concrete expressions classified in the map.
 
-5. DERIVATIVE WORKS
-   You may modify the Software for your own personal use. You may NOT
-   distribute modified versions, rebranded builds, or extractions of the
-   source code without prior written permission.
+TRADEMARK
+---------
+"SHEYTAN", "SHEYTAN-Local-Agent", and the SHEYTAN logo are trademarks of
+Parsaetak. The trademark grant and restrictions are stated in
+LICENSE-PROPRIETARY §3.
 
-6. LOCAL-FIRST PRIVACY
-   The Software is designed to run inference and tool execution locally on
-   your machine, with all data stored inside the application folder. When
-   the optional remote provider mode is enabled, prompts you submit are
-   sent to the third-party endpoint you configure; the Licensor is not
-   responsible for how third parties handle that data. Local logs (tool
-   calls, LLM calls, crashes) stay on your disk until you choose to export
-   them.
+THIRD-PARTY MATERIAL
+--------------------
+The Software bundles, downloads, or links third-party components (the
+llama.cpp inference engine, the Wails desktop framework, React and the
+frontend toolchain, and others). Those components remain under their own
+licenses, which are acknowledged in NOTICE.md. Nothing in this file
+changes the license of third-party material.
 
-7. ACCEPTABLE USE
-   You agree to use the Software only in compliance with applicable law.
-   You are solely responsible for commands the agent executes on your
-   behalf, including any file, shell, browser, git, or network operations.
-
-8. DISCLAIMER OF WARRANTY
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
-   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-   CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN
-   CONNECTION WITH THE SOFTWARE OR ITS USE.
-
-9. TERMINATION
-   This license terminates automatically if you breach any term. Upon
-   termination you must stop using the Software and delete all copies.
-
-10. CHANGES
-   The Licensor may revise this agreement for future releases. Continued
-   use after an update constitutes acceptance of the revised terms.
-
-Contact for licensing and trademark inquiries:
+CONTACT
+-------
+Licensing and trademark inquiries:
   Parsaetak — https://github.com/Parsaetak
 

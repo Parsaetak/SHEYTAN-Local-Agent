@@ -9,6 +9,94 @@
 > marked as future/planned. Nothing in Part II of this document is
 > implemented today.
 
+## v1.6.1 — Architecture changes shipped in this release
+
+Everything below is `IMPLEMENTED` and `TESTED` (test files cited; the
+Go suites, the native-engine suite and the 24-test browser E2E suite
+cover each claim):
+
+1. **Deterministic sampling gate** (`internal/config/sampling.go`,
+   `internal/config/sampling_test.go`,
+   `internal/llm/llama.go` `startLocked` gate +
+   `internal/llm/sampling_gate_test.go`,
+   `internal/api/server.go` patch gate +
+   `internal/api/config_sampling_patch_test.go`) — `TESTED` with
+   real-spawn evidence. One authoritative validation module defines the
+   engine-parser contract for every sampling field (repeat-penalty must
+   be finite and > 0; temperature finite ≥ 0; top-p/min-p in [0,1];
+   penalties finite; mirostat ∈ {0,1,2}; ctx/batch > 0). It runs at
+   FIVE layers: config Load (safe repair to documented default +
+   reported note), environment overrides (finiteness-checked), the
+   Settings PATCH API (rejected with an actionable 400 before anything
+   is stored), the engine boot gate (`validateSamplingForLaunch` —
+   BEFORE the ownership lease, the engine download path, the capability
+   probe and the compatibility ladder; returns the classified
+   `InvalidSamplingConfigError`), and the argument vector itself
+   (`argProblems` numeric-range rules, covering user extra args).
+   Deterministic config failures never enter the compatibility ladder:
+   the reproduction test counted 4 real engine spawns pre-fix for one
+   invalid repeatPenalty; post-fix the count is 0.
+
+2. **First-class local GGUF import** (`internal/llm/importmodel.go`,
+   `internal/llm/importmodel_test.go`, `internal/api/models_import.go`
+   + `internal/api/models_import_test.go`,
+   `src/ModelPicker.tsx` + `src/api.ts`) — `TESTED` against the REAL
+   in-repo GGUF fixture. `POST /api/models/import` validates the GGUF
+   header (same `ReadModelCard` authority as the picker/recommendation
+   engine), streams the file in 1 MiB chunks (never whole-model RAM),
+   places it atomically (`.import-*.tmp` staging + rename + size
+   verification), handles duplicates safely (size + SHA-256 identity →
+   duplicate report; different content → fresh `-1` name, never an
+   overwrite), and never modifies the source (external model paths are
+   a supported posture). `POST /api/models/import/pick` opens the
+   native comdlg32 multi-select picker on Windows. The picker chains
+   import → refresh → the EXISTING selection state machine.
+   `internal/config/modelpaths.go` re-anchors `model`/`draftModel`/
+   `visionMmproj` fields that still point inside a retired runtime
+   root (legacy AppData root, legacy home directory) onto the
+   canonical root — external paths are never touched.
+
+3. **Log discipline for the hot paths** (`internal/api/perf.go`,
+   `internal/updater/install.go`) — `TESTED` by the existing suites.
+   The per-poll accelerator resolution (recomputed on every
+   `/api/perf` poll) logs at INFO only when the resolution CHANGES;
+   unchanged recomputations log at DEBUG (Advanced diagnostics keeps
+   the evidence). The device-enumeration warning deduplicates the same
+   way. The updater's stale-file reporting emits ONE aggregated WARN
+   per package swap (per-file detail at DEBUG + in the returned
+   diagnostics). The secret policy is unchanged and audited: model
+   contents, credentials, tokens, headers and secrets are never logged.
+
+4. **Backend-variant engine provisioning (real Vulkan)**
+   (`internal/updater/variant.go` + `variant_test.go` +
+   `variant_install_test.go`, `internal/llm/llama.go`
+   `UpdateEngineVariantNow`, `internal/api/engine_variant.go`,
+   `internal/accelerator/v161_contract_test.go`) — `TESTED`
+   deterministically on every platform + a Windows CI gate that
+   HEAD-checks the pinned Vulkan asset. The install manifest records
+   the package's backend variant (`variant: cpu|vulkan`; v1.6.0-era
+   manifests read back as `cpu`). `InstallStagedDeferredWithVariant`
+   provisions the REAL upstream Vulkan asset
+   (`llama-<tag>-bin-win-vulkan-x64.zip`) through the same
+   staged/leased/rollback-safe transaction as every engine update;
+   `LlamaServer.UpdateEngineVariantNow` drives the full
+   stop → install → start → verify → commit / rollback choreography;
+   `POST /api/engine/provision` exposes it. An explicit VULKAN request
+   that cannot be provisioned fails LOUDLY (before stopping anything) —
+   never a silent CPU install. AUTO keeps the evidence gates: Vulkan
+   is selected only with engine enumeration or a measured offload
+   line; `executionVerified` stays false for DLL-presence-only
+   evidence.
+
+5. **Conservative mixed licensing + governance files** (`LICENSE`,
+   `LICENSE-APACHE`, `LICENSE-PROPRIETARY`, `LICENSE-MAP.md`,
+   `NOTICE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+   `internal/brand/brand.go`) — the classification authority is
+   `LICENSE-MAP.md`: open ONLY by explicit designation
+   (`internal/humanize/`, Apache-2.0 + SPDX headers), proprietary by
+   default for everything else. The model classifies actual material
+   (code, docs, assets, implementations), never abstract ideas.
+
 ## v1.6.0 — Architecture changes shipped in this release
 
 Everything below is `IMPLEMENTED` and `TESTED` (test files cited; the

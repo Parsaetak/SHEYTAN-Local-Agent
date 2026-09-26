@@ -2,8 +2,9 @@
 
 ## Current State
 
-Date: 2026-09-22 (v1.3.6: engine lifecycle ownership, system discovery,
-Net Search, canonical data root; v1.3.6 log first below)
+Date: 2026-09-26 (v1.6.1: P0 sampling gate, first-class GGUF import,
+log discipline, real Vulkan provisioning, mixed licensing; v1.6.1 log
+first below)
 
 Repository:
 
@@ -11,14 +12,192 @@ Repository:
 https://github.com/Parsaetak/SHEYTAN-local-agent
 ```
 
-Branch: `main` (v1.3.6 landed on main as `9036e1f` "v1.3.6" +
-`0207611` "Remove obsolete Research workspace assets", on top of `57f0c1b`)
+Branch: `main` (v1.6.1 built on top of `4b1f79f` "v1.6.0-Final")
 
 Current release:
 
 ```text
-1.3.6
+1.6.1
 ```
+
+---
+
+## v1.6.1 — P0 sampling gate, GGUF import, log discipline, real Vulkan, mixed licensing (2026-09-26)
+
+### 1. P0 — the deterministic sampling gate
+
+**Runtime evidence (the defect):** launching with an invalid repeat
+penalty produced
+
+```text
+error while handling argument "--repeat-penalty":
+repeat-penalty must be finite and greater than 0
+```
+
+after which the exit was classified `FailOptionLayout` (the
+"repairable" class) and re-fed through the compatibility ladder:
+2 passes × 4 levels (doubled again with a vision projector) — a retry
+storm of engine spawns for a value no compatibility level can fix.
+
+**Reproduction (pre-patch, real spawn evidence):** a fake-engine mode
+(`GO_FAKE_LLAMA_MODE=invalid-arg` in `TestMain`) replayed the exact
+llama.cpp rejection; the reproduction probe counted **4 real engine
+spawns** for one `repeatPenalty=0`, with the surfaced error being the
+unactionable "llama.cpp exited during startup: exit status 1".
+
+**Root cause:** (a) the config layer accepted parser-invalid sampling
+values from disk, the Settings PATCH API (`numberValue` turns a cleared
+field into 0) and env overrides; (b) `argProblems` validated only
+parsability — `ParseFloat("0")` passes; (c) the value-range rejection
+was classified as an option-LAYOUT problem and fed the repair ladder.
+
+**The fix — one authority, five layers** (`internal/config/sampling.go`
+is the single validation module):
+
+1. `config.Load`: `NormalizeSamplingOptions` safely repairs invalid
+   values to the documented defaults and reports each repair through
+   `SamplingNotes` (drained to the log by `cmd/root.go`).
+2. Environment overrides: `SHEYTAN_LLM_TEMPERATURE` finiteness-checked.
+3. Settings PATCH: `mergeConfigPatch` rejects invalid sampling values
+   with an actionable 400 (`config.SamplingProblemsError`).
+4. Engine boot gate: `startLocked` runs `validateSamplingForLaunch`
+   FIRST — before the ownership lease, the engine download path, the
+   capability probe and the compatibility ladder — and returns the
+   classified `InvalidSamplingConfigError` (a DETERMINISTIC
+   configuration failure; never an accelerator/compatibility verdict;
+   no ladder descent, no compat persistence, no retry).
+5. Launch arguments: `argProblems` now carries per-option numeric RANGE
+   rules mirroring the engine parser (covers user extra args).
+
+**Verification:** `TestEngineStartRefusesInvalidRepeatPenalty` proves
+**0 engine spawns** for invalid values (launch-count evidence file)
+plus the classified, actionable error and `StateFailed`;
+`TestEngineStartAcceptsValidSamplingValues` pins the no-over-validation
+half (unusual-but-valid settings still boot to ready);
+`TestLaunchArgsRangeValidation` covers the argument-vector path;
+`TestValidateSamplingOptions`/`TestNormalizeSamplingOptions*`/
+`TestLoadRepairsInvalidSamplingFromDisk` cover the config layer;
+`TestConfigPatchRejectsInvalidSamplingValues` covers the API layer.
+The Settings panel's repeat-penalty field normalizes a cleared input
+on blur instead of saving 0.
+
+### 2. First-class local GGUF import
+
+`internal/llm/importmodel.go` + `POST /api/models/import` +
+`POST /api/models/import/pick` (native comdlg32 multi-select on
+Windows; typed-path fallback elsewhere) + the picker's
+"Import GGUF…" flow. Header validation before any bytes move
+(`ReadModelCard` — the same authority as the picker), streaming 1 MiB
+copy (never whole-model RAM), atomic placement (`.import-*.tmp` +
+rename + size verification), duplicate handling (size + SHA-256 →
+duplicate report; different content → fresh `-1` name, never an
+overwrite), source copied never moved (external paths stay the user's).
+`internal/config/modelpaths.go` re-anchors `model`/`draftModel`/
+`visionMmproj` pointing inside retired runtime roots (legacy AppData
+root, legacy `~/.sheytan`) onto the canonical root — external paths
+never touched; direct models-dir citizens collapse to base names.
+
+**Verification with a REAL GGUF:** the in-repo fixture
+`native/engine/tests/fixtures/tiny-llama-f32.gguf` (real llama/F32
+model). `TestImportModelRealGGUF` proves byte identity, progress
+reporting, no staging leakage, source preservation;
+`TestImportModelDuplicateHandling`, `TestImportModelRenamesDifferentCollision`,
+`TestImportModelRejectsInvalidSources` cover the edge matrix;
+`TestModelsImportImportsAndLists` + `TestModelsImportThenSelect` prove
+the API chain (import → listing with parsed metadata → selection
+through the EXISTING state machine → live config names the model).
+
+### 3. Log discipline
+
+- `internal/api/perf.go`: the accelerator resolution (recomputed every
+  `/api/perf` poll) logs at INFO only when CHANGED; unchanged
+  recomputations at DEBUG. The device-enumeration warning dedups the
+  same way (`logAcceleratorResolution`/`logAcceleratorEnumWarn`).
+- `internal/updater/install.go`: stale-file reporting aggregates to ONE
+  WARN per package swap (`logDroppedCompanions`), per-file evidence at
+  DEBUG + in the returned diagnostics.
+- Secret audit: no credentials/tokens/headers/model contents logged
+  (existing redaction verified).
+
+### 4. Real Windows Vulkan provisioning
+
+`internal/updater/variant.go`: `AssetVariant` (cpu|vulkan),
+`AssetNameForVariant` (the REAL upstream asset
+`llama-<tag>-bin-win-vulkan-x64.zip`; non-Windows honestly gets ""
+— never a CPU URL in Vulkan clothing), variant-aware
+`ResolveDownloadURLForVariant` + `InstallStagedDeferredWithVariant` +
+`InstallStagedFromArchiveDeferredWithVariant` (same staged/leased/
+rollback transaction), the install manifest records the variant
+(v1.6.0-era manifests read back as "cpu"), `EnsureEngineVariant`.
+`LlamaServer.UpdateEngineVariantNow` drives stop → install → start →
+verify → commit/rollback with the ownership lease held;
+`POST /api/engine/provision` exposes it (GET reports the installed
+variant + platform support). Explicit VULKAN on an unserved platform
+is refused BEFORE stopping anything — never a silent CPU install. AUTO
+keeps the evidence gates (resolver discipline unchanged and now pinned
+by `internal/accelerator/v161_contract_test.go`).
+
+**Verification:** `variant_test.go` (naming, support honesty, loud
+refusal, manifest read-back), `variant_install_test.go` (the
+archive-seam installer COMMITS a manifest carrying the variant), the
+accelerator contract tests (explicit-GPU-verified / explicit-GPU-loud-
+fallback / AUTO-evidence-only / Describe honesty), and a Windows CI
+gate that HEAD-checks the pinned Vulkan asset exists upstream
+(`build-desktop.yml` "Validate Windows Vulkan engine asset").
+
+### 5. Conservative mixed licensing
+
+`LICENSE` (routing text, generated from `brand.LicenseText`),
+`LICENSE-APACHE` (Apache-2.0), `LICENSE-PROPRIETARY` (Parsaetak
+Proprietary v1.1), `LICENSE-MAP.md` (the classification authority —
+open ONLY by explicit designation: `internal/humanize/` is the
+designated Apache-2.0 component with SPDX headers; everything else is
+proprietary by conservative default), `NOTICE.md` (third-party
+attribution verified against the actual module-cache license files),
+`CONTRIBUTING.md`, `SECURITY.md`. The model classifies actual material
+(code, docs, assets, implementations), never abstract ideas.
+
+### 6. Regression verification (this release)
+
+- `go test ./internal/... -tags headless -count=1` — **53 packages ok,
+  0 failures**.
+- `go test ./... -tags headless -run Test -count=1` — exit 0.
+- `go test -race` on the concurrency-heavy packages (api, agent,
+  sessions, contextplan, histref, runtime, llm, updater, config,
+  accelerator) — all ok (llm under race: 203.7 s).
+- Native C++ engine: `make -C native/engine test` — **13/13 test
+  binaries pass**; `TestRealCppHost*` integration tests pass against
+  the real host.
+- Frontend: `npm run typecheck` clean, `npm run lint` 0 warnings,
+  `npm run test:units` **115/115**, `npm run test:release` **28/28**,
+  `npm run build` + `verify-static-assets` contract satisfied.
+- Browser E2E (`npx playwright test -c e2e/playwright.config.ts`):
+  **24/24 PASS** — real browser + real headless Go server + real C++
+  native engine + real GGUF generation (chat/agent separation, shared
+  history references, persistence, model-first selection chain,
+  abort/regenerate, sessions, lab gates, net search).
+- Release metadata: `node scripts/release-version.mjs --check` —
+  consistent (package.json, config.go, build/config.yml, SIGNATURE all
+  v1.6.1).
+
+### 7. Package
+
+`download/SHEYTAN-Local-Agent-v1.6.1-FINAL.zip` — created with
+`git archive` from the v1.6.1 commit on a clean workspace (the tracked
+tree only): complete source, embedded frontend (`web/static`), native
+engine sources + the real GGUF fixtures, packaging/CI definitions and
+the governance files — no `.git`, no `node_modules`, no build caches,
+no temporary artifacts. Post-extraction verification: the extracted
+tree builds headless (`go build -tags headless`) and the config/updater/
+accelerator suites pass from the extracted source. All four version
+surfaces read 1.6.1 in the archive.
+
+---
+
+## v1.6.0 — Startup maintenance gate, top-level views, custom tools (2026-09-26)
+
+*(The v1.6.0 entry continues below; the prior current-state header was
+superseded by the v1.6.1 entry above.)*
 
 v1.3.6 is the **engine-ownership** release. Root-fixed from the
 2026-09-22 runtime evidence: (1) ONE provisioning authority

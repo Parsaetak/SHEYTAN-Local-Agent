@@ -926,6 +926,30 @@ export interface ModelsRecommendationsResponse {
   recommendations: Record<string, ModelRecommendationEvidence>;
 }
 
+// v1.6.1: the first-class local GGUF import result. The backend validates
+// the GGUF header before any bytes move, streams the file into the managed
+// models directory atomically (duplicate-safe, source untouched) and
+// returns the model id the existing selection flow accepts.
+export interface ModelImportResult {
+  ok: boolean;
+  name: string;
+  path: string;
+  sizeBytes: number;
+  duplicate: boolean;
+  renamedFrom?: string;
+  architecture?: string;
+  quantization?: string;
+  contextLength?: number;
+  parameterInfo?: string;
+}
+
+// v1.6.1: the native platform GGUF file picker result (Windows comdlg32;
+// other hosts answer an honest error the UI falls back from).
+export interface ModelPickResult {
+  canceled: boolean;
+  paths: string[];
+}
+
 // v1.1.5 Phase 1: native engine status block. The state vocabulary is
 // the same engine state union above; the UI badge must keep following
 // the llama.cpp snapshot state until the native engine serves generation.
@@ -1441,6 +1465,25 @@ export const api = {
     return request<SelectionState>("/models/select", {
       method: "POST",
       body: JSON.stringify({ model, task }),
+    });
+  },
+
+  // v1.6.1: first-class local GGUF import — the backend validates the
+  // GGUF header, streams the file into the managed models directory
+  // (atomic, duplicate-safe, source untouched) and returns the imported
+  // model id, which immediately drives selectModel above.
+  importModel(path: string): Promise<ModelImportResult> {
+    return request<ModelImportResult>("/models/import", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+  },
+
+  // v1.6.1: the native platform GGUF file picker (Windows). Returns the
+  // chosen absolute paths; canceled picks answer { canceled: true }.
+  pickModelFiles(): Promise<ModelPickResult> {
+    return request<ModelPickResult>("/models/import/pick", {
+      method: "POST",
     });
   },
 

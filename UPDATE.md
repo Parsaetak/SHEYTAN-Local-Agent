@@ -1,3 +1,83 @@
+# UPDATE.md — v1.6.1 Maintenance, Update & Rollback Behavior
+
+**Release:** `v1.6.1` (canonical application version; single version
+hierarchy: package.json → release-version.mjs → config.go /
+build/config.yml / SIGNATURE)
+**Base:** `main @ 4b1f79f` (`v1.6.0-Final`) · **Date:** 2026-09-26
+**Package:** `SHEYTAN-Local-Agent-v1.6.1-FINAL.zip` (complete repository
+tree)
+
+v1.6.1 is a correctness, capability and governance release: the
+deterministic sampling gate (invalid configuration never spawns the
+engine), first-class local GGUF import, readable normal logs, REAL
+Windows Vulkan engine provisioning, and the conservative mixed licensing
+model. The v1.6.0 foundation is preserved: the same maintenance gate,
+the same transactional updater, the same selection state machine, the
+same session architecture.
+
+---
+
+## v1.6.1 — Maintenance / update / rollback behavior
+
+The v1.6.0 startup maintenance gate and the transactional engine update
+contract are UNCHANGED. What v1.6.1 adds to the maintenance surface:
+
+1. **Boot-order hardening (the sampling gate).** `LlamaServer.Start`
+   now validates the sampling configuration FIRST — before the
+   ownership lease, before the engine download/provisioning path,
+   before the capability probe, and long before the compatibility
+   ladder. A parser-invalid value (the in-the-wild
+   `repeatPenalty: 0`) is refused with the classified
+   `InvalidSamplingConfigError`: the engine state machine reports
+   `failed`, one actionable error names the field, rule and fix, and NO
+   engine process is ever spawned (the pre-fix behavior fed the same
+   invalid arguments through 4+ compatibility-ladder launches). The
+   maintenance gate's choreography is untouched — a deterministic
+   configuration failure simply never reaches it.
+
+2. **Backend-variant engine provisioning (Windows Vulkan).** The
+   installed engine package now records its backend family in the
+   install manifest (`engine-install.json` → `variant: "cpu"|"vulkan"`;
+   a v1.6.0-era manifest without the field reads back as `cpu`).
+   `POST /api/engine/provision {"variant":"vulkan"}` drives the
+   engine-owned transaction `UpdateEngineVariantNow`: stop the engine
+   (Windows file locks) → provision the REAL upstream Vulkan asset
+   (`llama-<tag>-bin-win-vulkan-x64.zip`, preferring the current engine
+   tag so the release is never silently downgraded) through the SAME
+   staged, hash-verified, leased installer as every engine update →
+   restart → startup-verify → COMMIT, or ROLL BACK the previous package
+   byte-for-byte when verification fails. An explicit VULKAN request
+   that cannot be provisioned on this platform is refused BEFORE the
+   engine is stopped — loudly, never a silent CPU install. AUTO keeps
+   the evidence gates: Vulkan is only selected with engine device
+   enumeration or a measured runtime offload line; `executionVerified`
+   is false for DLL-presence-only evidence; CPU stays the safe fallback
+   where policy permits.
+
+3. **Model import is part of the maintenance story.** `POST
+   /api/models/import` (and the picker's "Import GGUF…" flow) validates
+   the GGUF header, streams the file into the managed models directory
+   atomically (duplicate-safe, source untouched), and chains into the
+   existing selection state machine. Migrated config fields
+   (`model`/`draftModel`/`visionMmproj`) pointing inside a retired
+   runtime root are re-anchored at Load; external model paths are never
+   touched.
+
+4. **Log discipline (the update log stays readable).** A package swap
+   now reports dropped stale files as ONE aggregated WARN line (the
+   per-file evidence remains at DEBUG and in diagnostics); unchanged
+   per-poll accelerator resolutions and unchanged enumeration warnings
+   log at DEBUG instead of INFO. Actionable update/engine errors remain
+   at INFO/WARN/ERROR.
+
+Rollback semantics for the mixed licensing model: the distribution
+archive contains the complete repository (source + governance files);
+nothing about update/rollback depends on the license classification.
+
+---
+
+# v1.6.0 history (below)
+
 # UPDATE.md — v1.6.0 Startup Maintenance Gate, Top-Level Views, Custom Tools
 
 **Release:** `v1.6.0` (canonical application version; single version

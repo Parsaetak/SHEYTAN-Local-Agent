@@ -1,8 +1,9 @@
 package llm
 
 import (
-	"errors"
+        "errors"
         "fmt"
+        "math"
         "net"
         "net/http"
         "os"
@@ -210,6 +211,57 @@ func runFakeLlamaServer() {
                                 fmt.Fprintln(os.Stderr,
                                         "error: unknown model architecture: 'x-custom-arch' — this model requires a newer llama.cpp")
                                 os.Exit(1)
+                        }
+                }
+        }
+
+        // v1.6.1 (P0 reproduction): deterministic invalid-argument mode.
+        //
+        // Mimics the REAL llama.cpp argument-parser rejection reported in
+        // the wild (run --repeat-penalty 0 through the compat ladder):
+        //
+        //   error while handling argument "--repeat-penalty":
+        //   repeat-penalty must be finite and greater than 0
+        //
+        // The engine prints the two-line error on stderr and exits 1 —
+        // BEFORE any model load. Every server launch (identified by the
+        // --port flag) is recorded in SHEYTAN_FAKE_LAUNCH_COUNT so tests
+        // can prove how many engine processes were actually spawned.
+        if mode == "invalid-arg" {
+                launchedAsServer := false
+
+                for _, a := range args {
+                        if a == "--port" {
+                                launchedAsServer = true
+                                break
+                        }
+                }
+
+                if launchedAsServer {
+                        if countFile := os.Getenv("SHEYTAN_FAKE_LAUNCH_COUNT"); countFile != "" {
+                                f, cerr := os.OpenFile(countFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+                                if cerr == nil {
+                                        _, _ = f.WriteString("launch\n")
+                                        _ = f.Close()
+                                }
+                        }
+
+                        for i, a := range args {
+                                if a != "--repeat-penalty" || i+1 >= len(args) {
+                                        continue
+                                }
+
+                                raw := args[i+1]
+
+                                v, verr := strconv.ParseFloat(raw, 64)
+
+                                if verr != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+                                        fmt.Fprintln(os.Stderr,
+                                                "error while handling argument \"--repeat-penalty\":")
+                                        fmt.Fprintln(os.Stderr,
+                                                "repeat-penalty must be finite and greater than 0")
+                                        os.Exit(1)
+                                }
                         }
                 }
         }

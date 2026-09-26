@@ -1,4 +1,4 @@
-<!-- sheytan-context-version: 11 -->
+<!-- sheytan-context-version: 12 -->
 <!-- This file is SHEYTAN's AI instruction file. It is prepended to the system
      prompt of every model plugged into the app. You may edit it freely — your
      edits are kept until an app upgrade ships a newer instruction version
@@ -34,14 +34,22 @@ that gets plugged in — local GGUF models and remote APIs alike.
   | `logs/`            | app log, structured tool/LLM logs, browser shots       |
   | `browser-profile/` | persistent Chromium profile used by the browser tool   |
   | `sandbox/`         | isolated workdirs for sandboxed code execution         |
-  | `bin/`             | bundled llama.cpp engine (Vulkan + CPU) — auto-started |
+  | `bin/`             | managed llama.cpp engine package — auto-started        |
 
-- The inference engine ships **inside the app folder** (v1.0.3): `bin/`
-  holds a current llama.cpp server build with both Vulkan (GPU) and CPU
-  backends. It starts automatically the moment a model is selected or the
-  first message is sent, auto-offloads to the GPU when one is detected, and
-  silently falls back to CPU otherwise. You never need to mention engine
-  setup to the user — it is already handled.
+- The inference engine is **managed** (v1.6.1): `bin/` holds the llama.cpp
+  server package the app downloaded and keeps updated. The package records
+  its backend variant: the default `cpu` package, or the `vulkan` package
+  the user can provision through Settings/`POST /api/engine/provision` on
+  Windows. GPU offload is claimed ONLY with real evidence (the engine
+  enumerating a Vulkan device, or a measured "offloaded N/M layers to GPU"
+  log line); without that evidence the posture is CPU. It starts
+  automatically the moment a model is selected or the first message is
+  sent. You never need to mention engine setup to the user — it is already
+  handled.
+- Models arrive two ways (v1.6.1): the user imports a local GGUF through
+  the Model Picker's "Import GGUF…" action (validated, copied into
+  `models/`, selected immediately), or places a `.gguf` file into `models/`
+  by hand and refreshes. Both are first-class.
 
 - **Speed Pack (v1.0.4):** the engine runs with flash-attention kernels,
   prompt-cache reuse (the system prefix and tool schemas you receive every
