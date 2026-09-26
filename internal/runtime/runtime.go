@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
@@ -28,8 +29,10 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/multiagent"
 	nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/projectintel"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recovery"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/repoindex"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sandbox"
@@ -139,6 +142,18 @@ type Stack struct {
 	// cache trims, run-boundary cleanup, pressure-triggered eviction and
 	// measured reclamation telemetry (see internal/memmanager).
 	MemMgr *memmanager.Manager
+
+	// recoveryStore (v1.7.1) is the ONE durable store for context-
+	// exhaustion handoff records under <DataDir>/recovery.
+	recoveryStore *recovery.Store
+
+	// liveMonitor (v1.7.1) is the bounded live resource monitor; the
+	// activeRun* fields own cooperative protection cancellation.
+	liveMonitor        *preflight.LiveMonitor
+	activeRuns         atomic.Int64
+	activeRunMu        sync.Mutex
+	activeRunSeq       int64
+	activeRunCancelFns map[int64]context.CancelFunc
 
 	// memStop ends the manager's idle maintenance loop.
 	memStop chan struct{}
@@ -315,6 +330,13 @@ func NewStack(cfg *config.Config) *Stack {
 	stack.Sessions = sessions.New(cfg.SessionsDir)
 	memMgr := memmanager.New()
 	stack.MemMgr = memMgr
+
+	// v1.7.1: the context-exhaustion recovery authority — durable
+	// handoff records + the coordinator seam the orchestrator calls.
+	stack.recoveryStore = recovery.NewStore(recoveryDir(cfg))
+	orch.SetRecoveryCoordinator(newRecoveryCoordinator(stack))
+	stack.activeRunCancelFns = map[int64]context.CancelFunc{}
+	stack.StartLiveMonitor()
 	memMgr.RegisterTrim("sessions-hot", func() int64 {
 		return stack.Sessions.TrimHot(1) // keep the most recent session
 	})
@@ -941,6 +963,15 @@ func (s *Stack) StartMemoryManager(ctx context.Context) {
 //     surfaces to the loop like any engine error.
 func (s *Stack) streamGeneration(ctx context.Context, req *llm.ChatRequest,
 	onEvent func(llm.StreamEvent) error) (llm.PerfStats, error) {
+
+	// v1.7.1 live resource protection: every active generation registers
+	// its cancellation ownership so critical pressure can reach the run
+	// through cooperative cancellation (existing lifecycle, no killing).
+	protCtx, protCancel := context.WithCancel(ctx)
+	defer protCancel()
+	protID := s.registerActiveRun(protCancel)
+	defer s.unregisterActiveRun(protID)
+	ctx = protCtx
 
 	decision := llm.SelectGenerationBackendDetailed(
 		s.Src.Load(),

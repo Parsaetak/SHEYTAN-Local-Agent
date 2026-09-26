@@ -437,7 +437,9 @@ func (b *Backend) Metrics(ctx context.Context) (llm.Metrics, error) {
 // capability tracks reality, not hope. Mid-flight failures still fall
 // back through the router's pre-first-token retry policy.
 func (b *Backend) GenerationCapable() bool {
-	if b.eng == nil || !b.eng.IsAlive() {
+	// v1.7.1: nil-receiver safe — a nil-typed Backend surfaced through an
+	// interface is an honest "not capable", never a panic.
+	if b == nil || b.eng == nil || !b.eng.IsAlive() {
 		return false
 	}
 	return b.eng.NativeGenerationCapable()
@@ -453,7 +455,7 @@ func (b *Backend) GenerationCapable() bool {
 //   - engine running but no model loaded
 //   - model loaded but not natively executable (the engine's own verdict)
 func (b *Backend) GenerationFallbackReason() string {
-	if b.eng == nil {
+	if b == nil || b.eng == nil {
 		return "native engine is not configured"
 	}
 	if !b.eng.IsAlive() {
@@ -485,4 +487,47 @@ func statRegularFile(path string) (os.FileInfo, error) {
 	}
 
 	return fi, nil
+}
+
+// BackendCapabilities implements llm.CapabilityReporter (v1.7.1 §5.3):
+// the Native Engine reports its serving contract from real state —
+// generation capability and fallback reasons come from the existing
+// probes; the context window and memory plan come from the loaded
+// model's own metadata (0/empty when unknown, never guessed).
+func (b *Backend) BackendCapabilities() llm.BackendCapabilities {
+	if b == nil {
+		return llm.BackendCapabilities{
+			Identity:                 "native",
+			GenerationFallbackReason: "native engine is not configured",
+			IncompatibilityReason:    "native engine is not configured",
+		}
+	}
+	caps := llm.BackendCapabilities{
+		Identity:               "native",
+		SupportedArchitectures: "llama graph family (native engine)",
+		Streaming:              true, // protocol v4 streamed events
+		Cancellation:           true, // cooperative cancel op
+		Readiness:              string(b.eng.State()),
+	}
+
+	// Generation capability: the existing selection probes.
+	caps.GenerationCapable = b.GenerationCapable()
+	if !caps.GenerationCapable {
+		caps.GenerationFallbackReason = b.GenerationFallbackReason()
+		caps.IncompatibilityReason = caps.GenerationFallbackReason
+	}
+
+	// Model facts from the loaded model (unknown stays zero).
+	if info := b.eng.ModelInfoCached(); info != nil {
+		if info.ContextLength > 0 {
+			caps.ContextCapability = int(info.ContextLength)
+		}
+		if plan := b.eng.MemoryPlanCached(); plan != nil && plan.TotalBytes > 0 {
+			caps.ResourceRequirements = fmt.Sprintf(
+				"weights+KV+workspace plan: %d bytes total (available RAM %d)",
+				plan.TotalBytes, plan.AvailableRAMBytes)
+		}
+	}
+
+	return caps
 }

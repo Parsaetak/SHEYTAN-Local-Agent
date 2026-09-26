@@ -270,3 +270,31 @@ func hardwareFromSysInfo(si *sysinfo.SysInfo, backend string) HardwareInfo {
 
 	return hw
 }
+
+// BackendCapabilities implements llm.CapabilityReporter (v1.7.1 §5.3):
+// the llama.cpp serving alternative reports its contract from measured
+// state — streaming/cancellation are real; the context window is the
+// ENGINE-VERIFIED value (0 until the engine has proven one); the Vulkan
+// variant distinguishes itself through the managed binary's runtime.
+func (b *LlamaBackend) BackendCapabilities() BackendCapabilities {
+	caps := BackendCapabilities{
+		Identity:               "llama.cpp-cpu",
+		GenerationCapable:      true,
+		SupportedArchitectures: "llama graph family (llama.cpp)",
+		Streaming:              true,
+		Cancellation:           true,
+		Readiness:              b.server.State(),
+	}
+	if b.server != nil {
+		if b.server.hasVulkanBackend(b.server.src.Load()) {
+			caps.Identity = "llama.cpp-vulkan"
+			caps.Devices = "vulkan"
+		} else {
+			caps.Devices = "cpu"
+		}
+		if limit := b.server.EngineContextLimit(); limit > 0 {
+			caps.ContextCapability = limit
+		}
+	}
+	return caps
+}

@@ -420,7 +420,9 @@ func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, err
 		if resp.StatusCode != 200 {
 			buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
-			err := fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
+			// v1.7.1: real context exhaustion is a typed condition —
+			// detected once at this boundary, never re-grepped upstream.
+			err := wrapContextExhaustion(fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512)))
 			c.logCall(req, start, 0, 0, "", err)
 			return nil, err
 		}
@@ -465,6 +467,7 @@ func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, err
 	// only individual transport errors were logged, never the final
 	// give-up. This is the record that actually explains a dead turn.
 	if lastErr != nil {
+		lastErr = wrapContextExhaustion(lastErr)
 		c.logCall(req, time.Now(), 0, 0, "", lastErr)
 	}
 	return nil, lastErr
@@ -813,7 +816,8 @@ func (c *Client) streamOnce(ctx context.Context, req *ChatRequest, body []byte, 
 
 	if resp.StatusCode != 200 {
 		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		err := fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512))
+		// v1.7.1: typed context-exhaustion detection at the backend boundary.
+		err := wrapContextExhaustion(fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, truncateStr(string(buf), 512)))
 		c.logCall(req, start, 0, 0, "", err)
 		return err
 	}

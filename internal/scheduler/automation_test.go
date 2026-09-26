@@ -233,6 +233,10 @@ func TestRunNowManualRunAndPauseGate(t *testing.T) {
         if !report.OK || report.Output != "manual-ok" || report.Trigger != EventManual {
                 t.Fatalf("manual report: %+v", report)
         }
+        // v1.7.1 settlement contract: drain to CLOSE before touching
+        // anything that outlives the worker (TempDir cleanup runs at test
+        // return). Close is the deterministic full-settlement barrier:
+        // reports.jsonl + tasks.jsonl persisted, bookkeeping cleared.
 
         // Last-run pointer + chronological history.
         if s.Tasks()[0].LastRun == nil || !s.Tasks()[0].LastRun.OK {
@@ -271,6 +275,8 @@ func TestRunNowManualRunAndPauseGate(t *testing.T) {
         if !rep.Canceled {
                 t.Fatalf("canceled report: %+v", rep)
         }
+        for range ch2 { // settle the canceled run's worker fully
+        }
         close(blocked)
 
         // Pause refuses manual runs; resume re-allows.
@@ -283,8 +289,18 @@ func TestRunNowManualRunAndPauseGate(t *testing.T) {
         if err := s.Resume("m1"); err != nil {
                 t.Fatal(err)
         }
-        if _, err := s.RunNow(context.Background(), "m1"); err != nil {
+        // The final resumed run must be FULLY settled before the test
+        // returns: its worker persists into t.TempDir(), and TempDir
+        // cleanup races any persistence that outlives the test body.
+        // (v1.7.0 regression: this run leaked a goroutine that wrote
+        // tasks.jsonl/reports.jsonl during TempDir RemoveAll — "directory
+        // is not empty". Drain-to-close is the deterministic barrier; no
+        // sleeps, no cleanup retries, no weakened assertions.)
+        ch3, err := s.RunNow(context.Background(), "m1")
+        if err != nil {
                 t.Fatalf("resume: %v", err)
+        }
+        for range ch3 { // drain until deterministic close = fully settled
         }
 }
 
@@ -448,8 +464,81 @@ func TestShutdownSettleCancelsInFlightRuns(t *testing.T) {
         if !rep.Canceled {
                 t.Fatalf("shutdown did not cancel the run: %+v", rep)
         }
+        for range ch { // settle the worker: close follows bookkeeping cleanup
+        }
         if s.IsRunning("long") {
                 t.Fatal("run survived ShutdownSettle")
+        }
+}
+
+// TestRunNowChannelCloseIsFullSettlement is the v1.7.1 regression for the
+// CI failure in TestRunNowManualRunAndPauseGate ("TempDir cleanup:
+// directory is not empty"): a RunNow worker persisted reports.jsonl and
+// tasks.jsonl AFTER the test returned, racing t.TempDir() RemoveAll.
+//
+// The contract locked here: when the RunNow report channel CLOSES, the
+// run is already fully settled on disk and in memory — synchronously
+// assertable, no sleeps:
+//
+//   1. the runner function has returned;
+//   2. reports.jsonl contains the settled report (read from DISK);
+//   3. tasks.jsonl carries LastRun (reloaded from DISK);
+//   4. the running/cancel bookkeeping is cleared.
+//
+// If channel close ever moves before persistence or bookkeeping, this
+// test fails deterministically instead of flaking in CI.
+func TestRunNowChannelCloseIsFullSettlement(t *testing.T) {
+        dir := t.TempDir()
+
+        runnerReturned := make(chan struct{}, 1)
+        s := New(dir, func(ctx context.Context, task Task) (string, error) {
+                defer func() { runnerReturned <- struct{}{} }()
+                return "settled-ok", nil
+        }, nil)
+
+        if err := s.AddTask(Task{ID: "settle1", Name: "settle", Trigger: EventManual, Prompt: "p"}); err != nil {
+                t.Fatal(err)
+        }
+
+        ch, err := s.RunNow(context.Background(), "settle1")
+        if err != nil {
+                t.Fatal(err)
+        }
+
+        var report Report
+        for r := range ch { // drain until deterministic close
+                report = r
+        }
+        if !report.OK || report.Output != "settled-ok" || report.Trigger != EventManual {
+                t.Fatalf("report: %+v", report)
+        }
+
+        // (1) The runner returned before close.
+        select {
+        case <-runnerReturned:
+        default:
+                t.Fatal("channel closed before the runner returned")
+        }
+
+        // (2) reports.jsonl holds the settled report (disk read, synchronous).
+        reports := s.Reports(10)
+        if len(reports) != 1 || !reports[0].OK || reports[0].Output != "settled-ok" {
+                t.Fatalf("report log not settled at channel close: %+v", reports)
+        }
+
+        // (3) tasks.jsonl carries LastRun — proven by a FRESH reload from disk.
+        reloaded := New(dir, nil, nil)
+        if err := reloaded.Load(); err != nil {
+                t.Fatal(err)
+        }
+        tasks := reloaded.Tasks()
+        if len(tasks) != 1 || tasks[0].LastRun == nil || !tasks[0].LastRun.OK {
+                t.Fatalf("LastRun not durably persisted at channel close: %+v", tasks)
+        }
+
+        // (4) Bookkeeping cleared before close.
+        if s.IsRunning("settle1") {
+                t.Fatal("channel closed while the run was still registered as running")
         }
 }
 

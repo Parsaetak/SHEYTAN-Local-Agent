@@ -10,7 +10,213 @@ The v2.0.0.0 release is the point at which SHEYTAN-LA should be considered a com
 
 ---
 
-# 0. ENGINEERING STATUS — read this first (v1.7.0, 2026-09-26)
+# 0. ENGINEERING STATUS — read this first (v1.7.1, 2026-09-26)
+
+This is the AUTHORITATIVE v1.7.1 handoff. It supersedes the v1.7.0
+section below (kept as the historical record). Every item is marked
+**COMPLETED / CURRENT / NEXT / FUTURE** with its evidence class; nothing
+planned is marked completed, and no green claim outruns its evidence.
+
+## COMPLETED (v1.7.1 — all verified on this session's Linux amd64 runs)
+
+* **COMPLETED (P0, deterministic repro + regression) — the v1.7.0 CI
+  scheduler TempDir race is eliminated.** Root cause: the
+  `TestRunNowManualRunAndPauseGate` final resumed `RunNow` worker kept
+  persisting `reports.jsonl` / `tasks.jsonl` after the test returned,
+  racing `t.TempDir()` cleanup ("directory is not empty" — reproduced
+  locally with `-race -count=5`). Fix: a documented, deterministic
+  SETTLEMENT CONTRACT on `RunNow` (channel close = all persistence +
+  bookkeeping complete; buffered so ignoring it cannot block), the test
+  drains every `RunNow` channel to close, and
+  `TestRunNowChannelCloseIsFullSettlement` locks the contract (disk
+  reads + bookkeeping asserted synchronously after close — no sleeps,
+  no cleanup retries, no weaker assertions). Evidence: targeted
+  `-race -count=10` green; full scheduler suite `-race -count=3` green;
+  the runtime automation integration test drains under the same
+  contract. The v1.7.0 Windows rollback fix was not touched.
+
+* **COMPLETED (deterministic unit + integration tests) — context
+  exhaustion is now a DISTINCT, normalized recovery event.** One typed
+  condition (`recovery.ErrContextExhausted` + `recovery.Exhaustion`)
+  that both backends map at their own boundary: llama.cpp evidence is
+  classified once in `internal/llm` (conservative marker vocabulary
+  shared with `agent.CatContext`; a normal `finish_reason=length` is
+  NOT exhaustion), and the Native Engine's structured context-bound
+  rejection unwraps into the same sentinel
+  (`engine.ContextExhaustedError.Unwrap`).
+
+* **COMPLETED — the complete logical work state freezes on exhaustion.**
+  `internal/recovery.Snapshot` captures mission/state/constraints,
+  facts/decisions/open threads (via the EXISTING continuum distiller),
+  files inspected/changed, observed tool calls, tests/builds,
+  failures/repairs, artifacts, task tools/skills, backend/model/config,
+  the full neutral message list and the detection evidence — all
+  bounded, deduplicated, JSON-serializable.
+
+* **COMPLETED — whole-context summary without exceeding the
+  summarizer window.** `recovery.HierarchicalSummary` chunks the frozen
+  context in bounded in-order chunks (coverage pinned by test),
+  summarizes each stage, and folds partials until the merge input fits
+  its budget. When the summarizer cannot run, the deterministic
+  `FallbackSummary` builds the handoff from the snapshot alone — the
+  task is never discarded because the optional summarizer failed.
+
+* **COMPLETED — durable, versioned handoff.** One record per episode
+  (handoffId/sessionId/threadId/taskId/runId/sourceAttempt/createdAt/
+  backend/model/detected condition/summary+source/mission/facts/
+  decisions/open threads/artifacts/next actions/completed-work/last
+  user prompt/recovery attempt), written atomically (temp+rename,
+  fsync best-effort) under `<DataDir>/recovery`, reloadable after a
+  fresh store instance (restart proven in tests, including honest
+  rejection of newer schema versions).
+
+* **COMPLETED — safe restart EXACTLY ONCE, then continuation.** The
+  orchestrator wraps its engine call in a bounded recovery loop
+  (typed-condition-only detection; user aborts untouched):
+  freeze → summary → persist handoff → `PrepareRestart` through the
+  runtime's EXISTING lifecycle owners (`LlamaServer.Restart` with its
+  port-free verification, native `Engine` Stop+Start) →
+  `awaitReady` health verification (bounded polling, never a sleep) →
+  bounded injection (`recovery.RenderInjection`) + the ORIGINAL last
+  user turn carried exactly once, with the do-not-redo completed-work
+  list preventing duplicate execution. A second exhaustion ends the
+  automatic loop with a clear diagnostic
+  (`recovery.ErrRecoveryLoopGuard`, MaxRecoveryAttempts = 1). Truthful
+  activity states (Context limit reached / Preserving task state /
+  Creating recovery handoff / Restarting model / Continuing from
+  handoff) reach the timeline; `RunResult` and ctxtelemetry carry the
+  recovery evidence. Evidence: 12 recovery-package tests, 6
+  agent-level integration tests (including restart-exactly-once,
+  loop-guard, non-exhaustion-never-recovers, failed-restart-surfaces-
+  honestly, no-coordinator typed error) — all green under `-race`.
+
+* **COMPLETED (deterministic unit + integration tests) — pre-run
+  compatibility gate on the real execution path.** The ONE
+  authoritative `preflight.Report` (model/backend/device/compatible/
+  severity/reasons/requirements/available/safetyMarginPct/
+  recommendedAction/unknown) is evaluated from EXISTING authorities
+  (backend selection, model capabilities, engine-verified window,
+  hardware snapshot) BEFORE any engine start; the API server's run
+  gate refuses incompatible combinations with the rendered
+  "Cannot start this model / Reason / Alternative" message —
+  PREFLIGHT → REFUSE → NO ENGINE START. The zero-launch contract is
+  proven by an integration test against the launch-recording engine
+  fake (`TestPreflightRejectionStartsZeroModelProcesses`). The same
+  report is served at `GET /api/preflight` and rendered by the
+  ModelPicker banner — the frontend never recalculates compatibility.
+
+* **COMPLETED — live resource monitoring + protection.**
+  `preflight.LiveMonitor` samples measurable pressure (injected
+  samplers over the existing sysinfo/process-RSS authorities) with a
+  bounded 15 s cadence and hysteresis (2 agreeing samples — no
+  oscillation on measurement noise); the critical level fires the
+  protection path SYNCHRONOUSLY on the transition, cancelling active
+  generations through the runtime's registered cancel ownership
+  (cooperative — nothing is killed) so runs settle and persist their
+  state. Unknown facts never escalate the level.
+
+* **COMPLETED — Native Engine first-class backend surface.** The
+  shared capability contract (`llm.BackendCapabilities` +
+  `CapabilityReporter`) is implemented by both serving backends
+  (identity, generation capability + reason, architectures,
+  engine-verified context, streaming, cancellation, devices, memory
+  plan, readiness, incompatibility reason; unknown stays unknown).
+  Native failures are normalized ONCE at the boundary into typed
+  categories (context exhausted / unsupported model / unsupported
+  tensor / insufficient resources / invalid model / backend
+  unavailable / runtime failure) with details preserved. The §5.7
+  candidate table (Native Engine / llama.cpp CPU / llama.cpp Vulkan —
+  available + reason + selected) is produced by the ONE selection
+  authority (`llm.BackendCandidates`), mirrored in `/api/engine`, and
+  `SelectGenerationBackendDetailed` is nil-hardened. The native README
+  contradiction is cleaned: the Phase 1–4 no-inference wording is now
+  an explicitly HISTORICAL note superseded by Phase 5, and no
+  performance claim is made without fresh comparable measurements.
+
+* **COMPLETED (real Go↔C++ acceptance, this session) — Native Engine
+  acceptance battery green:** cmake configure + build OK; ctest
+  12/12 suites passed; the real-host Go integration battery
+  (TestRealCppHost*, Phase 4 tokenizer/KV/scheduler, Phase 5
+  end-to-end generation / cancellation / context overflow /
+  unsupported model / backend contract, Phase 7 small-model
+  acceptance: selection → preflight → load → generate → stream →
+  cancel → settle) all PASS against the built `shtn-engine-host`.
+
+* **COMPLETED — license cleanup with legal authorities intact.**
+  `LICENSE.md` is now the human-facing entry point (copyright, the
+  conservative mixed model, where LICENSE-APACHE / LICENSE-PROPRIETARY
+  live, LICENSE-MAP.md as classification authority, NOTICE.md for
+  third-party notices, trademarks, contact) — an INDEX that embeds no
+  full license text and reclassifies nothing. The existing
+  license-generation mechanism (cmd/license.go / brand) is untouched,
+  and `internal/releasecontract/license_contract_test.go` adds the
+  deterministic check: the license-file set is EXACT (LICENSE,
+  LICENSE-APACHE, LICENSE-PROPRIETARY, LICENSE-MAP.md, LICENSE.md,
+  NOTICE.md), any reintroduced redundant license Markdown fails the
+  suite, and the licence-spelling drift is blocked.
+
+* **COMPLETED — version identity is exactly 1.7.1** across
+  package.json → release-version.mjs → config.go AppVersion →
+  build/config.yml → SIGNATURE (`release-version.mjs --check` green).
+
+## CURRENT STATE (after v1.7.1)
+
+* Everything in the v1.7.0 CURRENT STATE below remains true, plus the
+  v1.7.1 features above.
+* **Fresh verification evidence (this session, Linux amd64 host):**
+  `go test ./internal/... -tags headless -count=1` — 54 packages, zero
+  failures; `go test ./... -tags headless -run Test -count=1` — zero
+  failures; `go vet -tags headless ./internal/... ./cmd/...` clean;
+  `go build -tags headless ./...` clean; race battery green for
+  scheduler, recovery, preflight, runtime, api, agent, llm, sessions,
+  contextplan, histref; native cmake build + ctest 12/12; real-host
+  Go integration battery green; frontend typecheck + lint + unit
+  tests + build + stable-asset contract + release-version check all
+  green.
+* **Honest environment note:** the non-headless build of the ROOT
+  package (Wails desktop shell) and `internal/desktop` requires
+  GTK4/webkitgtk system libraries. This session's container has no
+  system package manager access, so those two build targets were
+  verified under the headless contract the CI itself uses for its Go
+  gates (`-tags headless`); the desktop shell build itself is proven
+  by the CI's Windows/Linux jobs, which install the toolchain and run
+  the same battery. No Windows behavior was verified on this host.
+
+## NEXT (ordered, concrete, actionable)
+
+1. **NEXT — same-revision Actions verification.** Push v1.7.1 and
+   confirm the Actions run on THIS commit is green on windows-latest
+   and ubuntu-24.04 (Go verification incl. race gate, native
+   cmake/ctest, frontend gates, packaging). The scheduler race
+   regression (`TestRunNowChannelCloseIsFullSettlement`) must pass on
+   both runners. Until that run is inspected, CI status for v1.7.1 is
+   UNKNOWN — do not inherit any older green result.
+2. **NEXT — Windows runtime probes.** The preflight gate, live
+   monitor and recovery restart path compile and test cross-platform,
+   but the hand-executed Windows Vulkan transaction and a real
+   Windows preflight refusal remain untested on real hardware.
+3. **NEXT — selection candidate table UI.** The three-row verdicts
+   are exposed at /api/engine and the refusal banner ships in the
+   ModelPicker; a dedicated backend-candidates panel (native / CPU /
+   Vulkan rows with reasons) is the remaining slice.
+4. **NEXT — carried from v1.7.0:** genuine ci_failure/build_failure
+   emitters; per-run artifact grouping; Linux tar.gz engine packages
+   (upstream packaging still zip-only); AUTO variant-provisioning
+   policy; deferred v1.6.x items (AI custom-tool builder, Downloads
+   Center, --device override UI, import-flow E2E).
+
+## FUTURE (strategic, not yet started)
+
+* **FUTURE — v1.8+: Internet + Repository Operations** (web search
+  extraction depth, GitHub repository operations beyond cloning). See
+  the v1.7.0 FUTURE list below — unchanged.
+
+---
+
+# 0-b. ENGINEERING STATUS — v1.7.0 record (superseded by the v1.7.1
+section above; kept as the historical handoff)
+
+
 
 This section is the AUTHORITATIVE forward handoff: the next AI agent
 session can continue from this file alone. Read this section, then

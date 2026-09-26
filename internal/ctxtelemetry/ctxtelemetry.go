@@ -69,6 +69,8 @@ type TurnRecord struct {
 	TokensCompressed  int  `json:"tokensCompressed,omitempty"`  // history + in-loop tool-result compaction
 	RolloverTriggered bool `json:"rolloverTriggered,omitempty"` // Continuum chapter rollover followed
 	OverflowPrevented bool `json:"overflowPrevented,omitempty"` // a refusal gate fired instead of an engine call
+	RecoveryTriggered bool `json:"recoveryTriggered,omitempty"` // v1.7.1: a REAL context exhaustion was recovered
+	RecoveryHandoffID string `json:"recoveryHandoffId,omitempty"` // v1.7.1: durable recovery record id
 
 	// Context deltas.
 	TokensAdded   int `json:"tokensAdded,omitempty"`   // injected blocks (recall, attachments, skills)

@@ -1,5 +1,19 @@
 # SHEYTAN-Local-Agent — Agent Context
 
+> **v1.7.1 handoff note (2026-09-26):** this release fixes the P0
+> scheduler TempDir race (RunNow settlement contract + regression),
+> adds context-exhaustion recovery (typed condition → snapshot →
+> hierarchical/fallback summary → durable handoff under
+> `<DataDir>/recovery` → lifecycle-owned restart exactly once →
+> bounded continuation; second exhaustion stops the loop), adds the
+> pre-run preflight gate (`/api/preflight`; incompatible = refuse
+> before any engine start) with a hysteresis live monitor, makes the
+> Native Engine a first-class backend (capability contract, typed
+> failures, candidate table), and adds `LICENSE.md` with a
+> deterministic license-file contract. Version identity: 1.7.1. The
+> v1.7.0 note below remains accurate for the rollback hardening and
+> the automation layer.
+
 > **v1.7.0 handoff note (2026-09-26):** this release hardens the
 > engine transaction and ships the automation layer. (1) The
 > provisioning transaction's rollback paths now stop and reap the

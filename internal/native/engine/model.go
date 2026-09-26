@@ -187,14 +187,16 @@ func (e *Engine) LoadModel(ctx context.Context, spec ModelSpec) error {
 	if err != nil {
 		detail := fmt.Sprintf("native engine load: %v", err)
 		e.setModelFailedLocked(spec.Path, detail)
-		return fmt.Errorf("%s", detail)
+		// v1.7.1: typed native failure normalization (5.5).
+		return NormalizeError(fmt.Errorf("%s", detail))
 	}
 
 	var result ModelOpResult
 	if err := DecodeResult(resp, &result); err != nil {
 		detail := fmt.Sprintf("native engine load result: %v", err)
 		e.setModelFailedLocked(spec.Path, detail)
-		return fmt.Errorf("%s", detail)
+		// v1.7.1: typed native failure normalization (5.5).
+		return NormalizeError(fmt.Errorf("%s", detail))
 	}
 
 	if result.State != ModelStateLoaded || result.Model == nil {
@@ -377,4 +379,21 @@ func (e *Engine) resetModelForHostCycle() {
 	e.modelPlan = nil
 	e.mu.Unlock()
 	e.modelMu.Unlock()
+}
+
+// ModelInfoCached returns the cached model metadata of the currently
+// loaded model (nil when nothing is loaded). v1.7.1 capability contract
+// accessor — no IPC round-trip, a pure state read.
+func (e *Engine) ModelInfoCached() *NativeModelInfo {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.modelInfo
+}
+
+// MemoryPlanCached returns the cached memory plan of the currently
+// loaded model (nil when unknown). v1.7.1 capability contract accessor.
+func (e *Engine) MemoryPlanCached() *NativeMemoryPlan {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.modelPlan
 }

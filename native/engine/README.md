@@ -1,4 +1,4 @@
-# SHEYTAN Native AI Engine — C++ Engine Core (v1.1.5 Phase 5)
+# SHEYTAN Native AI Engine — C++ Engine Core (v1.7.1)
 
 This is the C++ side of the **SHEYTAN Native AI Engine architecture**:
 
@@ -11,7 +11,7 @@ React/TypeScript
       ↓
 SHEYTAN Native API  (internal/native/engine — supervised host + IPC)
       ↓
-C++ Native Engine   (THIS tree — future heavy-compute/AI execution engine)
+C++ Native Engine   (THIS tree — the supervised heavy-compute/AI execution engine)
 ```
 
 ## Status (read literally — ARCHITECTURE.md Part III truth standard)
@@ -63,12 +63,13 @@ C++ Native Engine   (THIS tree — future heavy-compute/AI execution engine)
   `failed`, mirrored on the Go side (protocol v2 ops: `load_model`,
   `unload_model`, `model_info`)
 
-**NOT implemented (future phases):** inference. No generation, no KV
-cache allocation, no compute buffers, no scheduler activity — the
-concern types exist on the Go side (`internal/native/engine`), the wire
-op set reserves `cancel` for generation requests, and llama.cpp remains
-the only generation engine. The host's `cancel` op honestly answers "no
-active generation requests".
+**HISTORICAL — Phases 1–4 (superseded by Phase 5, kept for the record):**
+through Phase 4 this host had NO inference: no generation, no KV cache
+allocation, no compute buffers, no scheduler activity — llama.cpp was
+the only generation engine, and the `cancel` op honestly answered "no
+active generation requests". Phase 5 (next section) implemented REAL
+native transformer inference + generation; the paragraph above is the
+record of how the engine got there, not the current state.
 
 **IMPLEMENTED + TESTED in Phase 5 (REAL native transformer inference + generation):**
 
@@ -133,9 +134,10 @@ Fixtures (checked in, deterministic — regenerate with
 **Phase 5 honest limits (read literally):** architecture llama only;
 tensor types F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 only; rope.freq_scale 1.0
 only; no chat-template interpretation (plain prompts); the forward pass
-is portable scalar C++ — measured SLOWER than llama.cpp on the fixtures
-(see worklog.md Phase 5 performance table) — correctness was the
-priority; optimization is future work.
+is portable scalar C++ — measured SLOWER than llama.cpp on the Phase-5
+fixtures (see worklog.md Phase 5 performance table) — correctness was
+the priority; optimization remains future work and is never claimed
+without fresh comparable measurements.
 
 ## Build
 

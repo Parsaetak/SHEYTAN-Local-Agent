@@ -3,11 +3,11 @@ package runtime
 // automation_test.go — v1.7.0: the INTEGRATION contract of the four
 // systems through a REAL agent loop:
 //
-//	scheduler task (manual trigger)
-//	  → taskRunner installs the task context + task-scoped tools
-//	  → the model calls artifact_create
-//	  → the artifact lands in the durable task/run registry
-//	  → the run output reports the registered artifact (provenance)
+//      scheduler task (manual trigger)
+//        → taskRunner installs the task context + task-scoped tools
+//        → the model calls artifact_create
+//        → the artifact lands in the durable task/run registry
+//        → the run output reports the registered artifact (provenance)
 //
 // A chat run WITHOUT a task context refuses artifact_create (task-scoped
 // honesty), and a task run with linked skills sees the injected block.
@@ -117,11 +117,11 @@ func TestTaskRunCreatesRegisteredArtifactThroughTheRealLoop(t *testing.T) {
 	}
 
 	if err := stack.Sched.AddTask(scheduler.Task{
-		ID:          "task-int-1",
-		Name:        "Integration Task",
-		Trigger:     scheduler.EventManual,
-		Prompt:      "write the report using the report skill and artifact_create",
-		MaxRuntime:  60 * time.Second,
+		ID:           "task-int-1",
+		Name:         "Integration Task",
+		Trigger:      scheduler.EventManual,
+		Prompt:       "write the report using the report skill and artifact_create",
+		MaxRuntime:   60 * time.Second,
 		LinkedSkills: []string{"nonexistent-skill"}, // must not break the run
 	}); err != nil {
 		t.Fatal(err)
@@ -133,6 +133,8 @@ func TestTaskRunCreatesRegisteredArtifactThroughTheRealLoop(t *testing.T) {
 	}
 
 	report := <-ch
+	for range ch { // v1.7.1 settlement contract: close = fully settled worker
+	}
 
 	if !report.OK {
 		t.Fatalf("task run failed: %+v", report)

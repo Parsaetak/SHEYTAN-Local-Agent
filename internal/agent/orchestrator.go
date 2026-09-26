@@ -26,6 +26,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/ctxtelemetry"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/recovery"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/skills"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/taskclassify"
@@ -123,6 +124,14 @@ type RunResult struct {
         // and consumed at settlement for the session summary + agent.md
         // handoff. Nil on runs that never touched tools.
         Task *TaskState `json:"task,omitempty"`
+
+        // Recovery (v1.7.1): truthful context-exhaustion recovery evidence.
+        // RecoveryTriggered is true when the run survived a REAL context
+        // exhaustion through the recovery path; RecoveryHandoffID names the
+        // durable record; RecoveryInfo carries the one-line diagnostic.
+        RecoveryTriggered bool   `json:"recoveryTriggered,omitempty"`
+        RecoveryHandoffID string `json:"recoveryHandoffId,omitempty"`
+        RecoveryInfo      string `json:"recoveryInfo,omitempty"`
 }
 
 // abortCaption renders the correct end caption for a canceled context:
@@ -242,6 +251,11 @@ type Orchestrator struct {
 
         // telemetry records per-turn context-effectiveness measurements.
         telemetry *ctxtelemetry.Store
+
+        // recoveryCoord (v1.7.1) is the runtime recovery seam: engine restart
+        // through the existing lifecycle owner, bounded summarization, and the
+        // durable handoff store. Nil disables automatic context recovery.
+        recoveryCoord RecoveryCoordinator
 }
 
 // SkillSource is the skills subset the orchestrator consumes.
@@ -419,12 +433,30 @@ type runOptions struct {
         // With* builders above).
         summaryBlock  string
         historyBlocks []llm.Message
+
+        // runIdentity (v1.7.1): the logical identities frozen into the
+        // context-exhaustion recovery snapshot and durable handoff record.
+        sessionID string
+        threadID  string
+        runID     string
 }
 
 // WithSessionContext applies the per-session context policy (1.1.6) to
 // this run only: the plan, the request's n_ctx and the fit gates all use
 // the resolved effective window. The policy lives with the session — it
 // never mutates the global config and never affects other sessions.
+// WithRunIdentity tags the run with the logical identities the
+// context-exhaustion recovery path freezes into its snapshot and
+// durable handoff record (v1.7.1). Identity-only: it never changes
+// planning, tools or policy.
+func WithRunIdentity(sessionID, threadID, runID string) RunOption {
+	return func(ro *runOptions) {
+		ro.sessionID = sessionID
+		ro.threadID = threadID
+		ro.runID = runID
+	}
+}
+
 func WithSessionContext(tokens int) RunOption {
         return func(ro *runOptions) {
                 if tokens > 0 {
@@ -1491,7 +1523,20 @@ func (o *Orchestrator) RunDetailed(
                         }
                 }
 
-                perf, err := o.streamChat(
+                // v1.7.1 BOUNDED CONTEXT-EXHAUSTION RECOVERY: a REAL exhaustion
+                // (typed condition, recovery.IsContextExhausted) does not terminate
+                // the task. One automatic recovery attempt freezes the logical
+                // state, persists a durable handoff, restarts the engine through
+                // the lifecycle owner and continues the SAME task from the handoff.
+                // A second exhaustion stops the loop with a clear diagnostic -
+                // never a restart storm.
+                var perf llm.PerfStats
+                var err error
+                recoveryAttempts := 0
+                recoveryStopped := false
+
+                for {
+                    perf, err = o.streamChat(
                         ctx,
                         req,
                         func(ev llm.StreamEvent) error {
@@ -1536,25 +1581,75 @@ func (o *Orchestrator) RunDetailed(
 
                 clock.Mark(StageGenerationEnd)
 
-                if err != nil {
-                        if cerr := ctx.Err(); cerr != nil {
-                                onActivity(Activity{
-                                        Type:      "done",
-                                        Caption:   abortCaption(cerr),
-                                        Timestamp: time.Now(),
-                                })
-
-                                return result, nil
-                        }
-
-                        onActivity(Activity{
-                                Type:      "error",
-                                Caption:   "LLM error: " + err.Error(),
-                                Timestamp: time.Now(),
-                        })
-
-                        return result, err
+                if err == nil {
+                    break
                 }
+
+                if cerr := ctx.Err(); cerr != nil {
+                    onActivity(Activity{
+                        Type:      "done",
+                        Caption:   abortCaption(cerr),
+                        Timestamp: time.Now(),
+                    })
+
+                    return result, nil
+                }
+
+                // Only a REAL, typed context exhaustion recovers - never a
+                // timeout, an OOM or a process crash.
+                if !recovery.IsContextExhausted(err) {
+                    break
+                }
+
+                // LOOP GUARD: automatic recovery runs at most once per
+                // exhaustion episode (v1.7.1 3.9).
+                if recoveryAttempts >= recovery.MaxRecoveryAttempts {
+                    recoveryStopped = true
+                    err = recovery.ErrRecoveryLoopGuard
+                    break
+                }
+
+                rebuilt, handoffID := o.attemptRecovery(ctx, &runRecovery{
+                    sessionID: ro.sessionID,
+                    threadID:  ro.threadID,
+                    runID:     ro.runID,
+                    runTask:   runTask,
+                    messages:  messages,
+                    model:     cfg.EffectiveModel(),
+                }, err, onActivity)
+                if len(rebuilt) == 0 {
+                    break // recovery unavailable or failed - honest error below
+                }
+
+                recoveryAttempts++
+                messages = rebuilt
+                result.RecoveryTriggered = true
+                result.RecoveryHandoffID = handoffID
+                result.RecoveryInfo = "continued from recovery handoff after context exhaustion"
+
+                // Rebuild the wire request for the continuation attempt - the
+                // SAME task, the SAME composition, the recovered history.
+                req = o.client.BuildChatRequestWithOptions(
+                    cfg.EffectiveModel(),
+                    messages,
+                    composer.toolSpecs,
+                    effCtx.Effective,
+                )
+            }
+
+            if err != nil {
+                caption := "LLM error: " + err.Error()
+                if recoveryStopped {
+                    caption = recoveryAbortDiagnostic()
+                }
+                onActivity(Activity{
+                    Type:      "error",
+                    Caption:   caption,
+                    Timestamp: time.Now(),
+                })
+
+                return result, err
+            }
 
                 // v1.0.4: keep the speed telemetry of the last successful call
                 // for the UI HUD.

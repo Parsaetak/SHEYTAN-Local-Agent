@@ -49,6 +49,11 @@ type engineSnapshot struct {
 	// ("llama" or "native" — the single selection policy decides).
 	Backend string `json:"backend"`
 
+	// Candidates (v1.7.1) lists the per-backend serving-alternative
+	// verdicts (Native Engine / llama.cpp CPU / llama.cpp Vulkan) from
+	// the ONE selection authority — the UI renders them, never computes.
+	Candidates []llm.BackendCandidateVerdict `json:"candidates,omitempty"`
+
 	// Native (v1.1.5) carries the supervised native engine's status
 	// when the native path is enabled (nil otherwise). Purely local
 	// reads — the poll path never performs IPC.
@@ -157,6 +162,15 @@ func (s *Server) engineSnapshot() engineSnapshot {
 
 	if s.stack != nil && s.stack.Engine() != nil {
 		snap.Backend = s.stack.Engine().Name()
+
+		// v1.7.1 (5.7): the per-backend candidate verdicts — the same
+		// selection authority, one capability truth.
+		snap.Candidates = llm.BackendCandidates(
+			s.src.Load(),
+			s.stack.NativeBackend(),
+			s.stack.LlamaBackend(),
+			nil, // model-side caps are folded into the native probe
+		)
 	}
 
 	// Phase 5 repair: when the native engine is the backend actually

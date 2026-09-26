@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
 
-import { api, type Model } from "./api";
+import { api, type Model, type PreflightReport } from "./api";
 import {
   SELECTION_PHASE_LABEL,
   backendVerdict,
@@ -539,6 +539,36 @@ const ModelPicker = function ModelPicker({
   const selectionPhase = (selection?.phase ?? null) as SelectionPhase | null;
   const selectionInFlight = selectionBusy(selectionPhase);
 
+  // v1.7.1: the pre-run compatibility report — fetched from the ONE
+  // backend authority (GET /api/preflight). The picker never computes
+  // compatibility locally; it renders the report. Only blocking states
+  // (incompatible / critical / high pressure) surface here to avoid
+  // decorating every healthy model with noise.
+  const [preflight, setPreflight] = useState<PreflightReport | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    void api
+      .preflight(undefined, controller.signal)
+      .then((report) => {
+        if (!cancelled) {
+          setPreflight(report);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPreflight(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeModel]);
+
   // v1.5.1: the hidden auto-selection is GONE. The previous "Use
   // recommended setup" action silently CHOSE a model (the first
   // evidence-safe entry, or the smallest estimated footprint as a
@@ -564,6 +594,49 @@ const ModelPicker = function ModelPicker({
 
   return (
     <section className="model-picker" aria-label="Model selection">
+      {preflight &&
+        (preflight.severity === "incompatible" ||
+          preflight.severity === "critical_pressure" ||
+          preflight.severity === "high_pressure") && (
+          <div
+            className="preflight-banner"
+            role="alert"
+            style={{
+              border: "1px solid rgba(220, 90, 90, 0.55)",
+              borderRadius: 8,
+              padding: "10px 12px",
+              margin: "0 0 12px",
+              fontSize: 12.5,
+              lineHeight: 1.45,
+            }}
+            title={
+              preflight.safetyMarginPct
+                ? `Safety margin ${preflight.safetyMarginPct.toFixed(0)}%`
+                : undefined
+            }
+          >
+            <strong>
+              {preflight.severity === "incompatible"
+                ? "This model cannot start on this machine"
+                : preflight.severity === "critical_pressure"
+                  ? "Critical memory pressure predicted for this run"
+                  : "High memory pressure predicted for this run"}
+            </strong>
+            {preflight.reasons && preflight.reasons.length > 0 && (
+              <div>
+                {preflight.reasons.map((reason, index) => (
+                  <div key={index}>{reason}</div>
+                ))}
+              </div>
+            )}
+            {preflight.recommendedAction && (
+              <div>
+                <strong>Alternative: </strong>
+                {preflight.recommendedAction}
+              </div>
+            )}
+          </div>
+        )}
       <header className="model-picker-head">
         <div>
           <span className="eyebrow">MODELS</span>

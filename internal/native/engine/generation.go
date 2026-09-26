@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recovery"
 )
 
 // GenerationRequest is one native generation request (the wire payload
@@ -82,6 +83,12 @@ type GenerationResult struct {
 
 // ContextExhaustedError reports a request that cannot fit the model's
 // context window (rejected by the engine, no silent truncation).
+//
+// v1.7.1: the structured native rejection unwraps into the ONE shared
+// condition (recovery.ErrContextExhausted), so the runtime detects
+// exhaustion identically for both backends via
+// recovery.IsContextExhausted / errors.Is — while this concrete type
+// stays the native boundary's own evidence carrier.
 type ContextExhaustedError struct {
 	Detail string
 }
@@ -90,10 +97,20 @@ func (e *ContextExhaustedError) Error() string {
 	return e.Detail
 }
 
-// IsContextExhausted reports whether err is a context-window rejection.
+// Unwrap maps the structured native context-bound rejection into the
+// shared runtime condition contract.
+func (e *ContextExhaustedError) Unwrap() error {
+	return recovery.ErrContextExhausted
+}
+
+// IsContextExhausted reports whether err is a context-window rejection
+// (the concrete native type, or anything unwrapping into the shared
+// recovery condition).
 func IsContextExhausted(err error) bool {
-	_, ok := err.(*ContextExhaustedError)
-	return ok
+	if _, ok := err.(*ContextExhaustedError); ok {
+		return true
+	}
+	return recovery.IsContextExhausted(err)
 }
 
 // generateStallTimeout mirrors the llama.cpp stream contract: no overall
@@ -221,8 +238,10 @@ func (e *Engine) StreamGeneration(ctx context.Context, req GenerationRequest,
 			return GenerationResult{RequestID: requestID, FinishReason: "error"},
 				&ContextExhaustedError{Detail: streamErr.Error()}
 		}
+		// v1.7.1: normalize every other native failure into the shared
+		// typed categories (§5.5) — raw host text stays embedded as detail.
 		return GenerationResult{RequestID: requestID, FinishReason: "error"},
-			fmt.Errorf("native generation: %w", streamErr)
+			NormalizeError(fmt.Errorf("native generation: %w", streamErr))
 	}
 
 	if !finalResp.OK {
@@ -236,8 +255,9 @@ func (e *Engine) StreamGeneration(ctx context.Context, req GenerationRequest,
 			return GenerationResult{RequestID: requestID, FinishReason: "error"},
 				&ContextExhaustedError{Detail: finalResp.Error}
 		}
+		// v1.7.1: typed native failure normalization (§5.5).
 		return GenerationResult{RequestID: requestID, FinishReason: "error"},
-			fmt.Errorf("native generation: %s", finalResp.Error)
+			NormalizeError(fmt.Errorf("native generation: %s", finalResp.Error))
 	}
 
 	var final GenerationFinalResult

@@ -153,13 +153,27 @@ type BackendDecision struct {
 // reason a native selection fell back. This is the observability contract
 // behind SelectGenerationBackend; the routing policy itself lives in one
 // place and is pinned by tests either way.
+//
+// v1.7.1 hardening: nil backends never panic. A decision whose Backend is
+// nil carries the honest FallbackReason "no backend available" — callers
+// (capability tables, preflight) treat it as "nothing can serve", not as
+// a crash.
 func SelectGenerationBackendDetailed(cfg *config.Config, native, fallback Backend) BackendDecision {
+	const noBackend = "no backend available"
+
 	if cfg != nil && cfg.NativeBackendEnabled() && native != nil {
 		if gc, ok := native.(GenerationCapable); ok && !gc.GenerationCapable() {
 			reason := "native engine cannot serve generation"
 			if fr, ok := native.(GenerationFallbackReporter); ok {
 				if r := fr.GenerationFallbackReason(); r != "" {
 					reason = r
+				}
+			}
+			if fallback == nil {
+				return BackendDecision{
+					Backend:        nil,
+					SelectedName:   "",
+					FallbackReason: reason + "; " + noBackend,
 				}
 			}
 			return BackendDecision{
@@ -169,6 +183,9 @@ func SelectGenerationBackendDetailed(cfg *config.Config, native, fallback Backen
 			}
 		}
 		return BackendDecision{Backend: native, SelectedName: native.Name()}
+	}
+	if fallback == nil {
+		return BackendDecision{Backend: nil, SelectedName: "", FallbackReason: noBackend}
 	}
 	return BackendDecision{Backend: fallback, SelectedName: fallback.Name()}
 }

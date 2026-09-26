@@ -31,6 +31,7 @@ import (
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/installer"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
         nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
@@ -2116,6 +2117,25 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         }
                 }
 
+                // v1.7.1 PRE-RUN COMPATIBILITY GATE: evaluate the ONE authoritative
+                // preflight report BEFORE any engine start. A hard incompatibility
+                // refuses the run here — PREFLIGHT → REFUSE → NO ENGINE START — with
+                // the honest reason and a valid alternative, never a crash to watch.
+                if pre := s.stack.PreflightReport(0); !pre.Compatible &&
+                	pre.Severity == preflight.SeverityIncompatible {
+                	gateCancel()
+                	msg := preflight.RefusalMessage(pre)
+                	logging.Default().Warn("preflight", "run refused before engine start: model=%s backend=%s", pre.Model, pre.Backend)
+                	settle("error", msg, false, "", "")
+                	publish(agent.Activity{
+                		Type:    "error",
+                		RunID:   runID,
+                		Caption: msg,
+                		Timestamp: time.Now(),
+                	})
+                	return
+                }
+
                 if err := s.stack.EnsureLLMContext(gateCtx); err != nil {
                         gateCancel()
 
@@ -2209,6 +2229,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         agent.WithReceivedAt(receivedAt),
                         agent.WithSessionSummaryBlock(summaryBlock),
                         agent.WithHistoryBlocks(histRefBlocks),
+                        // v1.7.1: identity for the context-exhaustion recovery record.
+                        agent.WithRunIdentity(sess.ID, sess.ThreadID, runID),
                 )
 
                 if err != nil {

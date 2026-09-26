@@ -1,5 +1,54 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
+Current release:  v1.7.1
+
+---
+Task ID: 1 (v1.7.1 session)
+Agent: v1.7.1 engineering session
+Task: v1.7.1 — P0 scheduler settlement, context-exhaustion recovery, preflight gate + live protection, Native first-class backend, license cleanup, docs/version truth
+
+Work Log:
+- P0: reproduced the CI failure (`-race -count=5` → TempDir "directory
+  is not empty"); root cause = the test's final resumed RunNow worker
+  persisting after test return. Documented the RunNow SETTLEMENT
+  CONTRACT (close = persistence + bookkeeping complete), drained every
+  RunNow channel in tests, added TestRunNowChannelCloseIsFullSettlement
+  (disk + bookkeeping asserted synchronously at close). Verified:
+  targeted `-race -count=10`, full suite `-race -count=3`.
+- Feature A: internal/recovery package (typed condition, snapshot,
+  hierarchical + fallback summary, durable versioned handoff store,
+  bounded injection); typed mapping at the llama.cpp client boundary
+  and the native boundary (Unwrap); orchestrator bounded recovery loop
+  (typed-condition-only, restart exactly once via the runtime
+  coordinator, loop guard at 1 attempt); runtime coordinator over
+  LlamaServer.Restart / Engine Stop+Start + awaitReady; identity
+  (session/thread/run) wired from the API server; telemetry fields.
+- Feature B: internal/preflight (one Report; Evaluate over existing
+  authorities; LiveMonitor with hysteresis + synchronous critical
+  protection); server run gate refuses incompatible BEFORE engine
+  start; /api/preflight; ModelPicker renders the report; runtime
+  active-run cancel registry wired into streamGeneration.
+- Feature C: llm.BackendCapabilities + CapabilityReporter implemented
+  by both backends; failure taxonomy (failureclass.go + NormalizeError);
+  BackendCandidates verdict table in /api/engine; nil-hardened
+  SelectGenerationBackendDetailed; native README contradiction cleaned
+  (Phase 1-4 relabeled HISTORICAL).
+- License: LICENSE.md human-facing index (embeds no license text);
+  internal/releasecontract/license_contract_test.go pins the EXACT
+  license-file set and blocks redundant license Markdown.
+- Version identity 1.7.1 across package.json / config.go /
+  build/config.yml / SIGNATURE (release-version.mjs --check green).
+- Verification: go test ./internal/... -tags headless (54 pkgs, 0
+  fail); go test ./... -tags headless -run Test (0 fail); vet clean;
+  race battery green (scheduler/recovery/preflight/runtime/api/agent/
+  llm/sessions/contextplan/histref); cmake + ctest 12/12; real-host
+  Go integration battery (TestRealCppHost*, Phase 7 acceptance) green;
+  frontend typecheck/lint/units/build/stable-asset/release-check green.
+
+Stage Summary:
+- v1.7.1 complete on this revision. Same-revision Actions verification
+  and the Windows runtime probes remain NEXT (see ROADMAP §0 NEXT).
+
 ---
 Task ID: 1
 Agent: main (Super Z)

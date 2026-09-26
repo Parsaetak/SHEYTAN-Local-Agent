@@ -156,6 +156,21 @@ func parseHHMM(s string) (int, int, error) {
 // yields the final Report for callers that want to wait (tests, API
 // optional wait). A paused task is refused; a task already running is
 // refused (ErrAlreadyRunning) — deterministic rejection, no stacking.
+//
+// SETTLEMENT CONTRACT (v1.7.1): the returned channel closes exactly
+// once, only AFTER the run has fully settled:
+//
+//      settle current attempt → reports.jsonl persisted →
+//      tasks.jsonl (LastRun) persisted → running/cancel bookkeeping
+//      cleared → channel closed
+//
+// The channel is buffered (capacity 1), so a caller that never reads it
+// cannot leak or block the worker. A caller that needs a full-settlement
+// barrier — e.g. before removing the store directory — must drain the
+// channel until it is CLOSED (receive-report, then receive-until-closed);
+// closure is the deterministic proof that every persistence write and
+// bookkeeping step has completed. Receiving only the report proves the
+// durable writes happened but not that the worker goroutine has exited.
 func (s *Scheduler) RunNow(ctx context.Context, id string) (<-chan Report, error) {
         s.mu.Lock()
         task, ok := s.findLocked(id)

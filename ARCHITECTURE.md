@@ -9,6 +9,65 @@
 > marked as future/planned. Nothing in Part II of this document is
 > implemented today.
 
+## v1.7.1 — Architecture changes shipped in this release
+
+Four additions, each extending an EXISTING authority (no second
+scheduler, no second memory system, no second capability owner):
+
+1. **Context-exhaustion recovery (`internal/recovery` + seams).** A
+   distinct recovery event, separate from the proactive continuum
+   rollover: `recovery.ErrContextExhausted` is the ONE typed condition;
+   llama.cpp evidence is classified once in `internal/llm` (its client
+   wraps matching HTTP errors) and the Native Engine's structured
+   context-bound rejection unwraps into the same sentinel. The
+   orchestrator's engine call sits in a bounded loop: on a typed
+   exhaustion it freezes a `recovery.Snapshot` (fed by `agent.TaskState`,
+   the run messages and the continuum distiller), builds a
+   hierarchical whole-context summary (bounded chunks → partials →
+   folded merge) with a deterministic fallback, persists a versioned
+   `recovery.Handoff` atomically under `<DataDir>/recovery`, restarts
+   through `agent.RecoveryCoordinator` (runtime-owned
+   `LlamaServer.Restart` / native Engine restart + `awaitReady` health
+   verification), injects `recovery.RenderInjection` plus the ORIGINAL
+   last user turn, and continues the SAME task. Automatic recovery runs
+   at most once per episode (`MaxRecoveryAttempts = 1`; a second
+   exhaustion ends the loop with `recovery.ErrRecoveryLoopGuard`).
+   Identity (session/thread/run) is frozen via `WithRunIdentity`.
+2. **Pre-run preflight gate (`internal/preflight`).** One authoritative
+   `Report` (severity ladder ok → warning → high_pressure →
+   critical_pressure → incompatible) computed from the EXISTING
+   authorities (backend selection, `ResolveModelCapabilities`,
+   engine-verified window, hardware snapshot) and consumed by the run
+   gate (server refuses incompatible BEFORE `EnsureLLMContext` — zero
+   engine starts), `GET /api/preflight`, and the ModelPicker banner.
+   The same package owns the live monitor (`LiveMonitor`: injected
+   samplers over sysinfo/process-RSS, 15 s bounded cadence, hysteresis
+   = 2, transition-only synchronous critical protection cancelling
+   active generations through the runtime's registered cancel
+   ownership).
+3. **Native Engine first-class serving alternative.**
+   `llm.BackendCapabilities` + optional `CapabilityReporter`
+   implemented by `LlamaBackend` and the native `Backend`;
+   `engine.NormalizeError` maps native failures into the typed
+   taxonomy (context exhausted / unsupported model / unsupported
+   tensor / insufficient resources / invalid model / backend
+   unavailable / runtime failure); `llm.BackendCandidates` produces the
+   §5.7 three-row verdict table from the ONE selection authority and
+   `/api/engine` exposes it; `SelectGenerationBackendDetailed` is
+   nil-hardened. Capability facts come from
+   `ModelInfoCached`/`MemoryPlanCached` (pure state reads, no IPC).
+4. **License surface.** `LICENSE.md` is the human-facing index over the
+   unchanged authorities (LICENSE, LICENSE-APACHE,
+   LICENSE-PROPRIETARY, LICENSE-MAP.md, NOTICE.md);
+   `internal/releasecontract/license_contract_test.go` deterministically
+   pins the license-file set and blocks redundant license Markdown.
+
+Scheduler correctness: `RunNow` now documents a deterministic
+SETTLEMENT CONTRACT — channel close happens only after both
+persistence writes and bookkeeping complete — which the P0 race
+regression (`TestRunNowChannelCloseIsFullSettlement`) locks and every
+consumer can rely on for a full-settlement barrier.
+
 ## v1.7.0 — Architecture changes shipped in this release
 
 Everything below is `IMPLEMENTED` and `TESTED` (deterministic unit /

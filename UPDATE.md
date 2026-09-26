@@ -1,3 +1,51 @@
+# UPDATE.md — v1.7.1 Release Notes & Maintenance Behavior
+
+**Release:** `v1.7.1` (canonical application version; single version
+hierarchy: package.json → release-version.mjs → config.go /
+build/config.yml / SIGNATURE)
+**Base:** `main @ 4a1b23b` (`v1.7.0`) · **Date:** 2026-09-26
+**Package:** `SHEYTAN-Local-Agent-v1.7.1-FINAL.zip` (complete repository
+tree)
+
+## v1.7.1 changes (verified evidence in ROADMAP.md §0)
+
+1. **P0 scheduler settlement fix.** The v1.7.0 CI failure
+   (`internal/scheduler TestRunNowManualRunAndPauseGate` — TempDir
+   cleanup "directory is not empty") is eliminated: `RunNow` now
+   documents and honors a deterministic settlement contract (channel
+   close = all persistence + bookkeeping complete), tests drain to
+   close, and a dedicated regression locks the contract. No sleeps, no
+   cleanup retries, no weakened assertions.
+2. **Context-exhaustion recovery.** A real context limit no longer
+   terminates the task: one typed condition across llama.cpp and the
+   Native Engine, a complete logical-state freeze, a whole-context
+   hierarchical summary (deterministic fallback included), an atomic
+   versioned handoff record under `<DataDir>/recovery` that survives
+   restart, a lifecycle-owned model restart verified for readiness,
+   bounded continuation injection, and a one-attempt loop guard.
+3. **Pre-run compatibility gate + live protection.** One authoritative
+   preflight report evaluated before any engine start (incompatible
+   combinations are refused with reason + alternative — no engine
+   process starts), served at `/api/preflight` and rendered by the
+   ModelPicker; a hysteresis-protected live monitor cancels active
+   runs cooperatively under critical memory pressure.
+4. **Native Engine as a first-class serving alternative.** Shared
+   capability contract, typed failure taxonomy, the per-backend
+   candidate table (Native / llama.cpp CPU / Vulkan) from the one
+   selection authority, nil-hardened selection, and a cleaned native
+   README (the historical no-inference wording is labeled historical).
+5. **License entry point.** `LICENSE.md` is the human-facing index over
+   the unchanged legal authorities, with a deterministic contract test
+   preventing redundant license Markdown from returning.
+6. **Version identity:** exactly `1.7.1` everywhere.
+
+The v1.7.0 maintenance/update/rollback behavior below is unchanged and
+remains accurate.
+
+---
+
+# v1.7.0 record
+
 # UPDATE.md — v1.7.0 Maintenance, Update & Rollback Behavior
 
 **Release:** `v1.7.0` (canonical application version; single version

@@ -1574,6 +1574,10 @@ export const api = {
   state(): Promise<AppState> {
     return request<AppState>("/state");
   },
+  preflight: (context?: number, signal?: AbortSignal): Promise<PreflightReport> => {
+    const suffix = context && context > 0 ? `?context=${context}` : "";
+    return request<PreflightReport>(`/preflight${suffix}`, { signal });
+  },
 
   sysinfo(signal?: AbortSignal): Promise<SysInfo> {
     return request<SysInfo>("/sysinfo", { signal });
@@ -2277,3 +2281,42 @@ export const api = {
 // v1.3.0: re-exported for convenience (the implementation lives in
 // clone-url.ts — a pure, node:test-importable module).
 export { parseGitHubUrl } from "./clone-url";
+
+// PreflightReport — v1.7.1: the ONE authoritative pre-run compatibility
+// report served by GET /api/preflight. The frontend renders this verdict;
+// it NEVER recalculates compatibility locally.
+export type PreflightSeverity =
+  | "ok"
+  | "warning"
+  | "high_pressure"
+  | "critical_pressure"
+  | "incompatible";
+
+export interface PreflightMemory {
+  modelBytes?: number;
+  kvCacheBytes?: number;
+  runtimeOverheadBytes?: number;
+  totalBytes: number;
+  contextTokens?: number;
+}
+
+export interface PreflightAvailable {
+  ramTotalBytes?: number;
+  ramAvailableBytes?: number;
+  vramBytes?: number;
+}
+
+export interface PreflightReport {
+  model: string;
+  backend: string;
+  device?: string;
+  compatible: boolean;
+  severity: PreflightSeverity;
+  reasons?: string[];
+  requirements: PreflightMemory;
+  available: PreflightAvailable;
+  safetyMarginPct?: number;
+  recommendedAction?: string;
+  unknown?: string[];
+  refusalMessage?: string;
+}
