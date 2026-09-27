@@ -5,7 +5,8 @@ Thank you for your interest in contributing to SHEYTAN-Local-Agent.
 ## Licensing — read this first
 
 SHEYTAN-Local-Agent uses a **conservative mixed licensing model**
-(`LICENSE`, `LICENSE.md`):
+(the complete picture — classification, notices, and both full legal
+texts — lives in the sole licensing artifact `LICENSE.md`):
 
 - `internal/humanize/` is designated **Apache-2.0** open.
 - Everything else is **Proprietary** under the Parsaetak Proprietary

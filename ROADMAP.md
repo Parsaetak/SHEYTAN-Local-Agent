@@ -52,12 +52,14 @@ planned is marked completed, and no green claim outruns its evidence.
   there — GPU_VULKAN claims remain impossible without the real
   execution line.
 
-* **COMPLETED (contract test) — license consolidation.** ONE
-  human-facing licensing Markdown (LICENSE.md) carrying the
-  consolidated classification + third-party attribution;
-  LICENSE-MAP.md/NOTICE.md merged and removed; LICENSE,
-  LICENSE-APACHE, LICENSE-PROPRIETARY preserved; the contract test
-  pins both directions.
+* **COMPLETED (contract test) — single-file license consolidation.**
+  EXACTLY ONE license artifact in the whole repository: LICENSE.md
+  carrying the complete consolidated package — classification +
+  third-party attribution + the FULL Apache-2.0 and Parsaetak
+  Proprietary License v1.1 texts. The former multi-file layout
+  (LICENSE, LICENSE-APACHE, LICENSE-PROPRIETARY, LICENSE-MAP.md,
+  NOTICE.md) is merged and removed; the whole-tree contract test pins
+  the exact-one invariant in both directions.
 
 The v1.7.1 handoff items below remain the historical record of that
 release; their evidence classes still hold.
@@ -187,21 +189,16 @@ release; their evidence classes still hold.
   acceptance: selection → preflight → load → generate → stream →
   cancel → settle) all PASS against the built `shtn-engine-host`.
 
-* **COMPLETED — license cleanup with legal authorities intact.**
-  `LICENSE.md` is now the human-facing entry point (copyright, the
-  conservative mixed model, where LICENSE-APACHE / LICENSE-PROPRIETARY
-  live, LICENSE-MAP.md as classification authority, NOTICE.md for
-  [historical v1.6.x–v1.7.1 layout; consolidated into LICENSE.md in
-  v1.7.2]
-  third-party notices, trademarks, contact) — an INDEX that embeds no
-  full license text and reclassifies nothing. The existing
-  license-generation mechanism (cmd/license.go / brand) is untouched,
-  and `internal/releasecontract/license_contract_test.go` adds the
-  deterministic check: the license-file set is EXACT (LICENSE,
-  LICENSE-APACHE, LICENSE-PROPRIETARY, LICENSE.md — the one
-  human-facing licensing document), any reintroduced redundant license
-  Markdown fails the
-  suite, and the licence-spelling drift is blocked.
+* **COMPLETED — license cleanup with legal authorities intact
+  [historical v1.6.x–v1.7.1 record; superseded by the v1.7.2
+  single-file consolidation above].** In the v1.6.x–v1.7.1 layout,
+  `LICENSE.md` served as the human-facing entry point over separate
+  legal-authority and classification files (an INDEX that embedded no
+  full license text). v1.7.2 consolidated EVERYTHING — classification,
+  notices, and both full legal texts — into the single `LICENSE.md`
+  artifact, deleted the other files, and rewrote the contract test to
+  the exact-one whole-tree invariant. The licence-spelling drift
+  remains blocked.
 
 * **COMPLETED — version identity is exactly 1.7.1** across
   package.json → release-version.mjs → config.go AppVersion →
@@ -258,6 +255,47 @@ release; their evidence classes still hold.
 * **FUTURE — v1.8+: Internet + Repository Operations** (web search
   extraction depth, GitHub repository operations beyond cloning). See
   the v1.7.0 FUTURE list below — unchanged.
+
+* **FUTURE — broad quantization coverage (Q1/Q2/Q3/... through F16).**
+  Expand coverage across the Q1/Q2/Q3/... quantization families
+  through F16, using an explicit matrix DERIVED FROM ACTUAL
+  upstream/runtime support — never asserted from informal Q-labels.
+  Before implementation begins, research the ACTUAL upstream-supported
+  formats; the matrix must identify, per format: the canonical format
+  identifier (as the loader/runtime names it), model-family
+  compatibility (which architectures accept it), loader/parser support
+  (GGUF loader coverage in each backend), tokenizer/config
+  requirements, backend restrictions (llama.cpp vs native engine vs
+  remote), memory implications (size class per model scale), and the
+  tests required before a format may be marked supported (parse →
+  plan → launch → generate, per backend). Nothing here is implemented
+  or tested in v1.7.2; no informal Q-label is presumed to exist.
+
+* **FUTURE — Safetensors support.** Native/imported Safetensors
+  support covering: discovery and import (files on disk, import
+  pipeline into the managed models directory), shard/index handling
+  where applicable (multi-shard model layouts and their index files),
+  metadata/card/config parsing (architecture, context, quantization
+  provenance), architecture validation against the supported-model
+  contract, tokenizer association (which tokenizer artifacts travel
+  with the weights), integrity/checksum handling, memory planning
+  (plugging into the existing GGUF-card-driven planner once metadata
+  is resolved), backend routing (llama.cpp path vs native engine vs
+  remote), secure loading (bounded parsing, no untrusted-code
+  execution), real inference verification before any format is
+  surfaced as supported, and UI/discovery exposure (ModelPicker
+  import, model card facts). Not implemented in v1.7.2.
+
+* **FUTURE — LiteRT / LiteRT-LM ("literm") investigation and
+  support.** Future investigation and, where viable, support for
+  Google LiteRT and LiteRT-LM, including: `.litertlm` bundles;
+  `.tflite` where relevant; tokenizer/chat-template packaging inside
+  the bundle; metadata handling; runtime/backend separation (LiteRT
+  runtime as another backend behind the EXISTING single selection
+  authority — never a second lifecycle owner); Windows/Linux/macOS
+  viability; OpenAI-compatible integration boundaries where
+  appropriate; and an import-vs-direct-runtime-vs-conversion strategy
+  decision backed by evidence. Not implemented in v1.7.2.
 
 ---
 

@@ -9,7 +9,30 @@ tree)
 
 ## v1.7.2 changes
 
-1. **P0 — the llama.cpp KV-cache CLI contract (the b11205 launch
+1. **P0 — the Windows one-word-chat crash (root cause fixed with a
+   deterministic regression).** The supplied Windows crash — log ends
+   at `task classified`, the process dies before `tier selected` —
+   was reproduced under `go test -race` and proven: `RunDetailed`
+   iterated the LIVE internal tool-registry map (the old
+   `Orchestrator.Tools()` handed out the registry itself) in the exact
+   classification→tier-selection window, while concurrent registry
+   mutation (custom-tool HTTP handlers, task-scoped tool
+   register/teardown from the scheduler, native engine unregister
+   sites) wrote it — a fatal, unrecoverable `concurrent map iteration
+   and map write` that kills the whole desktop process with no
+   terminal error event. The repair: `Tools()` now returns an
+   immutable SNAPSHOT (a private copy under the read lock); the
+   `len(o.tools)` read in the tier-selection walk and the unlocked
+   `ctxLimits` function-pointer read in `resolveEffectiveContext`
+   were fixed the same way; `/api/tools` now emits a deterministically
+   ordered listing. Regressions: the crash-window race reproduction
+   (fails on the pre-fix build), a snapshot-isolation contract, a
+   concurrent stress (6 readers + 4 writers), and a REAL-STACK
+   process-survival acceptance (one-word chat with Net Search OFF and
+   ON, a forced backend failure delivering a terminal error with the
+   process alive, and the next ordinary chat succeeding) over the real
+   API/WebSocket/session contracts.
+2. **P0 — the llama.cpp KV-cache CLI contract (the b11205 launch
    failure, fixed at the root).** The v1.7.1 Speed Pack emitted
    `--cache-type-kv q8_0` unconditionally; every modern llama.cpp build
    rejects that option (`error: invalid argument: --cache-type-kv`) and
@@ -28,12 +51,12 @@ tree)
    another flag as its value), and the bounded surgical repair walks
    the acyclic chain `shared → split → none` without touching unrelated
    speed flags or descending the compatibility ladder.
-2. **P0 — the `--mlock` → `--load-mode` contract.** The same audit
+3. **P0 — the `--mlock` → `--load-mode` contract.** The same audit
    found `--mlock` removed upstream (rejected by `b11205`; deprecated
    but accepted at `b10642`). Memory pinning is now emitted as
    `--load-mode mlock` on modern engines, the legacy flag only on
    builds whose help reports it, nothing when unknown.
-3. **P0 — the AUTO GPU evidence deadlock is broken.** Selection was
+4. **P0 — the AUTO GPU evidence deadlock is broken.** Selection was
    circular: GPU_VULKAN needs runtime evidence, but with only the CPU
    engine installed Vulkan evidence can never appear. AUTO may now run
    ONE bounded Vulkan candidate transaction — through the EXISTING
@@ -51,16 +74,20 @@ tree)
    change invalidates it. Stable lifecycle diagnostics
    (`gpuCandidateRequested` … `gpuCommit`/`gpuRollback`) cover the
    path.
-4. **P0/P1 — license consolidation completed.** Exactly ONE
-   human-facing licensing Markdown: `LICENSE.md` now carries the
-   consolidated classification (open/proprietary component tables) AND
-   the third-party attribution (the former `LICENSE-MAP.md` and
-   `NOTICE.md` content, merged and deleted). The authoritative legal
-   texts (`LICENSE`, `LICENSE-APACHE`, `LICENSE-PROPRIETARY`) are
-   preserved untouched; the contract test was rewritten to pin the new
-   layout in both directions (no duplicate license Markdown may
-   reappear; no legal authority may silently disappear).
-5. **Version identity:** exactly `1.7.2` everywhere (release-version
+5. **P0 — single-file license consolidation completed.** EXACTLY ONE
+   license artifact in the whole repository: `LICENSE.md` carries the
+   complete consolidated package — the classification (open/proprietary
+   component tables), the third-party attribution, the trademark,
+   governance and contact content, AND the FULL legal texts of the
+   Apache License 2.0 and the Parsaetak Proprietary License v1.1
+   (everything from the former multi-file layout was merged and the
+   source files deleted). The generator writes ONLY `LICENSE.md` from
+   `internal/brand` and actively removes resurrected legacy artifacts;
+   the CLI prints the complete document; the whole-tree contract test
+   pins the exact-one invariant in both directions (no license,
+   licence, notice, or copying artifact may appear anywhere; the
+   document may never degrade back into an index).
+6. **Version identity:** exactly `1.7.2` everywhere (release-version
    gate green); no codename.
 
 ## Evidence-truth statements (standing)
@@ -120,9 +147,10 @@ tree)
    candidate table (Native / llama.cpp CPU / Vulkan) from the one
    selection authority, nil-hardened selection, and a cleaned native
    README (the historical no-inference wording is labeled historical).
-5. **License entry point.** `LICENSE.md` is the human-facing index over
-   the unchanged legal authorities, with a deterministic contract test
-   preventing redundant license Markdown from returning.
+5. **License entry point (v1.7.1 layout, historical).** `LICENSE.md`
+   began as the human-facing index over separate legal authority
+   files; v1.7.2 consolidated everything into the single document
+   (see item 4 above).
 6. **Version identity:** exactly `1.7.1` everywhere.
 
 The v1.7.0 maintenance/update/rollback behavior below is unchanged and

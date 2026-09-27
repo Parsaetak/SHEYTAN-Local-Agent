@@ -211,7 +211,7 @@ upgrade_replaced:
 
   ; --- application payload (never models) ---------------------------------
   File "${BUILDDIR}\${EXE}"
-  File /nonfatal "${BUILDDIR}\LICENSE"
+  File /nonfatal "${BUILDDIR}\LICENSE.md"
   File /nonfatal "${BUILDDIR}\README.md"
   File /nonfatal "${BUILDDIR}\SIGNATURE"
   File "..\..\build\sheytan.ico"
@@ -318,7 +318,7 @@ Section "Uninstall"
   ; disk untouched. Recursion is forbidden here by the CI contract on
   ; this very file.
   Delete "$INSTDIR\${EXE}"
-  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\LICENSE.md"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\SIGNATURE"
   Delete "$INSTDIR\sheytan.ico"

@@ -349,12 +349,31 @@ func (o *Orchestrator) Unregister(name string) {
         }
 }
 
-// Tools returns the tool registry (for schema export to the UI). The map
-// is read-only by contract.
+// Tools returns an immutable SNAPSHOT of the tool registry.
+//
+// The returned map is a private copy taken under the registry read lock:
+// callers may hold and iterate it freely while Register/Unregister mutate
+// the live registry from other goroutines. This matters because the
+// registry mutates at runtime — custom tools (HTTP handlers) and
+// task-scoped tools (scheduler task runner teardown) register and
+// unregister CONCURRENTLY with active runs. v1.7.2's Windows chat crash
+// was a fatal `concurrent map iteration and map write` in RunDetailed's
+// tool-surface walk (between `task classified` and `tier selected`):
+// the old implementation handed out the LIVE internal map, so any
+// concurrent write during a caller's iteration killed the entire
+// desktop process. The snapshot contract removes that class entirely.
+//
+// Ordering: map iteration order is intentionally randomized by Go; any
+// caller needing deterministic order sorts the keys itself.
 func (o *Orchestrator) Tools() map[string]Tool {
         o.toolsMu.RLock()
-        defer o.toolsMu.RUnlock()
-        return o.tools
+        snapshot := make(map[string]Tool, len(o.tools))
+        for name, t := range o.tools {
+                snapshot[name] = t
+        }
+        o.toolsMu.RUnlock()
+
+        return snapshot
 }
 
 // tool looks one tool up under the registry read lock.
@@ -450,11 +469,11 @@ type runOptions struct {
 // durable handoff record (v1.7.1). Identity-only: it never changes
 // planning, tools or policy.
 func WithRunIdentity(sessionID, threadID, runID string) RunOption {
-	return func(ro *runOptions) {
-		ro.sessionID = sessionID
-		ro.threadID = threadID
-		ro.runID = runID
-	}
+        return func(ro *runOptions) {
+                ro.sessionID = sessionID
+                ro.threadID = threadID
+                ro.runID = runID
+        }
 }
 
 func WithSessionContext(tokens int) RunOption {
@@ -667,8 +686,17 @@ func (o *Orchestrator) RunDetailed(
         ramTotalMB, ramAvailMB := RAMInfo()
         historyTokens := chunking.EstimateMessagesTokens(messages)
 
-        enabledNames := make([]string, 0, len(o.tools))
-        for name := range o.Tools() {
+        // v1.7.2-repair: the tool surface walk takes ONE immutable snapshot.
+        // The pre-fix code read `len(o.tools)` outside the lock and iterated
+        // the map returned by Tools() — which WAS the live internal map. A
+        // concurrent Register/Unregister (custom tools via HTTP, task-scoped
+        // tool teardown) during this walk is a fatal concurrent map
+        // iteration/write: the whole desktop process dies with no terminal
+        // event. The window sits exactly between the `task classified` and
+        // `tier selected` log lines of the supplied crash trace.
+        toolSnap := o.Tools()
+        enabledNames := make([]string, 0, len(toolSnap))
+        for name := range toolSnap {
                 if cfg.ToolEnabled(name) {
                         enabledNames = append(enabledNames, name)
                 }
@@ -2903,8 +2931,14 @@ func ContextSafetyMargin(effectiveCtx int) int {
 // Remote or unresolved models keep the conservative fallback heuristic.
 func (o *Orchestrator) resolveEffectiveContext(cfg *config.Config, sessionContext int) llm.EffectiveContext {
         engineLimit := 0
-        if o.ctxLimits != nil {
-                engineLimit = o.ctxLimits(cfg)
+        // v1.7.2-repair: read the provider under the SAME mutex
+        // SetContextLimitProvider writes under. The pre-fix unlocked read
+        // was a data race (func pointer field) reachable from every run.
+        o.mu.Lock()
+        ctxLimits := o.ctxLimits
+        o.mu.Unlock()
+        if ctxLimits != nil {
+                engineLimit = ctxLimits(cfg)
         }
 
         if cfg.IsRemote() {

@@ -750,8 +750,8 @@ jobs:
           Commit: $env:GITHUB_SHA
           "@ | Set-Content "$root/BUILD-INFO.txt" -Encoding utf8
 
-          if (Test-Path "LICENSE") {
-            Copy-Item "LICENSE" "$root/LICENSE" -Force
+          if (Test-Path "LICENSE.md") {
+            Copy-Item "LICENSE.md" "$root/LICENSE.md" -Force
           }
 
           if (Test-Path "README.md") {
@@ -1395,8 +1395,8 @@ jobs:
           Commit: ${GITHUB_SHA}
           EOF
 
-          if [ -f LICENSE ]; then
-            cp LICENSE "$root/LICENSE"
+          if [ -f LICENSE.md ]; then
+            cp LICENSE.md "$root/LICENSE.md"
           fi
 
           if [ -f README.md ]; then
@@ -1425,8 +1425,8 @@ jobs:
           test -f "$root/models/README.txt"
           test -f "$root/workspace/README.txt"
 
-          if [ -f LICENSE ]; then
-            test -f "$root/LICENSE"
+          if [ -f LICENSE.md ]; then
+            test -f "$root/LICENSE.md"
           fi
 
           if [ -f README.md ]; then
@@ -1505,9 +1505,9 @@ jobs:
             "${LINUX_PKG_ROOT}/workspace/README.txt" \
             <<< "$entries"
 
-          if [ -f LICENSE ]; then
+          if [ -f LICENSE.md ]; then
             grep -Fxq \
-              "${LINUX_PKG_ROOT}/LICENSE" \
+              "${LINUX_PKG_ROOT}/LICENSE.md" \
               <<< "$entries"
           fi
 
@@ -1675,9 +1675,9 @@ jobs:
             <<< "$linux_entries"
 
           if grep -Fxq \
-            "${win_root}/LICENSE" \
+            "${win_root}/LICENSE.md" \
             <<< "$windows_entries"; then
-            echo "Windows LICENSE present."
+            echo "Windows LICENSE.md present."
           fi
 
           if grep -Fxq \
@@ -1699,9 +1699,9 @@ jobs:
           fi
 
           if grep -Fxq \
-            "${linux_root}/LICENSE" \
+            "${linux_root}/LICENSE.md" \
             <<< "$linux_entries"; then
-            echo "Linux LICENSE present."
+            echo "Linux LICENSE.md present."
           fi
 
           if grep -Fxq \

@@ -56,13 +56,15 @@ scheduler, no second memory system, no second capability owner):
    `/api/engine` exposes it; `SelectGenerationBackendDetailed` is
    nil-hardened. Capability facts come from
    `ModelInfoCached`/`MemoryPlanCached` (pure state reads, no IPC).
-4. **License surface.** `LICENSE.md` is the human-facing index over the
-   unchanged authorities (LICENSE, LICENSE-APACHE,
-   LICENSE-PROPRIETARY, LICENSE.md — the one human-facing licensing
-   document, consolidating the former LICENSE-MAP.md classification and
-   NOTICE.md attribution);
+4. **License surface.** `LICENSE.md` is the ONE complete licensing
+   document and the sole licensing artifact in the whole tree: the
+   mixed model, the component classification, the third-party
+   attribution, and the FULL Apache-2.0 and Parsaetak Proprietary
+   License v1.1 texts (the former routing/map/notice files were merged
+   in and removed in v1.7.2);
    `internal/releasecontract/license_contract_test.go` deterministically
-   pins the license-file set and blocks redundant license Markdown.
+   pins the exact-one whole-tree artifact invariant and the consolidated
+   content.
 
 Scheduler correctness: `RunNow` now documents a deterministic
 SETTLEMENT CONTRACT — channel close happens only after both
@@ -263,9 +265,9 @@ cover each claim):
    line; `executionVerified` stays false for DLL-presence-only
    evidence.
 
-5. **Conservative mixed licensing + governance files** (`LICENSE`,
-   `LICENSE-APACHE`, `LICENSE-PROPRIETARY`, `LICENSE.md`
-   (classification + third-party attribution, consolidated v1.7.2),
+5. **Conservative mixed licensing + governance files** (`LICENSE.md`
+   (the sole licensing artifact: classification + third-party
+   attribution + both full legal texts, consolidated v1.7.2),
    `CONTRIBUTING.md`, `SECURITY.md`,
    `internal/brand/brand.go`) — the classification authority is
    `LICENSE.md` §2: open ONLY by explicit designation

@@ -182,3 +182,35 @@ HONEST LIMITS (evidence classes NOT claimed): the Windows Vulkan runtime accepta
 
 Stage Summary:
 - v1.7.2 complete: the b11205 KV launch defect is eliminated at the root (real-engine-verified layouts), the AUTO GPU deadlock is broken through a bounded transactional candidate probe with execution-evidence verification, licensing is consolidated into ONE human-facing document with a two-directional contract test, and every gate runnable on this host is green on fresh evidence.
+
+---
+
+Task ID: v1.7.2-repair-pass
+Agent: main (Super Z)
+Task: v1.7.2 deep repair — Windows one-word-chat crash (root cause) + single-license-file consolidation + verification pass.
+
+Work Log:
+- REPRODUCED the supplied Windows chat crash deterministically: the log ends at `task classified`; the next expected line is `tier selected`. Between those markers RunDetailed walks the tool surface. The old `Orchestrator.Tools()` returned the LIVE internal map, and the tier walk read `len(o.tools)` outside the lock; concurrent Register/Unregister (custom-tools HTTP handlers, task-scoped tool register/teardown in the scheduler task runner, native-engine unregister sites) writes during that walk = fatal `concurrent map iteration and map write` — unrecoverable, kills the whole desktop process with no terminal event. go test -race reproduction captured the exact race (Register at orchestrator.go:331 vs the RunDetailed iteration).
+- ROOT-CAUSE FIX (minimal, ownership semantics): `Tools()` now returns an immutable SNAPSHOT (private copy under the read lock); the tier-selection walk uses one snapshot for len+iteration; `resolveEffectiveContext` reads the ctxLimits provider under the SAME mutex SetContextLimitProvider writes under; `/api/tools` iterates the snapshot with sorted names for deterministic output.
+- REGRESSIONS: internal/agent/registry_snapshot_test.go (crash-window race reproduction — fails on the pre-fix build; snapshot-isolation contract; 6-reader/4-writer concurrent stress with integrity validation) and internal/api/run_survival_v172_test.go (real-stack process-survival acceptance: one-word chat with Net Search OFF and ON → done + exactly one persisted assistant message + liveness; forced backend failure → terminal error event delivered over the WebSocket, zero duplicate assistant messages, process alive; the next ordinary chat succeeds on the same server).
+- LICENSE CONSOLIDATION (the rejected 4-artifact model → exact-one): read all four artifacts + the v1.7.1 LICENSE-MAP.md/NOTICE.md from history; consolidated EVERYTHING into LICENSE.md (model, classification, third-party notices, FULL Apache-2.0 text, FULL Parsaetak Proprietary License v1.1, trademarks, governance, contact; routing references rewired to internal sections); git-rm'd LICENSE, LICENSE-APACHE, LICENSE-PROPRIETARY; internal/brand.LicenseText is now the complete document (single in-code authority); scripts/gen-license.go writes ONLY LICENSE.md and actively removes resurrected legacy artifacts (verified: idempotent, removes planted LICENSE/LICENSE-APACHE); cmd/license.go prints the complete document truthfully; CI workflow (6 sites) + NSIS installer adapted to LICENSE.md; license_contract_test.go REWRITTEN to the exact-one whole-tree invariant (case-insensitive filename scan, banned-artifact list, both-legal-texts anchor proof, no-live-authority-reference scan, generator output-path contract).
+- DOCS: README/ARCHITECTURE/CONTRIBUTING/SECURITY/UPDATE/agent.md/ROADMAP.md moved to the single-document architecture (historical mentions labeled historical).
+- ROADMAP: FUTURE-only entries added (Q1–F16 quantization matrix from actual upstream support, Safetensors pipeline, LiteRT/LiteRT-LM investigation) — nothing implemented.
+- b11205 CLI contract re-verified (fixture-backed suites green); GPU/AUTO audit: offload-disabled gate, enumerated-device identity, execution-evidence semantics, bounded one-shot candidate, no polling side effects — no defects found; accelerator resolution semantics unchanged.
+
+Regression evidence (this host, Linux amd64, Go 1.26.0, Node 24):
+- gofmt: new/changed files clean (pre-existing upstream space-indentation left untouched — formatting the tree would create a 33-file whitespace diff).
+- go vet -tags headless ./internal/... — clean.
+- go test -tags headless -count=1 ./internal/... — 56/56 packages ok.
+- go test -race -tags headless ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime — ok (incl. the new regressions).
+- Native C++: make build + test — 12/12 (build artifacts cleaned afterwards).
+- Frontend: npm install, typecheck (0 errors), lint (0/0), test:units 132/132, test:release 28/28, build + sync:web + verify-static-assets — green; web/static byte-identical (no frontend drift).
+- Browser E2E (real stack, real browser, real native-engine generation): chat 5/5, composer+sessions 8/8 (incl. the Net Search intent test).
+- Version: 1.7.2 consistent across package.json / config.AppVersion / build/config.yml / SIGNATURE / web/static; release-version.mjs --check green.
+
+HONEST LIMITS: Windows desktop runtime (Wails window on Windows) cannot run on this Linux host — desktop-build GTK deps unavailable; the crash root cause is proven by the -race reproduction and the fix by the real-stack API/WebSocket/session acceptance, and the CI Build Desktop run #36285171524 remains the packaging evidence, not a runtime proof. No live Windows b11205 binary on this host — the KV contract is verified against the committed real-help fixtures. GPU execution on real Vulkan hardware remains evidence-gated exactly as before.
+
+Stage Summary:
+- Windows chat crash: root cause identified by evidence (fatal registry map race in the classification→tier window), fixed at the ownership level, pinned by deterministic regressions (race + real-stack survival), full matrix green.
+- Licensing: exactly ONE artifact (LICENSE.md) in the whole tree, complete consolidated content, generator/CLI/CI/packaging rewired, contract enforced both directions.
+- v1.7.2 version identity preserved; architecture preserved (one registry, one session store, one lifecycle owner — no duplicates introduced).

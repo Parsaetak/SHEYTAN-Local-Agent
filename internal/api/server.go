@@ -11,6 +11,7 @@ import (
         "net/http"
         "os"
         "path/filepath"
+        "sort"
         "strconv"
         "strings"
         "sync"
@@ -1497,7 +1498,19 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
         out := make([]map[string]any, 0)
 
-        for _, t := range s.orch.Tools() {
+        // v1.7.2-repair: iterate the immutable registry SNAPSHOT (Tools()
+        // returns a private copy — see the Orchestrator contract) and emit
+        // a deterministically ORDERED list: map iteration order is
+        // randomized by Go, so sort by tool name for stable responses.
+        snapshot := s.orch.Tools()
+        names := make([]string, 0, len(snapshot))
+        for name := range snapshot {
+                names = append(names, name)
+        }
+        sort.Strings(names)
+
+        for _, name := range names {
+                t := snapshot[name]
                 // v1.1.7: the Options UI shows the SHORT one-line description;
                 // the full operational spec (used by the model) stays in
                 // `detail` — documented, not duplicated, never truncated.
