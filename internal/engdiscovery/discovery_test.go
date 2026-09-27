@@ -9,6 +9,7 @@ package engdiscovery
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -325,5 +326,299 @@ func TestFullScanRespectsCandidateCap(t *testing.T) {
 
 	if len(cands) > 2 {
 		t.Fatalf("scan must respect MaxCandidates=2, got %d", len(cands))
+	}
+}
+
+// --- v1.7.3 frontier-priority contract ------------------------------------
+//
+// These tests pin the DESIGN of the Tier 2 traversal: directories are
+// visited (class, depth)-ordered by a bounded priority frontier, so a
+// shallow, high-value candidate can never be starved behind a huge or
+// lexically-earlier unrelated subtree (the Windows CI failure class of
+// Actions run 36311052375). They are deterministic — no sleeps, no
+// statistical margins.
+
+// TestFullScanPrefersShallowOverDeepLexicallyEarlierCandidate is the
+// starvation regression test. Inside one fixture root, a lexically
+// EARLIER branch holds a candidate at depth 3 and a lexically LATER
+// sibling holds one at depth 2. Lexical-order DFS (the pre-v1.7.3
+// walk) deterministically emitted the DEEP candidate first; the
+// priority frontier deterministically exhausts depth 2 before depth 3.
+// With MaxCandidates=1 the winner proves which traversal is running.
+func TestFullScanPrefersShallowOverDeepLexicallyEarlierCandidate(t *testing.T) {
+	cfg := fixtureConfig(t)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this runner")
+	}
+
+	root := filepath.Join(home, "sheytan-prio-fixture")
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+
+	// Lexically first: decoy directory structure plus the DEEP candidate.
+	deepDir := filepath.Join(root, "aaa-early", "deep")
+	stageTestBinary(t, deepDir, discoveryEngineName())
+	for i := 0; i < 6; i++ {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("m-decoy-%d", i), "level2", "level3"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Lexically last: the SHALLOW candidate (one level higher).
+	shallowDir := filepath.Join(root, "zzz-late-engine")
+	shallow := stageTestBinary(t, shallowDir, discoveryEngineName())
+
+	cands := FullScan(context.Background(), cfg, discoveryEngineName(), ScanOptions{
+		Workers:       2,
+		Timeout:       30 * time.Second,
+		MaxDepth:      6,
+		MaxCandidates: 1,
+	})
+
+	if len(cands) != 1 {
+		t.Fatalf("MaxCandidates=1 must yield exactly one candidate, got %d", len(cands))
+	}
+
+	if filepath.Clean(cands[0].Path) != filepath.Clean(shallow) {
+		t.Fatalf("the shallow candidate must win over the lexically-earlier deep one: got %s, want %s",
+			cands[0].Path, shallow)
+	}
+}
+
+// TestFullScanFindsCandidateExactlyAtMaxDepth: a directory exactly at
+// MaxDepth is still visited, so an engine living inside it is found.
+func TestFullScanFindsCandidateExactlyAtMaxDepth(t *testing.T) {
+	cfg := fixtureConfig(t)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this runner")
+	}
+
+	// home(0) → fixture(1) → l1(2) → l2(3) → l3(4): the engine directory
+	// sits exactly at MaxDepth=4.
+	target := filepath.Join(home, "sheytan-depth-fixture", "l1", "l2", "l3")
+	want := stageTestBinary(t, target, discoveryEngineName())
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(home, "sheytan-depth-fixture")) })
+
+	cands := FullScan(context.Background(), cfg, discoveryEngineName(), ScanOptions{
+		Workers:       2,
+		Timeout:       30 * time.Second,
+		MaxDepth:      4,
+		MaxCandidates: 8,
+	})
+
+	for _, c := range cands {
+		if filepath.Clean(c.Path) == filepath.Clean(want) {
+			return
+		}
+	}
+
+	t.Fatalf("candidate exactly at MaxDepth=4 must be found, got %+v", cands)
+}
+
+// TestFullScanMissesCandidateBeyondMaxDepth: one level deeper than the
+// same chain, the engine directory is never enqueued — the depth bound
+// is authoritative.
+func TestFullScanMissesCandidateBeyondMaxDepth(t *testing.T) {
+	cfg := fixtureConfig(t)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this runner")
+	}
+
+	// The engine directory is now at depth 5, past MaxDepth=4.
+	target := filepath.Join(home, "sheytan-depth2-fixture", "l1", "l2", "l3", "l4")
+	want := stageTestBinary(t, target, discoveryEngineName())
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(home, "sheytan-depth2-fixture")) })
+
+	cands := FullScan(context.Background(), cfg, discoveryEngineName(), ScanOptions{
+		Workers:       2,
+		Timeout:       30 * time.Second,
+		MaxDepth:      4,
+		MaxCandidates: 8,
+	})
+
+	for _, c := range cands {
+		if filepath.Clean(c.Path) == filepath.Clean(want) {
+			t.Fatalf("candidate beyond MaxDepth must NOT be found, got %s", c.Path)
+		}
+	}
+}
+
+// TestFullScanCancellationTerminatesPromptly: a cancelled context —
+// whether cancelled up front or mid-scan — must seal the frontier and
+// return within a bounded wall-clock budget, with no leaked worker or
+// watcher goroutines.
+func TestFullScanCancellationTerminatesPromptly(t *testing.T) {
+	cfg := fixtureConfig(t)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this runner")
+	}
+
+	// Real work exists so a mid-scan cancel has something in flight.
+	for i := 0; i < 12; i++ {
+		stageTestBinary(t, filepath.Join(home, "sheytan-cancel-fixture", fmt.Sprintf("d%02d", i)), discoveryEngineName())
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(home, "sheytan-cancel-fixture")) })
+
+	before := runtime.NumGoroutine()
+
+	// (a) Pre-cancelled context: the scan must observe cancellation and
+	// return promptly without processing the frontier.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan []Candidate, 1)
+	go func() {
+		done <- FullScan(ctx, cfg, discoveryEngineName(), ScanOptions{
+			Workers: 2, Timeout: 30 * time.Second, MaxDepth: 6, MaxCandidates: 8,
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("pre-cancelled FullScan did not return within 15s")
+	}
+
+	// (b) Mid-scan cancellation: a live scan must seal and drain out.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done2 := make(chan []Candidate, 1)
+	go func() {
+		done2 <- FullScan(ctx2, cfg, discoveryEngineName(), ScanOptions{
+			Workers: 2, Timeout: 60 * time.Second, MaxDepth: 8, MaxCandidates: 8,
+		})
+	}()
+	cancel2()
+
+	select {
+	case <-done2:
+	case <-time.After(15 * time.Second):
+		cancel2()
+		t.Fatal("FullScan did not return within 15s of cancellation")
+	}
+
+	// (c) No goroutine leaks: workers and the cancellation watcher must
+	// all be gone once FullScan returns.
+	if after := runtime.NumGoroutine(); after > before+2 {
+		t.Fatalf("goroutine leak across cancelled scans: before=%d after=%d", before, after)
+	}
+}
+
+// TestFullScanMaxCandidatesAuthoritativeWithConcurrentWorkers: with far
+// more concurrent workers than the cap and more fixture candidates than
+// the cap, the reported candidate count must never exceed MaxCandidates
+// — the cap is enforced under the sink mutex, at every interleaving.
+func TestFullScanMaxCandidatesAuthoritativeWithConcurrentWorkers(t *testing.T) {
+	cfg := fixtureConfig(t)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this runner")
+	}
+
+	root := filepath.Join(home, "sheytan-cap-fixture")
+	for i := 0; i < 10; i++ {
+		stageTestBinary(t, filepath.Join(root, fmt.Sprintf("d%02d", i)), discoveryEngineName())
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+
+	for iteration := 0; iteration < 3; iteration++ {
+		cands := FullScan(context.Background(), cfg, discoveryEngineName(), ScanOptions{
+			Workers:       8,
+			Timeout:       30 * time.Second,
+			MaxDepth:      6,
+			MaxCandidates: 3,
+		})
+
+		if len(cands) > 3 {
+			t.Fatalf("iteration %d: MaxCandidates=3 is authoritative, got %d", iteration, len(cands))
+		}
+
+		if len(cands) == 0 {
+			t.Fatalf("iteration %d: staged fixtures must produce at least one candidate", iteration)
+		}
+	}
+}
+
+// TestFullScanSkipsNoiseDirectories: engines hidden inside noise
+// directories (node_modules, .git, vendor, cache) must never surface as
+// scan candidates, at any depth.
+func TestFullScanSkipsNoiseDirectories(t *testing.T) {
+	cfg := fixtureConfig(t)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this runner")
+	}
+
+	root := filepath.Join(home, "sheytan-noise-fixture")
+	banned := []string{
+		filepath.Join(root, "node_modules", "pkg", discoveryEngineName()),
+		filepath.Join(root, ".git", "objects", discoveryEngineName()),
+		filepath.Join(root, "vendor", "lib", discoveryEngineName()),
+		filepath.Join(root, "cache", "x", discoveryEngineName()),
+	}
+	for _, b := range banned {
+		stageTestBinary(t, filepath.Dir(b), discoveryEngineName())
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+
+	cands := FullScan(context.Background(), cfg, discoveryEngineName(), ScanOptions{
+		Workers:       2,
+		Timeout:       30 * time.Second,
+		MaxDepth:      6,
+		MaxCandidates: 16,
+	})
+
+	for _, c := range cands {
+		for _, b := range banned {
+			if filepath.Clean(c.Path) == filepath.Clean(b) {
+				t.Fatalf("noise-directory engine must be skipped: %s", c.Path)
+			}
+		}
+	}
+}
+
+// TestFullScanRepeatedExecutionIsStable: the frontier scan must return
+// the same verdict on every run — repeated background scans find the
+// same shallow fixture every time (no ordering flakiness).
+func TestFullScanRepeatedExecutionIsStable(t *testing.T) {
+	cfg := fixtureConfig(t)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir on this runner")
+	}
+
+	target := filepath.Join(home, "sheytan-stable-fixture", "sub")
+	want := stageTestBinary(t, target, discoveryEngineName())
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(home, "sheytan-stable-fixture")) })
+
+	for run := 1; run <= 3; run++ {
+		cands := FullScan(context.Background(), cfg, discoveryEngineName(), ScanOptions{
+			Workers:       4,
+			Timeout:       30 * time.Second,
+			MaxDepth:      6,
+			MaxCandidates: 8,
+		})
+
+		found := false
+		for _, c := range cands {
+			if filepath.Clean(c.Path) == filepath.Clean(want) {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			t.Fatalf("run %d: fixture must be found on every repeated scan, got %+v", run, cands)
+		}
 	}
 }

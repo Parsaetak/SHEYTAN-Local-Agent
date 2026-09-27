@@ -32,10 +32,13 @@
 package releasecontract
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
 )
 
 // repoRoot resolves the repository root from THIS package's location
@@ -271,9 +274,28 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 	}
 }
 
-// TestLicenseMDSynchronizedWithBrand: the shipped LICENSE.md must match
-// brand.LicenseText exactly — the generator contract (scripts/gen-license
-// writes the file from the in-code authority; drift is a defect).
+// normalizeLicenseText is the canonical EOL normalization for the
+// synchronization contract: CRLF and bare CR both fold to LF, trailing
+// newlines collapse to exactly one terminal LF. v1.7.3 — the previous
+// comparison trimmed only "\n" before the suffix check, so a Windows
+// checkout (CRLF) left a trailing "\r" and failed the contract on a
+// perfectly synchronized document (Actions run 36311052375, Windows job
+// 108597318493). The contract is now CROSS-PLATFORM: normalization
+// first, then exact complete-document equality.
+func normalizeLicenseText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+
+	return strings.TrimRight(s, "\n") + "\n"
+}
+
+// TestLicenseMDSynchronizedWithBrand: the shipped LICENSE.md must equal
+// brand.LicenseText EXACTLY after EOL normalization — the generator
+// contract (scripts/gen-license.go writes the file from the in-code
+// authority; drift is a defect). This is a full-document comparison
+// against the compiled brand constant, not a suffix heuristic: any
+// drift anywhere in the document — front, middle, end, whitespace or
+// missing content — fails with the first differing line named.
 func TestLicenseMDSynchronizedWithBrand(t *testing.T) {
 	if testing.Short() {
 		t.Skip("brand compile check skipped in -short mode")
@@ -284,17 +306,47 @@ func TestLicenseMDSynchronizedWithBrand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LICENSE.md: %v", err)
 	}
-	shipped := strings.TrimRight(string(data), "\n")
 
-	// Load the brand package's LicenseText through the compiled test
-	// binary's own module: build a tiny helper via go/command is heavy;
-	// instead assert the equality markers that the generator guarantees:
-	// the file starts with the document title and ends with the contact
-	// section, and carries the generator-emitted full length.
+	shipped := normalizeLicenseText(string(data))
+	authoritative := normalizeLicenseText(brand.LicenseText)
+
+	if shipped != authoritative {
+		shippedLines := strings.Split(shipped, "\n")
+		authoritativeLines := strings.Split(authoritative, "\n")
+
+		firstDiff := -1
+		for i := 0; i < len(shippedLines) || i < len(authoritativeLines); i++ {
+			var a, b string
+			if i < len(shippedLines) {
+				a = shippedLines[i]
+			}
+			if i < len(authoritativeLines) {
+				b = authoritativeLines[i]
+			}
+			if a != b {
+				firstDiff = i
+
+				break
+			}
+		}
+
+		t.Fatalf("LICENSE.md does not match brand.LicenseText exactly after EOL "+
+			"normalization (regenerate with scripts/gen-license.go): "+
+			"%d shipped lines vs %d authoritative lines, first differing line %d"+
+			"%s",
+			len(shippedLines), len(authoritativeLines), firstDiff+1,
+			describeLicenseDiffLine(firstDiff, shippedLines, authoritativeLines))
+	}
+
+	// Redundant with the full-document equality above, but kept as
+	// standalone diagnostics so a degraded document is named precisely
+	// even if brand.LicenseText itself regresses in the same direction:
+	// the document must start with the consolidated title and end with
+	// the consolidated contact section.
 	if !strings.HasPrefix(shipped, "# LICENSE.md — SHEYTAN-Local-Agent licensing") {
 		t.Errorf("LICENSE.md does not start with the consolidated document title (regenerate with scripts/gen-license.go)")
 	}
-	if !strings.HasSuffix(shipped, "channel listed there).") {
+	if !strings.HasSuffix(shipped, "channel listed there).\n") {
 		t.Errorf("LICENSE.md does not end with the consolidated contact section (regenerate with scripts/gen-license.go)")
 	}
 
@@ -316,6 +368,62 @@ func TestLicenseMDSynchronizedWithBrand(t *testing.T) {
 		if !strings.Contains(brandSrcStr, anchor) {
 			t.Errorf("brand.go LicenseText missing anchor %q — the const must carry the complete consolidated document", anchor)
 		}
+	}
+}
+
+// describeLicenseDiffLine renders the first divergent line pair for the
+// failure message (empty when the line counts match and no divergence
+// was found — defensive; the caller only invokes it on mismatch).
+func describeLicenseDiffLine(idx int, shipped, authoritative []string) string {
+	if idx <= 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	i := idx - 1
+	if i < len(shipped) {
+		fmt.Fprintf(&b, "\n  shipped      line %d: %q", idx, shipped[i])
+	}
+	if i < len(authoritative) {
+		fmt.Fprintf(&b, "\n  authoritative line %d: %q", idx, authoritative[i])
+	}
+
+	return b.String()
+}
+
+// TestLicenseSyncContractSurvivesWindowsLineEndings encodes the exact
+// Windows CI failure class of run 36311052375: a LICENSE.md rendered
+// with CRLF line endings (the historical checkout/round-trip mode) must
+// still satisfy the synchronization contract. The contract is
+// cross-platform by construction — normalization happens BEFORE the
+// comparison, never inside the document.
+func TestLicenseSyncContractSurvivesWindowsLineEndings(t *testing.T) {
+	crlf := strings.ReplaceAll(brand.LicenseText, "\n", "\r\n")
+	cr := strings.ReplaceAll(brand.LicenseText, "\n", "\r")
+
+	if normalizeLicenseText(crlf) != normalizeLicenseText(brand.LicenseText) {
+		t.Fatal("a CRLF-rendered LICENSE.md must satisfy the synchronization contract (Windows portability)")
+	}
+
+	if normalizeLicenseText(cr) != normalizeLicenseText(brand.LicenseText) {
+		t.Fatal("a CR-rendered LICENSE.md must satisfy the synchronization contract (Windows portability)")
+	}
+
+	if normalizeLicenseText(brand.LicenseText+"\n\n\n") != normalizeLicenseText(brand.LicenseText) {
+		t.Fatal("trailing-newline variance must not break the synchronization contract")
+	}
+}
+
+// TestNormalizeLicenseTextCanonicalizesToSingleTerminalLF: the helper
+// itself must fold CRLF/CR to LF and collapse all trailing newlines to
+// exactly one terminal LF — the canonical form the generator emits.
+func TestNormalizeLicenseTextCanonicalizesToSingleTerminalLF(t *testing.T) {
+	got := normalizeLicenseText("alpha\r\nbeta\rgamma\n\n\n")
+	want := "alpha\nbeta\ngamma\n"
+
+	if got != want {
+		t.Fatalf("normalizeLicenseText mismatch:\n got %q\nwant %q", got, want)
 	}
 }
 

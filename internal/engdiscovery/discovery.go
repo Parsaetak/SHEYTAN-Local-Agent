@@ -18,6 +18,7 @@
 package engdiscovery
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -305,7 +306,7 @@ func mergeIntoCache(cfg *config.Config, cand Candidate) {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 2 — bounded full-system scan (background only, spec §11)
+// Tier 2 — bounded priority-frontier scan (background only, spec §11)
 // ---------------------------------------------------------------------------
 
 // ScanOptions bounds a Tier 2 scan.
@@ -345,10 +346,41 @@ var noiseDirs = map[string]bool{
 }
 
 // FullScan enumerates available volumes and scans them with a bounded
-// worker pool (spec §11 Tier 2). Inaccessible directories are ignored
-// without crashing; file contents are never read except for validation
-// of promising candidates. The returned candidates are static metadata
-// only — run Validate before importing anything.
+// worker pool fed by a priority frontier (spec §11 Tier 2). Inaccessible
+// directories are ignored without crashing; file contents are never read
+// except for validation of promising candidates. The returned candidates
+// are static metadata only — run Validate before importing anything.
+//
+// v1.7.3 — the traversal is a BOUNDED PRIORITY FRONTIER, not a recursive
+// DFS. The previous per-root walkBound was lexical-order DFS: it descended
+// one subtree to full depth before touching its next sibling, so a huge
+// sibling directory (AppData on the Windows CI runners) could consume the
+// entire Tier 2 time budget before a shallow, high-value location such as
+// <home>\sheytan-discovery-fixture was ever read (Actions run
+// 36311052375 / Windows job 108597318493). Root reordering (v1.4.0)
+// cannot fix that class of defect — the starvation happens INSIDE the
+// first root's own subtree. The frontier inverts the shape:
+//
+//	priority directory frontier → bounded worker pool → read directory
+//	→ inspect matching engine file → enqueue child directories
+//	   with (class, depth, name) priority
+//
+// Directories are visited (class, depth)-ordered — the user home first,
+// per-user application roots and previously observed candidate parents
+// second, broad volume recursion last, and every shallower level is
+// exhausted before any deeper level is touched. A valid engine a few
+// levels below home can no longer be blocked behind a giant unrelated
+// subtree: each directory visit costs one ReadDir, and the fixture's
+// ancestors are therefore reached within a handful of directory reads
+// regardless of sibling size.
+//
+// Preserved contract (unchanged from v1.4.0): Tier 0/Tier 1 are separate
+// synchronous passes (QuickFind); Tier 2 remains background-only; the
+// hard total timeout, bounded workers, MaxDepth, MaxCandidates,
+// cancellation, inaccessible-directory tolerance, noise-directory
+// skipping, candidate deduplication, static inspection, architecture
+// validation, bounded executable validation, cache integration and
+// symlink/reparse-point safety all keep their previous semantics.
 func FullScan(ctx context.Context, cfg *config.Config, engineName string, opts ScanOptions) []Candidate {
 	if opts.Workers <= 0 {
 		opts.Workers = 4
@@ -373,77 +405,96 @@ func FullScan(ctx context.Context, cfg *config.Config, engineName string, opts S
 	scanCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
-	var (
-		mu      sync.Mutex
-		found   []Candidate
-		wg      sync.WaitGroup
-		sem     = make(chan struct{}, opts.Workers)
-		stopped = false
-	)
+	f := newScanFrontier()
 
-	// v1.4.0: the semaphore is acquired by the SCHEDULER loop, not inside
-	// the worker goroutines. Goroutine start order is not deterministic,
-	// so with more roots than workers the pre-2026 code could hand every
-	// slot to the slow full-volume walks and leave the high-value user
-	// roots queued behind them — on Windows that meant the Tier 2 budget
-	// could expire before the home tree was ever entered (run
-	// 35996462352). Acquiring in root order makes the walk start at the
-	// first (highest-value) roots deterministically while keeping the
-	// bounded parallelism.
-	// v1.5.0 (race audit): `stopped` is written by the WORKER
-	// goroutines under mu — the scheduler loop must read it under the
-	// same mutex. The previous unlocked read raced the workers
-	// (go test -race ./internal/... failed on FullScan: the race
-	// audit subset never covered this package, so it survived the
-	// CI gate until the full-race validation command ran).
-	isStopped := func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return stopped
+	// Seed the frontier in mission priority order: (1) the user's own
+	// tree, (2) per-user application roots, (5) previously observed
+	// candidate parents from the discovery cache; the broad volume
+	// recursion (6) carries the lowest class. Seeding is ordered —
+	// roots first, so an overlapping cache parent can never re-mark
+	// the higher-priority home seed.
+	for _, root := range roots {
+		f.seed(root, scanRootClass(root))
+	}
+	for _, cached := range LoadCache(cfg) {
+		f.seed(filepath.Dir(cached.Path), 1)
 	}
 
-	for _, root := range roots {
-		if isStopped() {
-			break
+	// Candidate sink: dedupe by path, cap at MaxCandidates, seal the
+	// frontier when the cap is reached. The frontier's own mutex guards
+	// the found slice — one lock domain for all scan state (v1.5.0 race
+	// audit: every shared read/write stays under this mutex).
+	var found []Candidate
+
+	emit := func(cand Candidate) bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+
+		if f.stopped {
+			return false
 		}
 
-		// Bounded spawn: block until a worker slot is free.
-		sem <- struct{}{}
-
-		wg.Add(1)
-
-		go func(root string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			walkBound(scanCtx, root, name, opts, 0, func(cand Candidate) bool {
-				mu.Lock()
-				defer mu.Unlock()
-
-				if stopped {
-					return false
-				}
-
-				// Dedupe by path.
-				for _, f := range found {
-					if filepath.Clean(f.Path) == filepath.Clean(cand.Path) {
-						return true
-					}
-				}
-
-				found = append(found, cand)
-
-				if len(found) >= opts.MaxCandidates {
-					stopped = true
-					return false
-				}
-
+		// Dedupe by path.
+		for _, prev := range found {
+			if filepath.Clean(prev.Path) == filepath.Clean(cand.Path) {
 				return true
-			})
-		}(root)
+			}
+		}
+
+		found = append(found, cand)
+
+		if len(found) >= opts.MaxCandidates {
+			f.stopped = true
+			f.cond.Broadcast()
+			return false
+		}
+
+		return true
 	}
 
+	// Bounded worker pool: at most opts.Workers goroutines ever exist,
+	// each pulling the next-highest-priority directory from the frontier.
+	var wg sync.WaitGroup
+
+	for i := 0; i < opts.Workers; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for {
+				if scanCtx.Err() != nil {
+					return
+				}
+
+				job, ok := f.next()
+				if !ok {
+					return
+				}
+
+				f.visit(scanCtx, job, name, opts, emit)
+				f.release()
+			}
+		}()
+	}
+
+	// Cancellation watcher: wake every worker blocked on the frontier the
+	// moment the budget expires (hard total timeout, spec §11). Without
+	// this a worker waiting on an idle-but-active frontier would only
+	// notice cancellation when another worker happened to broadcast. No
+	// leak: the watcher exits as soon as the workers finish.
+	finished := make(chan struct{})
+
+	go func() {
+		select {
+		case <-scanCtx.Done():
+			f.stop()
+		case <-finished:
+		}
+	}()
+
 	wg.Wait()
+	close(finished)
 
 	// Validate the most promising candidates now (bounded: each is a
 	// static check + one bounded probe).
@@ -464,6 +515,26 @@ func FullScan(ctx context.Context, cfg *config.Config, engineName string, opts S
 		len(roots), len(found))
 
 	return found
+}
+
+// scanRootClass ranks a scan root for the priority frontier (lower is
+// visited earlier): (0) the user's own tree, (1) per-user application
+// roots, (2) broad volume recursion — the discovery priority order of
+// spec §11. Overlapping roots are collapsed later by the frontier's
+// visited set (e.g. LOCALAPPDATA lives inside the home tree), so the
+// same directory is never scanned twice.
+func scanRootClass(root string) int {
+	clean := filepath.Clean(root)
+
+	if home, err := os.UserHomeDir(); err == nil && clean == filepath.Clean(home) {
+		return 0
+	}
+
+	if local, ok := localAppData(); ok && clean == filepath.Clean(local) {
+		return 1
+	}
+
+	return 2
 }
 
 // scanRoots enumerates the volumes/roots to scan. On Windows that is the
@@ -526,37 +597,257 @@ func scanRoots() []string {
 	return roots
 }
 
-// walkBound walks one root with a depth bound, skipping noise dirs,
-// feeding matching files to emit. emit returning false stops the walk.
-func walkBound(
-	ctx context.Context,
-	root, engineName string,
-	opts ScanOptions,
-	depth int,
-	emit func(Candidate) bool,
-) {
-	if ctx.Err() != nil || depth > opts.MaxDepth {
+// ---------------------------------------------------------------------------
+// Priority directory frontier (the Tier 2 traversal engine)
+// ---------------------------------------------------------------------------
+
+// Frontier priority arithmetic. A job's priority is
+//
+//	class*prioClassBand + depth*prioDepthBand - nameBonus
+//
+// so root class dominates, then depth (strictly: the name bonus is
+// smaller than one depth band, so a "high-value" directory can never
+// overtake a shallower level), then enqueue order breaks exact ties.
+// Depth is capped far below the class band so the arithmetic can never
+// leak a deep directory into a higher class.
+const (
+	prioClassBand = 1_000_000_000
+	prioDepthBand = 100_000
+	prioNameBonus = 50_000
+	prioDepthCap  = 9_999
+
+	// maxQueuedDirs is a defensive memory bound on the frontier. The
+	// scan budget (timeout/cancellation) is the real limiter — no real
+	// scan visits remotely this many directories — but a pathological
+	// directory with millions of subdirectories must not be able to
+	// grow the heap without bound. Past the cap, breadth is dropped
+	// (shallow levels enqueue first, so the highest-value work is
+	// never the part dropped).
+	maxQueuedDirs = 200_000
+)
+
+// priorityDirNames are directory names that historically host engine
+// installs (spec §11 Tier 1 locations, plus the product's own roots).
+// A child with one of these names is visited ahead of its same-depth
+// siblings (mission priority: common bin/Programs/llama.cpp locations).
+var priorityDirNames = map[string]bool{
+	"bin": true, "programs": true, "llama.cpp": true, "scoop": true,
+	"shims": true, ".local": true, "sheytan-la": true,
+	"sheytan-local-agent": true,
+}
+
+// dirJob is one directory in the frontier.
+type dirJob struct {
+	path  string
+	depth int   // depth below its seed root
+	class int   // root class (0 = home, 1 = per-user roots, 2 = volumes)
+	prio  int64 // priority; lower is visited earlier
+	seq   int64 // enqueue order — deterministic tiebreak
+}
+
+// dirHeap orders dirJobs by (prio, seq).
+type dirHeap []*dirJob
+
+func (h dirHeap) Len() int { return len(h) }
+
+func (h dirHeap) Less(i, j int) bool {
+	if h[i].prio != h[j].prio {
+		return h[i].prio < h[j].prio
+	}
+
+	return h[i].seq < h[j].seq
+}
+
+func (h dirHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *dirHeap) Push(x any) { *h = append(*h, x.(*dirJob)) }
+
+func (h *dirHeap) Pop() any {
+	old := *h
+	n := len(old)
+	it := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
+
+	return it
+}
+
+// scanFrontier is the bounded priority frontier: a mutex-guarded
+// container/heap plus a condition variable that implements the classic
+// parallel-BFS termination protocol (a worker may only exit when the
+// heap is empty AND no worker is processing a job that could enqueue
+// more work). All state lives under one mutex; no production path ever
+// sleeps — waiting is condition-variable based, so shutdown is
+// immediate at budget expiry, at MaxCandidates, or at full drain.
+type scanFrontier struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	jobs    dirHeap
+	visited map[string]bool
+	seq     int64
+	active  int
+	stopped bool
+}
+
+func newScanFrontier() *scanFrontier {
+	f := &scanFrontier{visited: map[string]bool{}}
+	f.cond = sync.NewCond(&f.mu)
+
+	return f
+}
+
+// seed enqueues a scan root at depth 0.
+func (f *scanFrontier) seed(path string, class int) {
+	f.enqueue(path, 0, class)
+}
+
+// enqueue adds one directory unless the scan is stopped, the directory
+// was already queued (the visited set also collapses overlapping roots,
+// so a directory is never scanned twice), or the defensive queue cap is
+// reached.
+func (f *scanFrontier) enqueue(path string, depth int, class int) {
+	clean := filepath.Clean(path)
+	if clean == "" || clean == "." {
 		return
 	}
 
-	entries, err := os.ReadDir(root)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.stopped || f.visited[clean] || len(f.jobs) >= maxQueuedDirs {
+		return
+	}
+
+	f.visited[clean] = true
+
+	if depth > prioDepthCap {
+		depth = prioDepthCap
+	}
+
+	bonus := int64(0)
+	if priorityDirNames[strings.ToLower(filepath.Base(clean))] {
+		bonus = prioNameBonus
+	}
+
+	prio := int64(class)*prioClassBand + int64(depth)*prioDepthBand - bonus
+	if prio < 0 {
+		prio = 0
+	}
+
+	f.seq++
+	heap.Push(&f.jobs, &dirJob{path: clean, depth: depth, class: class, prio: prio, seq: f.seq})
+	f.cond.Broadcast()
+}
+
+// stop seals the frontier: no further enqueues are accepted and every
+// worker drains out at its next check.
+func (f *scanFrontier) stop() {
+	f.mu.Lock()
+
+	if !f.stopped {
+		f.stopped = true
+		f.cond.Broadcast()
+	}
+
+	f.mu.Unlock()
+}
+
+// next blocks for the highest-priority job. It returns ok=false when the
+// scan is stopped or the frontier is fully drained (heap empty and no
+// worker processing — the only safe exit, because a running worker may
+// still enqueue children).
+func (f *scanFrontier) next() (dirJob, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for {
+		if f.stopped {
+			return dirJob{}, false
+		}
+
+		if len(f.jobs) > 0 {
+			job := heap.Pop(&f.jobs).(*dirJob)
+			f.active++
+
+			return *job, true
+		}
+
+		if f.active == 0 {
+			return dirJob{}, false
+		}
+
+		f.cond.Wait()
+	}
+}
+
+// release marks one job fully processed and wakes peers when the last
+// one finishes so they can observe the drained frontier.
+func (f *scanFrontier) release() {
+	f.mu.Lock()
+	f.active--
+
+	if f.active == 0 {
+		f.cond.Broadcast()
+	}
+
+	f.mu.Unlock()
+}
+
+// isStopped reports whether the scan has been sealed.
+func (f *scanFrontier) isStopped() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.stopped
+}
+
+// visit processes one directory: read it, inspect any matching engine
+// file, enqueue its child directories with their own priority. Errors
+// (inaccessible directories, permission walls) are tolerated silently —
+// spec §11 requires the scan to continue without crashing.
+func (f *scanFrontier) visit(
+	ctx context.Context,
+	job dirJob,
+	engineName string,
+	opts ScanOptions,
+	emit func(Candidate) bool,
+) {
+	entries, err := os.ReadDir(job.path)
 	if err != nil {
 		return // inaccessible — ignore without crashing (spec §11)
 	}
 
 	for _, e := range entries {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || f.isStopped() {
 			return
 		}
 
 		name := e.Name()
 
 		if e.IsDir() {
-			if noiseDirs[strings.ToLower(name)] || strings.HasPrefix(name, ".") && depth == 0 {
+			// Symlink/reparse-point safety: ReadDir never reports a
+			// symlink (or a Windows junction/reparse point) as a plain
+			// directory, so only real directories are followed — a
+			// link named like the engine falls through to the file
+			// branch below, where inspectCandidate stats the TARGET
+			// and still rejects directories. No walk can loop.
+			if noiseDirs[strings.ToLower(name)] {
 				continue
 			}
 
-			walkBound(ctx, filepath.Join(root, name), engineName, opts, depth+1, emit)
+			// Root-level dot-directories are skipped (preserved from
+			// the v1.3.6 walk: saves the giant runner tool trees that
+			// live directly under the home root without hiding deeper
+			// user locations).
+			if job.depth == 0 && strings.HasPrefix(name, ".") {
+				continue
+			}
+
+			if job.depth+1 > opts.MaxDepth {
+				continue
+			}
+
+			f.enqueue(filepath.Join(job.path, name), job.depth+1, job.class)
 
 			continue
 		}
@@ -565,7 +856,7 @@ func walkBound(
 			continue
 		}
 
-		if cand, ok := inspectCandidate(filepath.Join(root, name), 2, "scan"); ok {
+		if cand, ok := inspectCandidate(filepath.Join(job.path, name), 2, "scan"); ok {
 			if !emit(*cand) {
 				return
 			}

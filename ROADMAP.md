@@ -1483,6 +1483,66 @@ The system does not need to match a cloud system's speed. It needs to provide th
 
 ---
 
+## NEXT — Future Model Format Ecosystem (SCOPE ONLY — NOT IMPLEMENTED)
+
+> **Status disclaimer (do not delete):** everything in this section is FUTURE
+> scope. None of it is implemented in the current release; no test, gate or
+> runtime path in the repository proves any of it. It must not be presented as
+> shipped capability, and identifiers listed here describe the real upstream
+> ecosystem, not features of this product.
+
+### Quantization / model formats
+
+Future work must cover the genuinely relevant GGUF quantization ecosystem —
+canonical families observable in current upstream/runtime support, including
+the K-quants (`Q2_K`, `Q3_K_S/M/L`, `Q4_K_S/M`, `Q5_K_S/M`, `Q6_K`, `Q8_0`),
+the legacy scalar formats (`Q4_0`, `Q5_0`, `Q8_0` lineage), the i-quant family
+(`IQ1_S`, `IQ2_XXS/XS/S`, `IQ3_XXS/XS/S`, `IQ4_XS/NL`), ternary quants where
+upstream supports them, and the floating-point family (`F32`, `F16`, `BF16`).
+For every identifier actually adopted later, the future matrix must define:
+
+1. canonical identifier and file-level metadata representation;
+2. architecture compatibility (which model families ship that quant);
+3. loader/parser behavior and version constraints;
+4. metadata/config interaction (context length, tensor overrides, KV type);
+5. tokenizer implications (quantization does not change tokenizers, but
+   model variants often pair quants with tokenizer changes);
+6. chat template bindings per variant;
+7. backend restrictions (which backends accept or dequantize which formats);
+8. memory implications (bits-per-weight → RAM/VRAM planning in the existing
+   context/memory pipeline);
+9. import/conversion paths (when a format must be converted before load);
+10. tests and evidence required before the format is offered in the UI.
+
+### Safetensors
+
+Future scope for a safetensors import path must cover, as one coherent
+design: discovery/import (including single-file and SHARDED models via the
+safetensors index JSON), index handling and tensor-map validation, metadata /
+config extraction (architecture, context length, RoPE settings), architecture
+validation against known families, tokenizer loading (fast tokenizers plus
+legacy sentencepiece paths), integrity/checksum verification before load,
+memory planning for large tensors (mmap vs. eager load), backend selection
+and conversion requirements, secure loading (untrusted-file hygiene — no
+arbitrary code execution from metadata), inference validation (bounded
+generation proof before the model is offered), and the UI model-browser
+surface that presents all of it with evidence.
+
+### LiteRT / LiteRT-LM
+
+Future scope for on-device runtimes must cover: LiteRT artifact discovery and
+import, LiteRT-LM artifacts and where classic TFLite still applies, tokenizer
+and chat-template binding for both, metadata/config extraction, runtime
+integration behind the existing engine abstraction, backend selection
+(CPU/NPU/GPU delegates where genuinely available), cross-platform viability
+per host, the decision between direct runtime integration vs.
+conversion/import (LiteRT artifacts converted into the managed engine path
+vs. executed natively), API integration through the existing local-provider
+surface, verification (bounded generation evidence, same honesty rules as
+every other backend), and resource planning on low-memory hosts.
+
+---
+
 # 17. Release Gates for Every Major Milestone
 
 No milestone is complete because a feature exists in code or in the UI.

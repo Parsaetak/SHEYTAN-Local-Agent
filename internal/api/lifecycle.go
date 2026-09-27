@@ -80,14 +80,23 @@ func (s *Server) Close() {
 // updateCancelIfNeeded cancels the scheduled engine-update loop and waits
 // up to 3 seconds for its completion signal. Safe on servers that never
 // started the loop.
+//
+// v1.7.3: the handles are read under updateMu — the same mutex that
+// publishes them in EnsureSetup — so a concurrent (or repeated) startup
+// can never race the teardown into using a stale or half-published pair.
 func (s *Server) updateCancelIfNeeded() {
-	if s.updateCancel != nil {
-		s.updateCancel()
+	s.updateMu.Lock()
+	cancel := s.updateCancel
+	done := s.updateDone
+	s.updateMu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 
-	if s.updateDone != nil {
+	if done != nil {
 		select {
-		case <-s.updateDone:
+		case <-done:
 		case <-time.After(3 * time.Second):
 		}
 	}
