@@ -458,6 +458,15 @@ func (s *Server) EnsureSetup() error {
         // exposes its live phase; the prewarm below WAITS on the gate.
         gate := s.startStartupMaintenance()
 
+        // v1.7.2 (P0): the AUTO GPU candidate bootstrap — ONE bounded
+        // Vulkan probe per boot, strictly AFTER the maintenance gate
+        // (never racing the maintenance transaction) and in the
+        // background (never blocking startup). The eligibility gates and
+        // the bounded-state logic live in gpu_autoprobe.go /
+        // internal/llm/variant_auto.go; the transaction itself is the
+        // existing variant authority.
+        go s.maybeAutoProvisionVulkan(gate.Done())
+
         // v1.1.3 — THE acceptance requirement: the application owns the engine
         // lifecycle. A clean launch must reach a healthy model without any
         // manual llama.cpp intervention — but ONLY after the maintenance gate
@@ -2122,18 +2131,18 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 // refuses the run here — PREFLIGHT → REFUSE → NO ENGINE START — with
                 // the honest reason and a valid alternative, never a crash to watch.
                 if pre := s.stack.PreflightReport(0); !pre.Compatible &&
-                	pre.Severity == preflight.SeverityIncompatible {
-                	gateCancel()
-                	msg := preflight.RefusalMessage(pre)
-                	logging.Default().Warn("preflight", "run refused before engine start: model=%s backend=%s", pre.Model, pre.Backend)
-                	settle("error", msg, false, "", "")
-                	publish(agent.Activity{
-                		Type:    "error",
-                		RunID:   runID,
-                		Caption: msg,
-                		Timestamp: time.Now(),
-                	})
-                	return
+                        pre.Severity == preflight.SeverityIncompatible {
+                        gateCancel()
+                        msg := preflight.RefusalMessage(pre)
+                        logging.Default().Warn("preflight", "run refused before engine start: model=%s backend=%s", pre.Model, pre.Backend)
+                        settle("error", msg, false, "", "")
+                        publish(agent.Activity{
+                                Type:    "error",
+                                RunID:   runID,
+                                Caption: msg,
+                                Timestamp: time.Now(),
+                        })
+                        return
                 }
 
                 if err := s.stack.EnsureLLMContext(gateCtx); err != nil {

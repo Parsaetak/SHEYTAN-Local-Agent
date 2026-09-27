@@ -1,3 +1,89 @@
+# UPDATE.md — v1.7.2 Release Notes & Maintenance Behavior
+
+**Release:** `v1.7.2` (canonical application version; single version
+hierarchy: package.json → release-version.mjs → config.go /
+build/config.yml / SIGNATURE)
+**Base:** `main @ 69bbd6c` (`v1.7.1`) · **Date:** 2026-09-27
+**Package:** `SHEYTAN-Local-Agent-v1.7.2-FINAL.zip` (complete repository
+tree)
+
+## v1.7.2 changes
+
+1. **P0 — the llama.cpp KV-cache CLI contract (the b11205 launch
+   failure, fixed at the root).** The v1.7.1 Speed Pack emitted
+   `--cache-type-kv q8_0` unconditionally; every modern llama.cpp build
+   rejects that option (`error: invalid argument: --cache-type-kv`) and
+   the resulting cascade hid a one-option layout defect behind
+   compatibility mode 2. The capability model now carries the REAL
+   engine contract — verified against the actual released binaries and
+   sources at `b10642` and `b11205` (probed 2026-09: both accept ONLY
+   the split form `-ctk, --cache-type-k TYPE` / `-ctv, --cache-type-v
+   TYPE`, with the exact lowercase vocabulary `f32 f16 bf16 q8_0 q4_0
+   q4_1 iq4_nl q5_0 q5_1`; the verbatim `--help` outputs ship as test
+   fixtures). Emission is layout-gated: split on modern engines, the
+   legacy shared form only when the engine's own `--help` reports it,
+   nothing when unsupported — a modern engine can never receive
+   `--cache-type-kv` again. Pre-spawn validation mirrors the engine's
+   parser (vocabulary, layout consistency, one flag can never consume
+   another flag as its value), and the bounded surgical repair walks
+   the acyclic chain `shared → split → none` without touching unrelated
+   speed flags or descending the compatibility ladder.
+2. **P0 — the `--mlock` → `--load-mode` contract.** The same audit
+   found `--mlock` removed upstream (rejected by `b11205`; deprecated
+   but accepted at `b10642`). Memory pinning is now emitted as
+   `--load-mode mlock` on modern engines, the legacy flag only on
+   builds whose help reports it, nothing when unknown.
+3. **P0 — the AUTO GPU evidence deadlock is broken.** Selection was
+   circular: GPU_VULKAN needs runtime evidence, but with only the CPU
+   engine installed Vulkan evidence can never appear. AUTO may now run
+   ONE bounded Vulkan candidate transaction — through the EXISTING
+   transactional variant authority, extended with a stricter
+   execution-evidence verification: usable Vulkan device from the
+   engine's own `--list-devices` (the ACTUAL enumerated identity, never
+   a hard-coded `Vulkan0`), a real bounded generation on the serving
+   engine, and the real GPU-offload line (`offloaded N/M layers to
+   GPU`) as the mandatory execution proof. Failure (no device, no
+   offload evidence, broken generation) rolls the CPU package back and
+   records the exact missing evidence layer. The outcome persists in
+   `gpu-probe.json` keyed by the hardware+engine identity (OS/arch +
+   GPU + driver + engine tag + variant) — a failed probe never repeats
+   for the same identity; a verified state is reused; any identity
+   change invalidates it. Stable lifecycle diagnostics
+   (`gpuCandidateRequested` … `gpuCommit`/`gpuRollback`) cover the
+   path.
+4. **P0/P1 — license consolidation completed.** Exactly ONE
+   human-facing licensing Markdown: `LICENSE.md` now carries the
+   consolidated classification (open/proprietary component tables) AND
+   the third-party attribution (the former `LICENSE-MAP.md` and
+   `NOTICE.md` content, merged and deleted). The authoritative legal
+   texts (`LICENSE`, `LICENSE-APACHE`, `LICENSE-PROPRIETARY`) are
+   preserved untouched; the contract test was rewritten to pin the new
+   layout in both directions (no duplicate license Markdown may
+   reappear; no legal authority may silently disappear).
+5. **Version identity:** exactly `1.7.2` everywhere (release-version
+   gate green); no codename.
+
+## Evidence-truth statements (standing)
+
+These distinctions are standing documentation policy, not release
+notes; they hold for every claim in this repository:
+
+```
+system GPU detection  ≠ Vulkan package installed
+Vulkan package        ≠ Vulkan device enumerated
+Vulkan device         ≠ model GPU offload (execution proof)
+CI success            ≠ user-hardware runtime proof
+compat mode 2 startup ≠ full-speed launch validation
+native C++ test pass  ≠ native runtime selected/proven
+```
+
+The v1.7.1 and v1.7.0 maintenance/update/rollback behavior below is
+unchanged and remains accurate.
+
+---
+
+# v1.7.1 record
+
 # UPDATE.md — v1.7.1 Release Notes & Maintenance Behavior
 
 **Release:** `v1.7.1` (canonical application version; single version

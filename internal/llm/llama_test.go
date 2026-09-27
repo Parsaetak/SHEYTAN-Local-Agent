@@ -338,10 +338,30 @@ func runFakeLlamaServer() {
                 os.Exit(2)
         }
 
+        // v1.7.2: the GPU-offload evidence line — mode "vulkan-offload"
+        // makes the fake engine print the exact llama.cpp load-time output
+        // the runtime evidence collector captures ("offloaded N/M layers to
+        // GPU"), BEFORE the health endpoint goes live.
+        if mode == "vulkan-offload" {
+                fmt.Println("llm_load_tensors: offloaded 33/33 layers to GPU")
+        }
+
         mux := http.NewServeMux()
         mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
                 w.WriteHeader(http.StatusOK)
                 _, _ = w.Write([]byte(`{"status":"ok"}`))
+        })
+        // v1.7.2: the raw /completion endpoint — the AUTO GPU candidate's
+        // real-generation probe posts here (present in every llama-server
+        // build, independent of chat-template flags). Mode "gen-fail"
+        // simulates a candidate whose generation path is broken.
+        mux.HandleFunc("/completion", func(w http.ResponseWriter, r *http.Request) {
+                if mode == "gen-fail" {
+                        http.Error(w, "simulated generation failure", http.StatusInternalServerError)
+                        return
+                }
+                w.Header().Set("Content-Type", "application/json")
+                _, _ = w.Write([]byte(`{"content":"pong","stopped_eos":true}`))
         })
         mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
                 w.Header().Set("Content-Type", "application/json")

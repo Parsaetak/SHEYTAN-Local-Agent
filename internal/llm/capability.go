@@ -64,13 +64,18 @@ import (
 // invalidates the profile automatically.
 const capsFileName = "engine-caps.json"
 
-// flashAttnValueSinceTag is the conservative fallback threshold: the first
-// llama.cpp release line known to require the `on|off|auto` value form.
-// Real behaviour is always preferred via --help parsing; this heuristic only
-// applies when the binary cannot be probed (e.g. missing binary pre-flight,
-// offline first boot with a cached tag). Evidence: b10642 accepted the bare
-// flag; b10936 rejects it and requires an explicit value.
-const flashAttnValueSinceTag = 10900
+// flashAttnValueSinceTag is the conservative fallback threshold: the
+// first llama.cpp release line known to require the `on|off|auto` value
+// form. Real behaviour is always preferred via --help parsing; this
+// heuristic only applies when the binary cannot be probed (e.g. missing
+// binary pre-flight, offline first boot with a cached tag). v1.7.2
+// evidence correction: the REAL b10642 binary (probed 2026-09, build
+// 10642) already REQUIRES the value form — `--flash-attn --cache-reuse 4`
+// fails with "unknown value for --flash-attn: '--cache-reuse'" exactly as
+// on b11205 — so the historical claim that b10642 accepted the bare flag
+// was wrong and the boundary moves down to the verified point. Tags older
+// than this keep the bare-flag layout (the pre-tri-state builds).
+const flashAttnValueSinceTag = 10642
 
 // helpProbeTimeout bounds one `--help` capability probe.
 const helpProbeTimeout = 10 * time.Second
@@ -99,6 +104,62 @@ type EngineCaps struct {
         Jinja        bool `json:"jinja"`
         UBatchSize   bool `json:"ubatchSize"`
         ThreadsBatch bool `json:"threadsBatch"`
+
+        // --- v1.7.2: the KV-cache quantization CLI contract ------------------
+        //
+        // The v1.7.1 launcher emitted `--cache-type-kv q8_0` unconditionally:
+        // every modern llama.cpp build rejects that option ("error: invalid
+        // argument: --cache-type-kv") and the resulting descent into
+        // compatibility mode 2 hid a one-option layout defect behind a
+        // profile that strips ALL speed flags.
+        //
+        // Real engine evidence (upstream common/arg.cpp, tags b10642 and
+        // b11205, verified 2026-09): modern builds accept the SPLIT form
+        //
+        //      -ctk, --cache-type-k TYPE     (KV cache data type for K)
+        //      -ctv, --cache-type-v TYPE     (KV cache data type for V)
+        //
+        // with the exact-match value vocabulary f32 f16 bf16 q8_0 q4_0 q4_1
+        // iq4_nl q5_0 q5_1 (ggml_type_name is all-lowercase). The LEGACY
+        // shared form `--cache-type-kv VALUE` is retained for builds whose
+        // own --help reports it — --help parsing is the authority, the tag
+        // heuristic only approximates when the binary cannot be probed.
+        //
+        // A consistent profile carries AT MOST ONE layout: split
+        // (CacheTypeK/CacheTypeV) or shared (CacheTypeKVShared) — pre-spawn
+        // validation rejects any combination.
+
+        // CacheTypeK is true when `--cache-type-k VALUE` is supported.
+        CacheTypeK bool `json:"cacheTypeK"`
+
+        // CacheTypeV is true when `--cache-type-v VALUE` is supported.
+        CacheTypeV bool `json:"cacheTypeV"`
+
+        // CacheTypeKVShared is true when the LEGACY `--cache-type-kv VALUE`
+        // form is supported (the engine's own --help must say so).
+        CacheTypeKVShared bool `json:"cacheTypeKVShared"`
+
+        // --- v1.7.2: the memory-pinning CLI contract --------------------------
+        //
+        // `--mlock` (bare flag, the pre-load-mode layout) was replaced by the
+        // value-taking `-lm, --load-mode MODE` (auto|none|mmap|mlock|mmap+mlock|dio);
+        // verified absent/present against the same b10642/b11205 sources.
+        // Mlock is the legacy bare-flag form; LoadMode is the modern option.
+        // Both false (unknown/unsupported) emits nothing — fail-closed.
+
+        // Mlock is true when the legacy `--mlock` bare flag is supported.
+        Mlock bool `json:"mlock"`
+
+        // LoadMode is true when `--load-mode MODE` is supported (mlock
+        // reachable as `--load-mode mlock`).
+        LoadMode bool `json:"loadMode"`
+
+        // Schema is the capability-profile schema version. v1.7.2 bumped it
+        // to capsSchemaV2 when the KV-cache layout + load-mode fields were
+        // introduced: a persisted pre-1.7.2 profile (schema 0) is STALE — it
+        // carries no KV layout knowledge and must never suppress detection —
+        // so the loader treats it as absent and the binary is re-probed.
+        Schema int `json:"schema,omitempty"`
 
         // DeviceFlag (v1.2.6 continuation): the build accepts `--device
         // <name>` for deterministic accelerator selection (llama.cpp
@@ -148,18 +209,30 @@ func (c *EngineCaps) Clone() *EngineCaps {
 // default to unsupported only when the tag is older than their arrival; the
 // Speed Pack options are all present in every tag SHEYTAN has ever shipped.
 func defaultCapsForTag(tag string) *EngineCaps {
+        n := tagNumber(tag)
+        splitKV := n >= cacheTypeSplitSinceTag
         caps := &EngineCaps{
                 Tag:              tag,
                 FlashAttnEnabled: true,
-                FlashAttnValue:   tagNumber(tag) >= flashAttnValueSinceTag,
+                FlashAttnValue:   n >= flashAttnValueSinceTag,
                 CacheReuse:       true,
                 NoWebUI:          true,
                 Jinja:            true,
                 UBatchSize:       true,
                 ThreadsBatch:     true,
+                // v1.7.2 KV contract: the split layout for every tag in the
+                // verified window; older/unparseable tags stay fail-closed with
+                // NO KV option. The shared form never comes from the heuristic
+                // — only the engine's own --help can report it.
+                CacheTypeK: splitKV,
+                CacheTypeV: splitKV,
+                // v1.7.2 memory pinning: --load-mode replaced --mlock.
+                Mlock:    false,
+                LoadMode: n >= loadModeSinceTag,
+                Schema:   capsSchemaV2,
                 // --device landed in llama.cpp builds around b3000
                 // (mid-2024); older/unknown tags stay fail-closed.
-                DeviceFlag: tagNumber(tag) >= deviceFlagSinceTag,
+                DeviceFlag: n >= deviceFlagSinceTag,
                 Source:     "tag-fallback",
         }
         return caps
@@ -168,6 +241,68 @@ func defaultCapsForTag(tag string) *EngineCaps {
 // deviceFlagSinceTag is the first llama.cpp release tag whose llama-server
 // accepts --device (measured from the llama.cpp change log; conservative).
 const deviceFlagSinceTag = 3000
+
+// cacheTypeSplitSinceTag is the fallback threshold for the SPLIT KV-cache
+// layout (--cache-type-k / --cache-type-v): every upstream tag SHEYTAN has
+// ever provisioned carries the split form — verified directly in the
+// upstream common/arg.cpp sources at b10642 AND b11205 (2026-09 evidence),
+// which define only -ctk/--cache-type-k and -ctv/--cache-type-v and NO
+// --cache-type-kv. Tags older than this boundary (and unparseable tags,
+// tagNumber 0) are unknown → NO KV option is emitted (fail-closed). The
+// engine's own --help remains the authority whenever the binary can be
+// probed; a build that genuinely reports the legacy shared
+// --cache-type-kv form gets it from help parsing, never from here.
+const cacheTypeSplitSinceTag = 10642
+
+// loadModeSinceTag is the fallback threshold for the modern
+// `--load-mode MODE` option (mlock reached as `--load-mode mlock`):
+// verified present at b10642 and b11205 while the legacy `--mlock` bare
+// flag is verified ABSENT from both. Older/unparseable tags are unknown →
+// nothing is emitted (fail-closed).
+const loadModeSinceTag = 10642
+
+// kvCacheQuantValues is the EXACT value vocabulary the engine's own
+// kv_cache_type_from_str accepts (upstream b10642/b11205 common/arg.cpp;
+// ggml_type_name is all-lowercase, the engine matches exactly). Pre-spawn
+// validation mirrors the engine parser so a bad quant can never spawn a
+// doomed process (v1.6.1 numeric-range discipline, applied to the KV type).
+var kvCacheQuantValues = map[string]bool{
+        "f32":    true,
+        "f16":    true,
+        "bf16":   true,
+        "q8_0":   true,
+        "q4_0":   true,
+        "q4_1":   true,
+        "iq4_nl": true,
+        "q5_0":   true,
+        "q5_1":   true,
+}
+
+// capsSchemaV2 is the current capability-profile schema (v1.7.2). Profiles
+// persisted with a lower schema are stale and re-detected.
+const capsSchemaV2 = 2
+
+// HasKVCacheQuant reports whether the profile knows any KV-cache
+// quantization layout (split or shared).
+func (c *EngineCaps) HasKVCacheQuant() bool {
+        return c != nil && (c.CacheTypeK || c.CacheTypeV || c.CacheTypeKVShared)
+}
+
+// kvLayoutName renders the KV layout for logs/diagnostics ("split",
+// "shared", "unsupported").
+func (c *EngineCaps) kvLayoutName() string {
+        if c == nil {
+                return "unknown"
+        }
+        switch {
+        case c.CacheTypeK || c.CacheTypeV:
+                return "split (--cache-type-k/-v)"
+        case c.CacheTypeKVShared:
+                return "shared (--cache-type-kv)"
+        default:
+                return "unsupported"
+        }
+}
 
 // tagNumber extracts the numeric part of a `b12345` release tag (0 when
 // unparseable — treated as "unknown old release").
@@ -234,7 +369,20 @@ func parseHelpCaps(binPath, tag string) *EngineCaps {
                 DeviceFlag:       optionMentioned(text, "--device"),
                 UBatchSize:       optionMentioned(text, "--ubatch-size") || optionMentioned(text, "--ubatch"),
                 ThreadsBatch:     optionMentioned(text, "--threads-batch"),
-                Source:           "help-parse",
+                // v1.7.2 KV contract: boundary-aware matching — "--cache-type-k"
+                // is a PREFIX of "--cache-type-kv", so a plain Contains() would
+                // report the split form for a shared-only build. The engine's
+                // own option lines are the authority for which form it accepts.
+                CacheTypeK:       helpMentionsOption(text, "--cache-type-k"),
+                CacheTypeV:       helpMentionsOption(text, "--cache-type-v"),
+                CacheTypeKVShared: helpMentionsOption(text, "--cache-type-kv"),
+                // v1.7.2 memory pinning: --load-mode replaced --mlock. "--device"
+                // is a distinct token, but --load-mode must also be matched
+                // exactly (a hypothetical --load-mode-xyz must not count).
+                Mlock:    helpMentionsOption(text, "--mlock"),
+                LoadMode: helpMentionsOption(text, "--load-mode"),
+                Schema:   capsSchemaV2,
+                Source:   "help-parse",
         }
 
         caps.FlashAttnValue = helpFlashAttnTakesValue(text)
@@ -246,6 +394,35 @@ func parseHelpCaps(binPath, tag string) *EngineCaps {
                 return nil
         }
         return caps
+}
+
+// helpMentionsOption reports whether the help text mentions an option
+// EXACTLY — the match must be followed by a non-name character so a longer
+// option that merely starts with the same prefix (the --cache-type-k /
+// --cache-type-kv pair) never produces a false positive.
+func helpMentionsOption(help, option string) bool {
+        for from := 0; from < len(help); {
+                idx := strings.Index(help[from:], option)
+                if idx < 0 {
+                        return false
+                }
+                idx += from
+                end := idx + len(option)
+                if end >= len(help) || !isOptionNameChar(help[end]) {
+                        return true
+                }
+                from = idx + 1
+        }
+        return false
+}
+
+// isOptionNameChar reports whether c can continue an option name
+// (letters, digits, dashes — the characters llama.cpp uses in long names).
+func isOptionNameChar(c byte) bool {
+        return c == '-' ||
+                (c >= 'a' && c <= 'z') ||
+                (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9')
 }
 
 // helpFlashAttnTakesValue decides the `--flash-attn` layout from help text:
@@ -302,7 +479,11 @@ func capsPath(cfg *config.Config) string {
 }
 
 // loadEngineCaps returns the persisted profile when it matches the current
-// engine tag; otherwise nil (the caller falls back to detection).
+// engine tag AND the current profile schema; otherwise nil (the caller
+// falls back to detection). v1.7.2: a pre-1.7.2 profile (schema 0) carries
+// no KV-cache layout knowledge — treating it as valid would silently
+// suppress the KV quantization option, so it is STALE by definition and
+// the binary is re-probed once.
 func loadEngineCaps(cfg *config.Config, tag string) *EngineCaps {
         data, err := os.ReadFile(capsPath(cfg))
         if err != nil {
@@ -314,6 +495,9 @@ func loadEngineCaps(cfg *config.Config, tag string) *EngineCaps {
         }
         if store.Caps == nil || store.Tag != tag || store.Caps.Tag != tag {
                 return nil
+        }
+        if store.Caps.Schema < capsSchemaV2 {
+                return nil // stale pre-1.7.2 profile — re-detect (bounded, once)
         }
         return store.Caps
 }
@@ -401,6 +585,17 @@ func argProblems(args []string, caps *EngineCaps) []string {
                 "--mirostat-eta":      "float",
                 "--mmproj":            "path",
                 "--model-draft":       "path",
+                "--device":            "string",
+                // v1.7.2: the KV-cache quantization layouts and the load-mode
+                // option all take exactly one value. Registering them here also
+                // gives the flag/value consumption semantics for free: the
+                // value slot is skipped, and a missing/option-looking value is
+                // rejected BEFORE spawn (one flag can never consume another
+                // flag as its value).
+                "--cache-type-k":  "kvtype",
+                "--cache-type-v":  "kvtype",
+                "--cache-type-kv": "kvtype",
+                "--load-mode":     "loadmode",
         }
 
         // Options that must NEVER be followed by a value.
@@ -410,7 +605,33 @@ func argProblems(args []string, caps *EngineCaps) []string {
                 "--jinja":    true,
         }
 
+        // v1.7.2: exact value vocabularies mirrored from the engine's own
+        // parser (upstream b10642/b11205 common/arg.cpp) — a value outside
+        // the engine's set is a DETERMINISTIC launch failure, rejected here
+        // like the numeric ranges below: no compatibility mode can make an
+        // invalid value work.
+        valueSets := map[string]map[string]bool{
+                "--cache-type-k":  kvCacheQuantValues,
+                "--cache-type-v":  kvCacheQuantValues,
+                "--cache-type-kv": kvCacheQuantValues,
+                "--load-mode": {
+                        "auto": true, "none": true, "mmap": true,
+                        "mlock": true, "mmap+mlock": true, "dio": true,
+                },
+        }
+
         var problems []string
+
+        // v1.7.2 KV-layout consistency: the profile may carry at most ONE
+        // layout. A profile (or a hand-edited config feeding it) that claims
+        // both the split and shared forms is inconsistent with any real
+        // engine — refuse it before spawn.
+        if caps.CacheTypeKVShared && (caps.CacheTypeK || caps.CacheTypeV) {
+                problems = append(problems,
+                        "inconsistent capability profile: --cache-type-kv (shared) and --cache-type-k/-v (split) are mutually exclusive layouts")
+        }
+
+        var sawKVShared, sawKVSplit bool
 
         // v1.6.1 (P0): per-option numeric RANGE contracts, mirroring the
         // engine's own argument parser. Type checks alone let
@@ -440,6 +661,40 @@ func argProblems(args []string, caps *EngineCaps) []string {
                 next := ""
                 if i+1 < len(args) {
                         next = args[i+1]
+                }
+
+                // v1.7.2: KV-layout capability gates. Each emitted form
+                // must be one the engine's own contract supports; mixing
+                // both forms in ONE launch profile is always wrong.
+                switch arg {
+                case "--cache-type-kv":
+                        sawKVShared = true
+                        if !caps.CacheTypeKVShared {
+                                problems = append(problems,
+                                        "--cache-type-kv is not supported by this engine build (the modern layout is --cache-type-k/--cache-type-v)")
+                        }
+                case "--cache-type-k":
+                        sawKVSplit = true
+                        if !caps.CacheTypeK {
+                                problems = append(problems,
+                                        "--cache-type-k is not supported by this engine build")
+                        }
+                case "--cache-type-v":
+                        sawKVSplit = true
+                        if !caps.CacheTypeV {
+                                problems = append(problems,
+                                        "--cache-type-v is not supported by this engine build")
+                        }
+                case "--mlock":
+                        if !caps.Mlock {
+                                problems = append(problems,
+                                        "--mlock is not supported by this engine build (the modern option is --load-mode mlock)")
+                        }
+                case "--load-mode":
+                        if !caps.LoadMode {
+                                problems = append(problems,
+                                        "--load-mode is not supported by this engine build")
+                        }
                 }
 
                 switch {
@@ -507,6 +762,18 @@ func argProblems(args []string, caps *EngineCaps) []string {
                                                                 arg, rng.rule, next))
                                                 }
                                         }
+                                case "kvtype", "loadmode":
+                                        // v1.7.2: EXACT vocabulary check mirroring
+                                        // the engine's own parser (lowercase, exact
+                                        // match — the engine rejects "Q8_0"). The
+                                        // launch pipeline normalizes its own values;
+                                        // anything case-mismatched reaching here
+                                        // would die deterministically at spawn.
+                                        if !valueSets[arg][next] {
+                                                problems = append(problems, fmt.Sprintf(
+                                                        "%s %q is not an accepted value for this engine (accepted: lowercase exact, e.g. q8_0; fix the value — no compatibility mode can make an invalid value work)",
+                                                        arg, next))
+                                        }
                                 }
                         }
                         // Unknown options pass through — the engine owns its surface.
@@ -517,6 +784,12 @@ func argProblems(args []string, caps *EngineCaps) []string {
                 if _, ok := takesValue[arg]; ok {
                         i++
                 }
+        }
+
+        // v1.7.2: one launch profile may carry at most ONE KV layout.
+        if sawKVShared && sawKVSplit {
+                problems = append(problems,
+                        "launch profile mixes --cache-type-kv (shared) with --cache-type-k/-v (split) — pick one KV-cache layout")
         }
 
         return problems
@@ -668,9 +941,20 @@ func repairCapsFor(caps *EngineCaps, sf *StartupFailure, launchedArgs []string) 
                         flipped.Source = "verified-repair"
                         return flipped
                 }
-                return nil
+
+                // v1.7.2: the KV-layout chain and the memory-pinning chain.
+                // "error: invalid argument: --cache-type-kv" (the b11205
+                // class) lands here with the option named. The transitions
+                // are ACYCLIC by construction — shared → split → none and
+                // mlock → load-mode → none — so a bounded repair can never
+                // oscillate.
+                return repairKVOrPinCaps(caps, sf)
 
         case FailUnknownOption:
+                if repaired := repairKVOrPinCaps(caps, sf); repaired != nil {
+                        return repaired
+                }
+
                 switch sf.Option {
                 case "cache-reuse":
                         if caps.CacheReuse {
@@ -737,6 +1021,93 @@ func repairCapsFor(caps *EngineCaps, sf *StartupFailure, launchedArgs []string) 
         return nil
 }
 
+// repairKVOrPinCaps produces the next profile in the ACYCLIC KV-layout /
+// memory-pinning repair chains:
+//
+//      KV:       shared (--cache-type-kv) → split (--cache-type-k/-v) → none
+//      Pinning:  --mlock → --load-mode → none
+//
+// Each transition fires only on the engine rejecting the CURRENT layout's
+// option, moves strictly forward, and records the removal — so the bounded
+// repair loop can never oscillate and never strips unrelated options.
+// Returns nil when the failure names no KV/pinning option.
+func repairKVOrPinCaps(caps *EngineCaps, sf *StartupFailure) *EngineCaps {
+        mark := func(c *EngineCaps, option, reason string) *EngineCaps {
+                c.Removed = append(c.Removed, RemovedOption{Option: option, Reason: reason})
+                c.Source = "verified-repair"
+                return c
+        }
+
+        switch sf.Option {
+        case "cache-type-kv":
+                // The engine rejected the shared layout.
+                switch {
+                case caps.CacheTypeKVShared && !caps.CacheTypeK && !caps.CacheTypeV:
+                        repaired := caps.Clone()
+                        repaired.CacheTypeKVShared = false
+                        repaired.CacheTypeK = true
+                        repaired.CacheTypeV = true
+                        return mark(repaired, "--cache-type-kv",
+                                "engine rejected the shared KV-cache layout — switching to the split --cache-type-k/-v form")
+                case caps.CacheTypeKVShared:
+                        // Inconsistent profile state (should not happen — validation
+                        // rejects it): drop the shared form only.
+                        repaired := caps.Clone()
+                        repaired.CacheTypeKVShared = false
+                        return mark(repaired, "--cache-type-kv",
+                                "engine rejected the shared KV-cache layout")
+                }
+                return nil
+
+        case "cache-type-k", "ctk":
+                // The engine rejected the split K option: an engine this old has
+                // no KV quantization worth chasing — drop the layout entirely.
+                if caps.CacheTypeK || caps.CacheTypeV {
+                        repaired := caps.Clone()
+                        repaired.CacheTypeK = false
+                        repaired.CacheTypeV = false
+                        return mark(repaired, "--cache-type-k",
+                                "engine rejected the split KV-cache layout — KV-cache quantization disabled for this build")
+                }
+                return nil
+
+        case "cache-type-v", "ctv":
+                if caps.CacheTypeK || caps.CacheTypeV {
+                        repaired := caps.Clone()
+                        repaired.CacheTypeK = false
+                        repaired.CacheTypeV = false
+                        return mark(repaired, "--cache-type-v",
+                                "engine rejected the split KV-cache layout — KV-cache quantization disabled for this build")
+                }
+                return nil
+
+        case "mlock":
+                // Legacy bare flag rejected → the modern --load-mode option.
+                if caps.Mlock {
+                        repaired := caps.Clone()
+                        repaired.Mlock = false
+                        repaired.LoadMode = true
+                        return mark(repaired, "--mlock",
+                                "engine rejected the legacy --mlock flag — switching to --load-mode mlock")
+                }
+                return nil
+
+        case "load-mode", "lm":
+                // Modern option rejected → drop memory pinning (do NOT flip back
+                // to --mlock: the chain is one-directional).
+                if caps.LoadMode {
+                        repaired := caps.Clone()
+                        repaired.LoadMode = false
+                        repaired.Mlock = false
+                        return mark(repaired, "--load-mode",
+                                "engine build does not support --load-mode — memory pinning disabled for this build")
+                }
+                return nil
+        }
+
+        return nil
+}
+
 // flashAttnDropped reports whether repair removed flash-attn entirely.
 func flashAttnDropped(caps *EngineCaps) bool {
         return caps == nil || !caps.FlashAttnEnabled
@@ -792,10 +1163,38 @@ func capsDiff(before, after *EngineCaps) string {
         if before.ThreadsBatch && !after.ThreadsBatch {
                 changes = append(changes, "--threads-batch removed")
         }
+        // v1.7.2: KV layout and memory-pinning transitions.
+        if before.CacheTypeKVShared && !after.CacheTypeKVShared {
+                changes = append(changes, "KV layout: shared → "+after.kvLayoutName())
+        }
+        if (before.CacheTypeK || before.CacheTypeV) && !after.CacheTypeK && !after.CacheTypeV {
+                changes = append(changes, "KV-cache quantization dropped")
+        }
+        if before.Mlock && !after.Mlock {
+                changes = append(changes, "--mlock → "+pinModeName(after))
+        }
+        if before.LoadMode && !after.LoadMode {
+                changes = append(changes, "memory pinning dropped")
+        }
         if len(changes) == 0 {
                 return "no capability change"
         }
         return strings.Join(changes, ", ")
+}
+
+// pinModeName renders the memory-pinning form for diffs ("--load-mode",
+// "--mlock", "none").
+func pinModeName(c *EngineCaps) string {
+        switch {
+        case c == nil:
+                return "unknown"
+        case c.LoadMode:
+                return "--load-mode mlock"
+        case c.Mlock:
+                return "--mlock"
+        default:
+                return "none"
+        }
 }
 
 // detectCapsForBoot performs the authoritative capability detection for one
@@ -830,8 +1229,8 @@ func capsSummary(caps *EngineCaps) string {
                         form = "on|off|auto"
                 }
         }
-        return fmt.Sprintf("flash-attn=%s cache-reuse=%v no-webui=%v jinja=%v ubatch=%v threads-batch=%v",
-                form, caps.CacheReuse, caps.NoWebUI, caps.Jinja, caps.UBatchSize, caps.ThreadsBatch)
+        return fmt.Sprintf("flash-attn=%s kv=%s pin=%s cache-reuse=%v no-webui=%v jinja=%v ubatch=%v threads-batch=%v",
+                form, caps.kvLayoutName(), pinModeName(caps), caps.CacheReuse, caps.NoWebUI, caps.Jinja, caps.UBatchSize, caps.ThreadsBatch)
 }
 
 // ---------------------------------------------------------------------------

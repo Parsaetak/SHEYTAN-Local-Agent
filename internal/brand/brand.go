@@ -27,7 +27,8 @@ const (
         // conservative mixed model — Apache-2.0 for explicitly designated
         // open components (LICENSE-APACHE), the Parsaetak Proprietary
         // License v1.1 for the SHEYTAN-specific proprietary material
-        // (LICENSE-PROPRIETARY), classified file-by-file in LICENSE-MAP.md.
+        // (LICENSE-PROPRIETARY), classified file-by-file in LICENSE.md
+        // (the one human-facing licensing document, v1.7.2).
         LicenseName = "Mixed: Apache-2.0 (designated components) + Parsaetak Proprietary v1.1"
 
         // SignedBy is the application author/signer — v1.0.8. Every release
@@ -102,7 +103,9 @@ func SignatureBlock(version string) string {
 }
 
 // LicenseFooter is the compact attribution block shown in About dialogs.
-const LicenseFooter = "SHEYTAN™ is a trademark of Parsaetak.\nLicensed under the conservative mixed model — Apache-2.0 for designated open components, Parsaetak Proprietary for SHEYTAN-specific material (see LICENSE-MAP.md).\n" + LicensorURL
+// v1.7.2: the classification lives in LICENSE.md (the consolidated
+// human-facing licensing document).
+const LicenseFooter = "SHEYTAN™ is a trademark of Parsaetak.\nLicensed under the conservative mixed model — Apache-2.0 for designated open components, Parsaetak Proprietary for SHEYTAN-specific material (see LICENSE.md).\n" + LicensorURL
 
 func itoa(n int) string {
         if n == 0 {
@@ -118,8 +121,9 @@ func itoa(n int) string {
 
 // LicenseText is the license summary shipped with the app (v1.6.1: the
 // conservative mixed-model routing text — the full component
-// classification lives in LICENSE-MAP.md; the two licenses live in
-// LICENSE-APACHE and LICENSE-PROPRIETARY).
+// classification and third-party attribution live in LICENSE.md, the one
+// human-facing licensing document consolidated in v1.7.2; the two
+// licenses live in LICENSE-APACHE and LICENSE-PROPRIETARY).
 const LicenseText = `
 SHEYTAN™ LICENSE — CONSERVATIVE MIXED MODEL
 ===========================================
@@ -131,26 +135,27 @@ reserved.
 SHEYTAN-Local-Agent ("the Software") is distributed under a deliberately
 CONSERVATIVE mixed licensing model: every file in this repository and
 every artifact built from it carries exactly one of the two licenses
-below, recorded in LICENSE-MAP.md (the classification authority).
+below, recorded in LICENSE.md §2 "Component classification" (the
+classification authority).
 
   1. LICENSE-APACHE      — Apache License 2.0, for the explicitly
                            designated OPEN components listed in
-                           LICENSE-MAP.md §Open components.
+                           LICENSE.md §2 "Open components".
 
   2. LICENSE-PROPRIETARY — the Parsaetak Proprietary License v1.1, for
                            the SHEYTAN-specific proprietary mechanisms,
                            the product-specific implementation, the
                            assets and designs, and every other component
                            explicitly classified as Proprietary in
-                           LICENSE-MAP.md.
+                           LICENSE.md §2.
 
 HOW TO DETERMINE THE LICENSE OF A FILE
 --------------------------------------
-  1. Open LICENSE-MAP.md and find the component the file belongs to.
-     The map's classification is authoritative.
+  1. Open LICENSE.md and find the component the file belongs to in
+     §2. The classification there is authoritative.
   2. Files inside an Apache-2.0-designated component carry an
      "SPDX-License-Identifier: Apache-2.0" header.
-  3. Everything not explicitly classified as open in LICENSE-MAP.md is
+  3. Everything not explicitly classified as open in LICENSE.md §2 is
      Proprietary under LICENSE-PROPRIETARY — the conservative default:
      material is open ONLY by explicit designation, never by omission.
 
@@ -171,8 +176,9 @@ THIRD-PARTY MATERIAL
 The Software bundles, downloads, or links third-party components (the
 llama.cpp inference engine, the Wails desktop framework, React and the
 frontend toolchain, and others). Those components remain under their own
-licenses, which are acknowledged in NOTICE.md. Nothing in this file
-changes the license of third-party material.
+licenses, which are acknowledged in LICENSE.md §3 "Third-party software
+and attribution notices". Nothing in this file changes the license of
+third-party material.
 
 CONTACT
 -------

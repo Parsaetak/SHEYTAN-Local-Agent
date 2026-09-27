@@ -7,7 +7,7 @@
 //
 // v1.6.1 licensing: this package is an explicitly designated OPEN
 // component under the repository's conservative mixed model — Apache-2.0
-// (see LICENSE-MAP.md §Open components). It is pure, self-contained
+// (see LICENSE.md §2 "Open components"). It is pure, self-contained
 // formatting logic with no coupling to any SHEYTAN subsystem.
 //
 // Copyright 2024-2026 Parsaetak

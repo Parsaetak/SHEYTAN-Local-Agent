@@ -58,7 +58,9 @@ scheduler, no second memory system, no second capability owner):
    `ModelInfoCached`/`MemoryPlanCached` (pure state reads, no IPC).
 4. **License surface.** `LICENSE.md` is the human-facing index over the
    unchanged authorities (LICENSE, LICENSE-APACHE,
-   LICENSE-PROPRIETARY, LICENSE-MAP.md, NOTICE.md);
+   LICENSE-PROPRIETARY, LICENSE.md — the one human-facing licensing
+   document, consolidating the former LICENSE-MAP.md classification and
+   NOTICE.md attribution);
    `internal/releasecontract/license_contract_test.go` deterministically
    pins the license-file set and blocks redundant license Markdown.
 
@@ -262,10 +264,11 @@ cover each claim):
    evidence.
 
 5. **Conservative mixed licensing + governance files** (`LICENSE`,
-   `LICENSE-APACHE`, `LICENSE-PROPRIETARY`, `LICENSE-MAP.md`,
-   `NOTICE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+   `LICENSE-APACHE`, `LICENSE-PROPRIETARY`, `LICENSE.md`
+   (classification + third-party attribution, consolidated v1.7.2),
+   `CONTRIBUTING.md`, `SECURITY.md`,
    `internal/brand/brand.go`) — the classification authority is
-   `LICENSE-MAP.md`: open ONLY by explicit designation
+   `LICENSE.md` §2: open ONLY by explicit designation
    (`internal/humanize/`, Apache-2.0 + SPDX headers), proprietary by
    default for everything else. The model classifies actual material
    (code, docs, assets, implementations), never abstract ideas.

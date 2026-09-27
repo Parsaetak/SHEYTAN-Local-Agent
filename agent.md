@@ -1,5 +1,33 @@
 # SHEYTAN-Local-Agent — Agent Context
 
+> **v1.7.2 handoff note (2026-09-27):** this release fixes the REAL
+> llama.cpp KV-cache CLI contract (the reported b11205
+> `invalid argument: --cache-type-kv` launch failure). The actual
+> released engine binaries at b10642 and b11205 were probed: BOTH
+> accept only the split `-ctk, --cache-type-k TYPE` /
+> `-ctv, --cache-type-v TYPE` form (exact lowercase vocabulary
+> f32/f16/bf16/q8_0/q4_0/q4_1/iq4_nl/q5_0/q5_1), and `--mlock` was
+> removed upstream in favor of `-lm, --load-mode MODE`. Consequences
+> for engine work: `EngineCaps` now carries `CacheTypeK/CacheTypeV/
+> CacheTypeKVShared` + `Mlock/LoadMode` (schema 2 — pre-v1.7.2
+> persisted profiles are stale and re-probed); `SpeedArgsWithCaps`
+> emits the layout the engine contract actually supports (never
+> `--cache-type-kv` on a modern engine); `argProblems` mirrors the
+> engine's value vocabulary and rejects mixed layouts; the surgical
+> repair chain is ACYCLIC (shared → split → none; mlock → load-mode →
+> none). Real `--help` fixtures live in `internal/llm/testdata/`.
+> AUTO accelerator selection also gained the bounded Vulkan candidate
+> bootstrap (`internal/llm/variant_auto.go` +
+> `internal/api/gpu_autoprobe.go`): ONE transaction through the
+> existing variant authority with execution-evidence verification
+> (device enumeration + real generation + the real offload line
+> mandatory), bounded state in `<DataDir>/gpu-probe.json` keyed by
+> hardware+engine identity. Licensing consolidated: `LICENSE.md` is
+> the ONE human-facing licensing document (classification +
+> third-party attribution merged from the removed LICENSE-MAP.md /
+> NOTICE.md). Version identity: 1.7.2. The v1.7.1 note below remains
+> accurate for its scope.
+
 > **v1.7.1 handoff note (2026-09-26):** this release fixes the P0
 > scheduler TempDir race (RunNow settlement contract + regression),
 > adds context-exhaustion recovery (typed condition → snapshot →
@@ -91,8 +119,9 @@
 > `LlamaServer.UpdateEngineVariantNow` + `POST /api/engine/provision`;
 > explicit VULKAN never silently falls back to CPU; AUTO stays
 > evidence-gated), and the conservative mixed licensing model
-> (`LICENSE`, `LICENSE-APACHE`, `LICENSE-PROPRIETARY`, `LICENSE-MAP.md`
-> — the classification authority, `NOTICE.md`, `CONTRIBUTING.md`,
+> (`LICENSE`, `LICENSE-APACHE`, `LICENSE-PROPRIETARY`, `LICENSE.md`
+> — the one human-facing licensing document: classification authority +
+> third-party attribution since v1.7.2, `CONTRIBUTING.md`,
 > `SECURITY.md`). Regression evidence: the full Go suite (53 packages,
 > headless), `go test -race` on the concurrency-heavy packages, the
 > native C++ engine suite (13/13), the frontend suite (115 unit tests,

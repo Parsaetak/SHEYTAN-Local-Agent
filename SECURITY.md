@@ -45,7 +45,7 @@ under the application folder. The posture, and what it means for reports:
 
 ## Scope
 
-In scope: any component classified in `LICENSE-MAP.md` (both the
+In scope: any component classified in `LICENSE.md` §2 (both the
 proprietary product and the Apache-2.0-designated components), the build
 and release pipeline, and the behavior of the managed llama.cpp
 subprocess lifecycle as orchestrated by this product.

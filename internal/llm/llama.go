@@ -2831,6 +2831,27 @@ func (s *LlamaServer) UpdateEngineVariantNow(
         variant updater.AssetVariant,
         onProgress func(downloader.Progress),
 ) (string, error) {
+        return s.updateEngineVariantTx(ctx, variant, onProgress, nil)
+}
+
+// variantVerifyFunc extends the runtime backend verification of the
+// variant transaction (v1.7.2). It runs AFTER the serving health check and
+// the engine's own device enumeration, and BEFORE the commit decision: an
+// error rolls the transaction back through the exact same stop/reap/
+// rollback/restart choreography as any other verification failure. The
+// AUTO GPU candidate probe installs one to enforce the stricter
+// execution-evidence contract (§4/§8).
+type variantVerifyFunc func(cfg *config.Config, variant updater.AssetVariant, note string) (string, error)
+
+// updateEngineVariantTx is the ONE transactional variant authority (the
+// body of the former UpdateEngineVariantNow, v1.7.2 parameterized with an
+// optional verification extension).
+func (s *LlamaServer) updateEngineVariantTx(
+        ctx context.Context,
+        variant updater.AssetVariant,
+        onProgress func(downloader.Progress),
+        extraVerify variantVerifyFunc,
+) (string, error) {
         s.switchMu.Lock()
         defer s.switchMu.Unlock()
 
@@ -2969,6 +2990,24 @@ func (s *LlamaServer) UpdateEngineVariantNow(
         // (devices.go) is the authoritative signal — the same authority
         // the accelerator surface uses for GPU claims.
         verifyNote, verifyErr := s.verifyRuntimeBackendForVariant(cfg, variant)
+
+        // v1.7.2: the optional verification EXTENSION (the AUTO GPU
+        // candidate's execution-evidence contract) runs inside the same
+        // transaction boundary — its failure takes the identical rollback
+        // path, and its note is appended to the committed outcome.
+        if verifyErr == nil && extraVerify != nil {
+                note2, err2 := extraVerify(cfg, variant, verifyNote)
+                if err2 != nil {
+                        verifyErr = err2
+                } else if strings.TrimSpace(note2) != "" {
+                        verifyNote = strings.TrimSpace(verifyNote)
+                        if verifyNote == "" {
+                                verifyNote = note2
+                        } else {
+                                verifyNote = verifyNote + " — " + note2
+                        }
+                }
+        }
 
         if verifyErr != nil {
                 logging.Default().Warn("updater",

@@ -5,7 +5,7 @@ Thank you for your interest in contributing to SHEYTAN-Local-Agent.
 ## Licensing — read this first
 
 SHEYTAN-Local-Agent uses a **conservative mixed licensing model**
-(`LICENSE`, `LICENSE-MAP.md`):
+(`LICENSE`, `LICENSE.md`):
 
 - `internal/humanize/` is designated **Apache-2.0** open.
 - Everything else is **Proprietary** under the Parsaetak Proprietary
@@ -21,7 +21,7 @@ SHEYTAN-Local-Agent uses a **conservative mixed licensing model**
 2. Do not copy code from other projects into proprietary components
    unless its license (e.g. MIT/BSD) permits relicensing into the
    proprietary tree AND you preserve the upstream attribution (add the
-   upstream notice to `NOTICE.md`).
+   upstream notice to `LICENSE.md` §3).
 3. Code copied into the Apache-2.0-designated components must itself be
    Apache-2.0-compatible and carry the upstream license header when
    required.

@@ -10,12 +10,57 @@ The v2.0.0.0 release is the point at which SHEYTAN-LA should be considered a com
 
 ---
 
-# 0. ENGINEERING STATUS — read this first (v1.7.1, 2026-09-26)
+# 0. ENGINEERING STATUS — read this first (v1.7.2, 2026-09-27)
 
-This is the AUTHORITATIVE v1.7.1 handoff. It supersedes the v1.7.0
+This is the AUTHORITATIVE v1.7.2 handoff. It supersedes the v1.7.1
 section below (kept as the historical record). Every item is marked
 **COMPLETED / CURRENT / NEXT / FUTURE** with its evidence class; nothing
 planned is marked completed, and no green claim outruns its evidence.
+
+## COMPLETED (v1.7.2 — verified on this session's Linux amd64 runs)
+
+* **COMPLETED (P0, real-engine evidence + regression suite) — the
+  llama.cpp KV-cache CLI contract is fixed at the root.** The real
+  released binaries at b10642 and b11205 were downloaded and probed
+  2026-09 (plus their upstream common/arg.cpp sources): BOTH reject
+  `--cache-type-kv` (`error: invalid argument: --cache-type-kv`) and
+  accept only the split `-ctk, --cache-type-k` / `-ctv, --cache-type-v`
+  form (exact lowercase vocabulary f32 f16 bf16 q8_0 q4_0 q4_1 iq4_nl
+  q5_0 q5_1; `--mlock` also removed upstream in favor of `-lm,
+  --load-mode`). EngineCaps now carries the KV layout + memory-pinning
+  contract (help-parse is the authority, boundary-aware so
+  `--cache-type-k-draft` cannot false-positive; tag fallback
+  fail-closed); emission is layout-gated; pre-spawn validation mirrors
+  the engine parser; the surgical repair walks the ACYCLIC chain
+  shared → split → none (and mlock → load-mode → none) without touching
+  unrelated options. The verbatim --help outputs of both real engines
+  ship as test fixtures (internal/llm/testdata/). Evidence class:
+  source + unit/integration tests + REAL probed engine binaries; NOT a
+  Windows runtime acceptance (no Windows hardware in this session).
+
+* **COMPLETED (deterministic transaction tests) — the AUTO GPU evidence
+  deadlock is broken.** ONE bounded Vulkan candidate transaction through
+  the existing variant authority, with execution-evidence verification
+  (engine's own --list-devices with the ACTUAL identity, a real bounded
+  generation, the real offloaded-N/M-layers line mandatory), commit/
+  rollback through the existing v1.7.0 hardening, and the outcome
+  persisted in gpu-probe.json keyed by the hardware+engine identity
+  (failed probes never repeat; verified states reused; identity changes
+  invalidate). Evidence class: deterministic transaction tests on the
+  fake-engine seam; the Windows Vulkan runtime chain (real device →
+  real offload) requires Windows hardware and stays evidence-gated
+  there — GPU_VULKAN claims remain impossible without the real
+  execution line.
+
+* **COMPLETED (contract test) — license consolidation.** ONE
+  human-facing licensing Markdown (LICENSE.md) carrying the
+  consolidated classification + third-party attribution;
+  LICENSE-MAP.md/NOTICE.md merged and removed; LICENSE,
+  LICENSE-APACHE, LICENSE-PROPRIETARY preserved; the contract test
+  pins both directions.
+
+The v1.7.1 handoff items below remain the historical record of that
+release; their evidence classes still hold.
 
 ## COMPLETED (v1.7.1 — all verified on this session's Linux amd64 runs)
 
@@ -146,13 +191,16 @@ planned is marked completed, and no green claim outruns its evidence.
   `LICENSE.md` is now the human-facing entry point (copyright, the
   conservative mixed model, where LICENSE-APACHE / LICENSE-PROPRIETARY
   live, LICENSE-MAP.md as classification authority, NOTICE.md for
+  [historical v1.6.x–v1.7.1 layout; consolidated into LICENSE.md in
+  v1.7.2]
   third-party notices, trademarks, contact) — an INDEX that embeds no
   full license text and reclassifies nothing. The existing
   license-generation mechanism (cmd/license.go / brand) is untouched,
   and `internal/releasecontract/license_contract_test.go` adds the
   deterministic check: the license-file set is EXACT (LICENSE,
-  LICENSE-APACHE, LICENSE-PROPRIETARY, LICENSE-MAP.md, LICENSE.md,
-  NOTICE.md), any reintroduced redundant license Markdown fails the
+  LICENSE-APACHE, LICENSE-PROPRIETARY, LICENSE.md — the one
+  human-facing licensing document), any reintroduced redundant license
+  Markdown fails the
   suite, and the licence-spelling drift is blocked.
 
 * **COMPLETED — version identity is exactly 1.7.1** across
@@ -362,7 +410,7 @@ session's fresh runs, Linux amd64 build host):
   - AUTO still does not auto-provision the Vulkan variant (unchanged
     v1.6.2 policy, see NEXT).
   - Only internal/humanize/ is Apache-2.0-designated (conservative
-    mixed licensing; LICENSE-MAP.md is the classification authority).
+    mixed licensing; LICENSE.md §2 is the classification authority).
 
 ## NEXT (ordered, concrete, actionable)
 
@@ -402,7 +450,7 @@ session's fresh runs, Linux amd64 build host):
   The v1.7.0 automation layer is the scheduling foundation §5 builds
   on — it does NOT implement §5.
 * **FUTURE — broader Apache-2.0 designation** (only with maintainer
-  sign-off via LICENSE-MAP.md reclassification): internal/chunking,
+  sign-off via LICENSE.md §2 reclassification): internal/chunking,
   internal/histref.
 * **FUTURE — non-Windows native file pickers** (GTK/Zenity) for the
   import flow on Linux desktops.
@@ -1231,8 +1279,9 @@ Shipped and tested (full verification matrix in `worklog.md` §v1.6.1):
   VULKAN never silently falls back to CPU; AUTO stays evidence-gated; a
   Windows CI gate HEAD-checks the pinned Vulkan asset.
 * Conservative mixed licensing + governance files (LICENSE-APACHE,
-  LICENSE-PROPRIETARY, LICENSE-MAP.md as the classification authority,
-  NOTICE.md, CONTRIBUTING.md, SECURITY.md; SPDX headers on the
+  LICENSE-PROPRIETARY, LICENSE.md as the classification authority +
+  third-party attribution (consolidated v1.7.2), CONTRIBUTING.md,
+  SECURITY.md; SPDX headers on the
   Apache-designated component).
 
 Deferred honestly: the AUTO variant-provisioning policy (NEXT item 4 in
