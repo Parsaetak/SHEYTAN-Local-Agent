@@ -11,8 +11,16 @@ import (
 )
 
 // RunWithDefaultFn dispatches to the right subcommand. If no command is
-// given, runs `defaultFn()`. The log catcher is booted first so every
-// subcommand is recorded.
+// given, runs `defaultFn()`.
+//
+// v1.7.4 boot order: the runtime-data migrations run BEFORE the canonical
+// log sinks open. Under v1.7.3 the sinks (app.log/tools.jsonl/llm.jsonl —
+// O_APPEND handles held for the whole process lifetime) were opened
+// first, so copyVerified's final rename onto an open sink file failed on
+// Windows ("Access is denied") and the legacy-root migration never
+// completed. A bootstrap logger (stderr + bounded memory buffer, no files
+// opened) records every migration decision meanwhile; its lines are
+// replayed into app.log right after the session banner.
 func RunWithDefaultFn(defaultFn func() int) int {
         cfg, err := config.Load(configPath())
         if err != nil {
@@ -20,28 +28,19 @@ func RunWithDefaultFn(defaultFn func() int) int {
                 return 1
         }
 
-        // Boot the log catcher (app.log, tools.jsonl, llm.jsonl, crashes/).
-        // v1.3.0: logging boots BEFORE directory creation and BEFORE the
-        // malformed-root migration, so every migration decision is recorded
-        // with full context — and a path problem found during Load is
-        // reported through PathNotes instead of vanishing into the pre-logger
-        // void.
-        mgr, err := logging.New(cfg.LogsDir())
-        if err != nil {
-                fmt.Fprintln(os.Stderr, "log catcher:", err)
-        } else {
-                logging.SetDefault(mgr)
-                logging.SetVersion(config.AppVersion)
-                defer mgr.Close()
-        }
-        // v1.2.2: one unambiguous session separator BEFORE anything else -
-        // app.log persists across versions/boots, so historical startup
-        // entries (e.g. v0.8.0) previously mixed indistinguishably with the
-        // current run. Everything above a banner is verifiably historical.
-        logging.Default().SessionBanner(brand.FullName, config.AppVersion)
+        // v1.7.4: bootstrap logger FIRST — stderr plus a bounded memory
+        // buffer, and NO file created or opened (the migrations below may
+        // need to create or rename the very sink files a canonical logger
+        // would hold open for the process lifetime).
+        boot := logging.NewBootstrap()
+        logging.SetDefault(boot)
+        logging.SetVersion(config.AppVersion)
 
         // v1.3.0: one place reports every path normalization the loader had
-        // to perform (rejected "%TOKEN%" values, canonical-root fallbacks).
+        // to perform (rejected "%TOKEN%" values, canonical-root fallbacks),
+        // so a path problem found during Load is reported through PathNotes
+        // instead of vanishing into the pre-logger void. Emitted through the
+        // bootstrap logger; replayed into app.log once the sinks exist.
         for _, note := range config.TakePathNotes(cfg) {
                 logging.Default().Warn("paths", "%s", note)
         }
@@ -120,6 +119,35 @@ func RunWithDefaultFn(defaultFn func() int) int {
         if err := cfg.EnsureDirs(); err != nil {
                 logging.Default().Error("boot", "ensure dirs: %v", err)
         }
+
+        // v1.7.4: migrations are done — only NOW open the canonical sinks
+        // (app.log, tools.jsonl, llm.jsonl, crashes/), with the FINAL config
+        // so a recovered/reloaded configuration drives the logs dir.
+        mgr, err := logging.New(cfg.LogsDir())
+        if err != nil {
+                // Keep the bootstrap logger installed: diagnostics stay on
+                // stderr instead of vanishing into a no-op manager.
+                logging.Default().Error("boot", "log catcher: %v", err)
+        } else {
+                logging.SetDefault(mgr)
+                defer mgr.Close()
+        }
+
+        // v1.2.2: one unambiguous session separator BEFORE anything else -
+        // app.log persists across versions/boots, so historical startup
+        // entries (e.g. v0.8.0) previously mixed indistinguishably with the
+        // current run. Everything above a banner is verifiably historical.
+        logging.Default().SessionBanner(brand.FullName, config.AppVersion)
+
+        // v1.7.4: bootstrap replay — the pre-canonical lines (path notes,
+        // sampling repairs, migration decisions) land in app.log right
+        // AFTER the session banner: the banner still separates this run's
+        // entries from history, the replayed boot context reads naturally
+        // before the "boot ... starting" line below, and the original
+        // message order is preserved. If the canonical manager could not be
+        // opened, the replay is skipped and the lines remain on stderr via
+        // the bootstrap logger — nothing is lost silently.
+        boot.ReplayInto(mgr)
 
         logging.Default().Info(
                 "boot",

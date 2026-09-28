@@ -11,6 +11,9 @@ export type RunPhase =
   | "preparing"
   | "thinking"
   | "generating"
+  | "pausing"
+  | "paused"
+  | "resuming"
   | "finalising"
   | "complete"
   | "error"
@@ -23,6 +26,10 @@ export type RunEventKind =
   | "reasoning_delta" // activity type "reasoning" (cumulative caption)
   | "response_delta" // activity type "response" (cumulative caption)
   | "thinking_activity" // activity types "thinking"/"context"/"tool_*"
+  | "pause_requested" // POST /api/run/pause accepted (phase "pausing")
+  | "paused" // backend confirmed: durable checkpoint persisted (phase "paused")
+  | "resume_requested" // POST /api/run/resume accepted (phase "resuming")
+  | "resumed" // backend confirmed: run generating again
   | "done" // activity type "done"
   | "history_confirmed" // authoritative session history contains the reply
   | "error" // activity type "error"
@@ -47,14 +54,42 @@ export function nextPhase(phase: RunPhase, event: RunEventKind): RunPhase {
     case "run_started":
       return "preparing";
 
+    case "pause_requested":
+      // Only a live run pauses. A duplicate pause (double-click, retry,
+      // stale client) is a no-op — the backend contract is idempotent.
+      if (isLivePhase(phase)) {
+        return "pausing";
+      }
+      return phase;
+
+    case "paused":
+      // The backend confirms PAUSED only after its durable checkpoint is
+      // persisted. From any live or pausing phase.
+      if (isLivePhase(phase) || phase === "pausing") {
+        return "paused";
+      }
+      return phase;
+
+    case "resume_requested":
+      if (phase === "paused") {
+        return "resuming";
+      }
+      return phase;
+
+    case "resumed":
+      if (phase === "resuming" || phase === "paused") {
+        return "generating";
+      }
+      return phase;
+
     case "reasoning_delta":
-      if (phase === "preparing" || phase === "thinking") {
+      if (phase === "preparing" || phase === "thinking" || phase === "resuming") {
         return "thinking";
       }
       return phase;
 
     case "response_delta":
-      if (phase === "preparing" || phase === "thinking") {
+      if (phase === "preparing" || phase === "thinking" || phase === "resuming") {
         return "generating";
       }
       return phase;
@@ -78,13 +113,17 @@ export function nextPhase(phase: RunPhase, event: RunEventKind): RunPhase {
       return phase;
 
     case "error":
-      if (isLivePhase(phase)) {
+      // v1.7.4: a paused run can also receive an authoritative terminal
+      // error (engine death while parked) — the backend is the authority.
+      if (isLivePhase(phase) || phase === "paused") {
         return "error";
       }
       return phase;
 
     case "aborted":
-      if (isLivePhase(phase)) {
+      // v1.7.4: Stop after pause settles the parked run as aborted — the
+      // backend really does abort a paused run, so the machine follows.
+      if (isLivePhase(phase) || phase === "paused") {
         return "aborted";
       }
       return phase;
@@ -95,13 +134,24 @@ export function nextPhase(phase: RunPhase, event: RunEventKind): RunPhase {
 }
 
 // isLivePhase reports whether the phase belongs to an in-flight run.
+// v1.7.4: pausing/resuming are live CONTROL phases (the run is still
+// registered and can still be stopped); "paused" is deliberately NOT live —
+// the run is safely parked and the composer is editable.
 export function isLivePhase(phase: RunPhase): boolean {
   return (
     phase === "preparing" ||
     phase === "thinking" ||
     phase === "generating" ||
+    phase === "pausing" ||
+    phase === "resuming" ||
     phase === "finalising"
   );
+}
+
+// isPausedPhase reports the confirmed paused state: the checkpoint is
+// durable, the composer is editable, resume/edit/discard are offered.
+export function isPausedPhase(phase: RunPhase): boolean {
+  return phase === "paused";
 }
 
 // isTerminalPhase reports whether the phase is a settled end state.
@@ -116,6 +166,9 @@ export const PHASE_LABELS: Record<RunPhase, string> = {
   preparing: "Preparing",
   thinking: "Thinking",
   generating: "Generating",
+  pausing: "Pausing…",
+  paused: "Paused",
+  resuming: "Resuming…",
   finalising: "Finalising",
   complete: "Complete",
   error: "Failed",

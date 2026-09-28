@@ -230,8 +230,8 @@ func copyTreeSkipping(srcRoot, dstRoot string, skip ...string) error {
 // itself). Only unambiguous application-data names are folded; binaries
 // and unrelated files are never touched.
 var appRootDataEntries = []string{
-	"config.json", "models", "sessions", "logs", "bin", "lab",
-	"workspace", "charts", "sandbox", "run", "research",
+	"config.json", "installed.json", "models", "sessions", "logs", "bin",
+	"lab", "workspace", "charts", "sandbox", "run", "research",
 }
 
 // mergeStrayLogsDir folds a stray application-root logs directory into

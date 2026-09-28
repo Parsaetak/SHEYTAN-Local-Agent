@@ -51,8 +51,65 @@ type Tool struct {
 // NewTool wraps a Definition as a registry Tool. The definition is
 // re-validated on EVERY Run — a hand-edited or corrupted file can never
 // reach an executor.
+//
+// v1.7.4 crash-window hardening: the tool takes a DEEP copy of the
+// definition (Params slice, per-param Enum/Default, HTTP config incl. the
+// Headers map, Command config incl. Args). The previous shallow share
+// aliased the store's cached pointers: any caller mutating a definition
+// in place while the orchestrator's planning pass introspected
+// Name/Description/Parameters could corrupt a concurrently iterated map
+// (t.def.HTTP.Headers) — on Windows that is a fatal, unrecoverable
+// process death exactly inside the `task classified → tier selected`
+// window. The registry-facing tool object is now immutable for the whole
+// run; store updates create new definitions, never mutate shared ones.
 func NewTool(d *Definition) *Tool {
-        return &Tool{def: d}
+        return &Tool{def: deepCopyDefinition(d)}
+}
+
+// deepCopyDefinition clones a definition with NO shared mutable state
+// (slices, maps, nested config pointers). A nil input yields nil so the
+// existing nil-handling behavior is preserved.
+func deepCopyDefinition(d *Definition) *Definition {
+        if d == nil {
+                return nil
+        }
+
+        out := *d
+
+        if len(d.Params) > 0 {
+                out.Params = make([]Param, len(d.Params))
+                copy(out.Params, d.Params)
+
+                for i := range out.Params {
+                        if len(out.Params[i].Enum) > 0 {
+                                out.Params[i].Enum = append([]string(nil), out.Params[i].Enum...)
+                        }
+                        if len(out.Params[i].Default) > 0 {
+                                out.Params[i].Default = append(json.RawMessage(nil), out.Params[i].Default...)
+                        }
+                }
+        }
+
+        if d.HTTP != nil {
+                h := *d.HTTP
+                if d.HTTP.Headers != nil {
+                        h.Headers = make(map[string]string, len(d.HTTP.Headers))
+                        for k, v := range d.HTTP.Headers {
+                                h.Headers[k] = v
+                        }
+                }
+                out.HTTP = &h
+        }
+
+        if d.Command != nil {
+                c := *d.Command
+                if len(d.Command.Args) > 0 {
+                        c.Args = append([]string(nil), d.Command.Args...)
+                }
+                out.Command = &c
+        }
+
+        return &out
 }
 
 // SetClientForTest injects an HTTP client (test-only seam: TLS test

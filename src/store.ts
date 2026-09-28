@@ -257,6 +257,14 @@ type RuntimeState = {
   runStartedAt: number | null;
   runNote: string | null;
 
+  // v1.7.4 run control: the accepted partial answer + the monotonic
+  // checkpoint revision while the run is paused (both strictly backend-
+  // derived: run_snapshot.pausedDraft / run_snapshot.revision). The
+  // paused draft is editable through editRun; resume replays the SAME
+  // revision the UI acted on — a stale client is rejected server-side.
+  pausedDraft: string | null;
+  runRevision: number;
+
   // v1.2.5: live status chip (backend "status" events only — measured
   // tier/token telemetry, never fabricated) + the tier-escalation trail
   // of the current/last run.
@@ -379,6 +387,13 @@ type RuntimeState = {
   run: (message: string) => Promise<void>;
   abort: () => Promise<void>;
   regenerate: () => Promise<void>;
+
+  // v1.7.4: backend-neutral Pause / Edit / Resume over the ONE /api/run
+  // authority. Editing is allowed only while paused; every accepted edit
+  // bumps the revision the UI must present on resume.
+  pauseRun: () => Promise<void>;
+  resumeRun: () => Promise<void>;
+  editRun: (payload: { message?: string; draft?: string }) => Promise<boolean>;
 
   uploadFiles: (files: File[]) => Promise<void>;
   removePendingAttachment: (id: string) => Promise<void>;
@@ -1180,6 +1195,43 @@ function handleRunSnapshot(payload: Record<string, unknown>): void {
     });
   }
 
+  // v1.7.4 RUN CONTROL: a paused/pausing/resuming run re-renders its
+  // draft and stays parked. The run is NOT terminal (running stays true
+  // server-side), so this must be handled BEFORE the terminal branch —
+  // a reconnect during PAUSED restores the draft and the revision
+  // exactly, and the composer is editable again.
+  if (phase === "paused" || phase === "pausing" || phase === "resuming") {
+    const pausedDraft =
+      typeof payload.pausedDraft === "string" ? payload.pausedDraft : "";
+    const revision =
+      typeof payload.revision === "number" ? payload.revision : 0;
+
+    if (latestResponse) {
+      queueStreamingContent(latestResponse);
+    }
+
+    if (latestReasoning) {
+      queueStreamingReasoning(latestReasoning);
+    }
+
+    flushStreaming();
+
+    // Backend-observed states only (the snapshot IS the authoritative
+    // wire event; the pure machine's no-op rules cannot express
+    // idle → paused, so the store adopts the observed phase directly).
+    // `running` stays TRUE while paused — the run is still registered;
+    // editability and the control buttons key on runPhase, never on a
+    // fabricated idle state.
+    useRuntimeStore.setState({
+      running: true,
+      runPhase: phase,
+      pausedDraft: phase === "paused" ? pausedDraft : null,
+      runRevision: revision,
+    });
+
+    return;
+  }
+
   // Terminal state: finalise through the same path the done/error events
   // use (the composer unlocks, the history reload confirms persistence).
   if (!running || terminal) {
@@ -1453,7 +1505,27 @@ function handleConversationEvent(event: ActivityEvent): void {
         useRuntimeStore.setState({ liveStatus: caption });
       }
 
-      transitionPhase("thinking_activity");
+      // v1.7.4 run-control phases ride the status Detail (backend-derived
+      // only): "pausing" acknowledges the request, "paused" confirms the
+      // durable checkpoint, "resuming" confirms the resume handoff.
+      const phaseDetail =
+        event.data && typeof event.data === "object"
+          ? (event.data as Record<string, unknown>).phase
+          : undefined;
+
+      if (phaseDetail === "pausing") {
+        transitionPhase("pause_requested");
+      } else if (phaseDetail === "paused") {
+        transitionPhase("paused");
+
+        // running stays true — the paused run is still registered; the
+        // composer gating and control buttons key on runPhase.
+        useRuntimeStore.setState({ liveStatus: caption });
+      } else if (phaseDetail === "resuming") {
+        transitionPhase("resume_requested");
+      } else {
+        transitionPhase("thinking_activity");
+      }
       break;
     }
 
@@ -1686,6 +1758,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   runPhase: "idle",
   runStartedAt: null,
   runNote: null,
+
+  // v1.7.4 run control state.
+  pausedDraft: null,
+  runRevision: 0,
 
   // v1.2.5: live status + escalation trail + composer controls.
   liveStatus: null,
@@ -2727,6 +2803,77 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       if (isLivePhase(phase)) {
         scheduleRunFinalisation(sessionId, 1200);
       }
+    }
+  },
+
+  // v1.7.4 — PAUSE: optimistic "pausing" transition from the real user
+  // action, then the backend's status/snapshot events confirm the durable
+  // pause. Duplicate clicks are no-ops on the backend (idempotent).
+  pauseRun: async () => {
+    const sessionId = get().activeSessionId;
+    const runId = typeof activeRunId === "string" ? activeRunId : "";
+
+    if (!sessionId || !runId) {
+      return;
+    }
+
+    transitionPhase("pause_requested");
+
+    try {
+      await api.pauseRun(sessionId, runId);
+    } catch {
+      // The pause request failed — the run keeps generating; the next
+      // status/delta event re-derives the live phase.
+      transitionPhase("response_delta");
+    }
+  },
+
+  // v1.7.4 — RESUME: continue the paused run at the revision the UI
+  // observed. A stale revision is rejected server-side with the current
+  // value; the next run_snapshot re-syncs the paused state.
+  resumeRun: async () => {
+    const sessionId = get().activeSessionId;
+    const runId = typeof activeRunId === "string" ? activeRunId : "";
+    const revision = get().runRevision;
+
+    if (!sessionId || !runId) {
+      return;
+    }
+
+    transitionPhase("resume_requested");
+
+    try {
+      await api.resumeRun(sessionId, runId, revision);
+    } catch {
+      transitionPhase("paused");
+    }
+  },
+
+  // v1.7.4 — EDIT (paused only): replace the user prompt and/or the
+  // partial draft. Returns true when the edit was accepted (the revision
+  // advanced); stale-revision conflicts surface to the caller as false.
+  editRun: async (payload: { message?: string; draft?: string }) => {
+    const sessionId = get().activeSessionId;
+    const runId = typeof activeRunId === "string" ? activeRunId : "";
+    const revision = get().runRevision;
+
+    if (!sessionId || !runId) {
+      return false;
+    }
+
+    try {
+      const response = await api.editRun({
+        sessionId,
+        runId,
+        revision,
+        message: payload.message,
+        draft: payload.draft,
+      });
+
+      useRuntimeStore.setState({ runRevision: response.revision });
+      return true;
+    } catch {
+      return false;
     }
   },
 

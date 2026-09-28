@@ -269,3 +269,41 @@
 /* -------------------------------------------------------------------------- */
 
 /* (v1.3.6) The research responsive rules were removed with the Research layer. */
+
+/* v1.7.4: paused-run panel (Pause / Edit / Resume). */
+.paused-run-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #d8d8d8);
+  border-radius: 10px;
+  background: var(--surface-muted, #f7f7f8);
+}
+
+.paused-run-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.paused-draft-editor {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #d8d8d8);
+  background: var(--surface, #fff);
+  color: inherit;
+}
+
+.paused-run-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

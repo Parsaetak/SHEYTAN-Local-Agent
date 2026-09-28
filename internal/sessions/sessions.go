@@ -1050,3 +1050,30 @@ func (s *Store) SetModel(id, model string) error {
 	sess.UpdatedAt = time.Now().UTC()
 	return s.saveLocked(sess)
 }
+
+// EditLastUserMessage (v1.7.4) replaces the content of the LAST user
+// message in place — the single authoritative transcript mutation for the
+// Pause/Edit/Resume flow. The store lock serializes it against every other
+// session mutation; the message is REPLACED, never duplicated, so a
+// resumed run can never produce a double user turn.
+func (s *Store) EditLastUserMessage(id, content string) (*Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.loadIndexLocked()
+
+	sess, err := s.fetchLocked(id)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := len(sess.Messages) - 1; i >= 0; i-- {
+		if sess.Messages[i].Role == "user" {
+			sess.Messages[i].Content = content
+			sess.UpdatedAt = time.Now().UTC()
+			return sess, s.saveLocked(sess)
+		}
+	}
+
+	return nil, fmt.Errorf("session %s has no user message to edit", id)
+}

@@ -16,6 +16,7 @@ import ComposerControls from "./ComposerControls";
 import { DownloadProgressPanel } from "./DownloadProgress";
 import { MaintenanceBanner } from "./MaintenanceBanner";
 import { initializeAgent } from "./agent-init";
+import { isPausedPhase } from "./run-phase";
 import MessageStream, { AttachmentChip } from "./MessageStream";
 import ActivityStream from "./ActivityStream";
 import HistoryPicker from "./HistoryPicker";
@@ -131,6 +132,27 @@ function AgentBody() {
   const error = useRuntimeStore((state) => state.error);
   const running = useRuntimeStore((state) => state.running);
   const engine = useRuntimeStore((state) => state.engine);
+
+  // v1.7.4 run control: the authoritative pause state machine phase, the
+  // accepted partial draft and the checkpoint revision — all strictly
+  // backend-derived (run_snapshot / status Detail), never local truth.
+  const runPhase = useRuntimeStore((state) => state.runPhase);
+  const pausedDraft = useRuntimeStore((state) => state.pausedDraft);
+  const pauseRun = useRuntimeStore((state) => state.pauseRun);
+  const resumeRun = useRuntimeStore((state) => state.resumeRun);
+  const editRun = useRuntimeStore((state) => state.editRun);
+  const composerPaused = isPausedPhase(runPhase);
+
+  // Local edit buffer for the paused partial answer — synced from the
+  // backend-derived draft every time the run enters PAUSED (reconnect
+  // included), never while the run is live.
+  const [draftEdit, setDraftEdit] = useState("");
+
+  useEffect(() => {
+    if (composerPaused) {
+      setDraftEdit(pausedDraft ?? "");
+    }
+  }, [composerPaused, pausedDraft]);
 
   // v1.5.0 MODEL-FIRST: a fresh install with no selected model. The
   // composer gates on this honest backend signal and the Model Selector
@@ -266,6 +288,36 @@ function AgentBody() {
     event.preventDefault();
 
     const value = message.trim();
+
+    // v1.7.4 PAUSED: the composer edits the paused run — submitting
+    // applies the edited user prompt (and any draft edit) and resumes the
+    // SAME run. It never starts a second run over a parked one.
+    if (composerPaused) {
+      event.preventDefault();
+
+      if (draftEdit.trim() !== (pausedDraft ?? "")) {
+        const ok = await editRun({
+          draft: draftEdit,
+          message: value || undefined,
+        });
+
+        if (!ok) {
+          // Stale revision — the next run_snapshot re-syncs the paused
+          // state; nothing is resumed from outdated data.
+          return;
+        }
+      } else if (value) {
+        const ok = await editRun({ message: value });
+
+        if (!ok) {
+          return;
+        }
+      }
+
+      setMessage("");
+      await resumeRun();
+      return;
+    }
 
     if (!value || running) {
       return;
@@ -997,7 +1049,7 @@ function AgentBody() {
                     ? "Message SHEYTAN..."
                     : "Describe what SHEYTAN should forge..."
             }
-            disabled={!activeSessionId || running || selectionRequired}
+            disabled={!activeSessionId || (running && !composerPaused) || selectionRequired}
             rows={1}
             onKeyDown={(event) => {
               // v1.2.0: Enter = send, Shift+Enter = newline. Ctrl/Cmd+Enter
@@ -1011,6 +1063,41 @@ function AgentBody() {
             }}
             onPaste={handlePaste}
           />
+
+          {/* v1.7.4 PAUSED PANEL: the checkpointed partial answer is
+              editable (replace or trim) and the composer above edits the
+              paused user prompt. Everything here acts on the SAME runId +
+              revision — the backend rejects stale revisions with the
+              current value, and the next run_snapshot re-syncs. */}
+          {composerPaused ? (
+            <div className="paused-run-panel">
+              <div className="paused-run-title">
+                Paused — edit the partial answer, then resume
+              </div>
+
+              <textarea
+                className="paused-draft-editor"
+                value={draftEdit}
+                rows={4}
+                onChange={(event) => setDraftEdit(event.target.value)}
+                placeholder="The partial answer written before the pause…"
+              />
+
+              <div className="paused-run-actions">
+                <button type="submit" className="send-button">
+                  Update &amp; Resume
+                </button>
+
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => void resumeRun()}
+                >
+                  Resume without changes
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="composer-footer">
             <div className="composer-footer-left">
@@ -1056,7 +1143,22 @@ function AgentBody() {
                 </button>
               ) : null}
 
-              {running ? (
+              {/* v1.7.4: PAUSE while the run is live — the orchestrator stops
+                  at the next safe boundary; PAUSING/RESUMING keep the button
+                  disabled so conflicting mutations are never double-sent. */}
+              {running && !composerPaused ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => void pauseRun()}
+                  disabled={runPhase === "pausing" || runPhase === "resuming"}
+                  title="Pause the run at the next safe boundary — the partial answer is checkpointed"
+                >
+                  {runPhase === "pausing" ? "Pausing…" : "Pause"}
+                </button>
+              ) : null}
+
+              {running && !composerPaused ? (
                 <button
                   type="button"
                   className="stop-button"
@@ -1064,7 +1166,31 @@ function AgentBody() {
                 >
                   Stop
                 </button>
-              ) : (
+              ) : null}
+
+              {composerPaused ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => void resumeRun()}
+                  title="Resume the paused run from its checkpoint"
+                >
+                  Resume
+                </button>
+              ) : null}
+
+              {composerPaused ? (
+                <button
+                  type="button"
+                  className="stop-button"
+                  onClick={() => void abort()}
+                  title="Stop the paused run and discard its draft"
+                >
+                  Stop
+                </button>
+              ) : null}
+
+              {!running ? (
                 <button
                   type="submit"
                   className="send-button"
@@ -1072,7 +1198,7 @@ function AgentBody() {
                 >
                   {chatMode ? "Send" : "Forge →"}
                 </button>
-              )}
+              ) : null}
             </div>
           </div>
         </div>

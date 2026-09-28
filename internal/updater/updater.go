@@ -139,6 +139,35 @@ func InstalledEngineTag(cfg *config.Config) string {
         return c.Version
 }
 
+// EffectiveInstalledEngineTag returns the llama.cpp build tag the "update
+// required" decision points must compare against.
+//
+// v1.7.4 (P0 #3): the recorded tag (installed.json
+// components.llamaServer.meta.engineTag, via InstalledEngineTag) is
+// preferred; when it is absent — a legacy install, or a state file whose
+// identity was lost — the committed install manifest beside the binary
+// (engine-install.json, rewritten at every install commit by
+// recordInstallManifest) is the honest fallback, because it describes the
+// package that is ACTUALLY on disk. Returns "" when neither source knows
+// the tag; callers keep their own DefaultEngineTag fallback.
+func EffectiveInstalledEngineTag(cfg *config.Config) string {
+        if tag := InstalledEngineTag(cfg); tag != "" {
+                return tag
+        }
+        return ManifestEngineTag(cfg)
+}
+
+// ManifestEngineTag returns the tag recorded in the engine install manifest
+// beside the managed binary (engine-install.json), or "" when the manifest
+// is missing, unreadable, or carries no tag.
+func ManifestEngineTag(cfg *config.Config) string {
+        m, ok := ReadInstallManifest(cfg)
+        if !ok || m.Tag == "" {
+                return ""
+        }
+        return m.Tag
+}
+
 // RecordEngineTag persists the engine tag (and install time) into
 // installed.json, creating the file when necessary. Failures are logged and
 // swallowed — bookkeeping must never break the app.
@@ -146,6 +175,10 @@ func RecordEngineTag(cfg *config.Config, tag string) {
         st := stateFile{Components: map[string]component{}}
         if data, err := os.ReadFile(cfg.StatePath()); err == nil {
                 _ = json.Unmarshal(data, &st)
+        } else if !os.IsNotExist(err) {
+                // v1.7.4 (P0 #3, D): a state file that cannot be READ is exactly how
+                // the recorded identity silently vanished — surface it.
+                logging.Default().Warn("updater", "engine tag record: read %s: %v", cfg.StatePath(), err)
         }
         if st.Components == nil {
                 st.Components = map[string]component{}
@@ -159,14 +192,29 @@ func RecordEngineTag(cfg *config.Config, tag string) {
                 c.Meta = map[string]string{}
         }
         c.Meta["engineTag"] = tag
+        // v1.7.4 (P0 #3): also record WHERE the committed binary lives — the
+        // installer's identity merge needs concrete path evidence to tell an
+        // unchanged engine from a genuinely replaced one.
+        c.Meta["path"] = EngineBinaryPath(cfg)
         c.Meta["updatedAt"] = time.Now().UTC().Format(time.RFC3339)
         st.Components["llamaServer"] = c
         out, err := json.MarshalIndent(st, "", "  ")
         if err != nil {
+                // v1.7.4 (P0 #3, D): never silent — bookkeeping failures must reach
+                // the log or the tag loss is undiagnosable.
+                logging.Default().Warn("updater", "engine tag record: encode %s: %v", cfg.StatePath(), err)
                 return
         }
-        _ = os.MkdirAll(cfg.DataDir, 0o755)
-        _ = os.WriteFile(cfg.StatePath(), out, 0o644)
+        if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+                logging.Default().Warn("updater", "engine tag record: create %s: %v", cfg.DataDir, err)
+                return
+        }
+        if err := os.WriteFile(cfg.StatePath(), out, 0o644); err != nil {
+                // v1.7.4 (P0 #3, D): the write failure used to be swallowed whole —
+                // the tag then never landed in the state file and every boot
+                // re-decided "update required" from the bundled default tag.
+                logging.Default().Warn("updater", "engine tag record: write %s: %v", cfg.StatePath(), err)
+        }
 }
 
 // MarkChecked records the last update-check time in the config (persisted by
@@ -589,7 +637,11 @@ func checkAndApply(ctx context.Context, cfg *config.Config, eng Engine, force bo
         if err != nil {
                 return "check failed: " + err.Error(), false, err
         }
-        current := InstalledEngineTag(cfg)
+        // v1.7.4 (P0 #3, B): compare against the EFFECTIVE installed tag — the
+        // recorded tag, or the committed manifest beside the binary when the
+        // state file lost it. The old plain InstalledEngineTag read made every
+        // identity-less boot re-download the engine.
+        current := EffectiveInstalledEngineTag(cfg)
         if current == "" {
                 current = DefaultEngineTag
         }

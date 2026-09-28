@@ -80,7 +80,7 @@ type runLive struct {
 
 	mu              sync.Mutex
 	running         bool
-	phase           string // "preparing" | "thinking" | "generating" | terminal outcome
+	phase           string // "preparing" | "thinking" | "generating" | "pausing" | "paused" | "resuming" | terminal outcome
 	latestResponse  string // cumulative snapshot (bounded)
 	latestReasoning string // cumulative snapshot (bounded)
 	latestStatus    string
@@ -92,6 +92,16 @@ type runLive struct {
 	recent          []agent.Activity
 	persistedReply  string // terminal reply snapshot (bounded) for late WS replay
 	persistedReason string
+
+	// v1.7.4 run-control state machine: RUNNING → PAUSING → PAUSED →
+	// RESUMING → RUNNING → terminal. revision is monotonic per run and
+	// bumped by every accepted edit; stale-revision mutations are
+	// rejected with the current value so a client can resync. The
+	// paused draft is retained here (bounded) so a reconnecting client
+	// re-renders the partial answer without re-reading the checkpoint.
+	revision    int64
+	pausedDraft string
+	pausedWhy   string
 }
 
 func newRunLive(runID, sessionID string, startedAt time.Time) *runLive {
@@ -126,6 +136,14 @@ func (l *runLive) observe(a agent.Activity) {
 		l.recent = make([]agent.Activity, 0, recentEventCap)
 	}
 
+	// v1.7.4: never retain a caller-owned map by reference — the
+	// publisher goroutine may still hold and mutate it while a WS
+	// reader marshals the retained ring/snapshot. Clone map details on
+	// the way in; the retained ring stays iteration-safe.
+	if m, ok := a.Detail.(map[string]any); ok {
+		a.Detail = cloneStringAnyMap(m)
+	}
+
 	l.recent = append(l.recent, a)
 	if len(l.recent) > recentEventCap {
 		l.recent = l.recent[len(l.recent)-recentEventCap:]
@@ -151,8 +169,11 @@ func (l *runLive) observe(a agent.Activity) {
 		// snapshot — a reconnecting client restores the task view
 		// (goal/plan/step/files/tests/verification) along with the
 		// cumulative text, without the run restarting.
+		// v1.7.4: stored as a PRIVATE clone — snapshot() hands the
+		// map to a concurrent JSON marshaler; sharing the caller's
+		// instance was a fatal concurrent map read/write hazard.
 		if m, ok := a.Detail.(map[string]any); ok {
-			l.latestTask = m
+			l.latestTask = cloneStringAnyMap(m)
 		} else if a.Detail != nil {
 			// Non-map detail (e.g. a typed struct in-process):
 			// re-marshal through JSON once, bounded.
@@ -260,6 +281,13 @@ type runSnapshot struct {
 	// the run's `task` activities — reconnect recovery carries the whole
 	// working state, not just the streamed text.
 	Task map[string]any `json:"task,omitempty"`
+
+	// v1.7.4 run-control surface: the monotonic checkpoint revision and
+	// the accepted partial answer while the run is paused. A reconnect
+	// during PAUSED re-renders the draft and resumes against the SAME
+	// revision — stale clients are rejected server-side.
+	Revision    int64  `json:"revision"`
+	PausedDraft string `json:"pausedDraft,omitempty"`
 }
 
 // snapshot copies the authoritative state for one wire frame. The returned
@@ -283,7 +311,9 @@ func (l *runLive) snapshot() runSnapshot {
 		TerminalOutcome: l.terminalOutcome,
 		Persisted:       l.persisted,
 		Error:           l.errMsg,
-		Task:            l.latestTask,
+		Revision:        l.revision,
+		PausedDraft:     l.pausedDraft,
+		Task:            cloneStringAnyMap(l.latestTask),
 	}
 
 	// A finished run replays the PERSISTED reply (authoritative final
@@ -305,4 +335,171 @@ func capSnapshot(s string) string {
 	// Keep the TAIL: the newest bytes are the live edge of a cumulative
 	// snapshot; the head is history already persisted per-milestone.
 	return "…[truncated]…" + s[len(s)-snapshotCapBytes:]
+}
+
+// ---------------------------------------------------------------------------
+// v1.7.4 run-control state machine
+//
+// RUNNING → PAUSING → PAUSED → RESUMING → RUNNING → DONE/ERROR/ABORTED
+//
+// The ONE authoritative per-run state (runLive) owns the transitions; the
+// HTTP handlers and the run goroutine call these methods and nothing else
+// mutates the pause fields. Transitions are idempotent and honestly
+// ordered: the durable checkpoint is persisted by the CALLER before
+// confirmPaused is invoked, so the phase that promises durability is only
+// ever published after the promise is kept.
+// ---------------------------------------------------------------------------
+
+// requestPause marks a running run as PAUSE_REQUESTED ("pausing"). It is
+// idempotent: a duplicate request (double-click, retry, reconnect) is a
+// no-op that still returns the current state. Terminal and already-paused
+// runs reject the request so a stale client cannot resurrect a finished
+// run.
+func (l *runLive) requestPause() (int64, string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.terminalOutcome != "" || l.phase == "paused" || l.phase == "pausing" {
+		return l.revision, l.phase, false
+	}
+
+	l.phase = "pausing"
+	return l.revision, l.phase, true
+}
+
+// confirmPaused records the PAUSED state. Call it ONLY after the durable
+// checkpoint is on disk. Not terminal: the run stays registered, its hub
+// stays open, and a reconnect replays the paused draft.
+func (l *runLive) confirmPaused(draft, why string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.terminalOutcome != "" {
+		return
+	}
+
+	l.phase = "paused"
+	l.pausedDraft = capSnapshot(draft)
+	l.pausedWhy = why
+}
+
+// requestResume moves a paused run to RESUMING. Only a paused run resumes;
+// the caller supplies the revision it acted on and a stale request is
+// rejected with the current revision (actionable conflict, never silence).
+func (l *runLive) requestResume(revision int64) (int64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.terminalOutcome != "" || l.phase != "paused" || revision != l.revision {
+		return l.revision, false
+	}
+
+	l.phase = "resuming"
+	return l.revision, true
+}
+
+// confirmResumed returns a resumed run to the live generating state
+// (deltas re-derive the exact streaming phase).
+func (l *runLive) confirmResumed() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.terminalOutcome != "" || l.phase != "resuming" {
+		return
+	}
+
+	l.phase = "generating"
+	l.pausedDraft = ""
+	l.pausedWhy = ""
+}
+
+// isPaused reports the authoritative paused/pausing state.
+func (l *runLive) isPaused() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.phase == "paused" || l.phase == "pausing"
+}
+
+// isPausedSettled reports a CONFIRMED paused run (the checkpoint exists).
+func (l *runLive) isPausedSettled() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.phase == "paused"
+}
+
+// currentRevision reports the checkpoint revision (0 while running).
+func (l *runLive) currentRevision() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.revision
+}
+
+// bumpRevision advances the checkpoint revision after an accepted edit and
+// returns the new value. Editing is only valid while paused.
+func (l *runLive) bumpRevision(revision int64) (int64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.terminalOutcome != "" || l.phase != "paused" || revision != l.revision {
+		return l.revision, false
+	}
+
+	l.revision++
+	return l.revision, true
+}
+
+// cloneStringAnyMap returns a shallow-value deep copy of a JSON-shaped
+// map: keys/values are copied into a fresh map so the returned instance
+// shares no mutable structure with the caller. Values are JSON-shaped
+// (strings, numbers, bools, nested maps/slices); nested containers are
+// cloned recursively — a run snapshot may be marshaled on ANY goroutine
+// while the publisher still mutates the source map.
+func cloneStringAnyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = cloneJSONValue(v)
+	}
+	return out
+}
+
+func cloneJSONValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return cloneStringAnyMap(t)
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = cloneJSONValue(e)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// phaseLocked reports the current phase (diagnostics + conflict messages).
+func (l *runLive) phaseLocked() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.phase
+}
+
+// confirmEdited publishes an accepted EDIT on the authoritative state
+// AFTER the checkpoint is durable: the draft shown to reconnecting clients
+// and the revision advance together, atomically under the state lock.
+func (l *runLive) confirmEdited(draft string, revision int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.terminalOutcome != "" {
+		return
+	}
+
+	l.phase = "paused"
+	l.pausedDraft = capSnapshot(draft)
+	l.revision = revision
 }

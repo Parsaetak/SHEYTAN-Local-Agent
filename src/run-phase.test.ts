@@ -120,3 +120,104 @@ test("every phase has a user-facing label", () => {
     assert.ok(PHASE_LABELS[phase].length > 0, `label missing for ${phase}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// v1.7.4 run control — Pause / Edit / Resume sequences.
+//
+// The machine must express the ONE authoritative backend contract:
+// RUNNING → PAUSING → PAUSED → RESUMING → RUNNING → terminal, with
+// idempotent duplicates and no illegal transitions from idle/terminal.
+// ---------------------------------------------------------------------------
+
+test("pause_requested moves live phases to pausing, never idle/terminal", () => {
+  for (const phase of ["preparing", "thinking", "generating", "finalising"] as RunPhase[]) {
+    assert.equal(nextPhase(phase, "pause_requested"), "pausing");
+  }
+  // A pause of an idle or terminal run is a no-op (double-click, stale
+  // client) — the UI never fabricates a pausing state.
+  assert.equal(nextPhase("idle", "pause_requested"), "idle");
+  assert.equal(nextPhase("complete", "pause_requested"), "complete");
+  assert.equal(nextPhase("error", "pause_requested"), "error");
+  assert.equal(nextPhase("aborted", "pause_requested"), "aborted");
+});
+
+test("paused confirms from any live or pausing phase", () => {
+  for (const phase of ["preparing", "thinking", "generating", "finalising", "pausing"] as RunPhase[]) {
+    assert.equal(nextPhase(phase, "paused"), "paused");
+  }
+  assert.equal(nextPhase("idle", "paused"), "idle");
+});
+
+test("resume runs only from paused", () => {
+  assert.equal(nextPhase("paused", "resume_requested"), "resuming");
+  assert.equal(nextPhase("generating", "resume_requested"), "generating");
+  assert.equal(nextPhase("idle", "resume_requested"), "idle");
+});
+
+test("resumed returns to generating; deltas keep it there", () => {
+  assert.equal(nextPhase("resuming", "resumed"), "generating");
+  assert.equal(nextPhase("paused", "resumed"), "generating");
+  assert.equal(nextPhase("resuming", "response_delta"), "generating");
+  assert.equal(nextPhase("resuming", "reasoning_delta"), "thinking");
+});
+
+test("double pause is a no-op; double resume is a no-op", () => {
+  // double pause
+  const afterFirst = nextPhase("generating", "pause_requested");
+  assert.equal(nextPhase(afterFirst, "pause_requested"), "pausing");
+  // double resume
+  const paused = nextPhase(afterFirst, "paused");
+  assert.equal(nextPhase(paused, "resume_requested"), "resuming");
+  assert.equal(nextPhase("resuming", "resume_requested"), "resuming");
+});
+
+test("start → pause → reconnect → edit → resume → done sequence", () => {
+  let phase: RunPhase = "idle";
+  phase = nextPhase(phase, "run_started"); // preparing
+  phase = nextPhase(phase, "response_delta"); // generating
+  phase = nextPhase(phase, "pause_requested"); // pausing
+  assert.equal(phase, "pausing");
+  // reconnect: the run_snapshot re-renders the paused state
+  phase = nextPhase(phase, "paused");
+  assert.equal(phase, "paused");
+  // resume after the edit
+  phase = nextPhase(phase, "resume_requested");
+  assert.equal(phase, "resuming");
+  phase = nextPhase(phase, "response_delta");
+  assert.equal(phase, "generating");
+  phase = nextPhase(phase, "done");
+  assert.equal(phase, "finalising");
+  phase = nextPhase(phase, "history_confirmed");
+  assert.equal(phase, "complete");
+});
+
+test("start → pause → stop sequence", () => {
+  let phase: RunPhase = "idle";
+  phase = nextPhase(phase, "run_started");
+  phase = nextPhase(phase, "pause_requested");
+  phase = nextPhase(phase, "paused");
+  // Stop after pause settles the run.
+  phase = nextPhase(phase, "aborted");
+  assert.equal(phase, "aborted");
+});
+
+test("a pause racing the resume window still settles paused", () => {
+  // The backend may confirm a NEW pause while the frontend is still in
+  // resuming (the user paused between resume and the first delta) — the
+  // machine follows the authoritative backend event.
+  const phase = nextPhase("resuming", "paused");
+  assert.equal(phase, "paused");
+});
+
+test("paused phase classification helpers", () => {
+  assert.equal(isLivePhase("paused"), false);
+  assert.equal(isLivePhase("pausing"), true);
+  assert.equal(isLivePhase("resuming"), true);
+  assert.equal(isTerminalPhase("paused"), false);
+});
+
+test("phase labels cover the run-control phases", () => {
+  assert.equal(PHASE_LABELS.pausing, "Pausing…");
+  assert.equal(PHASE_LABELS.paused, "Paused");
+  assert.equal(PHASE_LABELS.resuming, "Resuming…");
+});

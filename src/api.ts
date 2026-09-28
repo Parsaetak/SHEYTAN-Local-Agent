@@ -681,6 +681,24 @@ export interface AbortResponse {
   status?: string;
 }
 
+// v1.7.4 run-control contract responses (pause / edit / resume).
+export interface RunControlResponse {
+  ok: boolean;
+  runId: string;
+  revision: number;
+  phase: string;
+}
+
+// One recoverable paused run (restart recovery surface, GET /api/run/paused).
+export interface PausedRunSummary {
+  runId: string;
+  sessionId: string;
+  revision: number;
+  userMessage: string;
+  assistantDraft: string;
+  updatedAt?: string;
+}
+
 export type ActivityEvent = {
   id?: string;
   type: string;
@@ -1924,6 +1942,47 @@ export const api = {
         sessionId,
       }),
     });
+  },
+
+  // v1.7.4 — the backend-neutral Pause / Edit / Resume contract over the
+  // EXISTING /api/run authority. One runId, one revision, idempotent
+  // mutations; stale revisions are rejected with the current value.
+  pauseRun(sessionId: string, runId: string): Promise<RunControlResponse> {
+    return request<RunControlResponse>("/run/pause", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, runId }),
+    });
+  },
+
+  resumeRun(
+    sessionId: string,
+    runId: string,
+    revision: number,
+  ): Promise<RunControlResponse> {
+    return request<RunControlResponse>("/run/resume", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, runId, revision }),
+    });
+  },
+
+  editRun(payload: {
+    sessionId: string;
+    runId: string;
+    revision: number;
+    message?: string;
+    draft?: string;
+  }): Promise<RunControlResponse> {
+    return request<RunControlResponse>("/run/edit", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  pausedRuns(sessionId: string): Promise<PausedRunSummary[]> {
+    return request<PausedRunSummary[]>(
+      `/run/paused?sessionId=${encodeURIComponent(sessionId)}`,
+      { method: "GET" },
+    );
   },
 
   updateSession(

@@ -437,8 +437,29 @@ func (s *LlamaServer) ensureBinary(cfg *config.Config) (string, error) {
         }
 
         if _, err := os.Stat(binPath); err == nil {
+                // v1.7.4 (P0 #3, H2): the blind re-stamp recorded the BUNDLED
+                // default tag whenever the state file carried none — even when
+                // the binary beside this very manifest was a NEWER committed
+                // build — poisoning the identity every "update required"
+                // decision reads. The install manifest next to the binary is
+                // the honest identity; the bundled default is the last resort
+                // for a binary with no manifest at all.
                 if updater.InstalledEngineTag(cfg) == "" {
-                        updater.RecordEngineTag(cfg, updater.DefaultEngineTag)
+                        tag := updater.ManifestEngineTag(cfg)
+
+                        if tag == "" {
+                                tag = updater.DefaultEngineTag
+
+                                logging.Default().Warn("engine",
+                                        "no engine tag recorded and no install manifest beside %s — recording the bundled default tag %s",
+                                        binPath, tag)
+                        } else {
+                                logging.Default().Info("engine",
+                                        "no engine tag recorded — recording tag %s from the install manifest beside the engine",
+                                        tag)
+                        }
+
+                        updater.RecordEngineTag(cfg, tag)
                 }
 
                 return binPath, nil
@@ -2119,7 +2140,9 @@ func (s *LlamaServer) updateEngineForModel(cfg *config.Config) bool {
                 return false
         }
 
-        current := updater.InstalledEngineTag(cfg)
+        // v1.7.4 (P0 #3, B): the EFFECTIVE installed tag — the recorded tag, or
+        // the committed manifest beside the binary when the state file lost it.
+        current := updater.EffectiveInstalledEngineTag(cfg)
 
         if current == "" {
                 current = updater.DefaultEngineTag

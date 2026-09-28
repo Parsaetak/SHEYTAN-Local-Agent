@@ -384,6 +384,12 @@ func migrateFile(src, dst, rel string, report *MigrationReport) (bool, error) {
         return false, nil
 }
 
+// renameForTest is the commit seam of copyVerified (v1.7.4): tests
+// substitute it to simulate platform-specific rename failures — Windows
+// denies renaming onto a path another process holds open ("Access is
+// denied") — without adding retries or sleeps to production code.
+var renameForTest = os.Rename
+
 // copyVerified copies src to dst and verifies the copy by size AND
 // SHA-256 digest. The destination is written to a temp file and renamed
 // into place, so an interrupted copy never leaves a half-written target.
@@ -438,9 +444,16 @@ func copyVerified(src, dst string) error {
                 return fmt.Errorf("copy %s: verification failed (sha256 %s != %s)", dst, dstHash, srcHash)
         }
 
-        if err := os.Rename(tmp, dst); err != nil {
+        if err := renameForTest(tmp, dst); err != nil { // commit seam (v1.7.4, see renameForTest)
                 _ = os.Remove(tmp)
-                return err
+
+                // v1.7.4: classify the conflict honestly. The temp file is
+                // gone and the destination is untouched — on Windows this is
+                // the "destination held open by another process" shape (the
+                // canonical log sinks are O_APPEND handles held for the
+                // process lifetime), and the fold simply retries on the next
+                // start. Never delete or truncate the destination here.
+                return fmt.Errorf("commit %s: rename: %w (destination may be held open — will retry on next start)", dst, err)
         }
         return nil
 }

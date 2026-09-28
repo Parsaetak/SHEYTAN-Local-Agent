@@ -32,11 +32,32 @@ const (
 	jsonlMaxBytes  = 10 * 1024 * 1024
 	jsonlKeepFiles = 3
 	recentLinesCap = 512
+
+	// v1.7.4: the bootstrap sink keeps at most this many pre-canonical
+	// lines in memory (bounded ring, same discipline as recentLinesCap)
+	// before they are replayed into the canonical manager.
+	bootstrapBufferCap = 256
 )
+
+// bootstrapEntry is one pre-canonical log line held by the bootstrap
+// sink (v1.7.4). Level and category are stored structurally so
+// ReplayInto can re-emit the line through the canonical manager's real
+// Info/Warn/Error pipeline instead of parsing formatted text back apart.
+type bootstrapEntry struct {
+	Level    string
+	Category string
+	Message  string
+}
 
 // Manager owns all log sinks for one data directory.
 type Manager struct {
 	dir string
+
+	// v1.7.4: bootstrap mode — every line goes to stderr plus a bounded
+	// in-memory buffer and NO file is created or opened. A distinct
+	// field (not an overloaded dir=="") keeps the true no-op manager
+	// disabled while the bootstrap manager stays enabled.
+	bootstrap bool
 
 	mu    sync.Mutex
 	appF  *os.File
@@ -47,6 +68,8 @@ type Manager struct {
 	llmN  int64
 
 	recent []string // ring of recent app log lines for the UI
+
+	buf []bootstrapEntry // v1.7.4: bounded pre-canonical ring (bootstrap mode only)
 }
 
 // ToolCallRecord is one structured tool-call entry (tools.jsonl).
@@ -102,6 +125,21 @@ func Default() *Manager {
 
 // noop is a Manager whose directory is empty; every write is skipped.
 var noop = &Manager{}
+
+// NewBootstrap returns the pre-logger manager (v1.7.4). Every line goes
+// to stderr AND a bounded in-memory buffer; no file is ever created or
+// opened — not even the canonical sink files.
+//
+// Boot needs this because the runtime-data migrations must be able to
+// create or rename the very sink files (app.log, tools.jsonl, llm.jsonl)
+// a canonical manager would hold open for the whole process lifetime —
+// on Windows a rename onto an open path fails with "Access is denied",
+// which made the legacy-root migration fail on every v1.7.3 boot.
+// Install it with SetDefault BEFORE the migrations run, then ReplayInto
+// the canonical manager once logging.New has opened the real sinks.
+func NewBootstrap() *Manager {
+	return &Manager{bootstrap: true}
+}
 
 // New creates (or opens) the log directory and its sinks.
 func New(dir string) (*Manager, error) {
@@ -172,8 +210,10 @@ func (m *Manager) appPath() string { return filepath.Join(m.dir, "app.log") }
 // Dir returns the log directory ("" for the no-op manager).
 func (m *Manager) Dir() string { return m.dir }
 
-// Enabled reports whether this manager actually writes.
-func (m *Manager) Enabled() bool { return m.dir != "" }
+// Enabled reports whether this manager actually writes. The bootstrap
+// manager writes to stderr + memory even though it owns no directory;
+// only the true no-op manager (no directory, not bootstrap) is disabled.
+func (m *Manager) Enabled() bool { return m.dir != "" || m.bootstrap }
 
 // --- app.log ---
 
@@ -205,6 +245,17 @@ func (m *Manager) log(level, category, format string, args ...interface{}) {
 		message)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// v1.7.4: bootstrap sink — stderr + bounded memory buffer, no files.
+	if m.bootstrap {
+		fmt.Fprintln(os.Stderr, line)
+		if len(m.buf) >= bootstrapBufferCap {
+			m.buf = m.buf[1:]
+		}
+		m.buf = append(m.buf, bootstrapEntry{Level: level, Category: category, Message: message})
+		return
+	}
+
 	if m.appF == nil {
 		return
 	}
@@ -276,6 +327,36 @@ func (m *Manager) Warn(category, format string, args ...interface{}) {
 }
 func (m *Manager) Error(category, format string, args ...interface{}) {
 	m.log("ERROR", category, format, args...)
+}
+
+// ReplayInto re-emits every line the bootstrap sink buffered through dst
+// (v1.7.4). Level, category and message are preserved; timestamps are
+// re-stamped by dst's normal pipeline at replay time. The buffer is
+// drained, so a second call writes nothing — the replay is exactly once.
+// A nil dst (e.g. the canonical manager failed to open) or dst == m is
+// ignored; the lines remain on stderr either way.
+func (m *Manager) ReplayInto(dst *Manager) {
+	if m == nil || dst == nil || dst == m {
+		return
+	}
+
+	m.mu.Lock()
+	buf := m.buf
+	m.buf = nil
+	m.mu.Unlock()
+
+	for _, e := range buf {
+		switch e.Level {
+		case "WARN":
+			dst.Warn(e.Category, "%s", e.Message)
+		case "ERROR":
+			dst.Error(e.Category, "%s", e.Message)
+		case "DEBUG":
+			dst.Debug(e.Category, "%s", e.Message)
+		default:
+			dst.Info(e.Category, "%s", e.Message)
+		}
+	}
 }
 
 // Recent returns up to n most recent app log lines (for the UI Logs tab).
@@ -413,7 +494,9 @@ func SetVersion(v string) { crashVersion = v }
 // Crash writes a recovered panic (with stack) to logs/crashes/crash-<ts>.log
 // and also records it in app.log. Returns the crash file path.
 func (m *Manager) Crash(r interface{}, stack []byte) string {
-	if !m.Enabled() {
+	// v1.7.4: the bootstrap sink owns no directory — a crash report
+	// must never be written to a relative fallback path.
+	if !m.Enabled() || m.bootstrap {
 		return ""
 	}
 	dir := filepath.Join(m.dir, "crashes")

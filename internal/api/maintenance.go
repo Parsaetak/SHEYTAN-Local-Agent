@@ -285,7 +285,11 @@ func (s *Server) runStartupMaintenance(g *maintenanceGate) {
                 return
         }
 
-        current := updater.InstalledEngineTag(&mutable)
+        // v1.7.4 (P0 #3, B): the EFFECTIVE installed tag — the recorded tag, or
+        // the committed engine-install.json manifest beside the binary when the
+        // state file carries none. The plain state-file read used to fall back
+        // to the bundled default tag here and re-download the engine every boot.
+        current := updater.EffectiveInstalledEngineTag(&mutable)
         if current == "" {
                 current = updater.DefaultEngineTag
         }
