@@ -455,7 +455,8 @@ func (s *Server) handleRunPause(w http.ResponseWriter, r *http.Request) {
 // a new monotonic revision; a stale revision is rejected with the current
 // value. The discarded draft is never persisted as an assistant message.
 //
-// v1.7.5 TRANSACTIONAL CONSISTENCY (§10): the accepted revision does not
+//	v1.7.5 TRANSACTIONAL CONSISTENCY (§10): the accepted revision does not
+//
 // become authoritative until ALL durable state for the edit is safe. The
 // handler validates the CAS revision WITHOUT mutating, performs the
 // durable work (transcript replace + checkpoint commit), rolls the
@@ -466,6 +467,16 @@ func (s *Server) handleRunPause(w http.ResponseWriter, r *http.Request) {
 // revisions. Field presence, not emptiness: Draft is a *string so an
 // intentionally EMPTY replacement is expressible ("" is a value, not an
 // omission).
+//
+// v1.7.6 DURABLE RECOVERY (§7): an ordered rollback covers returned errors,
+// but NOT a process crash between two persistence stages. The edit is
+// therefore wrapped in a small durable journal (edittx.go,
+// <DataDir>/runs/paused/<runId>.edittx.json): prepared BEFORE any mutation
+// (a journal-write failure aborts the edit with NOTHING changed), advanced
+// as the durable stages land, and deleted after live publication. Startup
+// recovery (RecoverEditTransactions) converges any interrupted journal to
+// ONE coherent revision from the ACTUAL durable evidence — the transcript
+// and the checkpoint remain the authorities; the journal is forensic only.
 func (s *Server) handleRunEdit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, errMethodNotAllowed())
@@ -543,6 +554,43 @@ func (s *Server) handleRunEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// v1.7.6: prepare the durable recovery journal BEFORE any mutation.
+	// It records the bounded pre-/post-edit identities so startup recovery
+	// can converge either way without re-deriving anything. Fail closed:
+	// without a journal this edit must not start.
+	prevUser := rec.OriginalUserMessage
+	if rec.EditedUserMessage != "" {
+		prevUser = rec.EditedUserMessage
+	}
+
+	tx := &editTxRecord{
+		Version:               editTxSchemaVer,
+		RunID:                 body.RunID,
+		SessionID:             body.SessionID,
+		Phase:                 editTxPrepared,
+		OldRevision:           body.Revision,
+		NewRevision:           body.Revision + 1,
+		UserMessageChanged:    body.Message != nil,
+		OldUserMessage:        prevUser,
+		PrevEditedUserMessage: rec.EditedUserMessage,
+		DraftChanged:          body.Draft != nil,
+	}
+
+	if tx.UserMessageChanged {
+		tx.NewUserMessage = *body.Message
+	}
+
+	if tx.DraftChanged {
+		oldDraft := rec.AssistantDraft
+		tx.OldDraft = &oldDraft
+	}
+
+	if err := s.saveEditTx(tx); err != nil {
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf(
+			"paused edit could not prepare its recovery journal: %w — nothing was changed; retry", err))
+		return
+	}
+
 	// The durable work, in rollback-able order: the transcript first (one
 	// in-place replace — never a second copy), then the checkpoint. The
 	// transcript is the session authority; the checkpoint is the
@@ -552,10 +600,22 @@ func (s *Server) handleRunEdit(w http.ResponseWriter, r *http.Request) {
 
 		if _, editErr := s.store.EditLastUserMessage(body.SessionID, *body.Message); editErr != nil {
 			// Nothing else mutated: live revision and checkpoint are
-			// untouched — a clean abort, no reconciliation needed.
+			// untouched — a clean abort, no reconciliation needed. The
+			// journal is removed: this edit never happened.
+			s.deleteEditTx(body.RunID)
 			writeErr(w, http.StatusInternalServerError, fmt.Errorf("edit user message: %w", editErr))
 			return
 		}
+	}
+
+	// Stage note: the journal phase is forensic detail — startup recovery
+	// converges from the ACTUAL durable evidence (transcript position +
+	// checkpoint revision), never from the phase alone, so a failed phase
+	// write cannot make recovery guess.
+	tx.Phase = editTxTranscript
+	if err := s.saveEditTx(tx); err != nil {
+		logging.Default().Warn("run",
+			"edit journal phase update failed (recovery stays evidence-driven): runId=%s: %v", body.RunID, err)
 	}
 
 	if body.Draft != nil {
@@ -577,16 +637,41 @@ func (s *Server) handleRunEdit(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// The journal is removed: this edit never committed. (If the
+		// removal itself failed, the journal is harmless — recovery
+		// finds transcript+checkpoint both at the OLD state and
+		// converges to the old revision idempotently.)
+		s.deleteEditTx(body.RunID)
+
 		// The live state was NEVER mutated: revision still N everywhere the
 		// client can see. The conflict is explicit and actionable.
 		writeErr(w, http.StatusInternalServerError, fmt.Errorf("paused edit not committed: %w (the run stays paused at revision %d — retry)", err, body.Revision))
 		return
 	}
 
+	tx.Phase = editTxCheckpoint
+	if err := s.saveEditTx(tx); err != nil {
+		logging.Default().Warn("run",
+			"edit journal phase update failed (recovery stays evidence-driven): runId=%s: %v", body.RunID, err)
+	}
+
+	// Commit marker: all durable state is at the NEW revision. The marker
+	// itself is tolerant (evidence-driven recovery covers its absence).
+	tx.Phase = editTxCommitted
+	if err := s.saveEditTx(tx); err != nil {
+		logging.Default().Warn("run",
+			"edit journal commit marker failed (recovery stays evidence-driven): runId=%s: %v", body.RunID, err)
+	}
+
 	// Checkpoint durable + transcript consistent — NOW the accepted edit
 	// becomes authoritative on the live state (revision + draft advance
 	// together under the state lock).
 	rs.live.confirmEdited(rec.AssistantDraft, rec.Revision)
+
+	// Journal cleanup: the edit is fully done. A failed cleanup is
+	// harmless — the next boot's recovery finds a coherent NEW state and
+	// removes it idempotently.
+	s.deleteEditTx(body.RunID)
 
 	logging.Default().Info("run", "paused run edited: runId=%s revision=%d", body.RunID, rec.Revision)
 
@@ -742,11 +827,27 @@ func (s *Server) handlePausedRuns(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0)
 
 	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+		if e.IsDir() {
 			continue
 		}
 
-		rec, ok := s.loadPausedRecord(e.Name()[:len(e.Name())-len(".json")])
+		name := e.Name()
+
+		// v1.7.6: edit-transaction journals (.edittx.json), their
+		// quarantined leftovers (.edittx.corrupt.json) and in-flight
+		// temp files are NOT checkpoints — never listed, never
+		// recoverable runs.
+		if strings.HasSuffix(name, editTxSuffix) ||
+			strings.HasSuffix(name, editTxCorruptSuffx) ||
+			strings.HasSuffix(name, ".tmp") {
+			continue
+		}
+
+		if filepath.Ext(name) != ".json" {
+			continue
+		}
+
+		rec, ok := s.loadPausedRecord(name[:len(name)-len(".json")])
 		if !ok {
 			continue
 		}
@@ -786,6 +887,11 @@ func (s *Server) recoverPausedRun(rec *pausedRunRecord) *runState {
 
 	live := newRunLive(rec.RunID, rec.SessionID, rec.CreatedAt)
 	live.confirmPaused(rec.AssistantDraft, "recovered from restart")
+
+	// v1.7.6 (§7/§12): the recovered live state must claim the CHECKPOINT's
+	// revision — a run edited before its process died recovers at revision
+	// ≥ 1, and a fresh 0 would contradict the durable state.
+	live.restoreRevision(rec.Revision)
 
 	// A recovered paused run owns a cancellation token only so the
 	// one-run-per-session replacement keeps working; the resume runner

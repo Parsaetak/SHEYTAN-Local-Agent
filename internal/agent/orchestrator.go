@@ -242,6 +242,12 @@ type Orchestrator struct {
 	toolsMu sync.RWMutex
 	tools   map[string]Tool
 
+	// toolGen (v1.7.6) increments on every Register/Unregister under
+	// toolsMu. Spec builds stamp their cache entries with the generation
+	// they resolved tools at, so a superseded reader can never serve the
+	// replaced tool's schema to a later operation (see specCache.Spec).
+	toolGen uint64
+
 	// specs (v1.2.5) memoizes serialized tool schemas per registry
 	// generation — the per-turn double JSON marshal of every tool spec is
 	// gone. Invalidated on Register.
@@ -350,6 +356,7 @@ func (o *Orchestrator) Register(t Tool) {
 
 	o.toolsMu.Lock()
 	o.tools[t.Name()] = t
+	o.toolGen++
 	o.toolsMu.Unlock()
 
 	// v1.2.5: a new/changed tool invalidates the memoized spec cache.
@@ -363,11 +370,34 @@ func (o *Orchestrator) Register(t Tool) {
 func (o *Orchestrator) Unregister(name string) {
 	o.toolsMu.Lock()
 	delete(o.tools, name)
+	o.toolGen++
 	o.toolsMu.Unlock()
 
 	if o.specs != nil {
 		o.specs.Invalidate()
 	}
+}
+
+// ToolsGeneration returns the current registry generation: incremented on
+// every Register/Unregister. Spec builds pass it to the spec cache so a
+// cached schema is only ever served to a reader of the SAME generation.
+func (o *Orchestrator) ToolsGeneration() uint64 {
+	o.toolsMu.RLock()
+	defer o.toolsMu.RUnlock()
+	return o.toolGen
+}
+
+// ToolsAt returns the registry snapshot AND its generation under ONE read
+// lock — the atomic pair the classification→tier window must build from.
+func (o *Orchestrator) ToolsAt() (map[string]Tool, uint64) {
+	o.toolsMu.RLock()
+	snapshot := make(map[string]Tool, len(o.tools))
+	for name, t := range o.tools {
+		snapshot[name] = t
+	}
+	gen := o.toolGen
+	o.toolsMu.RUnlock()
+	return snapshot, gen
 }
 
 // Tools returns an immutable SNAPSHOT of the tool registry.
@@ -760,7 +790,9 @@ func (o *Orchestrator) RunDetailed(
 	// iteration/write: the whole desktop process dies with no terminal
 	// event. The window sits exactly between the `task classified` and
 	// `tier selected` log lines of the supplied crash trace.
-	toolSnap := o.Tools()
+	// v1.7.6: the snapshot carries its registry generation; every spec
+	// build in this turn stamps/validates against it.
+	toolSnap, toolGen := o.ToolsAt()
 	enabledNames := make([]string, 0, len(toolSnap))
 	for name := range toolSnap {
 		if cfg.ToolEnabled(name) {
@@ -779,7 +811,7 @@ func (o *Orchestrator) RunDetailed(
 				relTools = append(relTools, t)
 			}
 		}
-		_, toolRequirementTokens = o.specs.BuildSpecs(relTools)
+		_, toolRequirementTokens = o.specs.BuildSpecs(relTools, toolGen)
 	}
 
 	res := taskclassify.Resources{

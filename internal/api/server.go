@@ -469,6 +469,16 @@ func New(cfg *config.Config) (*Server, error) {
 		s.artRegistry = artRegistry
 	}
 
+	// v1.7.6 (§7): converge any interrupted paused-run edit BEFORE anything
+	// can observe it. Recovery scans the EXISTING paused-run directory for
+	// edit journals, validates their integrity, and deterministically
+	// completes or rolls back each one against the durable authorities
+	// (transcript + checkpoint). After this point every paused run exposed
+	// by /api/run/paused, /api/run/edit and /api/run/resume is coherent.
+	// (Absent dir / no journals → a no-op read; per-record corruption fails
+	// CLOSED — quarantined with actionable logging, never guessed.)
+	s.RecoverEditTransactions()
+
 	// v1.1.3: the engine event bus fans authoritative state transitions
 	// to every WebSocket as they happen.
 	go func() {

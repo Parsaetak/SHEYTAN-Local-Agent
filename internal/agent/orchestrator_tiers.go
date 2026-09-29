@@ -360,9 +360,12 @@ func (c *turnComposer) Allowed() []string {
 }
 
 // setTools stores the offered surface, bounded by the tier's tool-token
-// budget (drop non-core tools last-in-first until it fits).
+// budget (drop non-core tools last-in-first until it fits). The spec build
+// runs against the CURRENT registry generation (v1.7.6): a tool replaced
+// mid-turn re-serializes instead of serving a superseded schema.
 func (c *turnComposer) setTools(names []string, task string) {
 	tools := make([]Tool, 0, len(names))
+	gen := c.orch.ToolsGeneration()
 
 	for _, n := range names {
 		if t, ok := c.orch.tool(n); ok {
@@ -370,7 +373,7 @@ func (c *turnComposer) setTools(names []string, task string) {
 		}
 	}
 
-	specs, tokens := c.orch.specs.BuildSpecs(tools)
+	specs, tokens := c.orch.specs.BuildSpecs(tools, gen)
 
 	// MAX (budget 0) never trims; a manual policy never trims below the
 	// user's explicit selection — the budget only trims AUTO selections.
@@ -380,13 +383,13 @@ func (c *turnComposer) setTools(names []string, task string) {
 			// alphabetical within the same class (stable + explainable)
 			idx := leastImportantToolIndex(tools)
 
-			_, t := c.orch.specs.Spec(tools[idx])
+			_, t := c.orch.specs.Spec(tools[idx], gen)
 			tokens -= t
 
 			tools = append(tools[:idx], tools[idx+1:]...)
 		}
 
-		specs, tokens = c.orch.specs.BuildSpecs(tools)
+		specs, tokens = c.orch.specs.BuildSpecs(tools, gen)
 	}
 
 	c.toolSpecs = specs

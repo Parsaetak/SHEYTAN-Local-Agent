@@ -25,10 +25,16 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
-// specCacheEntry is one cached serialized tool spec.
+// specCacheEntry is one cached serialized tool spec. gen is the registry
+// generation the entry was built from: a cache entry is only ever SERVED to
+// a reader whose generation matches, so an entry a superseded reader writes
+// back after a Register/Invalidate can never leak the replaced tool's
+// metadata into a later build (v1.7.6 — the last name-keyed staleness
+// window).
 type specCacheEntry struct {
 	json   string
 	tokens int
+	gen    uint64
 }
 
 // specCache memoizes tool-schema serialization per registry generation.
@@ -50,15 +56,19 @@ func (c *specCache) Invalidate() {
 }
 
 // Spec returns the serialized spec and token estimate for one tool,
-// marshaling at most once.
-func (c *specCache) Spec(t Tool) (string, int) {
+// marshaling at most once PER REGISTRY GENERATION. The caller passes the
+// generation its tool references came from (Orchestrator.ToolsGeneration /
+// ToolsAt). A hit is served only when the cached entry carries the SAME
+// generation: metadata built inside one operation is therefore stable for
+// that operation's lifetime even while the registry churns underneath.
+func (c *specCache) Spec(t Tool, gen uint64) (string, int) {
 	name := t.Name()
 
 	c.mu.RLock()
 	e, ok := c.entries[name]
 	c.mu.RUnlock()
 
-	if ok {
+	if ok && e.gen == gen {
 		return e.json, e.tokens
 	}
 
@@ -76,6 +86,7 @@ func (c *specCache) Spec(t Tool) (string, int) {
 	entry := specCacheEntry{
 		json:   string(data),
 		tokens: chunking.EstimateTokens(string(data)),
+		gen:    gen,
 	}
 
 	c.mu.Lock()
@@ -87,12 +98,13 @@ func (c *specCache) Spec(t Tool) (string, int) {
 
 // BuildSpecsAssembles turns a tool-name selection into (specs, tokens)
 // using the cache. Callers that need the raw JSON can use Spec directly.
-func (c *specCache) BuildSpecs(tools []Tool) ([]llm.ToolSpec, int) {
+// gen must be the registry generation the tools were resolved from.
+func (c *specCache) BuildSpecs(tools []Tool, gen uint64) ([]llm.ToolSpec, int) {
 	specs := make([]llm.ToolSpec, 0, len(tools))
 	total := 0
 
 	for _, t := range tools {
-		data, tokens := c.Spec(t)
+		data, tokens := c.Spec(t, gen)
 
 		var spec llm.ToolSpec
 		if err := json.Unmarshal([]byte(data), &spec); err != nil {

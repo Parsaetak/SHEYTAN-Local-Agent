@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.7.5
+Current release:  v1.7.6
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -22,6 +22,16 @@ Branch:           main
 ---
 
 # What SHEYTAN is
+
+## v1.7.6 highlights
+
+* **P0 — interrupted edits now recover deterministically across a crash** — the v1.7.5 edit ordering was correct for every RETURNED error, but a process crash BETWEEN persistence stages (transcript replaced, checkpoint not yet written — or the reverse ordering of the commit path) left durable state with nothing on disk explaining how far the edit got. Each paused-run edit is now wrapped in a small durable journal (`<DataDir>/runs/paused/<runId>.edittx.json`, atomic temp+rename, integrity-hashed) recording the bounded pre-/post-edit identities, both revisions, both draft states and the phase. Startup recovery (`RecoverEditTransactions`, inside `api.New` before any paused run can be listed, edited or resumed) converges every interrupted journal to ONE coherent revision from the ACTUAL durable evidence — transcript position + checkpoint revision, never the phase alone: prepared-only rolls back, transcript-landed converges forward, checkpoint-landed completes, consumed checkpoints restore the pre-edit transcript. Corrupt journals fail CLOSED (quarantined with actionable logging, nothing guessed, other sessions unaffected); the journal is never a second session/run authority and is deleted when the edit completes. A deterministic fault-injection matrix covers all ten crash/failure windows — prepare, transcript-durable, checkpoint-durable, commit-marker, both publication/cleanup windows, transcript failure, checkpoint failure, journal-write failure (the edit aborts BEFORE any mutation), and a full restart-recovery integration that lists, resumes and settles the recovered run with exactly one authoritative assistant turn.
+* **P0 — a restart-recovered run now claims the checkpoint's revision** — the v1.7.5 restart recovery restored the paused draft but left the live revision at 0: a run that was EDITED before its process died came back unable to resume at its own recorded revision (every resume attempt 409'd against the very checkpoint it recovered from). The recovered state now pins the checkpoint's revision (monotonic, pause-only), so reconnect/reload/restart exposes the same revision the durable state records.
+* **P0 — the paused surface can never list an edit journal as a run** — `/api/run/paused` now excludes edit-transaction journals, their quarantined leftovers and in-flight temp files explicitly; a recovery record can never appear as a bogus resumable entry beside the checkpoint it belongs to.
+* **P0 — the codename audit gate is token-aware, not a regex guess** — the CI codename-removal gate now runs `scripts/codename-gate.mjs`: identifiers are tokenized (snake/kebab separators, camelCase humps, acronym runs, letter↔digit transitions) and a retired-codename TOKEN fails in every spelling (bare, quoted prose, snake/camel/digit-joined, any case — spellings the old boundary-regex silently missed, e.g. the retired name fused into a camelCase compound), while larger English identifiers that merely CONTAIN the same character sequence across a compound boundary (the historical `MaterializeTarget` false positive) are allowed. Deterministic proofs cover the real token, case variants and the legitimate-identifier class; the legacy joined and separated pair spellings (banned since v1.3.1) stay banned; the gate itself is never disabled or weakened and now works identically on tracked checkouts and clean-room source drops.
+* **P0 — the last schema-cache staleness window is closed** — the spec cache was keyed by tool NAME alone: a reader holding a pre-replacement tool reference could re-populate the cache AFTER a concurrent Register+Invalidate, and a later reader could be served the superseded tool's schema under the same name. Cache entries now carry the registry generation they were built from (`Register`/`Unregister` bump it under the registry lock; `ToolsAt()` returns the snapshot+generation atomically) and a hit is served only to a reader of the SAME generation: metadata visible to a run/schema build remains stable for that operation's lifetime while the registry churns underneath.
+* **P0 — corrupt engine identity is classified, not feared** — the maintenance-gate identity matrix now pins the corruption rows: a corrupt/unparseable state file with a valid committed manifest falls back to the manifest (current, ZERO redundant transactions); state corrupt AND manifest missing (a binary alone proves nothing about which build it is) runs the honest transaction; a genuinely newer target still updates through the corruption. The gate never fabricates "current" from untrustworthy evidence.
+* **Docs/version truth** — release identity synchronized to 1.7.6 through the canonical gate (`package.json` → `config.AppVersion`, `build/config.yml`, `SIGNATURE`); README current-release, release-history and package references updated together.
 
 ## v1.7.5 highlights
 
@@ -231,6 +241,7 @@ notes below are one-line headlines.
 
 | Version | Headline |
 |---|---|
+| v1.7.6 | Durable edit-transaction journal + evidence-driven startup recovery (all ten crash windows fault-injected, corrupt journals fail closed); restart-recovered runs claim the checkpoint revision; paused listing excludes journals; token-aware codename gate (zero false positives, zero detection gaps); generation-checked spec cache; corrupt engine-identity matrix rows |
 | v1.7.5 | Windows migration test models a real handle lifecycle; stale session-list guard (no resurrection of deleted sessions); transactional paused-edit (CAS + durable-first + rollback, empty-draft support); engine idempotency two-boot proof + fallback matrix; deep-copy tool metadata + content-level race regression; abort reaches resumed generations; no orphaned run-control state |
 | v1.7.4 | P0 Pause/Edit/Resume with durable checkpoints and semantic continuation; bootstrap-logger boot order (migrations before file sinks); engine identity preservation + manifest fallback (`EffectiveInstalledEngineTag`); run-goroutine panic recovery with crash reports; custom-tool definition deep copy at the registry boundary |
 | v1.7.3 | Engine discovery Tier-2 bounded priority frontier (no subtree starvation), startup/teardown lifecycle handle race closed |
@@ -371,7 +382,7 @@ cgo) and the full rationale are documented in
 Windows and Linux x64 portable ZIPs are produced by CI. The Windows package layout (package root `SHEYTAN-LA`):
 
 ```text
-SHEYTAN-LA-v1.7.5-windows-x64.zip
+SHEYTAN-LA-v1.7.6-windows-x64.zip
 └── SHEYTAN-LA/
     ├── SHEYTAN-LA.exe           (GUI app + embedded UI + HTTP/WS API)
     ├── SHEYTAN-LA.bat           (portable launcher)
@@ -382,7 +393,7 @@ SHEYTAN-LA-v1.7.5-windows-x64.zip
     └── workspace/               (empty; portable Coding Lab workspaces)
 ```
 
-The Linux package (`SHEYTAN-Local-Agent-Linux-x64-v1.7.5.zip`) mirrors this layout under a `SHEYTAN-Local-Agent/` root with a Linux executable. A Windows NSIS installer (`SHEYTAN-LA-v1.7.5-windows-x64-installer.exe`) is produced alongside the portable ZIP.
+The Linux package (`SHEYTAN-Local-Agent-Linux-x64-v1.7.6.zip`) mirrors this layout under a `SHEYTAN-Local-Agent/` root with a Linux executable. A Windows NSIS installer (`SHEYTAN-LA-v1.7.6-windows-x64-installer.exe`) is produced alongside the portable ZIP.
 
 Unzip anywhere and run the executable. On first launch the app creates its portable data layout next to it:
 
@@ -452,7 +463,7 @@ sheytan-local-agent diagnostics
 sheytan-local-agent update --status
 ```
 
-REST/WS surface (loopback only): `/api/state`, `/api/engine`, `/api/models`, `/api/sessions`, `/api/config`, `/api/llama`, `/api/run`, `/api/abort`, `/api/attachments`, `/api/tools`, `/api/lab`, `/api/net-search` (shim: `/api/research`), `/api/feedback`, `/ws/activity?sessionId=`.
+REST/WS surface (loopback only): `/api/state`, `/api/engine`, `/api/models`, `/api/sessions`, `/api/config`, `/api/llama`, `/api/run`, `/api/run/pause`, `/api/run/edit`, `/api/run/resume`, `/api/run/paused`, `/api/abort`, `/api/attachments`, `/api/tools`, `/api/lab`, `/api/net-search` (shim: `/api/research`), `/api/feedback`, `/ws/activity?sessionId=`.
 
 # Agent / tool capabilities and limits
 
@@ -561,7 +572,7 @@ yet; the list below is design intent, not shipped capability:
 
 # Version
 
-`v1.7.5` — see `worklog.md` for the complete implementation/remediation history and `agent.md` for the engineering handoff context.
+`v1.7.6` — see `worklog.md` for the complete implementation/remediation history and `agent.md` for the engineering handoff context.
 
 # License
 

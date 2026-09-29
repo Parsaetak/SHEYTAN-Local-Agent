@@ -207,22 +207,19 @@ jobs:
 
       # v1.3.1: codename removal gate. The product identity is
       # version-only; no codename may remain anywhere in the tracked
-      # tree (case-insensitive scan for the retired terms).
+      # tree. v1.7.6: the gate is TOKEN-AWARE (scripts/codename-gate.mjs)
+      # — a retired-codename TOKEN fails in every spelling (bare, quoted,
+      # snake/kebab/camel, digit-joined, any case), while larger English
+      # identifiers that merely contain the same character sequence across
+      # a compound boundary (the historical MaterializeTarget false
+      # positive) are allowed. Deterministic proofs:
+      # scripts/codename-gate.test.mjs (run in npm run test:release).
       - name: Codename removal gate
         shell: bash
         run: |
           set -euo pipefail
 
-          pattern='app_?codename|version-z[e]ta|(^|[^[:alpha:]])z[e]ta([^[:alpha:]]|$)'
-          hits="$(git grep -inE "$pattern" -- . || true)"
-
-          if [ -n "$hits" ]; then
-            echo "::error::Retired product-codename references remain:"
-            printf '%s\n' "$hits"
-            exit 1
-          fi
-
-          echo "Codename removal gate passed: zero codename references."
+          node scripts/codename-gate.mjs
 
       # v1.3.5: native temp-path portability gate (Actions run
       # 35583009466 — tokenizer/generate failed on Windows because two

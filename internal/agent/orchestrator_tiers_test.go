@@ -653,8 +653,8 @@ func TestSpecCacheMemoizesSerialization(t *testing.T) {
 	tool := &fakeTool{name: "echo"}
 	o.Register(tool)
 
-	specs1, tokens1 := o.specs.BuildSpecs([]Tool{tool})
-	specs2, tokens2 := o.specs.BuildSpecs([]Tool{tool})
+	specs1, tokens1 := o.specs.BuildSpecs([]Tool{tool}, o.ToolsGeneration())
+	specs2, tokens2 := o.specs.BuildSpecs([]Tool{tool}, o.ToolsGeneration())
 
 	if tokens1 != tokens2 || len(specs1) != len(specs2) {
 		t.Fatalf("memoized specs differ: %d/%d vs %d/%d", len(specs1), tokens1, len(specs2), tokens2)

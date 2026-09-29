@@ -388,6 +388,24 @@ func (l *runLive) confirmPaused(draft, why string) {
         l.pausedWhy = why
 }
 
+// restoreRevision pins a RESTART-RECOVERED run's revision to the durable
+// checkpoint value (v1.7.6, §7/§12): the paused state must claim exactly
+// the revision the checkpoint records. The v1.7.5 recovery restored the
+// draft but left the revision at 0 — a run that was EDITED before its
+// process died came back unable to resume at its own recorded revision
+// (every resume attempt 409'd against the very checkpoint it recovered
+// from). Valid only while paused; never moves a revision backwards.
+func (l *runLive) restoreRevision(revision int64) {
+        l.mu.Lock()
+        defer l.mu.Unlock()
+
+        if l.terminalOutcome != "" || l.phase != "paused" || revision < l.revision {
+                return
+        }
+
+        l.revision = revision
+}
+
 // requestResume moves a paused run to RESUMING. Only a paused run resumes;
 // the caller supplies the revision it acted on and a stale request is
 // rejected with the current revision (actionable conflict, never silence).
