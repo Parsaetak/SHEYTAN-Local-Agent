@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.7.1
+Current release:  v1.7.5
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -22,6 +22,30 @@ Branch:           main
 ---
 
 # What SHEYTAN is
+
+## v1.7.5 highlights
+
+* **P0 — the Windows migration "restart" simulation models a genuine handle lifecycle** — the `TestCopyVerifiedClassifiesHeldOpenDestination` regression previously ran its retry migration while the conflicting sink handle was STILL open (the same live process held it until test end), so on Windows the second rename deterministically failed with "Access is denied" again: the "restart" was logically impossible. The test now releases the handle (the previous process exits) before the next-boot retry, while preserving every real invariant: a held destination is never truncated or deleted, the failed temporary file is cleaned, the source survives intact, the fold is idempotent, and the next genuine startup completes it with full verification.
+* **P0 — stale session-list responses can no longer resurrect deleted sessions** — `refreshSessions()` captured the mode but not a mutation/request generation: a stale `GET /api/sessions` response already on the wire when a create/delete/rename/mode-switch landed could overwrite the newer state and reinsert a deleted session in the sidebar (the reproduced Linux E2E failure: "delete session removes it and activates a remaining one" — before = 4, after = 4). One monotonic generation guard (`src/session-list-guard.ts`, pure and deterministically unit-tested) now covers create → refresh, delete → stale refresh, rename → stale refresh, mode switch → stale old-mode response, and multiple refreshes completing out of order. The store remains the ONE authoritative session list; the guard owns no session data.
+* **P0 — edit is now transactionally consistent** — the paused-run edit previously bumped the in-memory revision and mutated the transcript BEFORE attempting the checkpoint save, so a failed save left live revision, transcript and durable checkpoint disagreeing. The accepted revision now becomes authoritative only AFTER all durable state is safe: CAS validation without mutation, transcript replace, checkpoint commit, transcript rollback on commit failure, and the live-state publication strictly last — serialized per run by one control mutex shared with resume and stop. Field presence replaces emptiness semantics: an assistant draft can now be intentionally ERASED ("" is a value, not an omission).
+* **P0 — engine maintenance idempotency proven across two boots** — a deterministic same-data-root two-boot regression drives the real startup maintenance gate: boot 1 commits b11223 through the transactional install; boot 2 must recognize the committed identity and complete with ZERO redundant download/install transactions. The full identity fallback matrix (state tag-less + manifest valid; manifest missing + state valid; both missing → honest transaction; binary path changed → identity reseeded from the manifest beside the new binary; genuinely newer target → transaction runs) is pinned at the gate level.
+* **P0 — tool metadata is concurrency-safe, not merely the registry map** — the custom-tools store returned SHALLOW copies (`cp := *d`) that aliased Params, per-param Enum/Default, HTTP headers and command args with the cache; `List`/`Get`/`Save` now hand out deep copies, closing the content-level aliasing the v1.7.4 registry-boundary deep copy could not cover. A new deterministic race regression exercises the complete `task classified → tier selected` interval against real custom-tool values (schema building, toolset selection, registry churn, definition updates) under `go test -race`.
+* **P0 — stop reaches a RESUMED generation** — a resumed run builds a fresh generation context, and the resume handler now installs its cancel as the live one BEFORE the phase is published: `/api/abort` covers the whole resumed lifecycle including the spawn window (previously an abort during RESUMING — or after it — could never cancel the fresh generation). A pause request during the RESUMING window is now rejected with an explicit conflict instead of being silently swallowed by the resume's control reset.
+* **P0 — no orphaned run-control state** — replacing a paused run (a newer run takes the session's single run slot) consumes its durable checkpoint, and deleting a session settles its registered run and consumes the checkpoint: a stale paused record can never be resumed over a live run, and no checkpoint outlives the session it belongs to. A run that lost its session slot can no longer checkpoint at all (the zombie-checkpoint guard on both pause paths).
+* **Docs/version truth** — README updated to the actual v1.7.5 identity with accurate v1.7.3/v1.7.4 historical sections; release metadata synchronized through the canonical gate.
+
+## v1.7.4 highlights
+
+* **P0 — Pause / Edit / Resume of an active generation (any backend)** — one run-control state machine over the EXISTING run authorities (`RUNNING → PAUSING → PAUSED → RESUMING → RUNNING → terminal`), backend-neutral SEMANTIC CONTINUATION (honestly labeled — no claimed KV identity): the stream stops at a safe boundary, the accepted prefix is checkpointed to a bounded durable record (`<DataDir>/runs/paused/<runId>.json`, atomic temp+rename), and `PAUSED` is published only after the checkpoint is durable. Edit uses monotonic CAS revisions (stale → 409 with the current value); resume continues the SAME runId through the ONE lifecycle and the shared settlement path; stop-while-paused settles aborted and consumes the checkpoint; process restart recovers the paused run from disk; pause → resume → pause works. Full API surface (`POST /api/run/pause|edit|resume`, `GET /api/run/paused`) with runId/revision/phase on every accepted control response, WS snapshot replay of the paused draft+revision, and a composer that edits the paused revision and resumes the SAME run.
+* **P0 — boot-order repair for the Windows log-sink conflict** — startup now runs bootstrap logger (memory/stderr only, creates NO files) → all runtime-data migrations → canonical file logger. The legacy-root fold commits every verified copy with a rename, classifies the Windows "destination held open" conflict honestly (never truncates or deletes the destination, cleans the temp file, leaves both sides intact) and completes on the next start.
+* **P0 — engine identity preservation across boots** — the installer's detection pass merges the recorded engine identity forward instead of wiping it; `EffectiveInstalledEngineTag` prefers the state-recorded tag and falls back to the committed `engine-install.json` manifest beside the binary. A committed engine is no longer re-downloaded on every boot when the state file lost its tag.
+* **P0 — run-goroutine panic recovery** — a recovered internal panic settles the run as an honest error, publishes the failure, writes a crash report and leaves the application ALIVE (the supplied v1.7.3-era process-death signature can no longer take the whole desktop down).
+* **P1 — custom-tool registry value hardening** — `customtools.NewTool` deep-copies the definition (Params, Enum/Default, HTTP headers, command args): the registry-facing tool object is immutable for the whole run; store updates create new definitions, never mutate shared ones.
+
+## v1.7.3 highlights
+
+* **Engine discovery Tier-2 traversal rewritten as a bounded priority frontier** — the previous recursive DFS descended one subtree to full depth before touching the next sibling, so a huge sibling directory could consume the entire scan budget before a shallow, high-value location was ever visited. The worker-pool frontier serves candidates by priority; inaccessible directories are skipped without crashing and file contents are never read except to validate promising candidates.
+* **Startup/teardown lifecycle race closed** — the updater handles are read under the same mutex that publishes them in `EnsureSetup`, so a concurrent (or repeated) startup can never race the teardown into using a stale or half-published cancel/done pair.
 
 ## v1.7.2 highlights
 
@@ -207,6 +231,9 @@ notes below are one-line headlines.
 
 | Version | Headline |
 |---|---|
+| v1.7.5 | Windows migration test models a real handle lifecycle; stale session-list guard (no resurrection of deleted sessions); transactional paused-edit (CAS + durable-first + rollback, empty-draft support); engine idempotency two-boot proof + fallback matrix; deep-copy tool metadata + content-level race regression; abort reaches resumed generations; no orphaned run-control state |
+| v1.7.4 | P0 Pause/Edit/Resume with durable checkpoints and semantic continuation; bootstrap-logger boot order (migrations before file sinks); engine identity preservation + manifest fallback (`EffectiveInstalledEngineTag`); run-goroutine panic recovery with crash reports; custom-tool definition deep copy at the registry boundary |
+| v1.7.3 | Engine discovery Tier-2 bounded priority frontier (no subtree starvation), startup/teardown lifecycle handle race closed |
 | v1.7.2 | llama.cpp KV-cache CLI contract fixed at the root (split `--cache-type-k/-v`, engine-verified; no more `--cache-type-kv` on modern engines), `--mlock` → `--load-mode`, AUTO GPU candidate bootstrap (bounded, transactional, execution-evidence-gated), license consolidation into ONE `LICENSE.md` |
 | v1.7.1 | P0 scheduler settlement fix, context-exhaustion recovery (lossless snapshot + hierarchical summary + handoff), pre-run compatibility gate + hysteresis live protection, Native Engine as a first-class serving alternative, `LICENSE.md` entry point |
 | v1.7.0 | Windows transactional rollback hardening (candidate stop/reap before restore), chronological tasks + scheduling + automation, Markdown SKILL.md packages, task-scoped tools, durable artifact registry |
@@ -344,7 +371,7 @@ cgo) and the full rationale are documented in
 Windows and Linux x64 portable ZIPs are produced by CI. The Windows package layout (package root `SHEYTAN-LA`):
 
 ```text
-SHEYTAN-LA-v1.3.2-windows-x64.zip
+SHEYTAN-LA-v1.7.5-windows-x64.zip
 └── SHEYTAN-LA/
     ├── SHEYTAN-LA.exe           (GUI app + embedded UI + HTTP/WS API)
     ├── SHEYTAN-LA.bat           (portable launcher)
@@ -355,7 +382,7 @@ SHEYTAN-LA-v1.3.2-windows-x64.zip
     └── workspace/               (empty; portable Coding Lab workspaces)
 ```
 
-The Linux package (`SHEYTAN-Local-Agent-Linux-x64-v1.3.2.zip`) mirrors this layout under a `SHEYTAN-Local-Agent/` root with a Linux executable. A Windows NSIS installer (`SHEYTAN-LA-v1.3.2-windows-x64-installer.exe`) is produced alongside the portable ZIP.
+The Linux package (`SHEYTAN-Local-Agent-Linux-x64-v1.7.5.zip`) mirrors this layout under a `SHEYTAN-Local-Agent/` root with a Linux executable. A Windows NSIS installer (`SHEYTAN-LA-v1.7.5-windows-x64-installer.exe`) is produced alongside the portable ZIP.
 
 Unzip anywhere and run the executable. On first launch the app creates its portable data layout next to it:
 
@@ -534,7 +561,7 @@ yet; the list below is design intent, not shipped capability:
 
 # Version
 
-`v1.2.7` — see `worklog.md` for the complete implementation/remediation history and `agent.md` for the engineering handoff context.
+`v1.7.5` — see `worklog.md` for the complete implementation/remediation history and `agent.md` for the engineering handoff context.
 
 # License
 

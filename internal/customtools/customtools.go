@@ -407,14 +407,22 @@ func normalize(d *Definition) {
 
 // List returns the definitions sorted deterministically (enabled first,
 // then by name).
+//
+// v1.7.5: the returned definitions are DEEP copies. The previous shallow
+// copy (`cp := *d`) shared Params, per-param Enum/Default, the HTTP config
+// (incl. the Headers map) and the Command config (incl. Args) with the
+// store's cache — exactly the aliasing shape that made a copied registry
+// map unsafe while its values stayed mutable. A consumer marshaling a
+// listed definition concurrently with any nested mutation raced; on
+// Windows that class of concurrent map read/write is a fatal process
+// death.
 func (s *Store) List() []*Definition {
         s.mu.Lock()
         defer s.mu.Unlock()
 
         out := make([]*Definition, 0, len(s.cache))
         for _, d := range s.cache {
-                cp := *d
-                out = append(out, &cp)
+                out = append(out, deepCopyDefinition(d))
         }
 
         sort.Slice(out, func(i, j int) bool {
@@ -427,7 +435,8 @@ func (s *Store) List() []*Definition {
         return out
 }
 
-// Get returns one definition (copy) by id.
+// Get returns one definition (DEEP copy — no shared mutable state with
+// the cache, see the List note) by id.
 func (s *Store) Get(id string) (*Definition, bool) {
         s.mu.Lock()
         defer s.mu.Unlock()
@@ -436,8 +445,8 @@ func (s *Store) Get(id string) (*Definition, bool) {
         if !ok {
                 return nil, false
         }
-        cp := *d
-        return &cp, true
+
+        return deepCopyDefinition(d), true
 }
 
 // Save validates and persists one definition ATOMICALLY.
@@ -485,8 +494,10 @@ func (s *Store) Save(d *Definition) error {
                 return fmt.Errorf("commit definition: %w", err)
         }
 
-        cp := *d
-        s.cache[d.ID] = &cp
+        // v1.7.5: the cache NEVER aliases the caller's nested state — the
+        // cache entry is a deep copy, so a later mutation of the caller's
+        // definition cannot corrupt what List/Get/NewTool serve.
+        s.cache[d.ID] = deepCopyDefinition(d)
 
         return nil
 }

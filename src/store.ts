@@ -37,6 +37,7 @@ import {
   type RunEventKind,
   type RunPhase,
 } from "./run-phase";
+import { createSessionListGuard } from "./session-list-guard";
 import {
   normalizeEventKind,
   normalizeThinkingControl,
@@ -445,6 +446,16 @@ type RuntimeState = {
 };
 
 const MAX_ACTIVITY_EVENTS = 500;
+
+// v1.7.5 STALE SESSION-LIST PROTECTION: one monotonic generation for every
+// GET /api/sessions request plus every session mutation. A list response may
+// only land while its ticket is still current — a stale response (started
+// before a create/delete/rename/mode switch, or superseded by a newer
+// refresh) can never overwrite newer state, so a deleted session can never
+// be resurrected in the sidebar. The guard owns NO session data; the store
+// remains the one authoritative list. Pure-module coverage:
+// session-list-guard.test.ts.
+const sessionListGuard = createSessionListGuard();
 
 let enginePollTimer: number | null = null;
 
@@ -1508,19 +1519,40 @@ function handleConversationEvent(event: ActivityEvent): void {
       // v1.7.4 run-control phases ride the status Detail (backend-derived
       // only): "pausing" acknowledges the request, "paused" confirms the
       // durable checkpoint, "resuming" confirms the resume handoff.
-      const phaseDetail =
+      // v1.7.5 WIRING REPAIR: the phase travels inside the activity's
+      // DETAIL object (agent.Activity.Detail → wire "detail"), not at the
+      // top level — the previous top-level read never matched, so a live
+      // PAUSED confirmation never transitioned the phase and the paused
+      // panel could not appear without a reconnect.
+      const activityRecord =
         event.data && typeof event.data === "object"
-          ? (event.data as Record<string, unknown>).phase
+          ? (event.data as Record<string, unknown>)
           : undefined;
+
+      const detailRecord =
+        activityRecord?.detail && typeof activityRecord.detail === "object"
+          ? (activityRecord.detail as Record<string, unknown>)
+          : undefined;
+
+      const phaseDetail =
+        (detailRecord?.phase as string | undefined) ??
+        (activityRecord?.phase as string | undefined);
 
       if (phaseDetail === "pausing") {
         transitionPhase("pause_requested");
       } else if (phaseDetail === "paused") {
         transitionPhase("paused");
 
-        // running stays true — the paused run is still registered; the
-        // composer gating and control buttons key on runPhase.
-        useRuntimeStore.setState({ liveStatus: caption });
+        // v1.7.5: the accepted draft rides the confirmation — the paused
+        // editor is populated without a reconnect snapshot.
+        const confirmedDraft = detailRecord?.pausedDraft;
+
+        useRuntimeStore.setState({
+          liveStatus: caption,
+          ...(typeof confirmedDraft === "string"
+            ? { pausedDraft: confirmedDraft, runRevision: Number(detailRecord?.revision ?? 0) || useRuntimeStore.getState().runRevision }
+            : {}),
+        });
       } else if (phaseDetail === "resuming") {
         transitionPhase("resume_requested");
       } else {
@@ -1902,6 +1934,13 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // space's list/selection with the old mode's sessions.
     const mode = get().mode;
 
+    // v1.7.5: take a generation ticket BEFORE the await. Any mutation
+    // (create/delete/rename/mode switch) or newer refresh invalidates this
+    // ticket, so this response can only land when nothing newer happened
+    // while it was in flight — the stale response can never resurrect a
+    // deleted session or drop a created one.
+    const ticket = sessionListGuard.begin();
+
     try {
       // v1.2.8: the sidebar shows ONE conversation space. The full list is
       // still reachable through the history picker (cross-mode search).
@@ -1911,6 +1950,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
       if (after.mode !== mode) {
         return; // the user switched modes while this fetch was in flight
+      }
+
+      if (!sessionListGuard.isActive(ticket)) {
+        return; // a mutation or a newer refresh superseded this response
       }
 
       const previous = after.activeSessionId;
@@ -2288,6 +2331,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // space and becomes that space's active session.
     const session = await api.createSession(get().mode);
 
+    // v1.7.5: the authoritative create succeeded — any list GET that was
+    // already on the wire is now stale (it cannot contain the new session
+    // and must never overwrite the state below).
+    sessionListGuard.invalidate();
+
     // v1.1.4: createSession previously only prepended the session and
     // switched the id — the socket stayed bound to the OLD session (the
     // stale-guard then silently discarded every event for the new one)
@@ -2400,6 +2448,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
   deleteSession: async (id) => {
     await api.deleteSession(id);
+
+    // v1.7.5: the authoritative DELETE succeeded — invalidate every list
+    // GET that started before this instant. A stale in-flight response
+    // (which still contains the deleted session) can never land after
+    // this, so the sidebar can never resurrect it.
+    sessionListGuard.invalidate();
 
     if (get().activeSessionId === id) {
       get().disconnectActivity();
@@ -2790,6 +2844,24 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     try {
       await api.abort(sessionId);
+
+      // v1.7.5 STOP-WHILE-PAUSED: the backend settles a parked run
+      // SYNCHRONOUSLY (no generation to cancel — the checkpoint is consumed
+      // and the run settles aborted inside the handler). The idle sentinel
+      // that follows is deliberately ignored for a non-live phase, so the
+      // client transitions here — the paused panel must not survive its
+      // own stop.
+      const phaseAfter = useRuntimeStore.getState().runPhase;
+
+      if (phaseAfter === "paused") {
+        transitionPhase("aborted");
+
+        useRuntimeStore.setState({
+          pausedDraft: null,
+          runRevision: 0,
+          running: false,
+        });
+      }
     } finally {
       // Fallback finalisation: if the backend's done(abort) event never
       // arrives (detached socket, engine hiccup), settle the run locally
@@ -3136,6 +3208,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       [state.mode]: state.activeSessionId,
     };
 
+    // v1.7.5: a mode switch poisons every in-flight list GET of the OLD
+    // mode — its response is stale the moment the space changes.
+    sessionListGuard.invalidate();
+
     // A run live in the current session keeps running on the backend;
     // this UI switch only changes the visible space.
     get().disconnectActivity();
@@ -3356,6 +3432,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     try {
       const updated = await api.updateSession(id, { title: clean });
+
+      // v1.7.5: the rename landed server-side — in-flight list GETs from
+      // before it must not overwrite the new title.
+      sessionListGuard.invalidate();
 
       set((state) => ({
         sessions: state.sessions.map((session) =>

@@ -247,9 +247,12 @@ func (e *Engine) StreamGeneration(ctx context.Context, req GenerationRequest,
 	if !finalResp.OK {
 		// Map the explicit engine rejections to inspectable errors.
 		if ctxErr := context.Cause(genCtx); ctxErr != nil && finalResp.Error == "" {
-			// Stall abort: surface it honestly.
+			// Stall abort: surface it honestly — and v1.7.5: keep the
+			// context sentinel in the chain, so a PAUSE-driven cancel is
+			// still classifiable by the orchestrator's errors.Is(err,
+			// context.Canceled) check.
 			return GenerationResult{RequestID: requestID, FinishReason: "error"},
-				fmt.Errorf("native generation stalled (no frames for %v)", generateStallTimeout)
+				fmt.Errorf("native generation stalled (no frames for %v): %w", generateStallTimeout, ctxErr)
 		}
 		if isContextOverflowMessage(finalResp.Error) {
 			return GenerationResult{RequestID: requestID, FinishReason: "error"},

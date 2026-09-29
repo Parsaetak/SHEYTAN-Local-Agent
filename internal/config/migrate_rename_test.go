@@ -20,11 +20,24 @@ import (
 )
 
 // TestCopyVerifiedClassifiesHeldOpenDestination simulates the Windows
-// rename conflict through the renameForTest seam: the canonical sink file
-// exists AND is held open (exactly what v1.7.3's boot order produced) and
-// the legacy llm.jsonl is newer, so the fold routes it through
-// copyVerified — whose commit rename then fails once with a Windows-style
-// permission error.
+// rename conflict through the renameForTest seam and then models a
+// GENUINE restart lifecycle (v1.7.5 repair):
+//
+//	boot N     : the canonical sink file exists AND is held open by the
+//	             previous process (exactly what the v1.7.3 boot order
+//	             produced); the legacy llm.jsonl is newer, so the fold
+//	             routes it through copyVerified — whose commit rename
+//	             fails once with a Windows-style permission error;
+//	shutdown   : the previous process EXITS and the conflicting handle
+//	             is actually released (the sink is closed here);
+//	boot N+1   : the retry — the NEXT genuine startup — completes the
+//	             fold and removes the legacy root only after full
+//	             verification.
+//
+// The retry previously ran while the handle was still open: on Windows
+// that second rename deterministically fails with "Access is denied"
+// again, so the "restart" was logically impossible — it exercised two
+// boots of the SAME live process, not a restart.
 func TestCopyVerifiedClassifiesHeldOpenDestination(t *testing.T) {
 	unsetDataDirOverride(t)
 
@@ -108,11 +121,20 @@ func TestCopyVerifiedClassifiesHeldOpenDestination(t *testing.T) {
 		t.Fatalf("legacy root must survive an incomplete fold: %v", serr)
 	}
 
-	// Restart with the real rename: the fold completes, the newer legacy
-	// record lands VERIFIED (never truncated, never mixed), and the legacy
-	// root is removed only after full verification.
+	// SHUTDOWN: the previous process exits and the conflicting sink
+	// handle is released. This is the step the v1.7.4 simulation missed —
+	// without it the retry below is not a restart but a second attempt
+	// inside the same live process, which on Windows deterministically
+	// fails with the same EACCES.
+	if err := sink.Close(); err != nil {
+		t.Fatalf("release the conflicting handle: %v", err)
+	}
+
+	// BOOT N+1 (the genuine restart, real rename): the fold completes, the
+	// newer legacy record lands VERIFIED (never truncated, never mixed),
+	// and the legacy root is removed only after full verification.
 	if _, err := MigrateLegacyAppDataRoot(&Config{DataDir: canonical}); err != nil {
-		t.Fatalf("the retry after the conflict must complete the fold: %v", err)
+		t.Fatalf("the retry after the handle was released must complete the fold: %v", err)
 	}
 	data, rerr = os.ReadFile(dstLLM)
 	if rerr != nil || string(data) != srcContent {
