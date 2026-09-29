@@ -196,6 +196,20 @@ func (l *runLive) observe(a agent.Activity) {
                 if l.phase != "error" {
                         l.phase = "done"
                 }
+        case "aborted":
+                // v1.8.0: the orchestrator's HONEST abort marker. A canceled
+                // generation is not a completed one: publishing "done" here
+                // flipped the early-visible terminal outcome to "done" while
+                // the caller's settle() recorded "aborted" - the registry and
+                // the live state then disagreed forever (settleTerminal never
+                // overrides an existing outcome). The abort paths now publish
+                // "aborted" and every terminal observer agrees.
+                if l.terminalOutcome == "" {
+                        l.terminalOutcome = "aborted"
+                }
+                l.running = false
+                l.endedAt = time.Now()
+                l.phase = "aborted"
         case "error":
                 if l.terminalOutcome == "" {
                         l.terminalOutcome = "error"

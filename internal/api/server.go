@@ -605,6 +605,10 @@ func (s *Server) Handler() http.Handler {
 
 	// REST API
 	mux.HandleFunc("/api/state", s.handleState)
+
+	// v1.8.0: the Runtime Governor / system-health surface — the ONE
+	// runtime-policy read model composed from the existing authorities.
+	mux.HandleFunc("/api/governor", s.handleGovernor)
 	mux.HandleFunc("/api/sysinfo", s.handleSysinfo)
 	mux.HandleFunc("/api/presets", s.handlePresets)
 	mux.HandleFunc("/api/models", s.handleModels)
@@ -2349,8 +2353,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// by the outcome record instead of being re-derived.
 		terminalCaption := ""
 
+		// v1.8.0: the orchestrator's abort paths publish `aborted` (never
+		// `done`), so the honest terminal label is captured from that
+		// type too.
 		captureTerminal := func(a agent.Activity) {
-			if a.Type == "done" || a.Type == "complete" {
+			if a.Type == "done" || a.Type == "complete" || a.Type == "aborted" {
 				tl.donePublished = time.Now()
 
 				if a.Caption != "" {

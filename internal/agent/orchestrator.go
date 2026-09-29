@@ -1481,8 +1481,11 @@ func (o *Orchestrator) RunDetailed(
 
 	for iter := 0; iter < maxIter; iter++ {
 		if err := ctx.Err(); err != nil {
-			onActivity(Activity{
-				Type:      "done",
+							// v1.8.0: honest abort marker — a canceled generation is not a
+				// completed one. The caller settles the authoritative outcome
+				// from the context state; the live state must agree with it.
+onActivity(Activity{
+				Type:      "aborted",
 				Caption:   abortCaption(err),
 				Timestamp: time.Now(),
 			})
@@ -1797,8 +1800,11 @@ func (o *Orchestrator) RunDetailed(
 			}
 
 			if cerr := ctx.Err(); cerr != nil {
-				onActivity(Activity{
-					Type:      "done",
+									// v1.8.0: honest abort marker — a canceled generation is not a
+					// completed one. The caller settles the authoritative outcome
+					// from the context state; the live state must agree with it.
+onActivity(Activity{
+					Type:      "aborted",
 					Caption:   abortCaption(cerr),
 					Timestamp: time.Now(),
 				})
@@ -1981,8 +1987,11 @@ func (o *Orchestrator) RunDetailed(
 		// Execute every tool call sequentially (parallel execution could be added)
 		for ti, tc := range lastToolCalls {
 			if err := ctx.Err(); err != nil {
-				onActivity(Activity{
-					Type:      "done",
+									// v1.8.0: honest abort marker — a canceled generation is not a
+					// completed one. The caller settles the authoritative outcome
+					// from the context state; the live state must agree with it.
+onActivity(Activity{
+					Type:      "aborted",
 					Caption:   abortCaption(err),
 					Timestamp: time.Now(),
 				})
@@ -2458,8 +2467,11 @@ func (o *Orchestrator) RunDetailed(
 			)
 
 			if cerr := ctx.Err(); cerr != nil {
-				onActivity(Activity{
-					Type:      "done",
+									// v1.8.0: honest abort marker — a canceled generation is not a
+					// completed one. The caller settles the authoritative outcome
+					// from the context state; the live state must agree with it.
+onActivity(Activity{
+					Type:      "aborted",
 					Caption:   abortCaption(cerr),
 					Timestamp: time.Now(),
 				})

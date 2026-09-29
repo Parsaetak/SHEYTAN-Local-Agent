@@ -934,11 +934,24 @@ func (s *Server) runResumed(rs *runState, rec *pausedRunRecord, ctx context.Cont
 		return
 	}
 
+	// v1.8.0: capture the orchestrator's honest terminal caption. The
+	// resumed path previously hardcoded "Completed" - an aborted
+	// resumed run then recorded the outcome "aborted" with the
+	// caption "Completed". The capture mirrors the fresh run path:
+	// one honest terminal label.
+	terminalCaption := ""
+
 	publish := func(a agent.Activity) {
 		a.RunID = rs.live.runID
 		a.Seq = rs.live.nextSeq()
 		rs.live.observe(a)
 		rs.hub.publish(a)
+
+		if a.Type == "done" || a.Type == "complete" || a.Type == "aborted" {
+			if a.Caption != "" {
+				terminalCaption = a.Caption
+			}
+		}
 	}
 
 	stampRun := func(a agent.Activity) agent.Activity {
@@ -1089,7 +1102,9 @@ func (s *Server) runResumed(rs *runState, rec *pausedRunRecord, ctx context.Cont
 		resultOutcome = "aborted"
 	}
 
-	terminalCaption := "Completed"
+	if terminalCaption == "" {
+	terminalCaption = "Completed"
+	}
 
 	// v1.7.5: the TRANSCRIPT is the authority for what will be resumed —
 	// reconcile the conversation identity from it (the checkpoint fields

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, type EnvironmentPayload, type HealthPayload } from "./api";
+import {
+  api,
+  type EnvironmentPayload,
+  type GovernorPayload,
+  type HealthPayload,
+} from "./api";
 import { useRuntimeStore } from "./store";
 import { useResource } from "./useResource";
 import { DownloadProgressPanel } from "./DownloadProgress";
@@ -381,6 +386,168 @@ function RecommendationCard({ env }: { env: EnvironmentPayload | null }) {
   );
 }
 
+// v1.8.0: Runtime Governor — the adaptive runtime intelligence surface.
+// Every value comes from /api/governor (one composed read model over the
+// EXISTING authorities). A fact the platform cannot measure renders as
+// "—" and is NAMED in the unknowns list — the surface never invents a
+// number, and the reasons always state WHY the policy is what it is.
+const GOVERNOR_LEVEL_TONE: Record<string, string> = {
+  ok: "good",
+  warning: "warn",
+  high_pressure: "bad",
+  critical_pressure: "bad",
+};
+
+const GOVERNOR_LEVEL_LABEL: Record<string, string> = {
+  ok: "GREEN — nominal",
+  warning: "YELLOW — elevated",
+  high_pressure: "RED — high pressure",
+  critical_pressure: "EMERGENCY — critical",
+};
+
+function GovernorCard() {
+  const govResource = useResource<GovernorPayload>("governor", (signal) =>
+    api.governor(signal),
+  );
+
+  const gov = govResource.data;
+
+  if (!gov) {
+    return (
+      <div className="settings-card">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">RUNTIME GOVERNOR</span>
+            <strong>Reading runtime policy…</strong>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!gov.governor.available || !gov.governor.state || !gov.governor.envelope) {
+    return (
+      <div className="settings-card">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">RUNTIME GOVERNOR</span>
+            <strong>Unavailable</strong>
+          </div>
+        </div>
+        <p className="env-loading">
+          {gov.governor.reason ??
+            "The runtime governor is not wired in this process."}
+        </p>
+      </div>
+    );
+  }
+
+  const { state, envelope } = gov.governor;
+  const tone = GOVERNOR_LEVEL_TONE[state.level] ?? "neutral";
+  const levelLabel = GOVERNOR_LEVEL_LABEL[state.level] ?? state.level;
+  const sustained =
+    state.sustained > 0 ? `${Math.round(state.sustained / 1000)}s` : "—";
+  const reasons = Array.isArray(envelope.reasons) ? envelope.reasons : [];
+  const unknowns = Array.isArray(state.unknowns) ? state.unknowns : [];
+
+  return (
+    <div className="settings-card">
+      <div className="panel-heading">
+        <div>
+          <span className="eyebrow">RUNTIME GOVERNOR</span>
+          <strong>Adaptive runtime policy</strong>
+        </div>
+        <span className={`settings-chip chip-${tone}`}>
+          {levelLabel}
+          {state.sustained > 0 ? ` · ${sustained}` : ""}
+        </span>
+      </div>
+
+      <div className="health-checks">
+        <details className={`health-check state-ok`}>
+          <summary>
+            <span className="health-check-label">Resource state</span>
+            <span className="health-check-state">
+              {state.availableKnown
+                ? `${fmtBytes(state.ramAvailableBytes)} free / ${fmtBytes(state.ramTotalBytes)}`
+                : "RAM unknown"}
+              {state.cpuLoadKnown &&
+              typeof state.cpuRollingAvg === "number" &&
+              state.cpuRollingAvg > 0
+                ? ` · CPU ${Math.round(state.cpuRollingAvg)}% rolling`
+                : " · CPU —"}
+            </span>
+          </summary>
+          <p className="health-check-evidence">
+            Process RSS{" "}
+            {typeof state.procRssBytes === "number" && state.procRssBytes > 0
+              ? fmtBytes(state.procRssBytes)
+              : "—"}
+            {" · "}
+            Engine{" "}
+            {state.engineRunning
+              ? `running${state.engineRssKnown ? ` (${fmtBytes(state.engineRssBytes)} RSS)` : ""}`
+              : "idle"}
+            {" · "}
+            Active runs {state.activeRuns}
+          </p>
+        </details>
+
+        <details className={`health-check state-ok`}>
+          <summary>
+            <span className="health-check-label">Execution envelope</span>
+            <span className="health-check-state">
+              {envelope.adjustmentClass === "none"
+                ? "no adjustment"
+                : `${envelope.adjustmentClass} adjustment`}
+            </span>
+          </summary>
+          <p className="health-check-evidence">
+            Heavyweight admission {envelope.admitHeavyweight ? "open" : "deferred"}
+            {" · "}
+            Background {envelope.reduceBackground ? "reduced" : "normal"}
+            {" · "}
+            Context work {envelope.reduceContextWork ? "minimal next run" : "normal"}
+            {" · "}
+            Tool concurrency{" "}
+            {envelope.reduceToolConcurrency ? "reduced" : "normal"}
+            {envelope.residentMemoryBudgetBytes &&
+            envelope.residentMemoryBudgetBytes > 0
+              ? ` · resident budget ${fmtBytes(envelope.residentMemoryBudgetBytes)}`
+              : ""}
+          </p>
+        </details>
+
+        {reasons.map((reason, i) => (
+          <p key={i} className="health-check-evidence">
+            {reason}
+          </p>
+        ))}
+
+        {unknowns.length > 0 ? (
+          <details className="health-check state-warn">
+            <summary>
+              <span className="health-check-label">Unknowns</span>
+              <span className="health-check-state">{unknowns.length}</span>
+            </summary>
+            {unknowns.map((u, i) => (
+              <p key={i} className="health-check-evidence">
+                {u}
+              </p>
+            ))}
+          </details>
+        ) : null}
+      </div>
+
+      <span className="runtime-hint">
+        The governor owns POLICY only — the pressure protection path, engine
+        lifecycle and scheduler keep executing. Maximum useful capability
+        while keeping the host responsive.
+      </span>
+    </div>
+  );
+}
+
 function HealthCard() {
   // v1.2.6 continuation: HealthCard now rides the SHARED resource layer
   // ("health") instead of its own uncached fetch. The old code issued a
@@ -534,6 +701,7 @@ const SystemPanel = function SystemPanel() {
       <DeviceCard env={env} status={status} onRetry={load} />
       <RuntimeCard env={env} />
       <RecommendationCard env={env} />
+      <GovernorCard />
       <HealthCard />
     </section>
   );

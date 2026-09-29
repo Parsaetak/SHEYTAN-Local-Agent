@@ -40,6 +40,7 @@ export type CanonicalEventKind =
   | "idle" // socket has no run attached (recovery signal)
   | "done" // run finished (legacy name)
   | "complete" // run finished (v1.2.5 name)
+  | "aborted" // v1.8.0: run stopped by user/budget — the honest abort marker
   | "error"
   | "unknown";
 
@@ -63,6 +64,7 @@ const KIND_MAP: Record<string, CanonicalEventKind> = {
   verification: "verification",
   done: "done",
   complete: "complete",
+  aborted: "aborted", // v1.8.0: the orchestrator's honest ctx-cancelation marker
 
   // statuses
   thinking: "progress", // legacy caption events keep their meaning
@@ -97,6 +99,7 @@ export function isRunEvidence(kind: CanonicalEventKind): boolean {
     kind === "tool_end" ||
     kind === "done" ||
     kind === "complete" ||
+    kind === "aborted" ||
     kind === "status" ||
     kind === "escalation" ||
     kind === "task"
@@ -179,11 +182,11 @@ export function normalizeToolAllowlist(list: unknown): string[] {
 
 // NetSearchState is the compact in-composer Net Search control state:
 //
-//	off      the control is disabled
-//	enabled  armed — the next request may use the research tool
-//	searching a run is executing the research tool right now
-//	results   the last run produced external evidence
-//	failed   the last search attempt failed (visible + actionable)
+//      off      the control is disabled
+//      enabled  armed — the next request may use the research tool
+//      searching a run is executing the research tool right now
+//      results   the last run produced external evidence
+//      failed   the last search attempt failed (visible + actionable)
 export type NetSearchState =
   | "off"
   | "enabled"

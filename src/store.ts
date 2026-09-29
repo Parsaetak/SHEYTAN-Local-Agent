@@ -1679,6 +1679,45 @@ function handleConversationEvent(event: ActivityEvent): void {
       break;
     }
 
+    case "aborted": {
+      // v1.8.0: the backend's HONEST abort marker. The orchestrator now
+      // publishes "aborted" (never "done") when the run context is
+      // canceled, so the stop path is decided by the event TYPE — no more
+      // caption-string sniffing on done events. The outcome is terminal:
+      // release the composer, settle the timeline on "Stopped", and run
+      // the normal finalisation (the backend persisted the partial answer
+      // through finishSuccessfulRun, so history reload finds it).
+      flushStreaming();
+
+      useRuntimeStore.setState({ thinkingPanelOpen: false });
+
+      const abortCaption =
+        typeof event.data.caption === "string" ? event.data.caption : "";
+
+      const abortedState = useRuntimeStore.getState();
+      const abortedSessionId = abortedState.activeSessionId;
+
+      transitionPhase("aborted");
+
+      runOutcome = "aborted";
+
+      useRuntimeStore.setState({
+        running: false,
+        runNote: abortCaption || null,
+      });
+
+      if (abortedSessionId) {
+        scheduleRunFinalisation(abortedSessionId, 400);
+      } else {
+        useRuntimeStore.setState({ streaming: null, runPhase: "aborted" });
+        runOutcome = null;
+        runAssistantBaseline = null;
+        releaseIdleOwnedResources();
+      }
+
+      break;
+    }
+
     case "done":
     case "complete":
     case "error": {

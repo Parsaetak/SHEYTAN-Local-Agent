@@ -179,6 +179,17 @@ func registeredRun(srv *Server, sessionID string) *runState {
 
 // waitForRunResponse polls the authoritative live state until the run has
 // streamed its first response delta (the deterministic pre-pause beat).
+//
+// v1.8.0 HAZARD NOTE: this helper is valid ONLY for the INITIAL generation
+// of a run, where LatestResponse is still empty. LatestResponse is a
+// CUMULATIVE snapshot that survives pause → resume, so calling this after a
+// resume returns the STALE pre-resume text immediately — it never proves
+// that the resumed generation is live. That exact defect broke
+// TestPauseResumePauseAgainThenResumeCompletes on the Windows runner
+// (Actions run 36553559366): the second pause was issued against a
+// not-yet-proven resumed generation and the run reached "done" while the
+// test waited for "paused". After a resume, use waitForResumedGeneration,
+// which requires evidence of a NEW authoritative event.
 func waitForRunResponse(t *testing.T, srv *Server, sessionID string) string {
 	t.Helper()
 
@@ -206,6 +217,72 @@ func waitForRunResponse(t *testing.T, srv *Server, sessionID string) string {
 	t.Fatal("the run never streamed its first response delta")
 
 	return ""
+}
+
+// resumedGenerationEvidence is the v1.8.0 synchronization contract for the
+// window between a RESUME and the resumed generation's first observable
+// output. It decides whether `now` proves that the RESUMED generation has
+// published a new authoritative event beyond the captured `pre` snapshot.
+//
+// The rules, in order:
+//
+//  1. A strictly greater Sequence: every published event is stamped with
+//     nextSeq() BEFORE it folds (publish → observe happens-before any
+//     snapshot that sees the fold), so a response fold is always preceded
+//     by its sequence bump. Without a newer sequence nothing was published.
+//  2. A CHANGED cumulative response/reasoning snapshot: those fields move
+//     ONLY when a response/reasoning activity folds. A status caption, a
+//     task fold or any other event type bumps the sequence without being
+//     generation evidence — and the pre-resume cumulative text is exactly
+//     the STALE state this contract exists to reject.
+//
+// Together: stale cumulative state (same sequence, same text) is never
+// evidence, a bare sequence bump is never evidence, and only a genuinely
+// new response/reasoning event of the resumed generation is.
+func resumedGenerationEvidence(pre, now runSnapshot) bool {
+	if now.Sequence <= pre.Sequence {
+		return false
+	}
+
+	return now.LatestResponse != pre.LatestResponse ||
+		now.LatestReasoning != pre.LatestReasoning
+}
+
+// waitForResumedGeneration polls the authoritative live state until the
+// RESUMED generation has objectively emitted a new response/reasoning event
+// beyond the pre-resume snapshot `pre` — the deterministic post-resume beat
+// (capture pre BEFORE POSTing /api/run/resume). Fails fast if the run
+// settles first: a settled run can no longer be paused, and hiding that
+// behind a timeout would lie about the synchronization. No delays, no
+// "wait longer": the wait condition itself is the proof.
+func waitForResumedGeneration(t *testing.T, srv *Server, sessionID string, pre runSnapshot) runSnapshot {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		rs := registeredRun(srv, sessionID)
+
+		if rs != nil && rs.live != nil {
+			snap := rs.live.snapshot()
+
+			if snap.TerminalOutcome != "" {
+				t.Fatalf("run settled %q (error %q) before the resumed generation emitted any new delta",
+					snap.TerminalOutcome, snap.Error)
+			}
+
+			if resumedGenerationEvidence(pre, snap) {
+				return snap
+			}
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	t.Fatalf("the resumed generation never emitted authoritative activity beyond seq=%d (response %d bytes, reasoning %d bytes at capture)",
+		pre.Sequence, len(pre.LatestResponse), len(pre.LatestReasoning))
+
+	return runSnapshot{}
 }
 
 // waitForRunPhase polls the authoritative runLive state until the phase

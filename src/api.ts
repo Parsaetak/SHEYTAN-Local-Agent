@@ -181,6 +181,56 @@ export interface HealthPayload {
   generatedAt: string;
 }
 
+// v1.8.0: the Runtime Governor / system-health surface (GET /api/governor).
+// Every block is composed server-side from the EXISTING authorities; a
+// fact the platform cannot measure arrives as measured:false — the UI
+// renders "—", never an invented number.
+export interface GovernorResourceState {
+  at: string;
+  ramTotalBytes?: number;
+  ramAvailableBytes?: number;
+  availableKnown: boolean;
+  procRssBytes?: number;
+  engineRssBytes?: number;
+  engineRssKnown?: boolean;
+  engineRunning?: boolean;
+  engineModel?: string;
+  activeRuns: number;
+  cpuLoadPercent?: number;
+  cpuLoadKnown?: boolean;
+  cpuRollingAvg?: number;
+  level: "ok" | "warning" | "high_pressure" | "critical_pressure";
+  sustained: number;
+  unknowns?: string[];
+}
+
+export interface GovernorEnvelope {
+  level: GovernorResourceState["level"];
+  sustained: number;
+  admitHeavyweight: boolean;
+  reduceBackground: boolean;
+  reduceContextWork: boolean;
+  reduceToolConcurrency: boolean;
+  residentMemoryBudgetBytes?: number;
+  adjustmentClass: "none" | "live" | "next-run" | "reload";
+  reasons?: string[];
+}
+
+export interface GovernorPayload {
+  appName: string;
+  appVersion: string;
+  governor: {
+    available: boolean;
+    reason?: string;
+    state?: GovernorResourceState;
+    envelope?: GovernorEnvelope;
+    selfModel?: Record<string, unknown>;
+  };
+  hardware: Record<string, unknown>;
+  engine: Record<string, unknown>;
+  capabilities: Record<string, boolean>;
+}
+
 export interface TaskProfileInfo {
   id: string;
   label: string;
@@ -2111,6 +2161,11 @@ export const api = {
   // v1.2.2: accepts an AbortSignal (cancellable refresh).
   health(signal?: AbortSignal): Promise<HealthPayload> {
     return request<HealthPayload>("/health", { signal }, 20_000);
+  },
+
+  // v1.8.0: the runtime governor / system-health read model.
+  governor(signal?: AbortSignal): Promise<GovernorPayload> {
+    return request<GovernorPayload>("/governor", { signal }, 20_000);
   },
 
   // v1.2.0: evidence-based runtime recommendation for a model + task

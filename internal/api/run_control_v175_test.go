@@ -479,10 +479,25 @@ func TestPauseResumePauseAgainThenResumeCompletes(t *testing.T) {
 	draft1 := snap1.PausedDraft
 
 	// Resume without changes.
+	//
+	// v1.8.0 SYNCHRONIZATION REPAIR (Actions run 36553559366): the second
+	// pause below must land on a PROVEN live resumed generation. The
+	// previous code reused waitForRunResponse here, whose LatestResponse
+	// condition is satisfied by the STALE pre-resume cumulative snapshot —
+	// it returned before the resumed stream emitted anything, and on a slow
+	// runner the run settled "done" while the test waited for "paused".
+	// The fix is the honest beat: capture the authoritative state BEFORE
+	// resuming, then require a NEW authoritative event (seq advance +
+	// changed cumulative response/reasoning) that only the resumed
+	// generation can produce. No delay, no "wait longer" — the wait
+	// condition itself is the evidence.
+	preResume := registeredRun(srv, sessionID).live.snapshot()
+
 	resumeRun(t, server, sessionID, runID, snap1.Revision)
 
-	// Wait until generating again, then pause a SECOND time mid-stream.
-	waitForRunResponse(t, srv, sessionID)
+	// Wait until the RESUMED generation has emitted new authoritative
+	// activity, then pause a SECOND time mid-stream.
+	waitForResumedGeneration(t, srv, sessionID, preResume)
 
 	status, body := postJSON(t, server, "/api/run/pause", map[string]any{
 		"sessionId": sessionID,
