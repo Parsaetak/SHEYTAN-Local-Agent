@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.8.0
+Current release:  v1.8.1
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -40,7 +40,43 @@ v1.8.0 a Runtime Governor folds the existing live-pressure telemetry into a
 policy authority — it owns policy only; every action stays with its
 existing subsystem. Full truth: `ARCHITECTURE.md`.
 
-## v1.8.0 highlights
+## v1.8.1 highlights
+
+* **P0 — the real-Windows local-generation crash is repaired at the root** —
+  on a machine running a small local Gemma-class model, an ordinary `hi`
+  turn panicked with a nil pointer dereference between `task classified`
+  and `tier selected`, settling as an error in ~57 ms with no request ever
+  reaching the engine. Root cause (reproduced deterministically): Gemma-class
+  GGUFs carry ~262K-entry tokenizer blocks whose metadata exceeds the model
+  card parser's old 8 MiB read bound, so the capability card resolved to nil
+  and the orchestrator's estimator block dereferenced it. Two repairs: the
+  documented nil-card fallback (configured context + conservative estimator)
+  in `resolveEffectiveContext`, and a 32 MiB read bound so real Gemma-class
+  cards parse again — restoring the model-aware context clamp and
+  family-tuned token estimation for exactly that model class. Regressions
+  pin both layers, including a full LOCAL-engine end-to-end `hi` run
+  (engine request evidence, streamed response before `done`, one persisted
+  reply, one settlement, a second ordinary chat).
+* **P0 — streamed answers become visible through ONE render frame instead
+  of two** — response/reasoning content previously waited for the activity
+  batch frame AND the streaming flush frame before appearing. The new
+  single-frame fast path folds stream-critical events into the streaming
+  accumulator the moment the WebSocket delivers them; the timeline batch,
+  sequence/stale-run protection, cumulative-snapshot semantics, replay
+  idempotence and synchronous done/error/abort flushing are all preserved
+  (12 deterministic frame-controller tests, no sleeps).
+* **P1 — engine rollback now restores the recorded identity** — a failed
+  startup verification after a package swap could leave the transient
+  bundled-default tag stamped in `installed.json` while the restored
+  manifest described the actually-serving engine; `Rollback()` now
+  re-records from the restored manifest (regression-tested, including the
+  user's observed b10642 transient shape).
+* Audited with no change needed: the legacy AppData root migration
+  (newer-wins collisions, one authoritative root, idempotent next boot) is
+  the intended contract; GPU/AUTO CPU selection with `numGPU=0` remains the
+  honest evidence-ladder outcome.
+
+## v1.8.0 highlights (historical)
 
 * **P0 — the Windows pause→resume→pause synchronization defect is repaired
   at the root** — the failing test (`TestPauseResumePauseAgainThenResumeCompletes`,
@@ -169,11 +205,15 @@ Every release through v1.7.6 was shipped with the same invariants: one
 authority per concern, evidence over confidence, no sleep-based
 correctness, honest hardware claims, the codename gate enabled.
 
-* **v1.8.0 (current)** — pause/resume synchronization repair at the root;
+* **v1.8.1 (current)** — real-Windows local-generation crash repaired at
+  the root (nil capability card on Gemma-class GGUFs + the 8→32 MiB card
+  read bound); single-frame streamed-answer visibility; engine rollback
+  identity restoration; version truth 1.8.1.
+* **v1.8.0** — pause/resume synchronization repair at the root;
   honest abort marker end-to-end (state/registry agreement restored); the
   Runtime Governor vertical slice (resource state, pressure model,
   envelope, admission, self-model) + `/api/governor` + System Centre card;
-  documentation consolidated to current + history; version truth 1.8.0.
+  documentation consolidated to current + history.
 * **v1.7.6** — edit-transaction journals with ten-window crash/fault
   recovery matrix; restart-recovered runs claim the checkpoint revision;
   paused surface excludes journals; token-aware codename gate; generation-

@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Architecture Truth Table
 
-Current for **v1.8.0**. This document states the architecture that IS
+Current for **v1.8.1**. This document states the architecture that IS
 implemented and verified in this repository. Future R&D is NOT described as
 implemented; the roadmap (`ROADMAP.md`) owns the future. Historical
 release-specific architecture notes were consolidated at the end.
@@ -47,7 +47,18 @@ spawn, device enumeration as the only execution-evidence source. The native
 engine (C++, `native/engine`) is a supervised alternative path with real
 generation for validated llama-architecture models and honest incapability
 verdicts (fallback, never a crash). Engine identity, corruption rows and
-update transactions are deterministic and covered by fault-injection.
+update transactions are deterministic and covered by fault-injection
+(v1.8.1: a rolled-back transaction also restores the recorded tag from the
+restored manifest, so state, manifest and serving binary can never
+disagree).
+
+**Model capability cards (v1.8.1):** the GGUF header parser reads up to
+32 MiB of metadata (`ggufMetadataReadLimit`) — real Gemma-class tokenizer
+blocks (262,144-entry arrays) exceed the old 8 MiB bound and made the card
+unreadable. A card that still cannot be read resolves to a nil capability
+object, and every consumer follows the documented fallback (configured
+context, conservative estimator) — never a dereference. The capability
+resolution itself is uniformly nil-config-safe.
 
 ## 3. Session / run lifecycle
 
@@ -75,6 +86,16 @@ changed cumulative response/reasoning snapshot
 publish the `aborted` activity type; the live state and the outcome
 registry agree on `aborted` forever (settleTerminal never has to override
 an early flip).
+
+**Streaming display (v1.8.1):** the backend emits cumulative
+`response`/`reasoning` snapshots (SmoothStream, ~8 ms minimum emit
+interval). In the frontend, stream-critical events fold into the streaming
+accumulator AT SOCKET-RECEIVE TIME (`src/stream-fast-path.ts`) — ONE
+render-frame boundary between the WebSocket and visible text. The events
+still join the activity timeline batch; a self-draining ledger guarantees
+the batch never processes them twice. Cumulative replace semantics,
+replay/reconnect idempotence, sequence/stale-run protection and the
+synchronous done/error/abort flush are unchanged.
 
 ## 4. Memory / context architecture
 

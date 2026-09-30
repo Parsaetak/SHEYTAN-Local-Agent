@@ -1,10 +1,92 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.8.0
+Current release:  v1.8.1
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
 `UPDATE.md`, the future in `ROADMAP.md`.
+
+---
+Task ID: 1 (v1.8.1 session)
+Agent: v1.8.1 engineering session
+Task: v1.8.1 — P0 real-Windows local-generation crash repair (small Gemma
+model + `hi`), P0 single-frame streamed-answer visibility, P1 engine
+rollback identity repair, audits, version truth
+
+Work Log:
+- Baseline: HEAD `e5a12c0` (`v1.8.0`), CI green (`36570586149`). The
+  primary evidence is the user's Windows runtime log: local CPU backend,
+  `gemma-4-E2B-it-Q4_K_M.gguf`, llama.cpp b11261, preflight
+  `compatible=true`, then `recovered panic: runtime error: invalid memory
+  address or nil pointer dereference` after `task classified: kind=chat
+  complexity=8`, run settled `error` in ~57 ms, no request-sent /
+  response-header / first-byte evidence.
+- Reproduced the panic deterministically BEFORE any fix (synthetic
+  Gemma-class GGUF: 262,144-entry tokenizer block > the parser's 8 MiB
+  read bound): `ReadModelCard` fails at the LimitReader →
+  `ResolveModelCapabilities` returns nil → the orchestrator's
+  `resolveEffectiveContext` dereferences `caps.TokenizerFamily` between
+  `task classified` and `tier selected` — the exact window and signature.
+- P0 crash repairs: (1) nil-card fallback in `resolveEffectiveContext`
+  (documented caps contract: configured context + conservative heuristic
+  estimator); (2) GGUF metadata read bound 8 → 32 MiB
+  (`ggufMetadataReadLimit`) so real Gemma-class cards parse again
+  (model-aware context clamp + family estimator restored for that model
+  class); (3) `ResolveModelCapabilities` made uniformly nil-config-safe
+  (the vision block was guarded, the recommendation block was not — same
+  deref class, found during verification); (4) gemma3n/gemma4 added to
+  the tokenizer-family and chat-template lineage lists.
+- Regressions (each verified to FAIL on the pre-fix code):
+  `TestResolveEffectiveContextSurvivesUnreadableCard` (unit, panics
+  pre-fix), `TestGemmaClassCardParsesUnderRaisedBound`,
+  `TestResolveEffectiveContextGemmaClassEndToEnd`,
+  `TestLocalGemmaHiChatCompletes` and
+  `TestLocalChatSurvivesUnreadableModelCard` (the api package's FIRST
+  local-provider run-level E2E tests — the test binary re-executes as a
+  fake llama-server subprocess serving the real engine contract; the
+  unreadable-card E2E settles `error` pre-fix, `done` post-fix).
+- P0 streaming: the store routed streamed text through TWO render frames
+  (activity batch frame → streaming flush frame). New
+  `src/stream-fast-path.ts`: stream-critical events
+  (response/reasoning) fold into the streaming accumulator at
+  socket-receive time — ONE frame boundary; the events still join the
+  timeline batch, a self-draining ledger prevents double processing;
+  cumulative-replace, replay idempotence, sequence/stale-run protection
+  and the synchronous done/error/abort flush are unchanged. 12
+  deterministic frame-controller tests (`stream-fast-path.test.ts`), no
+  sleeps. Registered in `npm run test:units`.
+- Backend `emitProgress` SplitThink O(n²) assessed and NOT optimized:
+  bounded by the ~8 ms emit throttle; at realistic local-model token
+  rates the scan volume is negligible (worst case ~6 MB/s on a 100 KB
+  response). Correctness preserved (measure, don't guess).
+- P1 engine identity: the user's b10642 transient is the documented
+  last-resort stamp during the verification window; the commit is
+  authoritative (existing tests pin two-boot no-redownload, manifest
+  fallback, corrupt-state fallback, genuinely-newer-still-updates). ONE
+  real defect found and fixed: after a FAILED verification + Rollback,
+  the transient stamp survived in `installed.json` while the restored
+  manifest described the serving engine (state-first
+  `EffectiveInstalledEngineTag` would then read the wrong build).
+  `Rollback()` now re-records from the restored manifest;
+  `TestRollbackRestoresRecordedIdentityFromManifest` fails pre-fix at
+  exactly `b10642`, plus `TestCommitRemainsTheAuthoritativeIdentity` and
+  `TestRollbackLeavesStateUntouchedWhenManifestHasNoTag`.
+- P1 runtime-root migration audit: the user's
+  `detected=1 merged=1 recovered=0 collisions=4 removed=1
+  reloadConfig=false` IS the intended contract (deterministic newer-wins
+  collisions, one authoritative root, idempotent next boot) — pinned by
+  the existing migration family; no change. GPU/AUTO CPU with `numGPU=0`
+  remains the honest evidence-ladder outcome; Runtime Governor untouched.
+- Version truth 1.8.1 through the canonical gate
+  (`node scripts/release-version.mjs --check` green); README/UPDATE/
+  ARCHITECTURE/agent.md updated to v1.8.1 current with v1.8.0 compressed
+  to history.
+
+Stage Summary:
+- v1.8.1 repairs the real-Windows `hi` crash at the root (both layers:
+  the deref guard and the card-read bound), makes streamed answers
+  visible through ONE render frame, and restores engine rollback
+  identity truth. All regressions were proven against the pre-fix code.
 
 ---
 Task ID: 1 (v1.8.0 session)

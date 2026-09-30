@@ -60,6 +60,7 @@ import {
   isEmpty as accumulatorIsEmpty,
   mergeSnapshot,
 } from "./stream-accumulator";
+import { StreamingFastPath } from "./stream-fast-path";
 
 export type ConnectionState =
   "idle" | "connecting" | "connected" | "disconnected" | "error";
@@ -639,6 +640,32 @@ let pendingActivity: ActivityEvent[] = [];
 let flushingActivity: ActivityEvent[] = [];
 let pendingRunning: boolean | undefined;
 
+// --- v1.8.1: SINGLE-FRAME STREAMING FAST PATH -------------------------------
+//
+// Stream-critical events (response/reasoning content) previously waited
+// TWO render-frame boundaries before becoming visible: the activity
+// batch frame AND the streaming flush frame. The fast path folds them
+// into the streaming accumulator THE MOMENT the WebSocket delivers
+// them, so the first (and every subsequent) streamed snapshot is visible
+// on the NEXT rendering frame — ONE boundary, no artificial delays, no
+// per-token renders (the streaming flush still coalesces everything
+// arriving within one frame).
+//
+// The event still joins the activity timeline batch; the fast-path
+// ledger (inside StreamingFastPath) makes the batch flush skip its
+// conversation processing so nothing is processed twice. Lifecycle
+// events (done/error/aborted) keep the existing path — they flush the
+// accumulator SYNCHRONOUSLY when the batch reaches them.
+const streamFastPath = new StreamingFastPath({
+  foldContent: (caption) => queueStreamingContent(caption),
+  foldReasoning: (caption) => queueStreamingReasoning(caption),
+  phaseResponseDelta: () => transitionPhase("response_delta"),
+  phaseReasoningDelta: () => transitionPhase("reasoning_delta"),
+  markRunEvidence: () => {
+    runEventsReceived = true;
+  },
+});
+
 // --- Phase 4: streaming coalescing ---------------------------------------
 //
 // High token rates (100+ tokens/sec) can swamp React with one setState
@@ -811,6 +838,11 @@ function resetPendingActivity(): void {
     activityFlushFrame = null;
   }
 
+  // v1.8.1: the fast-path ledger is per-socket state — a reconnect or
+  // session switch starts a clean ledger (the pending batch it
+  // referenced is being dropped below anyway).
+  streamFastPath.reset();
+
   pendingActivity.length = 0;
   flushingActivity.length = 0;
   pendingRunning = undefined;
@@ -899,7 +931,15 @@ function setActivityBatch(
   // v1.1.3: route conversation-relevant events into the message pipeline
   // (streaming bubbles + the run-end bookkeeping that used to leave the
   // composer permanently disabled after one message).
+  //
+  // v1.8.1: stream-critical events were ALREADY processed by the fast
+  // path at socket-receive time — the ledger skip guarantees they are
+  // never processed (or displayed) twice.
   for (const event of batch) {
+    if (streamFastPath.consumeBatchEvent(event.id)) {
+      continue;
+    }
+
     handleConversationEvent(event);
   }
 }
@@ -3110,7 +3150,22 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
           return;
         }
 
-        queueActivity(normalizeActivity(payload));
+        const activity = normalizeActivity(payload);
+
+        // v1.8.1 SINGLE-FRAME STREAMING: stream-critical content
+        // (response/reasoning) folds into the streaming accumulator NOW —
+        // visible on the next rendering frame, ONE boundary instead of
+        // two. The event still joins the timeline batch below; the
+        // fast-path ledger makes the batch flush skip its conversation
+        // processing (no double handling). Everything else — status,
+        // tools, done/error/abort — keeps the existing batching.
+        streamFastPath.deliver(
+          activity.id,
+          activity.type,
+          activity.data.caption,
+        );
+
+        queueActivity(activity);
       } catch {
         // Ignore malformed activity frames.
       }

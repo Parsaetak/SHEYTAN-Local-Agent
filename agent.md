@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.0 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.1 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -6,7 +6,7 @@ durable invariants, and the surfaces most sensitive to regression. Full
 truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (future),
 `UPDATE.md` (release evidence), `worklog.md` (session log).
 
-**Current release: v1.8.0.** Version identity is exactly `1.8.0`
+**Current release: v1.8.1.** Version identity is exactly `1.8.1`
 everywhere (canonical gate: `node scripts/release-version.mjs --check`).
 
 ---
@@ -37,6 +37,18 @@ proposes. The tools execute. The laboratory verifies."
 * **v1.8.0 abort honesty** — the orchestrator's context-cancelation exits
   publish `aborted` (never `done`); `observe()` folds it; live state and
   outcome registry agree; the frontend consumes the typed marker.
+* **v1.8.1 local-generation crash repair** — a GGUF card that cannot be
+  read (Gemma-class tokenizer blocks beyond the old 8 MiB bound, or any
+  unreadable file) resolves to a nil capability object; every consumer
+  follows the documented fallback (configured context + conservative
+  estimator) — the orchestrator never dereferences it. The read bound is
+  now 32 MiB, so real Gemma-class cards parse and drive the model-aware
+  context clamp. FIRST local-provider run-level E2E tests exist in
+  `internal/api` (fake llama-server subprocess, real engine contract).
+* **v1.8.1 single-frame streaming** — `src/stream-fast-path.ts` folds
+  stream-critical WS events into the streaming accumulator at receive
+  time (ONE render-frame boundary); the timeline batch skips them via a
+  self-draining ledger; done/error/abort still flush synchronously.
 * **Runtime Governor** (`internal/governor`) — the ONE runtime POLICY
   authority: resource state (measured + explicit unknowns), sustained +
   rolling pressure signals over the shipped four-level vocabulary,

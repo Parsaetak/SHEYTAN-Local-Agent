@@ -1,13 +1,91 @@
-# UPDATE.md — v1.8.0 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.8.1 Release Notes & Maintenance Behavior
 
-**Release:** `v1.8.0` (canonical application version; single version
+**Release:** `v1.8.1` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ eab6e1b` (`v1.7.6`) · **Date:** 2026-09-29
-**Package:** `SHEYTAN-Local-Agent-v1.8.0-FINAL.zip` (complete repository
+**Base:** `main @ e5a12c0` (`v1.8.0`) · **Date:** 2026-09-30
+**Package:** `SHEYTAN-Local-Agent-v1.8.1-FINAL.zip` (complete repository
 tree)
 
-## v1.8.0 changes
+## v1.8.1 changes
+
+1. **P0 — the real-Windows local-generation crash (`hi` on a small local
+   Gemma model), repaired at the root.** Evidence baseline: a user's
+   v1.8.0 Windows session (CPU backend, `gemma-4-E2B-it-Q4_K_M.gguf`,
+   llama.cpp b11261, preflight `compatible=true`) logged
+   `recovered panic: runtime error: invalid memory address or nil pointer
+   dereference` right after `task classified: kind=chat complexity=8`,
+   settling as an error in ~57 ms with no request-sent/response-header/
+   first-byte evidence. Root cause (reproduced deterministically before
+   the fix): Gemma-class GGUFs carry 262,144-entry tokenizer blocks whose
+   metadata exceeds the model-card parser's 8 MiB read bound →
+   `ReadModelCard` fails at the `LimitReader` →
+   `ResolveModelCapabilities` returns nil → the orchestrator's
+   `resolveEffectiveContext` dereferenced `caps.TokenizerFamily` between
+   `task classified` and `tier selected`. Two repairs, both verified:
+   (a) the nil-card path now honors the documented caps contract (the
+   configured context + the conservative heuristic estimator — exactly
+   the remote/unresolved-model fallback); (b) the GGUF metadata read
+   bound is 32 MiB (`ggufMetadataReadLimit`), so real Gemma-class cards
+   parse again, restoring the model-aware context clamp and the
+   family-tuned estimator. Same class, second site:
+   `ResolveModelCapabilities` itself guarded `cfg` for vision but
+   dereferenced `cfg.LLM` for recommendations — now uniformly nil-safe.
+   The Gemma lineage lists also recognize `gemma3n`/`gemma4`.
+   Evidence: `TestResolveEffectiveContextSurvivesUnreadableCard` (panics
+   on the pre-fix code), `TestGemmaClassCardParsesUnderRaisedBound`,
+   `TestResolveEffectiveContextGemmaClassEndToEnd`, plus the first
+   LOCAL-provider run-level E2E tests in the api package —
+   `TestLocalGemmaHiChatCompletes` (fake llama-server spawned as a real
+   subprocess: engine request evidence, streamed response frames before
+   `done`, one persisted reply, one settlement, a second ordinary chat)
+   and `TestLocalChatSurvivesUnreadableModelCard` (verified to fail on
+   the pre-fix code with the exact settled-as-error signature).
+
+2. **P0 — low first-visible latency: streamed content now crosses ONE
+   render-frame boundary, not two.** The store previously routed every
+   activity frame through `queueActivity → rAF (activity batch) →
+   handleConversationEvent → queueStreamingContent → rAF (streaming
+   flush) → React render`. The new single-frame fast path
+   (`src/stream-fast-path.ts`, wired at the WebSocket receive boundary)
+   folds stream-critical events (`response`/`reasoning` — canonical
+   `assistant_delta`/`thinking_delta`) into the streaming accumulator the
+   moment the socket delivers them; the event still joins the timeline
+   batch, and a self-draining ledger makes the batch skip its
+   conversation processing (never processed twice). Preserved unchanged:
+   cumulative-snapshot replace semantics, replay/reconnect idempotence,
+   run-sequence/stale-run protection, lifecycle ordering, and the
+   SYNCHRONOUS done/error/abort flush (no second frame for terminal
+   events). No artificial delays, no per-token renders. Evidence: 12
+   deterministic tests (`src/stream-fast-path.test.ts`) driven by a fake
+   `requestAnimationFrame` controller — no sleeps.
+
+3. **P1 — engine rollback restores the recorded identity.** During
+   startup verification (between the package swap and the commit)
+   `ensureBinary` may stamp the bundled-default tag as the last-resort
+   identity of a tagless, manifest-less binary — the exact transient in
+   the user's log (`recording the bundled default tag b10642`). If
+   verification then fails and the previous package is rolled back, that
+   stamp survived in `installed.json` while the restored manifest
+   described the actually-serving engine; since
+   `EffectiveInstalledEngineTag` is state-first, the next "update
+   required" comparison and the UI engine tag would read the wrong
+   build. `Rollback()` now re-records the tag from the restored manifest
+   (conservatively: no invented identity when the manifest has none).
+   Evidence: `TestRollbackRestoresRecordedIdentityFromManifest` (fails on
+   the pre-fix code at exactly `b10642`), `TestCommitRemainsTheAuthoritativeIdentity`, `TestRollbackLeavesStateUntouchedWhenManifestHasNoTag`.
+
+4. **Audited, no change required.** The legacy AppData root migration
+   logged by the user (`detected=1 merged=1 recovered=0 collisions=4
+   removed=1 reloadConfig=false`) IS the intended contract — deterministic
+   newer-wins collisions, one authoritative root afterward, idempotent
+   next boot — and is pinned by the existing migration test family.
+   GPU/AUTO selecting CPU with `numGPU=0` and no measured accelerator
+   evidence remains the honest evidence-ladder outcome. The Runtime
+   Governor was not expanded; the v1.8.1 changes touch no resource-state
+   collection, pressure hysteresis, admission or protection path.
+
+## v1.8.0 changes (historical, compact)
 
 1. **P0 — the Windows pause→resume→pause synchronization defect, repaired
    at the root.** `TestPauseResumePauseAgainThenResumeCompletes` failed on
@@ -88,11 +166,16 @@ tree)
 * The maintenance gate (identity manifest + committed state) still owns
   engine updates; two-boot idempotency and the corruption matrix are
   unchanged (deterministic, fault-injected).
+* v1.8.1: a rolled-back engine transaction now leaves the RECORDED tag
+  agreeing with the restored package (re-recorded from the restored
+  manifest; no invented identity). The commit remains the authoritative
+  identity record — state, manifest, binary hash all agree after every
+  successful update.
 * The update path still resolves engine variants through the ONE
   authoritative resolver (pinned tag first, else newest release containing
   the asset); unsupported variants are REFUSED, never silently CPU-fallen.
 * Update rollback safety, zipsafe installation and effective-tag rules are
-  unchanged from v1.7.4–v1.7.5.
+  unchanged from v1.7.4–v1.7.5 (plus the v1.8.1 rollback identity repair).
 * The Runtime Governor adds NO persistence, NO new scheduler and NO new
   updater: it is a policy read-model over existing telemetry. Restarting
   the app re-measures; nothing to migrate.
@@ -101,9 +184,12 @@ tree)
 
 * Deterministic unit / race / integration / E2E / CI / real-engine probe /
   real-host runtime are DISTINCT evidence classes and are never conflated.
-* v1.8.0 CI evidence cited here was produced on Linux (headless gates) —
-  the Windows pause/resume defect was repaired against the exact CI
-  scenario deterministically; no physical-PC Windows runtime claim is made.
+* v1.8.1 crash repair evidence: the panic was reproduced deterministically
+  from the user's log signature BEFORE the fix, and every regression here
+  was verified to fail against the pre-fix code. The end-to-end `hi` runs
+  use a REAL local-engine subprocess (the api package's first LOCAL-path
+  run-level tests); a physical Windows host run remains the user's own
+  acceptance step — no physical-PC claim is made by CI.
 * Build/typecheck ≠ runtime proof; CI ≠ physical-host runtime proof;
   detection ≠ execution.
 

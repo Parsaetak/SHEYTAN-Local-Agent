@@ -532,6 +532,22 @@ func (st *StagedInstall) Rollback() error {
                 return fmt.Errorf("rollback: restore previous engine package: %w", err)
         }
 
+        // v1.8.1 IDENTITY REPAIR: the previous package's manifest is back —
+        // make the RECORDED tag agree with it again. During startup
+        // verification (between the swap and this rollback) ensureBinary may
+        // have stamped the BUNDLED DEFAULT tag as the last-resort identity of
+        // a tagless, manifest-less binary; with the old package restored,
+        // that transient stamp would claim the WRONG engine to every plain
+        // InstalledEngineTag reader (the UI's engine tag, the next "update
+        // required" comparison). EffectiveInstalledEngineTag is state-FIRST,
+        // so a wrong recorded tag outranks the honest restored manifest —
+        // re-record from the manifest that now describes the serving binary.
+        // Conservative: when the restored manifest carries no tag either,
+        // the state is left untouched (nothing better is known).
+        if tag := ManifestEngineTag(st.cfg); tag != "" {
+                RecordEngineTag(st.cfg, tag)
+        }
+
         logging.Default().Warn("updater",
                 "engine %s rolled back — previous package restored as active", st.tag)
 
