@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.1 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.2 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -6,8 +6,10 @@ durable invariants, and the surfaces most sensitive to regression. Full
 truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (future),
 `UPDATE.md` (release evidence), `worklog.md` (session log).
 
-**Current release: v1.8.1.** Version identity is exactly `1.8.1`
+**Current release: v1.8.2.** Version identity is exactly `1.8.2`
 everywhere (canonical gate: `node scripts/release-version.mjs --check`).
+Release history lives ONLY in `changelog.md` (the README is
+current-only).
 
 ---
 
@@ -45,10 +47,24 @@ proposes. The tools execute. The laboratory verifies."
   now 32 MiB, so real Gemma-class cards parse and drive the model-aware
   context clamp. FIRST local-provider run-level E2E tests exist in
   `internal/api` (fake llama-server subprocess, real engine contract).
-* **v1.8.1 single-frame streaming** — `src/stream-fast-path.ts` folds
-  stream-critical WS events into the streaming accumulator at receive
-  time (ONE render-frame boundary); the timeline batch skips them via a
-  self-draining ledger; done/error/abort still flush synchronously.
+* **v1.8.2 dual-boundary streaming flush** — `src/stream-fast-path.ts`
+  still folds stream-critical WS events into the streaming accumulator at
+  receive time; the flush is armed on an event-loop task AND an animation
+  frame (`src/stream-flush-scheduler.ts`) so visibility never depends on
+  compositor frame callbacks (the "text visible only after Stop" WebView2
+  failure class). ONE coalescing latch; done/error/abort still flush
+  synchronously.
+* **v1.8.2 memory evidence** — `contextplan.MemoryEvidence` rides the
+  `context` activity; the live bubble renders exactly it
+  (`src/memory-evidence.ts`). No fabricated counts, ever.
+* **v1.8.2 capability self-model** — `taskclassify.SelfDescribe` intent +
+  `internal/agent/selfmodel.go` (ONE formatter over the existing
+  authorities); capability questions stay cheap.
+* **v1.8.2 identity-based caps cache** — `internal/llm/modelcaps.go`
+  caches the immutable GGUF card under (path, size, mtime) with no TTL;
+  config-sensitive fields re-derive on a config fingerprint change.
+* **v1.8.2 log redaction** — `internal/logging/redact.go` strips
+  `runId=`/`session=`-style tokens at the central sink only.
 * **Runtime Governor** (`internal/governor`) — the ONE runtime POLICY
   authority: resource state (measured + explicit unknowns), sustained +
   rolling pressure signals over the shipped four-level vocabulary,

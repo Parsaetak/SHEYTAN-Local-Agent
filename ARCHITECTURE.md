@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Architecture Truth Table
 
-Current for **v1.8.1**. This document states the architecture that IS
+Current for **v1.8.2**. This document states the architecture that IS
 implemented and verified in this repository. Future R&D is NOT described as
 implemented; the roadmap (`ROADMAP.md`) owns the future. Historical
 release-specific architecture notes were consolidated at the end.
@@ -87,15 +87,44 @@ publish the `aborted` activity type; the live state and the outcome
 registry agree on `aborted` forever (settleTerminal never has to override
 an early flip).
 
-**Streaming display (v1.8.1):** the backend emits cumulative
+**Streaming display (v1.8.2):** the backend emits cumulative
 `response`/`reasoning` snapshots (SmoothStream, ~8 ms minimum emit
 interval). In the frontend, stream-critical events fold into the streaming
-accumulator AT SOCKET-RECEIVE TIME (`src/stream-fast-path.ts`) — ONE
-render-frame boundary between the WebSocket and visible text. The events
-still join the activity timeline batch; a self-draining ledger guarantees
-the batch never processes them twice. Cumulative replace semantics,
-replay/reconnect idempotence, sequence/stale-run protection and the
-synchronous done/error/abort flush are unchanged.
+accumulator AT SOCKET-RECEIVE TIME (`src/stream-fast-path.ts`). The flush
+is scheduled on TWO deterministic boundaries (`src/stream-flush-scheduler.ts`)
+— an event-loop task (MessageChannel) AND an animation frame; whichever
+runs first flushes and the other no-ops — so visibility never depends on
+compositor frame callbacks (the WebView2 rAF-throttling failure class:
+text visible only after Stop). Exactly ONE coalescing latch remains; the
+events still join the activity timeline batch, a self-draining ledger
+guarantees the batch never processes them twice, and cumulative replace
+semantics, replay/reconnect idempotence, sequence/stale-run protection and
+the synchronous done/error/abort flush are unchanged.
+
+**Live memory evidence (v1.8.2):** the orchestrator composes
+`contextplan.MemoryEvidence` from the survival-reconciled injection facts
+and publishes it on the existing `context` activity. The live bubble
+renders exactly that record (`src/memory-evidence.ts`); a block the
+windower elided is never claimed, and no record means no indicator.
+
+**Capability self-model (v1.8.2):** a deterministic intent signal
+(`taskclassify.Signals.SelfDescribe`) triggers ONE bounded runtime
+self-model block (`internal/agent/selfmodel.go`) composed from the
+existing authorities — the registry snapshot, the already-resolved model
+card, config-backed backend facts, the sysinfo fast snapshot. No second
+capability database exists; capability questions trigger no research,
+recall or repo indexing.
+
+**Model capability cache (v1.8.2):** `internal/llm/modelcaps.go` caches the
+immutable parsed GGUF card under (path, size, mtime) with NO TTL;
+config-sensitive fields (multimodal pairing, recommendations) re-derive
+from the cached card when a configuration fingerprint changes. A turn
+separated by minutes no longer re-parses the GGUF metadata.
+
+**Log redaction (v1.8.2):** `internal/logging/redact.go` removes the
+opaque identity tokens (`runId=`, `session=`, …) at the ONE central sink;
+internal identity (API objects, run state, journals, storage keys) is
+untouched.
 
 ## 4. Memory / context architecture
 

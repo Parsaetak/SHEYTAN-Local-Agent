@@ -1211,8 +1211,15 @@ func (s *LlamaServer) detectCapsForBoot(cfg *config.Config, binPath string) *Eng
 
         caps := DetectEngineCaps(binPath, tag)
         s.logf("engine capability profile: %s (source: %s)", capsSummary(caps), caps.Source)
+        // v1.8.2 clarity: this line is the BOOT PROBE of the binary being
+        // launched right now — during a deferred-commit verification window
+        // that binary may still be the PREVIOUS build while a newer staged
+        // candidate awaits the commit decision. The sequence in a log is
+        // therefore explicit: "<tag> staged" → this boot probe (serving
+        // binary) → "<tag> committed" → the NEXT boot probe reports the new
+        // build as authoritative.
         logging.Default().Info("engine",
-                "engine version %s — capability profile %s (source %s)",
+                "engine boot probe: binary build %s — capability profile %s (source %s)",
                 tag, capsSummary(caps), caps.Source)
         return caps
 }

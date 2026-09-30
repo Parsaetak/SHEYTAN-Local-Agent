@@ -774,8 +774,11 @@ func (o *Orchestrator) RunDetailed(
 
         // Model-aware effective context: min(session policy, configured,
         // GGUF model limit, engine limit) — resolved BEFORE tier selection
-        // because the tier decision needs the real window.
-        effCtx := o.resolveEffectiveContext(cfg, ro.sessionContext)
+        // because the tier decision needs the real window. v1.8.2: the
+        // model card comes back too — the capability self-model (when the
+        // request carries capability intent) consumes the SAME resolved
+        // card; nothing re-parses the GGUF.
+        effCtx, modelCaps := o.resolveEffectiveContextCaps(cfg, ro.sessionContext)
         safety := contextSafetyMargin(effCtx.Effective)
 
         // --- SELECT TIER (measured resources, no hard-coded sizes) ---------
@@ -878,6 +881,51 @@ func (o *Orchestrator) RunDetailed(
                 )
 
                 wePrependedBriefing = true
+        }
+
+        // v1.8.2 CAPABILITY SELF-MODEL: when the request carries
+        // capability intent ("what tools do you have?", "what can you
+        // do?", "what model are you running?"), inject ONE bounded block
+        // of measured runtime facts composed from the EXISTING
+        // authorities — the tool registry snapshot above, the already-
+        // resolved model card, config-backed backend facts, the sysinfo
+        // fast snapshot and the turn's memory plan. The block rides the
+        // system prefix as verified application-authored facts (the same
+        // authority class as the briefing — the v1.2.9 boundary), is
+        // measured by the Phase 7 pipeline like any other system content,
+        // and costs NOTHING on ordinary turns (the intent signal is
+        // deterministic vocabulary detection; no research, no recall, no
+        // repo indexing is triggered by a capability question).
+        if profile.Signals.SelfDescribe {
+                offeredNames := append([]string{}, composer.allNames...)
+                sort.Strings(offeredNames)
+
+                block := BuildSelfModel(SelfModelInput{
+                        Cfg:          cfg,
+                        ToolSnapshot: toolSnap,
+                        EnabledNames: enabledNames,
+                        OfferedNames: offeredNames,
+                        Caps:         modelCaps,
+                })
+
+                if block != "" {
+                        messages = insertBeforeLastUser(messages, llm.Message{
+                                Role:    "system",
+                                Content: block,
+                        })
+
+                        onActivity(Activity{
+                                Type:      "thinking",
+                                Caption:   "Runtime self-model composed from the live registry and measured model facts",
+                                Timestamp: time.Now(),
+                        })
+
+                        logging.Default().Info(
+                                "agent",
+                                "capability intent detected — runtime self-model injected (%d bytes, %d offered tools)",
+                                len(block), len(offeredNames),
+                        )
+                }
         }
 
         // v1.0.2 thinking mode — v1.2.5: the per-request control resolves
@@ -1424,6 +1472,35 @@ func (o *Orchestrator) RunDetailed(
                 status,
         )
 
+        // v1.8.2 MEMORY EVIDENCE: compose the backend-truth record of what
+        // the memory authorities actually injected THIS turn, from the
+        // survival-reconciled injection facts (never from intent — a block
+        // the windower elided did NOT reach the model and must not be
+        // claimed). The record rides the plan on the `context` activity,
+        // so the live UI and any reconnect replay show exactly what was
+        // real. No new memory authority is introduced: every field is a
+        // measured fact of the existing injection path above.
+        recallAttempted := recaller != nil && cfg.RecallEnabled &&
+                task != "" && composer.tierSpec().IncludeRecall
+
+        recalledShown := 0
+        if survivedRecall > 0 {
+                recalledShown = result.Recalled
+        }
+
+        refsShown := 0
+        if survivedRefs > 0 {
+                refsShown = len(preWindowRefBlocks)
+        }
+
+        plan.Memory = &contextplan.MemoryEvidence{
+                SummaryInjected:   survivedSummary > 0,
+                SummaryTokens:     survivedSummary,
+                RecalledExchanges: recalledShown,
+                HistoryRefs:       refsShown,
+                RecallAttempted:   recallAttempted,
+        }
+
         // v1.1.3: publish the context provenance report once per turn so
         // the UI can show the real budget split without exposing prompts.
         onActivity(Activity{
@@ -1481,10 +1558,10 @@ func (o *Orchestrator) RunDetailed(
 
         for iter := 0; iter < maxIter; iter++ {
                 if err := ctx.Err(); err != nil {
-                                                        // v1.8.0: honest abort marker — a canceled generation is not a
-                                // completed one. The caller settles the authoritative outcome
-                                // from the context state; the live state must agree with it.
-onActivity(Activity{
+                        // v1.8.0: honest abort marker — a canceled generation is not a
+                        // completed one. The caller settles the authoritative outcome
+                        // from the context state; the live state must agree with it.
+                        onActivity(Activity{
                                 Type:      "aborted",
                                 Caption:   abortCaption(err),
                                 Timestamp: time.Now(),
@@ -1800,10 +1877,10 @@ onActivity(Activity{
                         }
 
                         if cerr := ctx.Err(); cerr != nil {
-                                                                        // v1.8.0: honest abort marker — a canceled generation is not a
-                                        // completed one. The caller settles the authoritative outcome
-                                        // from the context state; the live state must agree with it.
-onActivity(Activity{
+                                // v1.8.0: honest abort marker — a canceled generation is not a
+                                // completed one. The caller settles the authoritative outcome
+                                // from the context state; the live state must agree with it.
+                                onActivity(Activity{
                                         Type:      "aborted",
                                         Caption:   abortCaption(cerr),
                                         Timestamp: time.Now(),
@@ -1987,10 +2064,10 @@ onActivity(Activity{
                 // Execute every tool call sequentially (parallel execution could be added)
                 for ti, tc := range lastToolCalls {
                         if err := ctx.Err(); err != nil {
-                                                                        // v1.8.0: honest abort marker — a canceled generation is not a
-                                        // completed one. The caller settles the authoritative outcome
-                                        // from the context state; the live state must agree with it.
-onActivity(Activity{
+                                // v1.8.0: honest abort marker — a canceled generation is not a
+                                // completed one. The caller settles the authoritative outcome
+                                // from the context state; the live state must agree with it.
+                                onActivity(Activity{
                                         Type:      "aborted",
                                         Caption:   abortCaption(err),
                                         Timestamp: time.Now(),
@@ -2467,10 +2544,10 @@ onActivity(Activity{
                         )
 
                         if cerr := ctx.Err(); cerr != nil {
-                                                                        // v1.8.0: honest abort marker — a canceled generation is not a
-                                        // completed one. The caller settles the authoritative outcome
-                                        // from the context state; the live state must agree with it.
-onActivity(Activity{
+                                // v1.8.0: honest abort marker — a canceled generation is not a
+                                // completed one. The caller settles the authoritative outcome
+                                // from the context state; the live state must agree with it.
+                                onActivity(Activity{
                                         Type:      "aborted",
                                         Caption:   abortCaption(cerr),
                                         Timestamp: time.Now(),
@@ -3163,6 +3240,16 @@ func ContextSafetyMargin(effectiveCtx int) int {
 // estimator stays active and the context decision falls back to the
 // configured window, exactly like the remote/unresolved paths above.
 func (o *Orchestrator) resolveEffectiveContext(cfg *config.Config, sessionContext int) llm.EffectiveContext {
+        effCtx, _ := o.resolveEffectiveContextCaps(cfg, sessionContext)
+        return effCtx
+}
+
+// resolveEffectiveContextCaps is resolveEffectiveContext with the model
+// card returned alongside the decision (v1.8.2): the capability self-model
+// consumes the SAME resolved card instead of re-resolving it — one read
+// per run, one authority for model facts. The caps return is nil exactly
+// when the card was unreadable (remote provider, missing/oversized file).
+func (o *Orchestrator) resolveEffectiveContextCaps(cfg *config.Config, sessionContext int) (llm.EffectiveContext, *llm.ModelCapabilities) {
         engineLimit := 0
         // v1.7.2-repair: read the provider under the SAME mutex
         // SetContextLimitProvider writes under. The pre-fix unlocked read
@@ -3176,13 +3263,13 @@ func (o *Orchestrator) resolveEffectiveContext(cfg *config.Config, sessionContex
 
         if cfg.IsRemote() {
                 chunking.ResetTokenEstimator()
-                return llm.ResolveSessionContext(cfg, nil, engineLimit, sessionContext)
+                return llm.ResolveSessionContext(cfg, nil, engineLimit, sessionContext), nil
         }
 
         modelPath, err := llm.ResolveModelPath(cfg.ModelsDir, cfg.Model)
         if err != nil {
                 chunking.ResetTokenEstimator()
-                return llm.ResolveSessionContext(cfg, nil, engineLimit, sessionContext)
+                return llm.ResolveSessionContext(cfg, nil, engineLimit, sessionContext), nil
         }
 
         caps := llm.ResolveModelCapabilities(cfg, modelPath)
@@ -3203,7 +3290,7 @@ func (o *Orchestrator) resolveEffectiveContext(cfg *config.Config, sessionContex
                 }
         }
 
-        return llm.ResolveSessionContext(cfg, caps, engineLimit, sessionContext)
+        return llm.ResolveSessionContext(cfg, caps, engineLimit, sessionContext), caps
 }
 
 // familyForTokenizer maps the GGUF card's coarse tokenizer-family label
@@ -3223,10 +3310,10 @@ func familyForTokenizer(label string) string {
 // compactToolResults brings an over-ceiling prompt back inside the budget
 // (in-loop fit guard):
 //
-//      pass 1 — elide every tool result except the freshest (explicit
-//               marker replaces the body; message structure preserved);
-//      pass 2 — if still over, BOUND the freshest result to the remaining
-//               room (head kept, tail replaced by an explicit marker).
+//	pass 1 — elide every tool result except the freshest (explicit
+//	         marker replaces the body; message structure preserved);
+//	pass 2 — if still over, BOUND the freshest result to the remaining
+//	         room (head kept, tail replaced by an explicit marker).
 //
 // The model keeps the newest evidence either way; older results carry a
 // re-run hint. Returns the number of tool results touched and the

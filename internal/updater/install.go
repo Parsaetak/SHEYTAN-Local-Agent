@@ -322,6 +322,17 @@ type StagedInstall struct {
         manifest installManifest
 }
 
+// Tag reports the build tag this staged install carries (v1.8.2 seam:
+// the commit-path log names the build that became the active engine).
+// Empty for a nil staged install.
+func (st *StagedInstall) Tag() string {
+        if st == nil {
+                return ""
+        }
+
+        return st.tag
+}
+
 // Result returns the install identity of the staged package.
 func (st *StagedInstall) Result() InstallResult {
         if st == nil {

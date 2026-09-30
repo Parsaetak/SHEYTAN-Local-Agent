@@ -224,6 +224,14 @@ func (m *Manager) log(level, category, format string, args ...interface{}) {
 
 	message := fmt.Sprintf(format, args...)
 
+	// v1.8.2: the human-facing redaction rule — opaque run/session
+	// identity tokens never reach a rendered log line. Applied here, at
+	// the ONE point where a record becomes rendered text, so every sink
+	// (app.log, the UI recent ring, stderr, crash reports) inherits the
+	// rule. Internal identity (API objects, run state, journals, storage
+	// keys) is untouched — see redact.go.
+	message = RedactIdentityTokens(message)
+
 	// v1.3.0: a WARN/ERROR with no actionable context is a defect in the
 	// CALLER, not just noise — the v1.2.9 runtime log carried lines like
 	// "WARN  [updater]" with nothing after them, which is undiscoverable
@@ -504,10 +512,15 @@ func (m *Manager) Crash(r interface{}, stack []byte) string {
 		return ""
 	}
 	path := filepath.Join(dir, "crash-"+time.Now().Format("20060102-150405")+".log")
-	body := fmt.Sprintf("time:    %s\nversion: %s\npanic:   %v\n\nstack:\n%s\n",
-		time.Now().Format(time.RFC3339), crashVersion, r, string(stack))
+	// v1.8.2: the panic VALUE is human-facing report text — the identity
+	// redaction applies to it (and to the log line below, which the sink
+	// redacts anyway). The stack trace is machine diagnostics and is
+	// written verbatim.
+	panicText := RedactIdentityTokens(fmt.Sprint(r))
+	body := fmt.Sprintf("time:    %s\nversion: %s\npanic:   %s\n\nstack:\n%s\n",
+		time.Now().Format(time.RFC3339), crashVersion, panicText, string(stack))
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	m.log("ERROR", "crash", "recovered panic: %v (details: %s)", r, path)
+	m.log("ERROR", "crash", "recovered panic: %s (details: %s)", panicText, path)
 	return path
 }
 

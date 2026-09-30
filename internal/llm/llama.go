@@ -2085,7 +2085,8 @@ func (s *LlamaServer) commitPendingEngineUpdate() {
         staged.Commit()
 
         logging.Default().Info("engine",
-                "model-architecture engine update verified ready — committed")
+                "model-architecture engine update verified ready — build %s committed as the active engine (next boot probes it)",
+                staged.Tag())
 }
 
 // rollbackPendingEngineUpdate restores the previous engine package after

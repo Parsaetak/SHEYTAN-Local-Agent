@@ -39,6 +39,15 @@ import {
 } from "./run-phase";
 import { createSessionListGuard } from "./session-list-guard";
 import {
+  AnimationFrameController,
+  MessageChannelTaskController,
+  StreamFlushScheduler,
+} from "./stream-flush-scheduler";
+import {
+  extractMemoryEvidence,
+  type MemoryEvidenceState,
+} from "./memory-evidence";
+import {
   normalizeEventKind,
   normalizeThinkingControl,
   normalizeToolAllowlist,
@@ -272,6 +281,13 @@ type RuntimeState = {
   // of the current/last run.
   liveStatus: string | null;
   tierEscalations: string[];
+
+  // v1.8.2: the live MEMORY indicator — strictly backend truth. The
+  // value mirrors the plan's MemoryEvidence the orchestrator publishes
+  // on the `context` activity (which systems exist, which were actually
+  // injected this turn, the measured recall counts). Null until the
+  // current run's context report arrives; cleared on every fresh run.
+  memoryEvidence: MemoryEvidenceState | null;
 
   // v1.2.5: the thinking panel's open/fold state, driven ONLY by the
   // backend's thinking_start/thinking_end markers (plus run end).
@@ -671,10 +687,9 @@ const streamFastPath = new StreamingFastPath({
 // High token rates (100+ tokens/sec) can swamp React with one setState
 // per token, each re-rendering the whole message tree. The streaming
 // coalescer accumulates response/reasoning chunks into a single buffer
-// and flushes on the next animation frame — so no matter how fast the
-// model emits, the UI updates at most once per frame (capped by the
-// display's refresh rate, naturally degrading to 60 Hz on a 60 Hz
-// display without wasting CPU on 120 meaningless updates).
+// and flushes on ONE coalescing boundary — so no matter how fast the
+// model emits, the UI updates at most once per boundary turn (never one
+// render per token).
 //
 // Coalescing only batches the CONTENT payload; lifecycle events
 // (done/error/session) are still delivered immediately because they
@@ -682,27 +697,41 @@ const streamFastPath = new StreamingFastPath({
 //
 // v1.2.2: the buffer holds the LATEST CUMULATIVE snapshot per stream
 // (backend contract — see stream-accumulator.ts), not appended deltas.
-let streamingFlushFrame: number | null = null;
+// v1.8.2 DUAL-BOUNDARY FLUSH SCHEDULING — the P0 repair for "streamed
+// text visible only after Stop". The previous scheduler armed the flush
+// EXCLUSIVELY on requestAnimationFrame. In the user's WebView2 runtime
+// the compositor's frame callbacks can be throttled or suspended while
+// the event loop, the WebSocket and React's own scheduler keep running —
+// phase labels updated, elapsed clock ticked, but streamed text never
+// appeared, and pressing Stop (which flushes synchronously) revealed
+// everything at once. The scheduler below arms the flush on BOTH an
+// event-loop task (MessageChannel — delivered the moment the current JS
+// turn ends, in every renderer state where JavaScript runs) AND an
+// animation frame. Whichever runs first flushes; the other is a no-op.
+// Exactly one coalescing latch remains, so folds arriving within one
+// turn/frame still produce ONE render — never one per token. See
+// stream-flush-scheduler.ts (pure module + unit tests).
 const streamAccumulator = createStreamingAccumulator();
 
-function resetPendingStreaming(): void {
-  if (streamingFlushFrame !== null) {
-    cancelAnimationFrame(streamingFlushFrame);
+const streamFlushScheduler = new StreamFlushScheduler(
+  new MessageChannelTaskController(),
+  new AnimationFrameController(),
+  flushStreaming,
+);
 
-    streamingFlushFrame = null;
-  }
+function resetPendingStreaming(): void {
+  streamFlushScheduler.cancel();
 
   streamAccumulator.content = null;
   streamAccumulator.reasoning = null;
 }
 
 // flushStreaming writes the latest cumulative snapshots to the store in
-// ONE setState, then resets the buffers. Runs on a rAF boundary so
-// multiple token chunks arriving within one frame coalesce into a
-// single render.
+// ONE setState, then resets the buffers. v1.8.2: it runs on the dual
+// boundary above (event-loop task + animation frame) instead of a frame
+// callback alone — see stream-flush-scheduler.ts. Idempotent by the
+// empty-guard: whichever boundary runs first drains, the other no-ops.
 function flushStreaming(): void {
-  streamingFlushFrame = null;
-
   if (accumulatorIsEmpty(streamAccumulator)) {
     return;
   }
@@ -763,11 +792,7 @@ function recordStreamUpdateSafe(): void {
 }
 
 function scheduleStreamingFlush(): void {
-  if (streamingFlushFrame !== null) {
-    return;
-  }
-
-  streamingFlushFrame = requestAnimationFrame(flushStreaming);
+  streamFlushScheduler.schedule();
 }
 
 // queueStreamingContent folds one cumulative `response` snapshot (the
@@ -1650,6 +1675,18 @@ function handleConversationEvent(event: ActivityEvent): void {
       // Preparing → Thinking but never demote Generating.
       transitionPhase("thinking_activity");
 
+      // v1.8.2: the context provenance report carries the MEMORY
+      // EVIDENCE record (plan.MemoryEvidence) — what the memory
+      // authorities actually injected THIS turn. Stored verbatim; the
+      // live bubble renders exactly this, never a fabricated count.
+      if (kind === "context") {
+        const evidence = extractMemoryEvidence(event.data);
+
+        useRuntimeStore.setState({
+          memoryEvidence: evidence,
+        });
+      }
+
       // v1.3.6 (spec §25): Net Search evidence states from REAL wire
       // events — searching while the research tool executes, results or
       // failure when it settles, with the stated result count when the
@@ -1877,6 +1914,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   // v1.2.5: live status + escalation trail + composer controls.
   liveStatus: null,
   tierEscalations: [],
+  memoryEvidence: null,
   thinkingPanelOpen: false,
   thinkingControl: initialThinkingControl(),
   toolPolicyMode: initialToolPolicyMode(),
@@ -2637,8 +2675,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       runStartedAt: Date.now(),
       runNote: null,
       // v1.2.5: fresh run — fresh status line and escalation trail.
+      // v1.8.2: fresh run — fresh memory evidence (the new turn's
+      // context report replaces it).
       liveStatus: null,
       tierEscalations: [],
+      memoryEvidence: null,
       // v1.2.8: fresh run — fresh task-state view.
       agentTask: null,
     });
@@ -2753,6 +2794,8 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       runNote: null,
       liveStatus: null,
       tierEscalations: [],
+      // v1.8.2: fresh run — fresh memory evidence.
+      memoryEvidence: null,
       // v1.2.8.1: a regenerated run is a FRESH timeline — same parity as
       // run(); the previous run's task panel must not linger.
       agentTask: null,

@@ -5,6 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 
 import type { ChatMessage } from "./api";
 import { useRuntimeStore } from "./store";
+import { memoryEvidenceLine } from "./memory-evidence";
 import { isLivePhase, PHASE_LABELS, type RunPhase } from "./run-phase";
 import { historySurfaceState } from "./history-surface";
 
@@ -361,6 +362,8 @@ function GenerationBubble() {
   const runNote = useRuntimeStore((state) => state.runNote);
   const streaming = useRuntimeStore((state) => state.streaming);
   const activity = useRuntimeStore((state) => state.activity);
+  // v1.8.2: the backend-truth memory evidence for the current run.
+  const memoryEvidence = useRuntimeStore((state) => state.memoryEvidence);
 
   const [, setClockTick] = useState(0);
 
@@ -405,6 +408,21 @@ function GenerationBubble() {
   const reasoningLive =
     thinkingPanelOpen || runPhase === "thinking" || runPhase === "preparing";
 
+  // v1.8.2: a concise FACTUAL state while the run is in the thinking
+  // phase and the model has emitted no reasoning stream. Never fake
+  // reasoning, never generated labels presented as model thoughts — a
+  // plain statement of what is (not) happening, replaced the moment real
+  // reasoning arrives.
+  const noReasoningNote =
+    !reasoning && (runPhase === "thinking" || runPhase === "preparing")
+      ? "Thinking · this model is not exposing a reasoning stream"
+      : null;
+
+  // v1.8.2: the memory line is the backend's own evidence (null while
+  // the context report has not arrived yet — nothing is shown rather
+  // than a guess).
+  const memoryLine = memoryEvidenceLine(memoryEvidence);
+
   return (
     <article
       className="message-row from-agent generation-row"
@@ -432,6 +450,10 @@ function GenerationBubble() {
 
         {reasoning ? (
           <ReasoningPanel reasoning={reasoning} live={reasoningLive} />
+        ) : noReasoningNote ? (
+          <p className="generation-memory" data-role="no-reasoning">
+            {noReasoningNote}
+          </p>
         ) : null}
 
         <p className="message-content">
@@ -444,6 +466,12 @@ function GenerationBubble() {
             <span className="stream-cursor" aria-hidden="true" />
           ) : null}
         </p>
+
+        {memoryLine ? (
+          <p className="generation-memory" data-role="memory-evidence">
+            {memoryLine}
+          </p>
+        ) : null}
 
         {runActivity.length > 0 ? (
           <div

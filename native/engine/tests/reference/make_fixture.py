@@ -191,7 +191,7 @@ def kv_f32_array(b, k, vals):
 def write_gguf(path, tokens=None, token_types=None, merges=None,
                 emb=EMB, layers=LAYERS, heads=HEADS, kv_heads=KV_HEADS,
                 head_dim=HEAD_DIM, ffn=FFN, ctx=CTX, rms_eps=RMS_EPS,
-                rope_base=ROPE_BASE):
+                rope_base=ROPE_BASE, eos_token_id=EOS):
     """Write one llama GGUF. Defaults reproduce the reference fixture; the
     slow variant (bigger dims) serves cancellation/latency tests and needs
     no reference values."""
@@ -268,7 +268,7 @@ def write_gguf(path, tokens=None, token_types=None, merges=None,
         "tokenizer.ggml.scores": ("f32_array", [0.0] * vocab),
         "tokenizer.ggml.merges": ("str_array", merges),
         "tokenizer.ggml.bos_token_id": ("u32", BOS),
-        "tokenizer.ggml.eos_token_id": ("u32", EOS),
+        "tokenizer.ggml.eos_token_id": ("u32", eos_token_id),
         "tokenizer.ggml.unknown_token_id": ("u32", 0),
     }
 

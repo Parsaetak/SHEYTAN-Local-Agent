@@ -226,6 +226,42 @@ type Plan struct {
 	// exact — consumers must not claim exact context safety when this
 	// label is not "exact".
 	Estimator string `json:"estimator,omitempty"`
+
+	// Memory (v1.8.2) is the MEASURED memory-evidence record for this
+	// turn: which memory systems exist, which were actually injected and
+	// how much they carried. The UI renders exactly this — no fabricated
+	// "memory used" claims are possible because the record is composed
+	// at the injection site from the injection facts themselves. Nil for
+	// plans built outside the orchestrator (compat).
+	Memory *MemoryEvidence `json:"memory,omitempty"`
+}
+
+// MemoryEvidence is the v1.8.2 backend-truth record of what the memory
+// authorities actually contributed to THIS turn's prompt. Every field is
+// set from the injection facts at the moment of injection — counts and
+// presence only, never content, never guesses.
+type MemoryEvidence struct {
+	// SummaryInjected is true when the rolling session summary block was
+	// actually carried into the prompt (the plan kept it).
+	SummaryInjected bool `json:"summaryInjected"`
+
+	// SummaryTokens is the measured token estimate of the injected
+	// summary block (0 when absent).
+	SummaryTokens int `json:"summaryTokens,omitempty"`
+
+	// RecalledExchanges counts the past-exchange digests the targeted
+	// recall engine actually injected this turn (0 when none matched or
+	// recall did not run).
+	RecalledExchanges int `json:"recalledExchanges,omitempty"`
+
+	// HistoryRefs counts the attached cross-mode history-reference
+	// blocks actually carried into the prompt.
+	HistoryRefs int `json:"historyRefs,omitempty"`
+
+	// RecallAttempted distinguishes "recall ran and found nothing"
+	// (true) from "recall did not apply to this turn" (false) — the UI
+	// must never conflate a clean miss with an untried tool.
+	RecallAttempted bool `json:"recallAttempted,omitempty"`
 }
 
 // PromptCeiling is the authoritative maximum for the assembled prompt:

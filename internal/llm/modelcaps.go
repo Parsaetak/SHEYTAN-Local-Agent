@@ -245,22 +245,124 @@ func launchContextSize(cfg *config.Config, modelPath string) int {
 }
 
 // ---------------------------------------------------------------------------
-// Capability resolution with cache.
+// Capability resolution with identity-based cache.
 // ---------------------------------------------------------------------------
 
+// v1.8.2 CAPABILITY CACHE REPAIR: the pre-1.8.2 cache validated entries
+// with path+size+mtime PLUS an arbitrary 10-second TTL. For turns
+// separated by minutes (the normal chat cadence) the TTL always expired,
+// so EVERY turn re-parsed the full GGUF metadata — for real Gemma-class
+// cards that is a 32 MiB metadata read per turn of pure avoidable
+// pre-generation latency.
+//
+// The cache is now IDENTITY-BASED with no TTL at all:
+//
+//   - the IMMUTABLE parsed card (GGUF metadata facts) is cached under
+//     (path, size, mtime). Those facts cannot change while the identity
+//     holds — a different file content IS a different size/mtime;
+//   - the CONFIG-SENSITIVE derived fields (multimodal pairing,
+//     recommendations) are re-derived from the cached card whenever the
+//     relevant configuration fingerprint changes — cheap arithmetic and
+//     at most one projector lookup, never a GGUF re-parse;
+//   - a changed identity (path/size/mtime) re-parses from scratch, so a
+//     replaced or re-downloaded model file is always re-read exactly
+//     once.
+//
+// The map is bounded (capsCacheMaxEntries, oldest-evicted) so a long
+// session that browses many models cannot grow it without bound. No
+// second capability authority exists: this is still the one resolver.
+
 type capsCacheEntry struct {
-        caps  *ModelCapabilities
-        size  int64
-        mtime time.Time
-        stamp time.Time
+        card   *ModelCard  // immutable GGUF facts (identity-keyed)
+        caps   *ModelCapabilities
+        size   int64
+        mtime  time.Time
+        cfgFP  string // fingerprint of config-sensitive inputs
+        stamp  int64  // monotonic insertion counter for eviction order
 }
 
 var (
-        capsCacheMu sync.Mutex
-        capsCache   = map[string]capsCacheEntry{}
+        capsCacheMu      sync.Mutex
+        capsCache        = map[string]capsCacheEntry{}
+        capsCacheCounter int64
 )
 
-const capsCacheTTL = 10 * time.Second
+// capsCacheMaxEntries bounds the identity-keyed cache. A model card is
+// metadata only (no vocab arrays) — a few KiB each; 16 is generous for
+// any real installation while keeping the map trivially small.
+const capsCacheMaxEntries = 16
+
+// capsConfigFingerprint fingerprints the configuration inputs that feed
+// the CONFIG-SENSITIVE derived fields. Immutable GGUF facts are excluded
+// by design — they belong to the card, not the config.
+func capsConfigFingerprint(cfg *config.Config, modelPath string) string {
+        if cfg == nil {
+                return "nil"
+        }
+
+        visionPart := "off"
+        if cfg.VisionEnabled {
+                visionPart = "on:" + cfg.VisionMMProj
+        }
+
+        return fmt.Sprintf("%s|%d|%d|%s|%s",
+                cfg.ModelsDir, cfg.LLM.NumCtx, cfg.LLM.MaxTokens,
+                visionPart, modelPath)
+}
+
+// capsCacheLookup returns a cache hit under one lock acquisition. ok is
+// true exactly when the caller can serve the returned caps without any
+// further work.
+func capsCacheLookup(modelPath string, fiSize int64, fiMod time.Time, cfgFP string) (*ModelCapabilities, *ModelCard, bool) {
+        capsCacheMu.Lock()
+        defer capsCacheMu.Unlock()
+
+        e, ok := capsCache[modelPath]
+        if !ok || e.size != fiSize || !e.mtime.Equal(fiMod) {
+                return nil, nil, false
+        }
+
+        if e.cfgFP != cfgFP || e.caps == nil {
+                // Identity still valid; the config-sensitive derivation must be
+                // redone FROM THE CACHED CARD (no GGUF re-parse). The card return
+                // tells the caller which immutable facts to re-derive from.
+                return nil, e.card, false
+        }
+
+        return e.caps, e.card, true
+}
+
+// capsCacheStore records the parsed card and the derived caps for one
+// identity, evicting the oldest entry beyond the bound.
+func capsCacheStore(modelPath string, fiSize int64, fiMod time.Time, cfgFP string, card *ModelCard, caps *ModelCapabilities) {
+        capsCacheMu.Lock()
+        defer capsCacheMu.Unlock()
+
+        capsCacheCounter++
+        capsCache[modelPath] = capsCacheEntry{
+                card:  card,
+                caps:  caps,
+                size:  fiSize,
+                mtime: fiMod,
+                cfgFP: cfgFP,
+                stamp: capsCacheCounter,
+        }
+
+        for len(capsCache) > capsCacheMaxEntries {
+                oldestPath := ""
+                var oldestStamp int64 = -1
+                for p, e := range capsCache {
+                        if oldestStamp < 0 || e.stamp < oldestStamp {
+                                oldestPath = p
+                                oldestStamp = e.stamp
+                        }
+                }
+                if oldestPath == "" {
+                        break
+                }
+                delete(capsCache, oldestPath)
+        }
+}
 
 // ResolveModelCapabilities builds (or serves from cache) the capability
 // card for one model file. Nil when the file cannot be read — callers must
@@ -275,20 +377,33 @@ func ResolveModelCapabilities(cfg *config.Config, modelPath string) *ModelCapabi
                 return nil
         }
 
-        capsCacheMu.Lock()
-        if e, ok := capsCache[modelPath]; ok &&
-                e.size == fi.Size() && e.mtime.Equal(fi.ModTime()) &&
-                time.Since(e.stamp) < capsCacheTTL {
-                capsCacheMu.Unlock()
-                return e.caps
+        cfgFP := capsConfigFingerprint(cfg, modelPath)
+
+        if caps, card, ok := capsCacheLookup(modelPath, fi.Size(), fi.ModTime(), cfgFP); ok {
+                return caps
+        } else if card != nil {
+                // Identity hit + config drift: re-derive the config-sensitive
+                // fields from the IMMUTABLE cached card — the GGUF is NOT parsed.
+                caps := deriveModelCapabilities(cfg, modelPath, card)
+                capsCacheStore(modelPath, fi.Size(), fi.ModTime(), cfgFP, card, caps)
+                return caps
         }
-        capsCacheMu.Unlock()
 
         card, err := ReadModelCard(modelPath)
         if err != nil {
                 return nil
         }
 
+        caps := deriveModelCapabilities(cfg, modelPath, card)
+        capsCacheStore(modelPath, fi.Size(), fi.ModTime(), cfgFP, card, caps)
+
+        return caps
+}
+
+// deriveModelCapabilities builds the config-sensitive capability card
+// from the immutable parsed GGUF card. All GGUF-derived facts are copied
+// here and nowhere else so the card/caps boundary stays exact.
+func deriveModelCapabilities(cfg *config.Config, modelPath string, card *ModelCard) *ModelCapabilities {
         caps := &ModelCapabilities{
                 Path:           modelPath,
                 FileName:       baseName(modelPath),
@@ -354,15 +469,6 @@ func ResolveModelCapabilities(cfg *config.Config, modelPath string) *ModelCapabi
                 gen = 512
         }
         caps.RecommendedGenBudget = gen
-
-        capsCacheMu.Lock()
-        capsCache[modelPath] = capsCacheEntry{
-                caps:  caps,
-                size:  fi.Size(),
-                mtime: fi.ModTime(),
-                stamp: time.Now(),
-        }
-        capsCacheMu.Unlock()
 
         return caps
 }

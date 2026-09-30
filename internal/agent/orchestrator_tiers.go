@@ -473,6 +473,13 @@ func (c *turnComposer) Injectables() (card, repo, skills, recall string, cardOn,
 	return c.card, c.repoBlk, c.skillBlk, c.recallBlk, c.cardOn, c.repoOn, c.skillsOn, c.recallOn
 }
 
+// tierSpec returns the active tier spec (v1.8.2 memory-evidence seam:
+// the injection site reads IncludeRecall to distinguish "recall did not
+// apply to this turn" from "recall ran and found nothing").
+func (c *turnComposer) tierSpec() taskclassify.TierSpec {
+	return c.spec
+}
+
 // Escalate applies ONE tier upgrade (evidence-driven). It returns the
 // enrichment that must be injected into the live conversation.
 type upgrade struct {

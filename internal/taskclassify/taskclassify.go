@@ -43,6 +43,16 @@ type Signals struct {
 	NeedsMemory      bool // remember/recall vocabulary
 	NeedsDepth       bool // architecture/analysis/multi-step vocabulary
 	NeedsRepoContext bool // "this project", "the codebase", relative refs
+
+	// SelfDescribe (v1.8.2) is the deterministic capability-intent
+	// signal: the user asks what the runtime itself has — its tools,
+	// capabilities, access or current model ("what tools do you have?",
+	// "what can you do?", "what model are you running?"). The
+	// orchestrator answers it from the EXISTING registry/capability
+	// authorities (one shared self-model builder) — never web research,
+	// never blind historical recall. Detection is vocabulary-based and
+	// deterministic, mirroring every other signal here.
+	SelfDescribe bool
 }
 
 // Profile is the classification result for one incoming request.
@@ -102,6 +112,48 @@ var signalRules = []signalRule{
 		func(s *Signals) { s.NeedsDepth = true }, 16},
 	{[]string{"csv", "json data", "dataset", "statistics", "chart", "plot", "analyze data", "dataframe", "spreadsheet"},
 		func(s *Signals) {}, 8}, // data complexity bump (kind decided below)
+	// v1.8.2: capability/self-description intent. Phrases are matched
+	// with strings.Contains against the lowercased request, exactly like
+	// every other signal table. No complexity score here — the signal
+	// changes WHAT the orchestrator composes (the runtime self-model
+	// block), not how deep the tier ladder goes.
+	{selfDescribePhrases(),
+		func(s *Signals) { s.SelfDescribe = true }, 0},
+}
+
+// selfDescribePhrases is the deterministic capability-intent vocabulary
+// (v1.8.2). Lowercase; matched with strings.Contains.
+func selfDescribePhrases() []string {
+	return []string{
+	"what tools do you have",
+	"which tools do you have",
+	"what tools do you have access",
+	"your tools",
+	"your available tools",
+	"your capabilities",
+	"what capabilities",
+	"which capabilities",
+	"what can you do",
+	"what all can you do",
+	"what can you access",
+	"what do you have access to",
+	"what are you able to do",
+	"what model are you",
+	"which model are you",
+	"what model are you running",
+	"which model are you running",
+	"what are you running",
+	"what are you running on",
+	"list your tools",
+	"list your capabilities",
+	"show your tools",
+	"what functions do you have",
+	"what features do you have",
+	"what do you support",
+	"what hardware are you",
+	"what engine are you",
+	"what backend are you",
+	}
 }
 
 // Classify derives the task profile from the request text plus the
@@ -271,6 +323,10 @@ func classifyReason(p Profile, words []string) string {
 
 	if p.Signals.NeedsDepth {
 		parts = append(parts, "depth signals")
+	}
+
+	if p.Signals.SelfDescribe {
+		parts = append(parts, "capability/self-description intent")
 	}
 
 	if len(parts) == 0 {

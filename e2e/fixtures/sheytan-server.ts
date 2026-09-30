@@ -127,6 +127,9 @@ export async function startSheytan(options: SheytanOptions = {}): Promise<Sheyta
       modelsDir,
       binDir,
       noModel: options.noModel,
+      model: options.model,
+      modelGenerator: options.modelGenerator,
+      maxTokens: options.maxTokens,
       onSpawn: (c) => (child = c),
     });
   } catch (err) {
@@ -144,11 +147,34 @@ interface StartOptions {
   onSpawn: (child: ChildProcess) => void;
   /** When true the generated config carries model:"" — the model-first flow (the app must show the selector and must NOT prewarm an arbitrary GGUF). */
   noModel?: boolean;
+  /** v1.8.2: model filename + generator override (see SheytanOptions). */
+  model?: string;
+  modelGenerator?: string;
+  maxTokens?: number;
 }
 
 export interface SheytanOptions {
   /** Start with NO selected model: config.model = "" (the fresh-install model-first flow). */
   noModel?: boolean;
+
+  /**
+   * v1.8.2: filename of the model to select inside modelsDir (default
+   * "e2e-wide.gguf"). The file must have been generated into modelsDir by
+   * the caller via modelGenerator (below) before the server boots.
+   */
+  model?: string;
+
+  /**
+   * v1.8.2: python script (under e2e/) that GENERATES the requested model
+   * into modelsDir. Default: make-e2e-model.py (the standard fixture).
+   */
+  modelGenerator?: string;
+
+  /**
+   * v1.8.2: override for config llm.maxTokens (the live-visibility suite
+   * bounds the fixture generation so the live window is deterministic).
+   */
+  maxTokens?: number;
 }
 
 async function startSheytanStack(opts: StartOptions): Promise<SheytanStack> {
@@ -162,9 +188,10 @@ async function startSheytanStack(opts: StartOptions): Promise<SheytanStack> {
   // ubuntu-24.04 runner it was a missing numpy for the externally
   // managed system python3, not a missing python3). A diagnostic must
   // be collected, never guessed.
-  const modelPath = path.join(modelsDir, "e2e-wide.gguf");
+  const modelFile = opts.model ?? "e2e-wide.gguf";
+  const modelPath = path.join(modelsDir, modelFile);
   const gen = spawn(process.platform === "win32" ? "python" : "python3", [
-    path.join(REPO_ROOT, "e2e", "make-e2e-model.py"),
+    path.join(REPO_ROOT, "e2e", opts.modelGenerator ?? "make-e2e-model.py"),
     modelPath,
   ]);
   const genLog: string[] = [];
@@ -208,12 +235,19 @@ async function startSheytanStack(opts: StartOptions): Promise<SheytanStack> {
         // selected model (the fresh-install flow). The server must then
         // reach "model selection required" WITHOUT loading an arbitrary
         // first GGUF; the selector flow picks one explicitly.
-        model: opts.noModel ? "" : "e2e-wide.gguf",
+        // v1.8.2: the model filename and llm.maxTokens are overridable
+        // for the live-visibility suite.
+        model: opts.noModel ? "" : (opts.model ?? "e2e-wide.gguf"),
         engineBackend: "native",
         nativeEnginePath: path.join(binDir, path.basename(ENGINE_BIN)),
         llamaHost: "127.0.0.1",
         llamaPort: port + 1,
         llamaAutoStart: true,
+        // v1.8.2: the live-visibility suite bounds the fixture generation
+        // so the live window is deterministic.
+        ...(opts.maxTokens !== undefined
+          ? { llm: { maxTokens: opts.maxTokens } }
+          : {}),
       },
       null,
       2,
