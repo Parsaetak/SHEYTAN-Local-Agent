@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.2 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.3 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -6,7 +6,7 @@ durable invariants, and the surfaces most sensitive to regression. Full
 truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (future),
 `UPDATE.md` (release evidence), `worklog.md` (session log).
 
-**Current release: v1.8.2.** Version identity is exactly `1.8.2`
+**Current release: v1.8.3.** Version identity is exactly `1.8.3`
 everywhere (canonical gate: `node scripts/release-version.mjs --check`).
 Release history lives ONLY in `changelog.md` (the README is
 current-only).
@@ -65,6 +65,16 @@ proposes. The tools execute. The laboratory verifies."
   config-sensitive fields re-derive on a config fingerprint change.
 * **v1.8.2 log redaction** — `internal/logging/redact.go` strips
   `runId=`/`session=`-style tokens at the central sink only.
+* **v1.8.3 session-list generation authority (all consumers)** —
+  `refreshSessions` AND the startup `initializeAgentOnce` write the
+  session list through the ONE `sessionListGuard` ticket; superseded
+  startup responses delegate to `refreshSessions()` instead of landing.
+  `deleteSession` surfaces server failures honestly (store error state,
+  no fake success); `createSession`'s prepend is idempotent by id
+  (a refresh landing between POST dispatch and response cannot
+  duplicate the row). Sidebar rows carry `data-session-id` for
+  unambiguous identity (the rendered 8-char id slice collides within a
+  bucket).
 * **Runtime Governor** (`internal/governor`) — the ONE runtime POLICY
   authority: resource state (measured + explicit unknowns), sustained +
   rolling pressure signals over the shipped four-level vocabulary,
@@ -123,7 +133,13 @@ proposes. The tools execute. The laboratory verifies."
   journaling; restart recovery; empty-draft semantics; pause-after-resume;
   stop/abort-after-resume; one authoritative run.
 * WebSocket run snapshot/replay and sequence continuity.
-* Sessions: stale refresh responses cannot resurrect deleted state.
+* Sessions: stale refresh AND stale startup responses cannot resurrect
+  deleted state or drop created state; the delete-vs-in-flight-GET
+  interleavings are pinned deterministically
+  (`src/session-delete-regression.test.ts` — the store runs under
+  `node --test` via `src/extensionless-ts-resolver.mjs`);
+  pending-session delete cleans every backend authority
+  (`internal/sessions/delete_pending_test.go`).
 * Tools: deep-copied metadata under race; generation-aware spec cache.
 * Engine lifecycle: no orphaned processes; error normalization.
 * Governor: admission stays conservative on unknowns; envelope and

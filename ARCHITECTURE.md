@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Architecture Truth Table
 
-Current for **v1.8.2**. This document states the architecture that IS
+Current for **v1.8.3**. This document states the architecture that IS
 implemented and verified in this repository. Future R&D is NOT described as
 implemented; the roadmap (`ROADMAP.md`) owns the future. Historical
 release-specific architecture notes were consolidated at the end.
@@ -125,6 +125,20 @@ separated by minutes no longer re-parses the GGUF metadata.
 opaque identity tokens (`runId=`, `session=`, …) at the ONE central sink;
 internal identity (API objects, run state, journals, storage keys) is
 untouched.
+
+**Session-list generation authority (v1.7.5; init consumer v1.8.3):** every
+session-list write in the frontend — `refreshSessions` AND the startup
+`initializeAgentOnce` — goes through ONE monotonic generation counter
+(`src/session-list-guard.ts`). A response may only land while its ticket is
+current; every mutation (create/delete/rename/mode switch) invalidates the
+tickets taken before it. A failed DELETE surfaces through the store error
+state (never a fake success), and the created-session prepend is idempotent
+by id. The session-delete contract (pending and persisted deletion,
+replacement selection, stale-response non-resurrection, mode separation,
+honest duplicate-delete) is pinned deterministically at the store level
+(`src/session-delete-regression.test.ts`), the Go store level
+(`internal/sessions/delete_pending_test.go`) and the browser level
+(`e2e/sessions.spec.ts`), with mutation-verified coverage.
 
 ## 4. Memory / context architecture
 

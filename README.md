@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.8.2
+Current release:  v1.8.3
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -103,6 +103,13 @@ evidence class named in parentheses:
 * sessions, memory, recall, skills, repository indexing, research, browser,
   sandbox, custom tools, coding lab, automations (unit/integration per
   surface);
+* the session-list generation guard extended to the startup consumer:
+  every list write — refresh or initialization — goes through the ONE
+  monotonic generation, so stale responses can neither resurrect a
+  deleted session nor drop a created one (deterministic store-level
+  suite, Go store tests, and real-browser E2E with mutation-verified
+  coverage; the v1.8.3 session-delete contract is pinned at all three
+  layers);
 * live resource monitoring with hysteresis and cooperative critical
   protection (deterministic + race);
 * the Runtime Governor policy loop with deterministic explanations

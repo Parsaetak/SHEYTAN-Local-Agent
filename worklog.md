@@ -1,12 +1,121 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.8.2
+Current release:  v1.8.3
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
 `UPDATE.md`, the future in `ROADMAP.md`.
 
 ---
+Task ID: 1 (v1.8.3 session)
+Agent: v1.8.3 engineering session
+Task: v1.8.3 — P0 root-cause and repair of the Linux CI session-delete
+failure (Actions run 36713108772 / job 109880449134,
+e2e/sessions.spec.ts:88 "Expected: < 4, Received: 4"), P0 deterministic
+session-delete coverage, P1 roadmap evidence-ranking of the supplied
+bottleneck reports
+
+Work Log:
+- Baseline: HEAD `c8867886` (v1.8.2). CI run 36713108772: Browser E2E
+  30/31, only e2e/sessions.spec.ts:88 failing; stress/package skipped
+  after the E2E failure. All other gates (source/frontend audit,
+  Windows x64, Linux build deps, release metadata, native C++, Go
+  verification) PASS.
+- v1.8.2 diff audit: no session create/delete/list path changed (streaming,
+  memory-evidence, self-model only) — the failure is a latent timing race,
+  not a v1.8.2 regression.
+- Reproduced with an instrumented diagnostic (request/response journal +
+  server-side authoritative list snapshots + DOM identity capture; the
+  browser's create-response delivery delayed to model CI latency): the
+  test sampled its count baseline BEFORE the asynchronous "New session"
+  create landed (its visibility gate was satisfied by pre-existing
+  items); the delete then removed the correct session (verified absent
+  server-side); the late create kept the count flat; final DOM == final
+  server state. A pass of the same test = the poll catching the transient
+  count window. Product behavior correct; measurement raced the app.
+- Second, real defect found by the investigation: initializeAgentOnce
+  applied its startup GET /api/sessions response WITHOUT a sessionListGuard
+  ticket (the v1.7.5 repair covered refreshSessions only). The sidebar's
+  New-session button is actionable during init, so a create landing in
+  that window was clobbered by the stale startup list — the created
+  session vanished from the sidebar. Also: AgentSidebar's
+  `void deleteSession(id)` turned server DELETE failures into invisible
+  unhandled rejections; and createSession's unconditional prepend could
+  duplicate a row when a refresh landed between POST dispatch and
+  response.
+- P0 repairs: (1) agent-init routes the startup list write through the
+  ONE sessionListGuard (ticket before the GET; mode-change and
+  user-action detection around the eager first-install create; superseded
+  responses apply only app/loading and delegate list+selection
+  re-resolution to refreshSessions); (2) deleteSession surfaces failures
+  through the store error state (state untouched on failure, never a fake
+  success); (3) createSession prepend is idempotent by id; (4) sidebar
+  rows carry data-session-id (the rendered 8-char slice collides within a
+  bucket).
+- Test repair (never weakened): the browser delete test now waits
+  STATE-BASED for the created session (count grows by one), then asserts
+  the SPECIFIC deleted id, survivor identity-set equality, the count,
+  replacement activation, composer usability, and post-reload absence
+  from the sidebar AND a fresh authoritative fetch. New browser E2E for
+  the init race: the startup GET response is held until the create POST's
+  response has REACHED the page (causality, no timers), then delivered;
+  asserts the created session survives, appears exactly once, and is
+  active.
+- Deterministic coverage: src/session-delete-regression.test.ts (11
+  scenarios over the REAL store via a scripted HTTP transport where
+  response ordering is forced by causality — pending/persisted delete,
+  replacement selection, delete-vs-held-GET, stale-GET non-resurrection,
+  mode separation, honest duplicate-delete, post-delete fresh fetch,
+  init-race survival, clean-init apply, eager first-install session) +
+  src/extensionless-ts-resolver.mjs (Node resolve hook making the store
+  testable outside the bundler); internal/sessions/delete_pending_test.go
+  (pending delete removes every authority; persisted delete cleans
+  index/file/sidecars with fresh-store no-resurrection; unknown-id honest
+  failure). Registered in package.json test:units.
+- Mutation verification: with the init guard neutralized (v1.8.2
+  semantics), BOTH the store-level test and the browser E2E fail; with
+  the repair, both pass. The coverage detects the defect class it was
+  written for.
+- ROADMAP.md repaired: artifact truth (changelog = sole release history;
+  README current-only; UPDATE.md current release/maintenance evidence);
+  Performance, Reliability & Scale Backlog with D/I/H evidence labels;
+  v1.9/v1.10/v1.11/v1.12/v2.0 expanded per the mission; external report
+  figures (percentages, TPS/TTFT/cache/VRAM, 3x/5x/80%) explicitly
+  treated as hypotheses; incompatible prescriptions (Tokio/asyncio
+  rewrites, mandatory FAISS/USearch/SQLite/bbolt/tree-sitter, assumed
+  PagedAttention, NPU embedding service, dual-model VRAM swapping)
+  rejected; performance measurement framework documented with no invented
+  targets.
+- Version truth 1.8.3 via the canonical gate (release-version.mjs
+  --check green: package.json, package-lock.json, config.go,
+  build/config.yml, SIGNATURE); codename gate green; README/ARCHITECTURE/
+  agent.md/UPDATE.md/changelog.md synchronized to v1.8.3.
+
+Verification (evidence classes; Linux x86-64, Go 1.26, Node 24):
+- Frontend: typecheck green; oxlint 0 warnings; npm run test:units 191/191
+  (incl. the 11 new store-level scenarios); production build + embedded
+  sync green.
+- Go: go test ./internal/... -tags headless -count=1 green (58 packages);
+  go vet -tags headless ./internal/... green; race gate green
+  (api/agent/sessions/contextplan/histref/runtime).
+- Native: cmake configure/build + ctest 12/12 green.
+- Browser E2E: FULL suite 32/32 green (real stack, real native engine,
+  no skipped failures) — the repaired delete test and the new init-race
+  test included; every v1.8.2 streaming/memory/self-model test unchanged
+  and passing.
+- Stress suite: 47 pass / 0 fail, hangs=0, crashes=0.
+- NOT executed here (stated honestly): physical-Windows runtime
+  acceptance. The repairs are pinned by deterministic tests and
+  mutation-verified coverage, not by a physical-host observation.
+
+Stage Summary:
+- v1.8.3 complete on this revision: the run-107 session-delete failure is
+  root-caused with instrumented evidence and repaired without weakening
+  any test; the startup list write goes through the one generation
+  authority; DELETE failures are honest; the prepend is idempotent;
+  session-delete behavior is pinned deterministically at store, Go and
+  browser layers with mutation-verified coverage; the roadmap carries
+  the evidence-ranked backlog; version identity is exactly 1.8.3.
 Task ID: 1 (v1.8.1 session)
 Agent: v1.8.1 engineering session
 Task: v1.8.1 — P0 real-Windows local-generation crash repair (small Gemma

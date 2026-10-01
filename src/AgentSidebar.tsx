@@ -40,7 +40,11 @@ const SessionItem = memo(function SessionItem({
   };
 
   return (
-    <div className={`session-item-wrap ${active ? "active" : ""}`}>
+    // v1.8.3: data-session-id gives every sidebar row an UNAMBIGUOUS
+    // identity (the rendered id text is an 8-char timestamp slice that
+    // collides for sessions created within the same bucket — useless for
+    // assertions). No behavior change; a stable test hook.
+    <div className={`session-item-wrap ${active ? "active" : ""}`} data-session-id={session.id}>
       {editing ? (
         <input
           ref={inputRef}

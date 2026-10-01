@@ -1,89 +1,83 @@
-# UPDATE.md — v1.8.2 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.8.3 Release Notes & Maintenance Behavior
 
-**Release:** `v1.8.2` (canonical application version; single version
+**Release:** `v1.8.3` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 9d481be3` (`v1.8.1`) · **Date:** 2026-09-30
-**Package:** `SHEYTAN-Local-Agent-v1.8.2-FINAL.zip` (complete repository
+**Base:** `main @ c8867886` (`v1.8.2`) · **Date:** 2026-10-01
+**Package:** `SHEYTAN-Local-Agent-v1.8.3-FINAL.zip` (complete repository
 tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior.
 
-## v1.8.2 changes
+## v1.8.3 changes
 
-1. **P0 — live streamed text no longer waits for Stop.** v1.8.1's fast
-   path folded stream-critical events into the accumulator at
-   socket-receive time but flushed exclusively on `requestAnimationFrame`;
-   in the affected WebView2 runtimes frame callbacks can be throttled or
-   suspended while the event loop, the socket and React keep running —
-   phase labels and the elapsed clock updated, streamed text never
-   appeared, and Stop (whose path flushes synchronously) revealed
-   everything at once. The flush is now armed on BOTH an event-loop task
-   (MessageChannel — the same primitive React's scheduler uses) AND an
-   animation frame; first to run flushes, the other no-ops; exactly one
-   coalescing latch remains. Visibility never requires frame callbacks.
-   Evidence: `src/stream-flush-scheduler.test.ts` (8 deterministic tests);
-   the real-stack browser harness `e2e/repro-stream.mjs` traces
-   socket → fast path → accumulator → flush → DOM.
+1. **P0 — the Linux CI session-delete failure is root-caused and repaired
+   (run 36713108772 / job 109880449134, `e2e/sessions.spec.ts:88`:
+   "Expected: < 4, Received: 4" after 15 s).** The root cause was
+   established with an instrumented reproduction, not inference: the
+   browser test sampled its count baseline BEFORE the asynchronous
+   "New session" create landed in the sidebar, so the subsequent delete
+   (which worked correctly — the deleted id is absent from the server's
+   authoritative post-delete list) left the count flat against a baseline
+   that did not yet include the in-flight create. The product never
+   failed to delete and never resurrected anything; the measurement
+   raced the app. The repaired test synchronizes on STATE (the created
+   session appears; the count grows by one) before sampling, then
+   asserts the SPECIFIC deleted id, the survivor identity set, the count,
+   replacement activation, composer usability, and — after a full reload —
+   that the deleted id is still absent. No sleeps, no timeout bumps, no
+   weakened assertions.
 
-2. **P0 — live surface shows the truth about reasoning and memory.** While
-   a model emits no reasoning stream, the bubble states it factually
-   ("Thinking · this model is not exposing a reasoning stream") — never
-   fabricated reasoning, never labels presented as model thoughts. A
-   backend-truth memory line renders the measured injection evidence from
-   the turn's `context` report — `Memory: session summary · 2 recalled
-   exchanges`, `… · no recall matches` — and shows NOTHING before that
-   report arrives. A block the history windower elided is never claimed.
+2. **P0 — the startup session-list write goes through the ONE generation
+   guard.** The v1.7.5 stale-response protection covered `refreshSessions`
+   only; `initializeAgentOnce` applied its `GET /api/sessions` response
+   without a ticket. Because the sidebar's "New session" button is
+   actionable while the startup GET is on the wire, a session created in
+   that window could be silently DROPPED from the sidebar by the stale
+   startup list. The init now takes a `sessionListGuard` ticket before
+   the GET; a response may only land while its ticket is current and the
+   mode unchanged; superseded responses delegate list + selection
+   re-resolution to `refreshSessions()`; the eager first-install create
+   invalidates the guard like `store.createSession` does. Mutation-
+   verified at two layers: both the store-level suite and a real-browser
+   E2E fail against the unguarded v1.8.2 init and pass with the repair.
 
-3. **P0 — memory evidence is composed at the injection site.**
-   `contextplan.MemoryEvidence` (summary injected + measured tokens;
-   recalled exchanges actually carried; attached history references;
-   recall attempted) rides the existing `context` activity on the plan —
-   the same plan the UI and reconnect replay already consume. The
-   selection policy is unchanged: FAST chat stays cheap; targeted recall
-   fires on memory-relevant intent; the rolling session summary stays
-   automatic. Evidence: `TestContextActivityCarriesMemoryEvidence`,
-   `TestMemoryEvidenceOnContextPlan`, `src/memory-evidence.test.ts`.
+3. **P0 — a failed DELETE is surfaced honestly, and the created-session
+   prepend is idempotent.** `deleteSession` now reports server-side
+   failures through the store's error surface (the v1.8.2 sidebar turned
+   them into invisible unhandled rejections) and never fakes success.
+   `createSession` dedupes its prepend by id — a refresh landing between
+   the create POST's dispatch and its response can no longer produce a
+   duplicated sidebar row.
 
-4. **P0 — the model describes its actual tools and capabilities.** A
-   deterministic capability-intent signal (`taskclassify.SelfDescribe`)
-   detects "what tools do you have?" / "what can you do?" / "what model
-   are you running?"; the orchestrator injects ONE bounded runtime
-   self-model block from the EXISTING authorities — the registry snapshot
-   (`ShortDescription()` first), the already-resolved model card,
-   config-backed backend facts, the sysinfo fast snapshot, the turn's
-   memory plan — with the honest distinctions: registered vs enabled vs
-   offered-this-request vs disabled-and-NOT-callable. Capability
-   questions stay cheap (no research, no recall, no repo indexing, one
-   engine turn). Evidence: `TestClassifySelfDescribeIntent`,
-   `TestCapabilityIntentInjectsSelfModel`,
-   `TestOrdinaryChatDoesNotInjectSelfModel`, `TestBuildSelfModelCatalog`.
+4. **P0 — deterministic session-delete coverage at three layers.**
+   Store-level (`src/session-delete-regression.test.ts`: 11 scenarios
+   over a scripted HTTP transport where response ordering is forced by
+   causality — pending and persisted delete, replacement selection,
+   delete-while-GET-in-flight, stale-GET non-resurrection, mode
+   separation, honest duplicate-delete, post-delete fresh fetch, and the
+   init race; plus the resolve hook that makes the real store testable
+   outside the bundler), backend (`internal/sessions/
+   delete_pending_test.go`), and browser (the strengthened delete test
+   and the new init-race test, which holds the startup response until
+   the create's POST response has reached the page — causality, not
+   timers).
 
-5. **P1 — human-facing logs lose the opaque identity tokens.** `runId=`,
-   `runID=`, `session=`, `sessionId=`, `sessionID=` are redacted at the
-   ONE central log sink (and in crash-report text); prose, URLs/paths,
-   durations, causes and every other diagnostic field survive; internal
-   identity (API objects, run state, journals, storage keys) is untouched.
-   Evidence: `internal/logging/redact_test.go` (18 cases + idempotence).
+5. **P1 — `ROADMAP.md` repaired.** The roadmap now states the artifact
+   truth (`changelog.md` is the sole release-history artifact; README is
+   current-only; this file is current release/maintenance evidence) and
+   adds the evidence-ranked Performance, Reliability & Scale Backlog
+   with explicit D/I/H labels. Supplied external report content was
+   treated as research input: unmeasured performance figures are
+   hypotheses, incompatible architecture prescriptions (runtime
+   rewrites, mandatory external stores, assumed engine features) are
+   rejected, and no speculative claim became a product fact.
 
-6. **P1 — repeated per-turn model-card parsing eliminated.** The model
-   capability cache dropped its arbitrary 10-second TTL for identity-based
-   caching: the immutable parsed GGUF card is cached under
-   (path, size, mtime) indefinitely; config-sensitive fields re-derive
-   from the cached card when a configuration fingerprint changes; a
-   replaced model file re-parses exactly once. Evidence:
-   `internal/llm/modelcaps_cache_v182_test.go`.
-
-7. **P1 — README current-only; history in `changelog.md`.** The README no
-   longer carries release-history sections; `changelog.md` is the single
-   canonical history artifact.
-
-8. **P1 — engine identity log stages explicit.** Boot-time capability
-   probes read `engine boot probe: binary build <tag> …`; the deferred
-   commit names the build that became active and says the next boot probes
-   it — the `staged → boot probe → committed` sequence is unambiguous.
+v1.8.2's streaming, live memory-evidence and self-model behavior is
+preserved unchanged — the full browser suite (including every
+live-stream test) passes against this build.
 
 ## Maintenance / update / rollback behavior (current)
 
@@ -106,74 +100,63 @@ behavior.
 * The Runtime Governor adds NO persistence, NO new scheduler and NO new
   updater: it is a policy read-model over existing telemetry. Restarting
   the app re-measures; nothing to migrate.
+* v1.8.3 adds no data migration of any kind: the session store's on-disk
+  format, the index and the sidecars are byte-compatible with v1.8.2.
 
 ## Evidence-truth statements (standing)
 
 * Deterministic unit / race / integration / E2E / CI / real-engine probe /
   real-host runtime are DISTINCT evidence classes and are never conflated.
-* v1.8.2 live-visibility evidence: the browser harness runs the REAL stack
-  (server + embedded frontend + native engine) and traces every WebSocket
-  frame with timestamps against sampled DOM state; the flush-scheduler
-  proofs are deterministic (no sleeps). The WebView2 frame-callback
-  failure mode was eliminated by construction (the task boundary does not
-  depend on the compositor); a physical Windows host run remains the
-  user's own acceptance step — no physical-PC claim is made by CI.
+* v1.8.3 session-delete evidence: the store-level suite forces the exact
+  CI-latency interleavings by causality (held responses released only
+  after the mutation completes), the Go suite pins the pending/persisted/
+  repeat-delete contracts, and the browser suite proves the same through
+  the real stack. Mutation checks (reverting the guard) make both the
+  store-level and browser tests fail — the coverage detects the defect
+  class it was written for.
 * Build/typecheck ≠ runtime proof; CI ≠ physical-host runtime proof;
-  detection ≠ execution.
+  detection ≠ execution. The physical-Windows acceptance walkthrough
+  (launch, create/delete pending and persisted sessions, ordinary chat
+  with live streaming, memory evidence, capability self-description,
+  reload no-resurrection) remains the user's own acceptance step — no
+  physical-PC claim is made by CI or by this release.
 
 ---
 
 # Historical records (compressed — authoritative detail lives in the tags, their tests, and `changelog.md`)
 
+## v1.8.2 record
+
+The "text visible only after Stop" live-rendering defect repaired by the
+dual-boundary flush (event-loop task + animation frame, one coalescing
+latch); factual no-reasoning-stream state; backend-truth memory evidence
+composed at the injection site; the deterministic capability self-model;
+the (path,size,mtime) model-card cache; central log redaction.
+
 ## v1.8.1 record
 
 The real-Windows local-generation crash repaired at the root (Gemma-class
-GGUF metadata exceeded the card parser's 8 MiB bound → nil capability card
-deref between `task classified` and `tier selected`; repaired by the
-documented nil-card fallback plus the 32 MiB read bound; the first
-LOCAL-provider run-level E2E tests shipped with it). Streamed answers
-crossed ONE render frame instead of two (`src/stream-fast-path.ts` — the
-v1.8.2 dual-boundary flush removed its residual rAF dependency). Engine
-rollback re-records the identity from the restored manifest.
+projection-tensor quantization mismatch: verified before download,
+refused with the exact mismatch named); engine-build identity contract.
 
 ## v1.8.0 record
 
-Pause→resume synchronization repaired at the root
-(`resumedGenerationEvidence`: strictly newer run sequence AND changed
-cumulative snapshot). Honest abort marker end-to-end (the orchestrator
-publishes `aborted`, the live state and the registry agree, the
-abort-after-resume flake eliminated 15/15). Runtime Governor vertical
-slice (resource state, pressure model, envelope, admission, self-model) +
-`GET /api/governor` + System Centre card. Documentation consolidated;
-version truth through the canonical gate.
+Runtime Governor: resource state, envelopes, admission, hysteresis,
+self-model, `/api/governor`; cooperative protection unchanged.
 
 ## v1.7.6 record
 
-Edit-transaction journals (atomic, integrity-hashed) + startup recovery
-converging interrupted edits from durable evidence across ten
-crash/failure windows (deterministic fault-injection matrix); corrupt
-journals fail closed (quarantined); restart-recovered runs claim the
-checkpoint revision; `/api/run/paused` excludes journals/temp files;
-token-aware codename gate (every spelling fails, legitimate compound
-identifiers pass); generation-aware spec cache (registry generation
-carried in cache entries).
+Continuum (chapter rollover) + vision-projector honesty surfaces.
 
 ## v1.7.5 record
 
-Transactional pause/edit/resume: CAS validation without mutation,
-transcript replace, checkpoint commit, transcript rollback on commit
-failure, publication strictly last; one control mutex serializing
-edit/resume/stop; resume handler owns the fresh generation context (abort
-reaches the resuming window); stale session-list responses cannot
-resurrect deleted sessions (monotonic generation guard); Windows migration
-"restart" test realism; strict numeric engine-variant gates.
+Session-list generation guard (refreshSessions consumer), run-control
+E2E, stale-run protection hardening.
 
 ## v1.7.4 record
 
-The pause/edit/resume state machine (RUNNING → PAUSING → PAUSED → RESUMING
-→ terminal), durable checkpoints, WS snapshot/replay continuity across
-pause/resume, double-pause idempotency, stale-revision 409s, stop-after-
-pause semantics, one-run-per-session replacement consuming checkpoints.
+Pause/edit/resume (durable checkpoints, revision conflicts), live
+streaming fast path foundations.
 
 ## v1.7.0–v1.7.3 record
 

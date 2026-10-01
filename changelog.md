@@ -11,6 +11,105 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.8.3 — 2026-10-01
+
+Focus: root-cause and repair the exact Linux CI session-delete failure
+(Actions run 36713108772, job 109880449134: Browser E2E 30/31,
+`e2e/sessions.spec.ts:88` "delete session removes it and activates a
+remaining one" — `Expected: < 4, Received: 4` after 15 s), and close the
+real defects the investigation exposed. No new authority was created; the
+v1.8.2 streaming, memory-evidence and self-model behavior is untouched
+(the full browser suite, including every live-stream test, passes).
+
+1. **P0 — the run-107 failure root-caused with instrumented evidence.**
+   An instrumented diagnostic (request/response journaling + server-side
+   authoritative list snapshots + DOM identity capture, with the browser's
+   create response delivery delayed to reproduce CI latency) proved the
+   interleaving: the test sampled its count baseline BEFORE the
+   asynchronous "New session" create landed in the sidebar (its
+   `expect(first()).toBeVisible()` gate was satisfied by the PRE-EXISTING
+   items, not the new one); the delete then correctly removed exactly one
+   session — verified absent from the server's authoritative post-delete
+   list — while the just-created session's late response kept the sidebar
+   count flat. The product deleted the correct session and never
+   resurrected it; the count arithmetic compared equal numbers for 15 s.
+   A passing run of the same test was the same interleaving with the poll
+   catching the transient count window — a coin flip on runner latency.
+
+2. **P0 — the browser test repaired and strengthened (measurement
+   synchronizes on state, never on timing).** The repaired test waits —
+   state-based, no sleeps — for the created session to actually appear
+   (the count grows by one) before sampling its baseline, then asserts
+   the SPECIFIC deleted id (new `data-session-id` rows; the rendered
+   8-char id slice is ambiguous within the same bucket), the survivor
+   identity set, the count, replacement activation, composer usability,
+   and — after a full reload — that the deleted id is still absent from
+   both the sidebar and a fresh authoritative list fetch. No timeout was
+   increased; nothing was weakened.
+
+3. **P0 — the startup session-list write now goes through the ONE
+   generation guard (the v1.7.5 authority).** `initializeAgentOnce`
+   previously applied its `GET /api/sessions` response WITHOUT a ticket —
+   the v1.7.4 stale-response defect class survived in the init consumer.
+   The sidebar's "New session" button is actionable while the startup GET
+   is on the wire, so a user create landing in that window was clobbered
+   by the stale startup list: the created session VANISHED from the
+   sidebar. The repair: the init takes a `sessionListGuard` ticket before
+   the GET; a response may only land while its ticket is current and the
+   mode unchanged; a superseded response applies only the non-session
+   state and delegates the list + selection re-resolution to
+   `refreshSessions()` (its own ticket); the eager first-install create
+   invalidates the guard exactly like `store.createSession` does. Verified
+   by mutation at two layers: the store-level suite and a real-browser
+   E2E both FAIL against the unguarded v1.8.2 init and PASS with the
+   repair.
+
+4. **P0 — deterministic session-delete coverage at three layers.**
+   `src/session-delete-regression.test.ts` (11 scenarios against the REAL
+   store over a scripted HTTP transport where response ordering is forced
+   by causality — pending/persisted delete, replacement selection,
+   delete-vs-held-GET, stale-GET non-resurrection, mode separation,
+   honest duplicate-delete, post-delete fresh fetch, init-race survival,
+   clean-init apply, eager first-install session preserved — plus a
+   Node resolve hook making the store testable outside the bundler);
+   `internal/sessions/delete_pending_test.go` (pending delete removes
+   every authority; persisted delete cleans index/file/sidecars with a
+   fresh-store no-resurrection check; unknown-id honest failure); and the
+   new browser E2E for the init race.
+
+5. **P0 — a failed DELETE is never silently swallowed.** The sidebar
+   invoked `void deleteSession(id)`; a server-side DELETE failure was an
+   invisible unhandled rejection and the session stayed in the list with
+   no explanation. `deleteSession` now surfaces the failure through the
+   same error state `renameSession` uses (state untouched on failure,
+   never a fake success).
+
+6. **P0 — the created-session prepend is idempotent.** A list refresh
+   whose response lands between the create POST's dispatch and its
+   arrival can already contain the created session; the unconditional
+   prepend then produced a duplicate row. The prepend now dedupes by id —
+   the new session is always the first row and appears exactly once.
+
+7. **P1 — roadmap repaired.** `ROADMAP.md` now states the artifact truth
+   (changelog = sole release history; README current-only; UPDATE.md =
+   current release/maintenance evidence) and carries the evidence-ranked
+   **Performance, Reliability & Scale Backlog** (D/I/H labels). External
+   report claims — percentages, TPS/TTFT/cache/VRAM figures, "3x/5x/80%"
+   numbers, Tokio/asyncio rewrites, mandatory FAISS/USearch/SQLite/
+   bbolt/tree-sitter, NPU embedding services, dual-model VRAM swapping —
+   are explicitly treated as hypotheses or rejected; the one-authority
+   architecture and the Go runtime are preserved.
+
+Verification: frontend typecheck/lint/unit 191/191; `go test ./internal/...
+-tags headless` 58 packages; race suite (api/agent/sessions/contextplan/
+histref/runtime); native C++ build + ctest 12/12; full browser E2E
+32/32 (the repaired delete test and the new init-race test included);
+stress suite 47/47 with zero hangs/crashes; release metadata and codename
+gates in check mode. Windows acceptance on a physical machine remains
+outstanding until observed (CI is not physical-host evidence).
+
+---
+
 ## v1.8.2 — 2026-09-30
 
 Focus: make live generation genuinely visible and self-describing; remove

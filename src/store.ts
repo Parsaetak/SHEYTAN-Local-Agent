@@ -472,7 +472,14 @@ const MAX_ACTIVITY_EVENTS = 500;
 // be resurrected in the sidebar. The guard owns NO session data; the store
 // remains the one authoritative list. Pure-module coverage:
 // session-list-guard.test.ts.
-const sessionListGuard = createSessionListGuard();
+//
+// v1.8.3: EXPORTED so agent-init.ts routes the STARTUP session-list write
+// through the SAME one-authority generation counter (the v1.7.5 repair
+// covered refreshSessions only — the init consumer wrote its response
+// unguarded, so a user mutation that landed while the initial GET was on
+// the wire could be clobbered by the stale init response: a just-created
+// session vanished from the sidebar, or a stale selection was resurrected).
+export const sessionListGuard = createSessionListGuard();
 
 let enginePollTimer: number | null = null;
 
@@ -2471,7 +2478,13 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     resetRunReplayTracking(null);
 
     set((state) => ({
-      sessions: [session, ...state.sessions],
+      // v1.8.3: the prepend is IDEMPOTENT. A session-list refresh whose
+      // response lands between the POST's dispatch and its arrival can
+      // already contain the created session (the backend registered it
+      // the moment the POST was served) — prepending unconditionally
+      // then produced a DUPLICATE row (same id twice). The new session
+      // is always the newest first row and appears exactly once.
+      sessions: [session, ...state.sessions.filter((s) => s.id !== session.id)],
       activeSessionId: session.id,
       activeSessionByMode: {
         ...state.activeSessionByMode,
@@ -2564,7 +2577,28 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   },
 
   deleteSession: async (id) => {
-    await api.deleteSession(id);
+    // v1.8.3: a failed DELETE is surfaced HONESTLY (the same error
+    // surface renameSession uses) — never swallowed. The v1.8.2 sidebar
+    // invoked this as `void deleteSession(id)`, so a server-side failure
+    // became an invisible unhandled rejection: the session stayed in the
+    // list with no explanation, violating the never-hide-a-DELETE-error
+    // rule. The store keeps its state untouched on failure; the error
+    // banner carries the server's own message.
+    let deleted = false;
+
+    try {
+      await api.deleteSession(id);
+      deleted = true;
+    } catch (error) {
+      set({
+        error:
+          error instanceof Error ? error.message : "Failed to delete session.",
+      });
+    }
+
+    if (!deleted) {
+      return;
+    }
 
     // v1.7.5: the authoritative DELETE succeeded — invalidate every list
     // GET that started before this instant. A stale in-flight response
