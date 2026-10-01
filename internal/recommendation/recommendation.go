@@ -170,6 +170,18 @@ func Recommend(in Input) Recommendation {
 	}
 
 	// --- GPU posture: only from measured adapters + backend evidence. --
+	// v1.8.4 (P0-B) POSTURE SEMANTICS: the recommendation never writes
+	// gpuAutoOffload=false as a derived state. The pre-1.8.4 behavior
+	// ("GPU present but no Vulkan engine backend" → false/0) persisted
+	// a CPU posture that then looked like an explicit OFF to the AUTO
+	// candidate gate — the exact circularity that kept AUTO CPU-only
+	// forever (Vulkan never provisioned because the posture said off;
+	// the posture said off because Vulkan was never provisioned). The
+	// AUTO posture (true) is safe in every case here: the launch-time
+	// evidence gate (llm.autoGPUOffload) keeps the engine on CPU when
+	// no usable device is proven, which is exactly the CPU-only
+	// behavior the old derived false was approximating — without the
+	// sticky state.
 	gpuVRAM := hw.VRAMBytes()
 	vulkan := hw.Backend.Vulkan
 	switch {
@@ -186,17 +198,17 @@ func Recommend(in Input) Recommendation {
 				"VRAM size not reported by the driver — offload posture stays automatic; watch /api/perf after applying.")
 		}
 	case hw.HasGPU() && !vulkan:
-		rec.GPUAutoOffload = false
+		rec.GPUAutoOffload = true
 		rec.GPULayers = 0
 		rec.Notes = append(rec.Notes,
-			"GPU present but no Vulkan engine backend detected — running CPU-only until a Vulkan engine build is provisioned.")
+			"GPU present but no Vulkan engine backend detected — the launch-time evidence gate keeps the engine on CPU until a Vulkan engine build is provisioned (AUTO may provision one; the posture stays automatic, never a pinned off).")
 	default:
-		rec.GPUAutoOffload = false
+		rec.GPUAutoOffload = true
 		rec.GPULayers = 0
 		rec.Notes = append(rec.Notes,
-			"No dedicated GPU detected — CPU execution with GPU offload disabled.")
+			"No dedicated GPU detected — the launch-time evidence gate keeps the engine on CPU (the posture stays automatic, never a pinned off).")
 	}
-	if task == TaskLowPower && rec.GPUAutoOffload {
+	if task == TaskLowPower && hw.HasGPU() && vulkan {
 		// Low-power keeps the offload (VRAM does not burn wall power the
 		// way CPU generation does) but is not the place for maximum ctx.
 		rec.Reasons = append(rec.Reasons, "low-power profile: GPU offload retained — VRAM work is cooler than CPU generation")
@@ -307,7 +319,11 @@ func Recommend(in Input) Recommendation {
 	rec.ProjectorDevice = "cpu"
 	switch {
 	case in.Vision.State.Healthy() || in.Vision.State == vision.StateFound:
-		if rec.GPUAutoOffload {
+		// v1.8.4: GPU projector placement requires a USABLE GPU backend
+		// (measured Vulkan engine backend), never the posture flag
+		// alone — with a CPU-only engine the honest placement is CPU
+		// even though the posture is now always AUTO/automatic.
+		if rec.GPUAutoOffload && vulkan {
 			fits := gpuVRAM == 0 ||
 				rec.Predicted.TotalBytes == 0 ||
 				rec.Predicted.TotalBytes-rec.Predicted.KVBytes < gpuVRAM
@@ -341,7 +357,7 @@ func Recommend(in Input) Recommendation {
 	}
 
 	// --- Predicted speed: qualitative, honest. -------------------------
-	rec.Predicted.Speed = predictedSpeed(rec, gpuVRAM)
+	rec.Predicted.Speed = predictedSpeed(rec, gpuVRAM, hw.HasGPU() && vulkan)
 
 	sortStrings(rec.Reasons)
 	return rec
@@ -359,15 +375,18 @@ func sysinfoThreads(hw hardware.Profile) (gen, batch int) {
 	return gen, batch
 }
 
-// predictedSpeed is a qualitative band from the offload posture and the
-// footprint class — explicitly NOT a tok/s measurement.
-func predictedSpeed(rec Recommendation, gpuVRAM int64) string {
+// predictedSpeed is a qualitative band from the USABLE GPU evidence and
+// the footprint class — explicitly NOT a tok/s measurement. v1.8.4: the
+// band keys on the measured Vulkan engine backend (the posture flag is
+// always AUTO/automatic now), so a machine whose engine would launch CPU
+// is never promised GPU-class speed.
+func predictedSpeed(rec Recommendation, gpuVRAM int64, gpuUsable bool) string {
 	switch {
-	case rec.GPUAutoOffload && gpuVRAM > 0 && rec.Predicted.Class == "safe":
+	case gpuUsable && gpuVRAM > 0 && rec.Predicted.Class == "safe":
 		return "high"
-	case rec.GPUAutoOffload && rec.Predicted.Class == "caution":
+	case gpuUsable && rec.Predicted.Class == "caution":
 		return "medium"
-	case rec.GPUAutoOffload:
+	case gpuUsable:
 		return "medium"
 	case rec.Threads >= 8:
 		return "medium"

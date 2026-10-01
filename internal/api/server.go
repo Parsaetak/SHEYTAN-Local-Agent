@@ -1471,6 +1471,16 @@ func (s *Server) mergeConfigPatch(data []byte) (*config.Config, error) {
 		return nil, err
 	}
 
+	// v1.8.4 (P0-B): a patch that carries gpuAutoOffload is an EXPLICIT
+	// user action on the GPU posture (the settings toggle, the System
+	// Centre posture controls). Marking it here is what makes the
+	// explicit-OFF contract enforceable: only a user-set posture is
+	// ever treated as a real OFF by the AUTO candidate gate and the
+	// derived-posture repair never touches it.
+	if _, ok := patch["gpuAutoOffload"]; ok {
+		updated.GPUAutoOffloadUserSet = true
+	}
+
 	// v1.6.1 (P0): the sampling-value gate on the LIVE configuration. A
 	// patch carrying a parser-invalid sampling value (repeatPenalty=0, a
 	// negative temperature, a non-finite topP…) is REJECTED with an

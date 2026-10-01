@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.8.3
+Current release:  v1.8.4
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -50,9 +50,13 @@ own emitted reasoning when it streams one, bounded runtime activity
 (`Memory: session summary · 2 recalled exchanges`) that states exactly
 what the memory authorities actually injected this turn — no fabricated
 counts, no invented reasoning. Streamed text reaches that surface through
-a dual-boundary flush (an event-loop task plus an animation frame) with
-one coalescing latch: live text appears without any user action, updates
-continuously, and the final message replaces it exactly once.
+a triple-boundary flush (an event-loop macrotask, a 0ms timer task and an
+animation frame — three independent scheduling sources) behind one
+coalescing latch, with a task controller that recovers from a lost or
+suspended MessageChannel delivery instead of wedging: live text appears
+without any user action, updates continuously, the run settles on its own
+without depending on any single scheduling primitive, and the final
+message replaces it exactly once.
 
 ## Model self-knowledge
 
@@ -110,6 +114,26 @@ evidence class named in parentheses:
   suite, Go store tests, and real-browser E2E with mutation-verified
   coverage; the v1.8.3 session-delete contract is pinned at all three
   layers);
+* live streaming that cannot wedge: the flush scheduler arms three
+  independent boundaries behind one coalescing latch and its task
+  controller self-heals from a lost MessageChannel delivery
+  (deterministic scheduler tests reproducing the wedge + a real-browser
+  E2E that streams and settles with requestAnimationFrame suspended);
+* zero-session Send: deleting the final session leaves a usable
+  zero-session state and pressing Send creates + activates a session in
+  the current mode and continues the run (store-level scripted-transport
+  suite + real-stack browser E2E in Chat and Agent modes, including
+  visible-before-completion and reload persistence);
+* a monotonic context-refresh generation: stale context responses can
+  never overwrite newer context state across out-of-order responses,
+  session switches, deletions, creations, mode switches and fresh runs
+  (causally ordered store-level race suite);
+* the AUTO GPU posture contract: explicit user OFF, explicit manual
+  layer counts and the CPU requested profile are respected; a derived
+  legacy CPU posture is repaired once, honestly noted; the engine-update
+  verification window reports and probes the byte-verified staged binary
+  through a window-scoped identity marker (deterministic updater +
+  config + recommendation suites);
 * live resource monitoring with hysteresis and cooperative critical
   protection (deterministic + race);
 * the Runtime Governor policy loop with deterministic explanations
@@ -154,7 +178,9 @@ read-model, not a configuration file.
   live CPU seam reports unknown and CPU policy stays off until a live
   Windows authority exists — never a fabricated utilization number.
 * GPU/NPU facts on all surfaces are DETECTION-level; execution evidence is
-  the engine's own device enumeration, verified at provisioning time.
+  the engine's own device enumeration, verified at provisioning time. The
+  AUTO Vulkan path is repaired and deterministically tested, but no GPU
+  execution claim is made without that runtime evidence on real hardware.
 * CI (Windows and Linux) is build/test evidence, not physical-host runtime
   evidence.
 * The v1.9+ roadmap (AI System builder, computer-use, evaluation framework,

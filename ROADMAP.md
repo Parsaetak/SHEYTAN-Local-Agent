@@ -74,7 +74,17 @@ Hardening delivered across v1.8.x maintenance releases (details in
 `changelog.md`): the dual-boundary streaming flush and live memory/self-model
 surfaces (v1.8.2), and the session-list generation-guard extension to the
 startup consumer with deterministic session-delete coverage at store, Go and
-browser layers (v1.8.3).
+browser layers (v1.8.3). v1.8.4 hardened the same line with evidence-backed
+repairs: the streaming flush became a triple-boundary, self-healing
+scheduler (a lost MessageChannel delivery can no longer wedge visibility —
+deterministic wedge-reproduction tests + a suspended-rAF browser E2E), the
+activity flush lost its rAF-only dependency, zero-session Send became a
+first-class contract (store-level + real-stack E2E), the context surface
+gained a monotonic response-generation authority (causally ordered race
+suite), the AUTO GPU posture became explicitly provenance-marked with a
+one-time honest migration of the legacy derived state, and the engine
+update's deferred-commit window now reports and probes the byte-verified
+staged binary through a window-scoped identity marker.
 
 Exit condition: SHEYTAN can operate for long periods without unnecessarily
 degrading the host and can explain measurable reasons for its runtime

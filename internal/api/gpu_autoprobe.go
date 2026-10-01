@@ -11,19 +11,19 @@ package api
 //
 // The eligibility chain (all must hold):
 //
-//	AUTO requested (not CPU/GPU/NPU explicit, not remote)
-//	→ platform serves a Vulkan package (Windows x64)
-//	→ a host GPU is DETECTED (hardware probe — OS GPU detection only;
-//	  it is NOT Vulkan capability, NOT a device, NOT offload proof)
-//	→ GPU offload is not disabled by config
-//	→ a model is selected (the candidate must load a REAL GGUF)
-//	→ the installed engine is not already a verified-usable Vulkan engine
-//	→ no persisted failed probe for the current identity (bounded)
-//	→ no active run / no calibration in flight
-//	→ online
-//	→ FINAL PREFLIGHT passes (hard incompatibility or severe transient
-//	  pressure refuses the candidate)
-//	→ ONE bounded transaction through the existing variant authority
+//      AUTO requested (not CPU/GPU/NPU explicit, not remote)
+//      → platform serves a Vulkan package (Windows x64)
+//      → a host GPU is DETECTED (hardware probe — OS GPU detection only;
+//        it is NOT Vulkan capability, NOT a device, NOT offload proof)
+//      → GPU offload is not disabled by config
+//      → a model is selected (the candidate must load a REAL GGUF)
+//      → the installed engine is not already a verified-usable Vulkan engine
+//      → no persisted failed probe for the current identity (bounded)
+//      → no active run / no calibration in flight
+//      → online
+//      → FINAL PREFLIGHT passes (hard incompatibility or severe transient
+//        pressure refuses the candidate)
+//      → ONE bounded transaction through the existing variant authority
 //
 // The trigger runs strictly AFTER the startup maintenance gate completes
 // (never racing the maintenance transaction or the prewarm release), in
@@ -133,8 +133,18 @@ func (s *Server) autoVulkanEligibility() (identity string, eligible bool, reason
 
 	// GPU offload must not be disabled by configuration — a candidate
 	// launched with zero offload can never produce offload evidence.
+	//
+	// v1.8.4 (P0-B): this gate now sees only an EXPLICIT OFF. The
+	// pre-1.8.4 recommendation pipeline wrote gpuAutoOffload=false as a
+	// derived posture ("CPU-only until a Vulkan engine build is
+	// provisioned") that then landed here indistinguishable from a
+	// user decision — the circularity that kept AUTO CPU-only forever.
+	// config.Load repairs that derived state once (repairDerivedGPUPosture)
+	// and every recommendation path stopped writing it, so a remaining
+	// false posture under AUTO is a genuine user OFF and is respected
+	// exactly as the explicit-OFF contract requires.
 	if !cfg.GPUAutoOffload && cfg.LLM.NumGPU <= 0 {
-		return "", false, "GPU offload is disabled in settings (numGPU=0, auto-offload off) — the candidate could not prove execution"
+		return "", false, "GPU offload is explicitly disabled in settings (numGPU=0, auto-offload off) — AUTO respects the user's explicit OFF and does not provision a GPU candidate"
 	}
 
 	// No run may be interrupted by the package swap.

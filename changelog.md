@@ -11,6 +11,134 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.8.4 — 2026-10-01
+
+Focus: four P0 defect families — (A) live streaming visibility, (B) the
+AUTO Vulkan posture circularity and the engine-identity verification
+window, (C) the zero-session Send dead end, (D) stale context-usage
+races — plus the reliability defect the verification funnel surfaced
+(the fixed `config.json.tmp` name racing concurrent config writers). No
+new authority was created anywhere: every fix routes through the
+existing streaming scheduler, the existing variant transaction, the
+existing session store and the existing context backend.
+
+1. **P0-A — the streaming flush can no longer wedge permanently, and the
+   activity timeline is no longer rAF-only.** Root cause of the real
+   Windows runtime report ("live response/thinking invisible during
+   generation, appears only after Stop"): the v1.8.2
+   `MessageChannelTaskController` was ONE-SHOT — its port handler nulled
+   the channel after the first delivery and a post arriving while a
+   message was still in flight chained onto the armed callback WITHOUT
+   posting a new message. A single lost or indefinitely delayed
+   MessageChannel message therefore left the controller wedged forever
+   (queued armed, channel non-null, microtask fallback unreachable, the
+   scheduler latch stuck pending) — every later `schedule()` became a
+   no-op and streamed text accumulated in the accumulator until the Stop
+   path's synchronous flush revealed it, exactly matching the observed
+   runtime (the phase label kept updating because the fast path's
+   `transitionPhase` renders synchronously at socket-receive time).
+   v1.8.4: the flush scheduler arms THREE independent boundaries behind
+   the ONE coalescing latch — a reusable MessageChannel macrotask, a 0ms
+   timeout task (the primitive class proven alive in the failing
+   runtime), and the animation frame; the task controller is
+   latest-callback-wins with an explicit in-flight handshake and a
+   deterministic microtask fallback the moment a post arrives while a
+   message is still undelivered (a lost channel degrades to microtask
+   delivery instead of dying). The ACTIVITY flush — statuses, tool
+   events and the done/error/aborted lifecycle events — moved off its
+   rAF-only schedule onto the same triple-boundary scheduler. Evidence:
+   `src/stream-flush-scheduler.test.ts` (13 tests, including the
+   lost-message wedge reproduced deterministically — the v1.8.2 design
+   fails it, the v1.8.4 design self-heals), the store-level suites, and
+   a new browser E2E proving live text and honest run settlement with
+   requestAnimationFrame fully suspended.
+
+2. **P0-B — the AUTO Vulkan candidate is no longer blocked by a stale
+   derived posture, and the verification window reports the binary that
+   is actually on disk.** Two root causes:
+   (i) The pre-1.8.4 recommendation pipeline wrote `gpuAutoOffload=false`
+   + `numGpu=0` as a DERIVED posture ("CPU-only until a Vulkan engine
+   build is provisioned") on every auto model selection; the AUTO probe
+   eligibility gate then read that posture as an explicit OFF and refused
+   the candidate forever — the exact circularity in the real runtime log
+   ("GPU AUTO Vulkan candidate not considered this boot: GPU offload is
+   disabled in settings (numGPU=0, auto-offload off)"). The
+   recommendation never writes a derived OFF anymore (the launch-time
+   evidence gate `autoGPUOffload` keeps the engine honestly on CPU while
+   no usable device exists), a new `gpuAutoOffloadUserSet` config field
+   marks EXPLICIT user actions (settings toggle, direct config patch),
+   and `config.Load` repairs the legacy derived state ONCE — honestly
+   noted and persisted — while never touching an explicit user OFF, an
+   explicit manual layer count, or a CPU requested profile.
+   (ii) The real log sequence "b11310 staged + SHA verified → engine
+   boot probe: binary build b11273 → b11310 committed" was an identity
+   violation in the deferred-commit window: the boot path keyed its
+   identity on the RECORDED tag (installed.json), which still described
+   the previous build until Commit ran, so the log misreported the
+   serving binary AND the old build's persisted capability profile
+   shadowed the new binary. The installer now writes a window-scoped
+   staged-identity marker (`engine-stage-pending.json`) the moment the
+   byte-verified candidate is swapped in; the boot probe probes, caches
+   and reports the ACTUAL staged build; Commit and Rollback clear the
+   marker. Evidence: `internal/updater/staged_identity_v184_test.go`
+   (marker present during the window with the old recorded tag,
+   cleared on commit and rollback, corrupt marker fails closed),
+   `internal/config/gpu_posture_v184_test.go` (repair + explicit-OFF +
+   manual-layers + CPU-profile boundaries, persisted once),
+   `internal/recommendation` contract updates.
+
+3. **P0-C — pressing Send with zero sessions creates and activates a
+   session and continues the run.** Root cause: `run()` already created
+   the session lazily, but the composer textarea and Send button were
+   hard-disabled on `!activeSessionId` — with zero sessions the lazy
+   creation was unreachable (the reported "Send/chat is blocked instead
+   of creating a session"). The composer now enables on a zero-session
+   space (the model gate and the live-run gate keep their semantics),
+   the placeholder and footer state the truth ("sending starts a new
+   session"), and `deleteSession` already left a valid zero-session
+   state. Evidence: `src/zero-session-send.test.ts` (store-level:
+   create + activate + continue the same send; valid zero state after
+   deletion; the exact delete-then-send user path; honest rejection when
+   creation fails; the created session survives a refresh),
+   `e2e/zero-session.spec.ts` (real-stack: delete every session →
+   zero-session state → Send → session created + active → user bubble →
+   streamed text visible BEFORE completion → reload persistence; Chat
+   and Agent modes).
+
+4. **P0-D — stale context responses can never overwrite newer context
+   state.** Root cause: `refreshSessionContext` guarded only on the
+   active session id, so two concurrent requests for the SAME session
+   could resolve out of order (older lands last), and deleting the
+   active session never cleared or refreshed the visible context.
+   v1.8.4 adds a monotonic request generation: every refresh claims a
+   strictly newer generation; a response may land only when it is still
+   the newest request AND its session is still active. Session switch,
+   session deletion (with replacement refresh), session creation, mode
+   switch and a fresh run's state transitions all invalidate the
+   generation; the UX stays automatic/unlimited (no user-controlled
+   context-size controls; physical limits remain backend-governed).
+   Evidence: `src/context-refresh-race.test.ts` (7 scenarios over a
+   scripted transport with causally forced response ordering: same-
+   session out-of-order, triple-race, cross-session held response,
+   deletion clears, deletion refreshes a replacement, creation clears,
+   pre-run response invalidated).
+
+5. **P1 — `config.Save` atomicity hardening (surfaced by the funnel).**
+   The fixed `config.json.tmp` name let two concurrent config writers
+   rename each other's temp file away — observed in this repo's own E2E
+   run as a hard engine-start failure ("persist default engine path:
+   rename …config.json.tmp …: no such file or directory"). Every
+   config write now uses a unique same-directory temp file (CreateTemp +
+   rename), preserving the atomic-rename semantics without the name
+   collision. `config.Save`, the v1.8.4 posture repair and the sampling
+   repair all share the helper.
+
+Version surfaces are 1.8.4 (package.json → `release-version.mjs` →
+config.go / build/config.yml / SIGNATURE); the codename gate and the
+release contract tests pass unchanged.
+
+---
+
 ## v1.8.3 — 2026-10-01
 
 Focus: root-cause and repair the exact Linux CI session-delete failure

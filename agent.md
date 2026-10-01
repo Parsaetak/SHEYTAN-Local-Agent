@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.3 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.4 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -6,7 +6,7 @@ durable invariants, and the surfaces most sensitive to regression. Full
 truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (future),
 `UPDATE.md` (release evidence), `worklog.md` (session log).
 
-**Current release: v1.8.3.** Version identity is exactly `1.8.3`
+**Current release: v1.8.4.** Version identity is exactly `1.8.4`
 everywhere (canonical gate: `node scripts/release-version.mjs --check`).
 Release history lives ONLY in `changelog.md` (the README is
 current-only).
@@ -47,13 +47,40 @@ proposes. The tools execute. The laboratory verifies."
   now 32 MiB, so real Gemma-class cards parse and drive the model-aware
   context clamp. FIRST local-provider run-level E2E tests exist in
   `internal/api` (fake llama-server subprocess, real engine contract).
-* **v1.8.2 dual-boundary streaming flush** — `src/stream-fast-path.ts`
-  still folds stream-critical WS events into the streaming accumulator at
-  receive time; the flush is armed on an event-loop task AND an animation
-  frame (`src/stream-flush-scheduler.ts`) so visibility never depends on
-  compositor frame callbacks (the "text visible only after Stop" WebView2
-  failure class). ONE coalescing latch; done/error/abort still flush
-  synchronously.
+* **v1.8.2 dual-boundary streaming flush → v1.8.4 TRIPLE-BOUNDARY
+  SELF-HEALING FLUSH** — `src/stream-fast-path.ts` still folds
+  stream-critical WS events into the streaming accumulator at receive
+  time; `src/stream-flush-scheduler.ts` arms THREE independent boundaries
+  (a REUSABLE MessageChannel macrotask, a 0ms timer task, an animation
+  frame) behind ONE coalescing latch, and the task controller is
+  recoverable: latest-callback-wins + in-flight handshake + a
+  deterministic microtask fallback whenever a post arrives while a
+  message is still undelivered. A lost MessageChannel delivery — which
+  permanently wedged the v1.8.2 one-shot controller (text visible only
+  after Stop) — now degrades to microtask delivery. The ACTIVITY flush
+  (statuses/tools/done/error/aborted) uses the same scheduler (it was
+  rAF-only before v1.8.4). done/error/abort still flush synchronously.
+* **v1.8.4 zero-session Send** — a zero-session space is first-class:
+  the composer stays usable and pressing Send runs the store's lazy
+  `createSession()` in the current mode and continues the same run
+  (`src/zero-session-send.test.ts` + `e2e/zero-session.spec.ts`).
+* **v1.8.4 context-refresh generation** — `sessionContext` is written
+  only by the newest context request for the still-active session; every
+  session/mode/run transition invalidates in-flight responses
+  (`src/context-refresh-race.test.ts` forces the interleavings by
+  causality). The backend stays the ONE context authority; the UX stays
+  automatic/unlimited.
+* **v1.8.4 GPU posture + staged identity** — the recommendation never
+  writes a derived `gpuAutoOffload=false`; explicit user OFF is marked by
+  `gpuAutoOffloadUserSet` and respected; legacy derived CPU posture is
+  repaired ONCE at Load (noted, persisted). The deferred-commit
+  verification window keys boot identity off the installer's staged
+  marker (`engine-stage-pending.json`) — the boot probe probes and
+  reports the byte-verified staged binary, never a stale recorded tag
+  (`internal/updater/staged_identity_v184_test.go`).
+* **v1.8.4 config-write atomicity** — every config write uses a unique
+  same-directory temp file (the fixed `config.json.tmp` name raced
+  concurrent writers into hard engine-start failures).
 * **v1.8.2 memory evidence** — `contextplan.MemoryEvidence` rides the
   `context` activity; the live bubble renders exactly it
   (`src/memory-evidence.ts`). No fabricated counts, ever.
@@ -92,18 +119,33 @@ proposes. The tools execute. The laboratory verifies."
 
 * Deterministic unit: governor policy matrix; synchronization contract;
   abort-marker folding; pause/resume family; edit-transaction fault
-  windows; llama.cpp CLI contract against real `--help` fixtures.
+  windows; llama.cpp CLI contract against real `--help` fixtures;
+  the v1.8.4 flush-scheduler wedge/self-heal matrix (13 tests);
+  zero-session Send (5 store-level scenarios); context-refresh races
+  (7 causally ordered scenarios); staged-identity window (3);
+  GPU-posture repair boundaries (5); the streaming/zero-session/context
+  store suites run the REAL store over a scripted transport.
 * Race: governor suite; the CI race gate (api, agent, sessions,
   contextplan, histref, runtime). Abort-after-resume now passes 15/15
   stressed (was ~1-in-6 flaky at v1.7.6 baseline).
 * Integration: API contract tests including `/api/governor`; restart
   recovery; cross-mode surfaces.
+* Browser E2E: the full real-stack suite including the v1.8.2
+  visible-before-completion proofs, the v1.8.4 suspended-rAF run
+  (streams and settles with requestAnimationFrame dead), and the
+  v1.8.4 zero-session suite (delete-all → Send → auto-create → live
+  stream → reload persistence; Chat + Agent).
 * CI: Linux headless gates green in the producing environment. The
   Windows pause/resume defect was repaired against the exact CI scenario
   deterministically — **no physical-PC Windows runtime claim is made.**
+  The v1.8.4 streaming wedge repair is proven on healthy Chromium and by
+  construction at the unit level; the reported WebView2 runtime needs
+  the user's own physical acceptance pass before any physical claim.
 * Known limitations: CPU policy inert on Windows (live load authority
   doesn't exist there yet — reported as unknown); GPU/NPU surfaces are
-  detection-level; CI ≠ physical-host runtime proof.
+  detection-level; the AUTO Vulkan path is repaired and tested but a GPU
+  execution claim still requires the transaction's own runtime offload
+  evidence on real hardware; CI ≠ physical-host runtime proof.
 
 ## Durable engineering invariants (never weaken)
 
@@ -128,7 +170,9 @@ proposes. The tools execute. The laboratory verifies."
 ## Regression-sensitive surfaces (re-check after ANY change)
 
 * Startup/maintenance gate ordering (gate before engine/model prewarm);
-  two-boot idempotency; identity fallback/corruption matrix.
+  two-boot idempotency; identity fallback/corruption matrix; the v1.8.4
+  staged-identity marker lifecycle (written at swap, cleared at
+  commit/rollback; boot identity + caps probing key off it while present).
 * Pause/Edit/Resume: durable checkpoint; revision consistency; edit
   journaling; restart recovery; empty-draft semantics; pause-after-resume;
   stop/abort-after-resume; one authoritative run.
@@ -139,7 +183,24 @@ proposes. The tools execute. The laboratory verifies."
   (`src/session-delete-regression.test.ts` — the store runs under
   `node --test` via `src/extensionless-ts-resolver.mjs`);
   pending-session delete cleans every backend authority
-  (`internal/sessions/delete_pending_test.go`).
+  (`internal/sessions/delete_pending_test.go`);
+  the zero-session state stays valid and Send creates + activates
+  (`src/zero-session-send.test.ts`, `e2e/zero-session.spec.ts`).
+* Streaming flush: the three boundaries + recoverable controller
+  (`src/stream-flush-scheduler.test.ts`); a lost MessageChannel delivery
+  must NEVER wedge the latch; the activity flush must never be
+  rAF-dependent again; cumulative-replace and no-double-processing
+  contracts are unchanged.
+* Context surface: only the newest context response may write
+  `sessionContext`; deletion/creation/mode/run transitions invalidate
+  (`src/context-refresh-race.test.ts`).
+* GPU posture: explicit user OFF (`gpuAutoOffloadUserSet`), manual layer
+  counts and the CPU profile are never repaired; the recommendation never
+  writes a derived OFF (`internal/config/gpu_posture_v184_test.go`,
+  `internal/recommendation`).
+* Config writes: unique per-write temp files; never reintroduce a shared
+  fixed temp name (cross-writer rename races became hard engine-start
+  failures).
 * Tools: deep-copied metadata under race; generation-aware spec cache.
 * Engine lifecycle: no orphaned processes; error normalization.
 * Governor: admission stays conservative on unknowns; envelope and

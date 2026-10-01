@@ -104,8 +104,20 @@ func TestRecommend_ContextStepsDownWhenUnsupported(t *testing.T) {
 	if rec.Context > 16384 {
 		t.Fatalf("context = %d, expected the resource ladder to step far down on a 2 GB machine", rec.Context)
 	}
-	if rec.GPUAutoOffload {
-		t.Fatal("no GPU + no Vulkan must disable offload")
+	// v1.8.4 (P0-B): the recommendation NEVER writes a derived
+	// gpuAutoOffload=false — the pre-1.8.4 derived OFF was the stale state
+	// that permanently blocked the AUTO Vulkan candidate. On a no-GPU
+	// machine the posture stays AUTO/automatic (launch-time evidence
+	// keeps the engine on CPU) with zero pinned layers, and the note
+	// states the truth.
+	if !rec.GPUAutoOffload {
+		t.Fatal("no-GPU posture must stay AUTO/automatic (never a derived off)")
+	}
+	if rec.GPULayers != 0 {
+		t.Fatalf("no-GPU layers = %d, want 0 (launch evidence decides)", rec.GPULayers)
+	}
+	if rec.Predicted.Speed == "high" || rec.Predicted.Speed == "medium" && rec.Threads < 8 {
+		t.Fatalf("no-GPU predicted speed = %q must never claim GPU-class throughput", rec.Predicted.Speed)
 	}
 }
 

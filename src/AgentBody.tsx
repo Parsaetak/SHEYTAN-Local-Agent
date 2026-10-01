@@ -1044,12 +1044,19 @@ function AgentBody() {
               selectionRequired
                 ? "Choose a model to begin..."
                 : !activeSessionId
-                  ? "Create a session to begin..."
+                  ? chatMode
+                    ? "Message SHEYTAN — sending starts a new session..."
+                    : "Describe what SHEYTAN should forge — sending starts a new session..."
                   : chatMode
                     ? "Message SHEYTAN..."
                     : "Describe what SHEYTAN should forge..."
             }
-            disabled={!activeSessionId || (running && !composerPaused) || selectionRequired}
+            // v1.8.4 (P0-C): a ZERO-SESSION space no longer disables the
+            // composer — pressing Send is exactly how the first session is
+            // created (run() creates + activates it lazily and continues
+            // the same send). The model gate (selectionRequired) and the
+            // live-run gate keep their pre-1.8.4 semantics.
+            disabled={(running && !composerPaused) || selectionRequired}
             rows={1}
             onKeyDown={(event) => {
               // v1.2.0: Enter = send, Shift+Enter = newline. Ctrl/Cmd+Enter
@@ -1126,7 +1133,9 @@ function AgentBody() {
               <span>
                 {activeSessionId
                   ? "Enter to send · Shift+Enter for newline"
-                  : "Create a session first"}
+                  : selectionRequired
+                    ? "Create a session first"
+                    : "Sending starts a new session"}
               </span>
             </div>
 
@@ -1194,7 +1203,10 @@ function AgentBody() {
                 <button
                   type="submit"
                   className="send-button"
-                  disabled={!activeSessionId || !message.trim() || loading}
+                  // v1.8.4 (P0-C): Send is enabled in a zero-session space
+                  // — it creates + activates a session in the current mode
+                  // and continues the run (see run()'s lazy creation).
+                  disabled={!message.trim() || loading || selectionRequired}
                 >
                   {chatMode ? "Send" : "Forge →"}
                 </button>

@@ -42,6 +42,7 @@ import {
   AnimationFrameController,
   MessageChannelTaskController,
   StreamFlushScheduler,
+  TimeoutTaskController,
 } from "./stream-flush-scheduler";
 import {
   extractMemoryEvidence,
@@ -620,6 +621,27 @@ function isStaleRunEvent(payload: Record<string, unknown>): boolean {
 let activitySequence = 0;
 let activitySessionId: string | null = null;
 
+// v1.8.4 MONOTONIC CONTEXT-REFRESH GENERATION (P0-D).
+//
+// sessionContext is written ONLY by the newest refresh request of the
+// newest relevant state. Every refreshSessionContext() call claims a
+// strictly increasing generation; a response may land only when its
+// generation is still current AND its session is still active. Relevant
+// state changes (session switch, session deletion, session creation,
+// mode switch, a fresh run's state transitions) BUMP the generation —
+// via an explicit invalidate or by issuing the next refresh — so a
+// response that belonged to a superseded state can never mutate
+// sessionContext after the newer authoritative state exists. The backend
+// remains the ONE context authority; this is purely response ordering.
+let contextRefreshGeneration = 0;
+
+// invalidateSessionContext drops every in-flight context response without
+// starting a new one (deletion/creation/mode boundaries — the caller
+// decides what the visible context should hold afterwards).
+function invalidateSessionContext(): void {
+  contextRefreshGeneration += 1;
+}
+
 // v1.2.2: activity-socket ownership refcount. While any AgentBody is
 // mounted the count is ≥ 1. A live run holds an implicit lease even at
 // count 0 so tab switches mid-generation never drop the event stream.
@@ -658,7 +680,11 @@ function clearReconnectTimer(): void {
   }
 }
 
-let activityFlushFrame: number | null = null;
+// v1.8.4: the ACTIVITY timeline flush moved off its rAF-only schedule
+// onto the same triple-boundary scheduler class as the streaming flush.
+// Statuses, tool events and the LIFECYCLE events (done/error/aborted)
+// ride this path — a suspended frame callback alone must never be able
+// to starve run settlement (the v1.8.2 fix covered streaming only).
 let pendingActivity: ActivityEvent[] = [];
 let flushingActivity: ActivityEvent[] = [];
 let pendingRunning: boolean | undefined;
@@ -720,8 +746,15 @@ const streamFastPath = new StreamingFastPath({
 // stream-flush-scheduler.ts (pure module + unit tests).
 const streamAccumulator = createStreamingAccumulator();
 
+// v1.8.4: THREE boundaries (MessageChannel macrotask + 0ms timer task +
+// animation frame) behind the ONE coalescing latch, and a RECOVERABLE
+// MessageChannel controller — the v1.8.3 runtime evidence showed a single
+// lost MessageChannel delivery could wedge the v1.8.2 latch forever (text
+// visible only after Stop) and the activity path had the same exposure.
+// See stream-flush-scheduler.ts for the failure-class analysis.
 const streamFlushScheduler = new StreamFlushScheduler(
   new MessageChannelTaskController(),
+  new TimeoutTaskController(),
   new AnimationFrameController(),
   flushStreaming,
 );
@@ -864,11 +897,10 @@ function normalizeActivity(payload: unknown): ActivityEvent {
 }
 
 function resetPendingActivity(): void {
-  if (activityFlushFrame !== null) {
-    cancelAnimationFrame(activityFlushFrame);
-
-    activityFlushFrame = null;
-  }
+  // v1.8.4: disarm the activity flush through its scheduler (the armed
+  // task/timer callbacks become latch no-ops; the frame callback is
+  // cancelled).
+  activityFlushScheduler.cancel();
 
   // v1.8.1: the fast-path ledger is per-socket state — a reconnect or
   // session switch starts a clean ledger (the pending batch it
@@ -880,9 +912,10 @@ function resetPendingActivity(): void {
   pendingRunning = undefined;
 }
 
+// v1.8.4: flushActivity runs on the activity scheduler's triple boundary
+// instead of a bare rAF callback. Same drain-then-clear semantics as
+// before (batch swap, session guard, one setActivityBatch per window).
 function flushActivity(): void {
-  activityFlushFrame = null;
-
   if (pendingActivity.length === 0 && pendingRunning === undefined) {
     return;
   }
@@ -909,12 +942,17 @@ function flushActivity(): void {
   batch.length = 0;
 }
 
-function scheduleActivityFlush(): void {
-  if (activityFlushFrame !== null) {
-    return;
-  }
+// v1.8.4: the activity flush scheduler — declared after flushActivity
+// (function declaration hoisting keeps the reference valid).
+const activityFlushScheduler = new StreamFlushScheduler(
+  new MessageChannelTaskController(),
+  new TimeoutTaskController(),
+  new AnimationFrameController(),
+  flushActivity,
+);
 
-  activityFlushFrame = requestAnimationFrame(flushActivity);
+function scheduleActivityFlush(): void {
+  activityFlushScheduler.schedule();
 }
 
 function queueActivity(activity: ActivityEvent): void {
@@ -2252,20 +2290,46 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   // status is per-session and never mutates other chats.
   refreshSessionContext: async () => {
     const id = get().activeSessionId;
+
     if (!id) {
+      // v1.8.4: no active session — every in-flight context response is
+      // invalidated with the generation bump, and the visible context is
+      // cleared (a stale session's usage must never survive its session).
+      invalidateSessionContext();
       set({ sessionContext: null, sessionContextError: null });
       return;
     }
+
+    // v1.8.4 MONOTONIC REQUEST GENERATION: every refresh claims a strictly
+    // newer generation. Responses settle only when they are BOTH (a) still
+    // the newest request AND (b) bound to the still-active session. Two
+    // requests for the SAME session can now resolve in any order without
+    // the older response overwriting the newer state (the pre-1.8.4 guard
+    // checked only the session id, so A-start/B-start/B-settles/A-settles
+    // landed A's older usage last).
+    const generation = ++contextRefreshGeneration;
+
     try {
       const status = await api.sessionContext(id);
-      if (useRuntimeStore.getState().activeSessionId !== id) {
+
+      const state = useRuntimeStore.getState();
+
+      if (
+        generation !== contextRefreshGeneration ||
+        state.activeSessionId !== id
+      ) {
         return;
       }
+
       set({ sessionContext: status, sessionContextError: null });
     } catch (err) {
-      if (useRuntimeStore.getState().activeSessionId !== id) {
+      if (
+        generation !== contextRefreshGeneration ||
+        useRuntimeStore.getState().activeSessionId !== id
+      ) {
         return;
       }
+
       set({
         sessionContext: null,
         sessionContextError:
@@ -2470,6 +2534,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // Phase 4: drop any pending streaming chunks for the OLD session.
     resetPendingStreaming();
 
+    // v1.8.4 (P0-D): a new session invalidates every in-flight context
+    // response of the previous state; the fresh session's context is
+    // unknown until its own refresh lands.
+    invalidateSessionContext();
+
     // v1.2.2: a fresh session ends any in-flight timeline for the old one.
     clearRunFinalizeTimer();
     runOutcome = null;
@@ -2505,6 +2574,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       pendingAttachments: [],
       historyRefs: [],
       agentTask: null,
+      // v1.8.4 (P0-D): the new session's context is genuinely unknown —
+      // never carry the previous session's usage into it.
+      sessionContext: null,
+      sessionContextError: null,
       olderHasMore: false,
       olderNextBefore: null,
     }));
@@ -2637,8 +2710,20 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         runPhase: state.activeSessionId === id ? "idle" : state.runPhase,
         runStartedAt: state.activeSessionId === id ? null : state.runStartedAt,
         runNote: state.activeSessionId === id ? null : state.runNote,
+        // v1.8.4 (P0-D): the deleted session's usage must never remain
+        // visible — cleared here, refreshed below when a replacement
+        // session became active.
+        sessionContext:
+          state.activeSessionId === id ? null : state.sessionContext,
+        sessionContextError:
+          state.activeSessionId === id ? null : state.sessionContextError,
       };
     });
+
+    // v1.8.4 (P0-D): every in-flight context response is invalidated by a
+    // deletion (its session may be gone); a replacement session starts a
+    // fresh authoritative refresh.
+    invalidateSessionContext();
 
     const nextId = get().activeSessionId;
 
@@ -2649,6 +2734,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       }
 
       void get().loadSession(nextId);
+      void get().refreshSessionContext();
     }
   },
 
@@ -2683,6 +2769,12 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     runEventsReceived = false;
     resetPendingStreaming();
     resetRunReplayTracking(null);
+
+    // v1.8.4 (P0-D): a fresh run is a relevant state transition — every
+    // in-flight context response that predates the run can never
+    // overwrite newer state during or after it (finaliseRun issues the
+    // authoritative post-run refresh).
+    invalidateSessionContext();
 
     // v1.2.6 continuation: the DETERMINISTIC ATTACH CONTRACT — the POST
     // fires only after the server acknowledged this session's socket
@@ -3382,6 +3474,11 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // v1.7.5: a mode switch poisons every in-flight list GET of the OLD
     // mode — its response is stale the moment the space changes.
     sessionListGuard.invalidate();
+
+    // v1.8.4 (P0-D): a mode switch also poisons every in-flight context
+    // response of the old space (the cleared sessionContext below must
+    // never be re-populated by a response that predates the switch).
+    invalidateSessionContext();
 
     // A run live in the current session keeps running on the backend;
     // this UI switch only changes the visible space.

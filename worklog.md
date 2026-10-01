@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.8.3
+Current release:  v1.8.4
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
@@ -435,3 +435,107 @@ Stage Summary:
   capabilities, human-facing logs are free of opaque identity tokens,
   repeated model-card work is gone, README is current-only with the
   history in `changelog.md`, and version identity is exactly 1.8.2.
+
+---
+Task ID: v1.8.4 session
+Agent: v1.8.4 engineering session
+Task: v1.8.4 — P0 root-cause and repair of four defect families from the
+real Windows runtime evidence: (A) live response/thinking invisible
+during generation until Stop; (B) the AUTO Vulkan candidate blocked by a
+stale derived GPU posture + the b11273/b11310 boot-probe identity
+contradiction; (C) zero-session Send dead end; (D) stale context-usage
+races. Documentation to current state; full verification funnel; the
+v1.8.4 final source ZIP.
+
+Work Log:
+- Baseline verified first: HEAD `ca44b08008f26df467d4bd9c7b70cc49729e1ffb`
+  (v1.8.3) on `main` — matches the stated baseline exactly.
+- P0-A root cause (from the code, deterministic): the v1.8.2
+  `MessageChannelTaskController` was ONE-SHOT (port handler nulled the
+  channel after the first delivery; a post while a message was in flight
+  chained onto the armed callback WITHOUT reposting). One lost/delayed
+  MessageChannel message wedged the controller and the flush latch
+  forever — streamed text accumulated until Stop's synchronous flush,
+  while the fast path's synchronous `transitionPhase` renders kept the
+  phase label moving. Exactly the reported split. Also found the
+  ACTIVITY flush was rAF-only (statuses/tools/done/error) — the same
+  boundary-loss class for run settlement.
+  Repair: `src/stream-flush-scheduler.ts` — THREE independent boundaries
+  (reusable MessageChannel macrotask + 0ms timer task + animation frame)
+  behind ONE coalescing latch; recoverable latest-wins task controller
+  with an in-flight handshake and a deterministic microtask fallback; the
+  activity flush moved onto the same scheduler class.
+- P0-B root causes: (i) `internal/recommendation` wrote
+  `gpuAutoOffload=false + numGpu=0` as a derived posture ("CPU-only
+  until a Vulkan engine build is provisioned"); the AUTO probe gate then
+  read it as an explicit OFF — the exact circularity in the runtime log.
+  Repair: the recommendation never writes a derived OFF; a new
+  `gpuAutoOffloadUserSet` field marks explicit user actions (toggle +
+  config patch); `config.Load` repairs the legacy derived state ONCE,
+  honestly noted and persisted; explicit OFF / manual layers / CPU
+  profile are never touched. (ii) the deferred-commit verification
+  window keyed boot identity on the RECORDED tag (still the previous
+  build until Commit) — the "b11310 staged → probe reports b11273"
+  contradiction. Repair: the installer writes a window-scoped
+  `engine-stage-pending.json` marker at swap time; `detectCapsForBoot`
+  probes/caches/reports the ACTUAL staged binary while it exists;
+  Commit/Rollback clear it.
+- P0-C root cause: `run()`'s lazy session creation was unreachable — the
+  composer textarea and Send button were hard-disabled on
+  `!activeSessionId`. Repair: composer enabled on zero-session spaces
+  (model + live-run gates unchanged), truthful placeholder/footer.
+- P0-D root cause: `refreshSessionContext` guarded only the session id —
+  same-session out-of-order responses overwrote newer state; deletion
+  never cleared/refreshed the context. Repair: monotonic request
+  generation; invalidation on session switch/deletion/creation/mode
+  switch/fresh runs; deletion now clears + refreshes a replacement.
+- Funnel-surfaced defect (P1): `config.Save` used the FIXED
+  `config.json.tmp` name — two concurrent writers rename each other's
+  temp away (observed in this repo's own E2E run as a hard engine-start
+  failure: "persist default engine path: rename …: no such file"). Every
+  config write now uses a unique same-directory temp file.
+- Tests added/updated: `src/stream-flush-scheduler.test.ts` (13 —
+  including the deterministic lost-message wedge the v1.8.2 design
+  fails), `src/context-refresh-race.test.ts` (7), 
+  `src/zero-session-send.test.ts` (5), `e2e/zero-session.spec.ts` (4),
+  the suspended-rAF live-stream E2E (1),
+  `internal/updater/staged_identity_v184_test.go` (3),
+  `internal/config/gpu_posture_v184_test.go` (5), recommendation
+  contract updates. New store-level suites run the REAL store via the
+  extensionless resolver (same harness discipline as v1.8.3).
+- Docs: README current-only to v1.8.4 (triple-boundary flush, new
+  verified capabilities); UPDATE.md rewritten as v1.8.4 current notes
+  with compressed history; changelog.md v1.8.4 entry (factual,
+  evidence-cited); ARCHITECTURE.md current for v1.8.4 (flush, zero-
+  session, context generation, staged identity, GPU posture contract);
+  agent.md handoff updated; ROADMAP.md only records what actually
+  shipped with its evidence classes.
+
+Verification (what actually ran here, Linux x64):
+- `go build ./...` and the headless build pass; `go vet`-equivalent via
+  test compilation clean.
+- Go: full `go test ./internal/... -tags headless -count=1` PASS;
+  race gate PASS (api, agent, sessions, contextplan, histref, runtime,
+  config, updater, recommendation; one load-sensitive governor flake
+  observed once under heavy parallel load, not reproducible in 3
+  targeted race runs — unrelated to this change set).
+- Native C++: `make -C native/engine test` all checks passed.
+- Frontend: `tsc --noEmit` clean; `oxlint` clean; `npm run test:units`
+  209/209; `npm run test:release` 38/38; release-version gate consistent
+  at 1.8.4.
+- Browser E2E (real stack: headless server + embedded frontend + native
+  engine + Chromium): FULL suite 37/37 green (32 existing + 5 new).
+- NOT executed here (stated honestly): GitHub Actions Windows x64
+  packaging, physical-Windows/WebView2 runtime acceptance, real-GPU
+  Vulkan execution evidence — the repairs are proven deterministically
+  and on healthy Chromium; the physical claims remain the user's own
+  acceptance step.
+
+Stage Summary:
+- v1.8.4 complete on this revision: the streaming flush cannot wedge
+  (three boundaries, recoverable controller), the activity lifecycle is
+  not rAF-hostage, zero-session Send works end-to-end, stale context
+  responses can never land, the AUTO GPU posture is honest and
+  provenance-marked, the engine-update window reports the binary that is
+  actually on disk, and config writes are race-free. Version identity is
+  exactly 1.8.4; no new authority was introduced anywhere.

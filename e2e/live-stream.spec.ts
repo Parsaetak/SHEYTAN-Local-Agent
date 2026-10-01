@@ -163,3 +163,69 @@ test("Stop during a live generation settles honestly and keeps the partial", asy
   expect(userCount).toBe(1);
   expect(agentCount, "at most one assistant row after abort").toBeLessThanOrEqual(1);
 });
+
+// ---------------------------------------------------------------------------
+// v1.8.4 (P0-A): THE SUSPENDED-BOUNDARY REPRODUCTION.
+//
+// The v1.8.3 Windows runtime failure class, reproduced deterministically
+// in Chromium: requestAnimationFrame NEVER fires (the WebView2 occlusion
+// failure class). In v1.8.3 the ACTIVITY timeline — statuses, tool events
+// and the done/aborted LIFECYCLE events — was flushed through a rAF-ONLY
+// schedule, so a suspended frame callback starved run settlement: the
+// composer stayed locked and the visible state froze until Stop (whose
+// abort path flushes synchronously). v1.8.4 routes the activity flush
+// through the same triple-boundary scheduler as the streaming flush
+// (MessageChannel macrotask + 0ms timer + animation frame), so the run
+// stays visible and settles WITHOUT the frame callback. The MessageChannel
+// wedge variant of the failure class is pinned deterministically at the
+// unit level (stream-flush-scheduler.test.ts — a lost channel message must
+// self-heal via the microtask fallback and the timer boundary).
+// ---------------------------------------------------------------------------
+
+test("the run streams and settles while live even with requestAnimationFrame suspended", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    // Kill the frame boundary: rAF callbacks are never invoked (the
+    // WebView2 occlusion failure class). The event loop, timers, the
+    // WebSocket and MessageChannel stay healthy — the scheduler must not
+    // NEED the frame callback for visibility or settlement.
+    window.requestAnimationFrame = ((): number => 0) as typeof requestAnimationFrame;
+    window.cancelAnimationFrame = (() => {}) as typeof cancelAnimationFrame;
+  });
+
+  await page.goto(stack!.baseURL + "/");
+
+  await expect(composer(page)).toBeEnabled({ timeout: 60_000 });
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(
+    page.locator(".message-row, .conversation-empty").first(),
+  ).toBeVisible();
+
+  await composer(page).fill("suspended rAF streaming proof");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+
+  // (1)+(2) The LIVE surface shows non-empty streamed text while the run
+  // is provably live (Stop up) — no frame callbacks involved.
+  await expect
+    .poll(async () => {
+      const s = await liveSample(page);
+      return s.hasBubble && s.stopVisible && s.textLen > 0;
+    }, { timeout: 60_000, intervals: [100] })
+    .toBe(true);
+
+  const first = await liveSample(page);
+  expect(first.stopVisible, "run must still be live at first text").toBe(true);
+  expect(first.textLen, "first visible snapshot must be non-empty").toBeGreaterThan(0);
+
+  // (3) The run SETTLES without the frame callback: the activity path's
+  // lifecycle flush (done) no longer depends on rAF — the composer
+  // unlocks and the final transcript is exactly one reply.
+  await expect(composer(page)).toBeEnabled({ timeout: 120_000 });
+  await expect(
+    page.getByRole("button", { name: "Stop", exact: true }),
+  ).toHaveCount(0);
+
+  const assistantRows = page.locator(".message-row.from-agent");
+  expect(await assistantRows.count(), "exactly one assistant message").toBe(1);
+});

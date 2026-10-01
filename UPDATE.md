@@ -1,129 +1,131 @@
-# UPDATE.md — v1.8.3 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.8.4 Release Notes & Maintenance Behavior
 
-**Release:** `v1.8.3` (canonical application version; single version
+**Release:** `v1.8.4` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ c8867886` (`v1.8.2`) · **Date:** 2026-10-01
-**Package:** `SHEYTAN-Local-Agent-v1.8.3-FINAL.zip` (complete repository
+**Base:** `main @ ca44b08` (`v1.8.3`) · **Date:** 2026-10-01
+**Package:** `SHEYTAN-Local-Agent-v1.8.4-FINAL.zip` (complete repository
 tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior.
 
-## v1.8.3 changes
+## v1.8.4 changes
 
-1. **P0 — the Linux CI session-delete failure is root-caused and repaired
-   (run 36713108772 / job 109880449134, `e2e/sessions.spec.ts:88`:
-   "Expected: < 4, Received: 4" after 15 s).** The root cause was
-   established with an instrumented reproduction, not inference: the
-   browser test sampled its count baseline BEFORE the asynchronous
-   "New session" create landed in the sidebar, so the subsequent delete
-   (which worked correctly — the deleted id is absent from the server's
-   authoritative post-delete list) left the count flat against a baseline
-   that did not yet include the in-flight create. The product never
-   failed to delete and never resurrected anything; the measurement
-   raced the app. The repaired test synchronizes on STATE (the created
-   session appears; the count grows by one) before sampling, then
-   asserts the SPECIFIC deleted id, the survivor identity set, the count,
-   replacement activation, composer usability, and — after a full reload —
-   that the deleted id is still absent. No sleeps, no timeout bumps, no
-   weakened assertions.
+1. **P0 — live streaming visibility (response AND thinking) during an
+   active run.** The v1.8.2 dual-boundary flush carried a latent wedge:
+   the MessageChannel task controller was one-shot, and a post arriving
+   while a message was still in flight chained onto the armed callback
+   without posting a new one. One lost or indefinitely delayed MessageChannel
+   delivery — the failure class the reported Windows runtime exhibited —
+   left the flush latch pending forever; streamed text accumulated in the
+   accumulator until Stop's synchronous flush revealed it. The v1.8.4
+   scheduler arms THREE independent boundaries behind the ONE coalescing
+   latch (reusable MessageChannel macrotask + 0ms timer task + animation
+   frame); the task controller is recoverable by construction (latest-wins,
+   bounded handshake, deterministic microtask fallback). The ACTIVITY flush
+   (statuses, tool events, done/error/aborted) moved off its rAF-only
+   schedule onto the same scheduler. Streaming efficiency is unchanged:
+   cumulative snapshots, one coalescing latch, no per-token renders, no
+   sleeps, no polling.
 
-2. **P0 — the startup session-list write goes through the ONE generation
-   guard.** The v1.7.5 stale-response protection covered `refreshSessions`
-   only; `initializeAgentOnce` applied its `GET /api/sessions` response
-   without a ticket. Because the sidebar's "New session" button is
-   actionable while the startup GET is on the wire, a session created in
-   that window could be silently DROPPED from the sidebar by the stale
-   startup list. The init now takes a `sessionListGuard` ticket before
-   the GET; a response may only land while its ticket is current and the
-   mode unchanged; superseded responses delegate list + selection
-   re-resolution to `refreshSessions()`; the eager first-install create
-   invalidates the guard like `store.createSession` does. Mutation-
-   verified at two layers: both the store-level suite and a real-browser
-   E2E fail against the unguarded v1.8.2 init and pass with the repair.
+2. **P0 — AUTO Vulkan provisioning unblocked; explicit OFF stays
+   respected; the engine-identity verification window is truthful.**
+   (i) The stale derived CPU posture (`gpuAutoOffload=false` written by
+   the pre-1.8.4 recommendation pipeline) no longer blocks the AUTO
+   candidate: the recommendation never writes a derived OFF, the config
+   records explicit user actions (`gpuAutoOffloadUserSet`), and Load
+   repairs the legacy derived state once, with an honest note, persisted.
+   Explicit user OFF, manual layer counts and the CPU requested profile
+   are never touched. (ii) During the deferred-commit verification window
+   the boot path now derives identity from the installer's staged marker
+   and probes the ACTUAL swapped-in binary — "staged b11310, probe
+   reports b11310" — instead of misreporting the previous recorded tag
+   and reusing the old build's capability profile. Commit/Rollback clear
+   the marker; the transaction's stop → stage → verify → start → health
+   → execution-evidence → commit/rollback choreography is unchanged.
 
-3. **P0 — a failed DELETE is surfaced honestly, and the created-session
-   prepend is idempotent.** `deleteSession` now reports server-side
-   failures through the store's error surface (the v1.8.2 sidebar turned
-   them into invisible unhandled rejections) and never fakes success.
-   `createSession` dedupes its prepend by id — a refresh landing between
-   the create POST's dispatch and its response can no longer produce a
-   duplicated sidebar row.
+3. **P0 — zero-session Send.** Deleting the final session leaves a valid
+   zero-session state, the composer stays usable, and pressing Send
+   automatically creates + activates a session in the current mode and
+   continues the same run (the store's lazy creation, now reachable).
+   Chat and Agent modes behave identically; the created session persists
+   across reloads.
 
-4. **P0 — deterministic session-delete coverage at three layers.**
-   Store-level (`src/session-delete-regression.test.ts`: 11 scenarios
-   over a scripted HTTP transport where response ordering is forced by
-   causality — pending and persisted delete, replacement selection,
-   delete-while-GET-in-flight, stale-GET non-resurrection, mode
-   separation, honest duplicate-delete, post-delete fresh fetch, and the
-   init race; plus the resolve hook that makes the real store testable
-   outside the bundler), backend (`internal/sessions/
-   delete_pending_test.go`), and browser (the strengthened delete test
-   and the new init-race test, which holds the startup response until
-   the create's POST response has reached the page — causality, not
-   timers).
+4. **P0 — monotonic context refresh.** The context UI can no longer show
+   stale usage: every context refresh carries a monotonic generation; only
+   the newest request for the still-active session may write
+   `sessionContext`. Session change, deletion (cleared + replacement
+   refreshed), creation, mode switch and fresh-run transitions invalidate
+   in-flight responses. The UX remains automatic/unlimited; physical
+   limits remain governed by model + engine + runtime (the backend stays
+   the ONE context authority).
 
-5. **P1 — `ROADMAP.md` repaired.** The roadmap now states the artifact
-   truth (`changelog.md` is the sole release-history artifact; README is
-   current-only; this file is current release/maintenance evidence) and
-   adds the evidence-ranked Performance, Reliability & Scale Backlog
-   with explicit D/I/H labels. Supplied external report content was
-   treated as research input: unmeasured performance figures are
-   hypotheses, incompatible architecture prescriptions (runtime
-   rewrites, mandatory external stores, assumed engine features) are
-   rejected, and no speculative claim became a product fact.
-
-v1.8.2's streaming, live memory-evidence and self-model behavior is
-preserved unchanged — the full browser suite (including every
-live-stream test) passes against this build.
+5. **P1 — config-write atomicity.** Every config write uses a unique
+   same-directory temp file (the fixed `config.json.tmp` name was a
+   latent cross-writer race, observed as a hard engine-start failure in
+   this repo's own verification funnel).
 
 ## Maintenance / update / rollback behavior (current)
 
 * The maintenance gate (identity manifest + committed state) still owns
   engine updates; two-boot idempotency and the corruption matrix are
   unchanged (deterministic, fault-injected).
-* A rolled-back engine transaction leaves the RECORDED tag agreeing with
-  the restored package (re-recorded from the restored manifest; no
-  invented identity). The commit remains the authoritative identity
-  record — state, manifest, binary hash all agree after every successful
-  update, and the log sequence names which build is serving and which is
-  staged.
+* During a deferred engine update the serving binary is the byte-verified
+  staged candidate and the staged-identity marker (`engine-stage-pending.json`,
+  inside the managed bin directory) is its identity authority until
+  Commit records the new tag and removes the marker. Rollback restores
+  the previous package and the marker is gone with the staged tree.
+* The v1.8.4 GPU-posture repair is a ONE-TIME config migration: it fires
+  at Load only for a marker-less derived CPU posture under a non-CPU
+  requested profile, repairs to the AUTO default, appends an honest
+  PathNote and persists. After the repair it can never fire again. There
+  is no other data migration of any kind: the session store's on-disk
+  format, the index and the sidecars are byte-compatible with v1.8.3.
 * The update path still resolves engine variants through the ONE
   authoritative resolver (pinned tag first, else newest release containing
   the asset); unsupported variants are REFUSED, never silently CPU-fallen.
-* Update rollback safety, zipsafe installation and effective-tag rules are
-  unchanged from v1.7.4–v1.7.5 (plus the v1.8.1 rollback identity repair).
-* The model capability cache is in-memory only (bounded, identity-keyed);
-  restarting the app re-reads each model's card once. Nothing to migrate.
+* The AUTO Vulkan candidate evidence ladder is unchanged: supported
+  variant → resolved asset → staged package → byte identity → start →
+  health → device enumeration → bounded real generation → offload-line
+  evidence → commit (or rollback). Detection alone is never proof.
 * The Runtime Governor adds NO persistence, NO new scheduler and NO new
   updater: it is a policy read-model over existing telemetry. Restarting
   the app re-measures; nothing to migrate.
-* v1.8.3 adds no data migration of any kind: the session store's on-disk
-  format, the index and the sidecars are byte-compatible with v1.8.2.
 
 ## Evidence-truth statements (standing)
 
 * Deterministic unit / race / integration / E2E / CI / real-engine probe /
   real-host runtime are DISTINCT evidence classes and are never conflated.
-* v1.8.3 session-delete evidence: the store-level suite forces the exact
-  CI-latency interleavings by causality (held responses released only
-  after the mutation completes), the Go suite pins the pending/persisted/
-  repeat-delete contracts, and the browser suite proves the same through
-  the real stack. Mutation checks (reverting the guard) make both the
-  store-level and browser tests fail — the coverage detects the defect
-  class it was written for.
+* v1.8.4 evidence: the flush-scheduler wedge is reproduced deterministically
+  at the unit level (a lost channel message must self-heal — the design
+  fails the test before the repair and passes after); the context races
+  are forced by causality over a scripted transport; zero-session Send is
+  proven store-level AND through the real stack in a browser (including
+  visible-before-completion with requestAnimationFrame suspended).
+* Vulkan GPU execution is NOT claimed by this release: the AUTO path and
+  the identity window are repaired and deterministically tested, but a
+  real-GPU offload claim still requires the physical execution evidence
+  the transaction itself collects — CI and this repository cannot
+  manufacture it.
 * Build/typecheck ≠ runtime proof; CI ≠ physical-host runtime proof;
   detection ≠ execution. The physical-Windows acceptance walkthrough
-  (launch, create/delete pending and persisted sessions, ordinary chat
-  with live streaming, memory evidence, capability self-description,
-  reload no-resurrection) remains the user's own acceptance step — no
-  physical-PC claim is made by CI or by this release.
+  (launch, delete the final session, Send with zero sessions, live
+  streaming during generation, reload persistence) remains the user's own
+  acceptance step — no physical-PC claim is made by CI or by this release.
 
 ---
 
 # Historical records (compressed — authoritative detail lives in the tags, their tests, and `changelog.md`)
+
+## v1.8.3 record
+
+The Linux CI session-delete failure root-caused with instrumented
+evidence (measurement race in the test, not the product); the startup
+session-list write moved through the ONE generation guard; honest DELETE
+errors + idempotent create-prepend; deterministic three-layer
+session-delete coverage; ROADMAP evidence-ranking.
 
 ## v1.8.2 record
 

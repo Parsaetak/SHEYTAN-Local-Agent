@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Architecture Truth Table
 
-Current for **v1.8.3**. This document states the architecture that IS
+Current for **v1.8.4**. This document states the architecture that IS
 implemented and verified in this repository. Future R&D is NOT described as
 implemented; the roadmap (`ROADMAP.md`) owns the future. Historical
 release-specific architecture notes were consolidated at the end.
@@ -87,19 +87,27 @@ publish the `aborted` activity type; the live state and the outcome
 registry agree on `aborted` forever (settleTerminal never has to override
 an early flip).
 
-**Streaming display (v1.8.2):** the backend emits cumulative
-`response`/`reasoning` snapshots (SmoothStream, ~8 ms minimum emit
+**Streaming display (v1.8.2; v1.8.4 self-healing):** the backend emits
+cumulative `response`/`reasoning` snapshots (SmoothStream, ~8 ms minimum emit
 interval). In the frontend, stream-critical events fold into the streaming
 accumulator AT SOCKET-RECEIVE TIME (`src/stream-fast-path.ts`). The flush
-is scheduled on TWO deterministic boundaries (`src/stream-flush-scheduler.ts`)
-— an event-loop task (MessageChannel) AND an animation frame; whichever
-runs first flushes and the other no-ops — so visibility never depends on
-compositor frame callbacks (the WebView2 rAF-throttling failure class:
-text visible only after Stop). Exactly ONE coalescing latch remains; the
-events still join the activity timeline batch, a self-draining ledger
-guarantees the batch never processes them twice, and cumulative replace
-semantics, replay/reconnect idempotence, sequence/stale-run protection and
-the synchronous done/error/abort flush are unchanged.
+is scheduled on THREE deterministic boundaries
+(`src/stream-flush-scheduler.ts`) — a REUSABLE MessageChannel macrotask, a
+0ms timeout task, and an animation frame; whichever runs first flushes and
+the others no-op — so visibility and run settlement never depend on any
+single scheduling primitive (the WebView2 failure classes: rAF suspension,
+and a lost MessageChannel delivery which permanently wedged the v1.8.2
+one-shot controller). The task controller is recoverable by construction:
+latest-callback-wins, an explicit in-flight handshake, and a deterministic
+microtask fallback the moment a post arrives while a message is still
+undelivered. The ACTIVITY flush (statuses, tool events, done/error/aborted
+lifecycle events) uses the same scheduler — the v1.8.2 design left it on a
+rAF-only schedule, so a suspended frame callback starved run settlement.
+Exactly ONE coalescing latch remains; the events still join the activity
+timeline batch, a self-draining ledger guarantees the batch never processes
+them twice, and cumulative replace semantics, replay/reconnect idempotence,
+sequence/stale-run protection and the synchronous done/error/abort flush
+are unchanged.
 
 **Live memory evidence (v1.8.2):** the orchestrator composes
 `contextplan.MemoryEvidence` from the survival-reconciled injection facts
@@ -133,9 +141,62 @@ session-list write in the frontend — `refreshSessions` AND the startup
 current; every mutation (create/delete/rename/mode switch) invalidates the
 tickets taken before it. A failed DELETE surfaces through the store error
 state (never a fake success), and the created-session prepend is idempotent
-by id. The session-delete contract (pending and persisted deletion,
-replacement selection, stale-response non-resurrection, mode separation,
-honest duplicate-delete) is pinned deterministically at the store level
+by id.
+
+**Zero-session Send (v1.8.4):** a space with zero sessions is a FIRST-CLASS
+state, not a dead end. The composer stays usable (the model gate and the
+live-run gate keep their semantics), and pressing Send runs the store's
+lazy `createSession()` — creating a session in the CURRENT mode, making it
+active, and continuing the SAME send through the normal run lifecycle
+(deterministic store-level suite + real-stack browser E2E in both modes,
+including reload persistence). `deleteSession` already produced a valid
+zero-session state; the v1.8.3-era composer gates made it unreachable.
+
+**Context-refresh generation authority (v1.8.4):** `sessionContext` is
+written ONLY by the newest context request for the still-active session.
+Every `refreshSessionContext()` claims a strictly increasing generation;
+a response may land only while it is both the newest request and bound to
+the active session. Session switch, deletion (the visible context is
+cleared and a replacement session's is refreshed), creation, mode switch
+and fresh-run transitions invalidate every in-flight response. The backend
+remains the ONE context authority — this is purely response ordering; the
+UX stays automatic/unlimited with no user-controlled context-size controls
+(`src/context-refresh-race.test.ts` forces every interleaving by
+causality).
+
+**Engine identity during the deferred-commit window (v1.8.4):** the
+transactional installer writes a window-scoped staged-identity marker
+(`engine-stage-pending.json` inside the managed bin directory) the moment
+a byte-verified candidate is swapped in, and clears it at Commit (the
+install manifest becomes the authority) and at Rollback (the previous
+package is restored). While the marker exists, the boot path
+(`detectCapsForBoot`) derives the identity from it: the ACTUAL staged
+binary is probed, capability-cached and reported — never the recorded tag
+left over from the previous build (`updater.StagedEngineIdentity`;
+`internal/updater/staged_identity_v184_test.go`).
+
+**GPU launch posture contract (v1.8.4):** `gpuAutoOffload` is the AUTO
+offload posture (default true; the launch-time evidence gate
+`autoGPUOffload` decides from device enumeration/offload evidence — CPU
+while nothing is proven). `gpuAutoOffloadUserSet` marks EXPLICIT user
+actions (settings toggle, direct config patch); the recommendation
+pipeline NEVER writes a derived OFF (the pre-1.8.4 derived
+`false + numGpu=0` permanently blocked the AUTO Vulkan candidate — the
+stale state is repaired once at Load, honestly noted and persisted, and
+never touches an explicit user OFF, a manual layer count, or a CPU
+requested profile). The AUTO candidate eligibility gate
+(`internal/api/gpu_autoprobe.go`) therefore sees only a genuine explicit
+OFF. Evidence ladder unchanged: detection ≠ enumeration ≠ offload
+evidence.
+
+**Log redaction (v1.8.2):** `internal/logging/redact.go` removes the
+opaque identity tokens (`runId=`, `session=`, …) at the ONE central sink;
+internal identity (API objects, run state, journals, storage keys) is
+untouched.
+
+The session-delete contract (pending and persisted deletion, replacement
+selection, stale-response non-resurrection, mode separation, honest
+duplicate-delete) is pinned deterministically at the store level
 (`src/session-delete-regression.test.ts`), the Go store level
 (`internal/sessions/delete_pending_test.go`) and the browser level
 (`e2e/sessions.spec.ts`), with mutation-verified coverage.
