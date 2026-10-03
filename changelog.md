@@ -11,6 +11,96 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.8.5 — 2026-10-03 — Phase 1 of the staged engine program
+
+Focus: PHASE 1 — the core runtime / user-surface foundation of the staged
+engine program (the plan: Phase 1 runtime/user foundation → Phase 2 deep
+execution-engine/resource integration → Phase 3+ new product capabilities).
+Four user-facing/engineering verticals landed, each through the EXISTING
+authorities (no new manager, scheduler, registry, downloader or runtime):
+
+1. **P0 — live streaming: the server-side drop-newest bottleneck closed.**
+   Trace (engine → SSE client → orchestrator emitProgress ~8ms → publish →
+   hub → WS → frontend fast-path fold → triple-boundary flush → render)
+   showed the v1.8.4 frontend scheduler robust; the remaining defect was
+   the run hub's subscriber channel: on overflow it DROPPED THE NEWEST
+   event ("a slow WebSocket must never block the agent run"). For
+   cumulative response/reasoning captions that discards the frame with
+   the FULL text while the buffer keeps stale prefixes — under transport
+   backpressure the visible text freezes at a stale prefix until the run
+   ends (Stop included), then the reconnect snapshot replay reveals
+   everything at once: the server-side twin of the v1.8.4 MessageChannel
+   wedge. v1.8.5: bounded conflation-aware subscriber queues (overflow
+   evicts the OLDEST conflatable snapshot — newest-wins; order and the
+   seq replay contract preserved; terminal events never preferentially
+   evicted; publisher never blocks; memory bounded) plus a generous
+   per-event write deadline (a wedged client tears down deterministically
+   and recovers via reconnect replay). Coverage: 9 deterministic
+   hub/queue suites including the drop-newest reproduction, terminal
+   survival, publish-never-blocks (20k offers to a wedged reader),
+   close-drains-first, concurrent publishers (race gate); the full API
+   suite green.
+
+2. **P0 — reasoning depth becomes a REAL four-level ladder: Low / Mid /
+   High / Ultra.** Every level carries a numeric thinking-token budget
+   applied to the generation request through the llama.cpp request-level
+   `reasoning_budget_tokens` parameter — VERIFIED against the actual
+   server sources of BOTH managed builds (b10642 DefaultEngineTag and
+   b11205; the field exists at the OAI chat endpoint and maps into the
+   reasoning budget sampler; the CLI fixtures independently document
+   `--reasoning-budget`): low=0 (thinking off — "0 for immediate end"),
+   mid=1024 (bounded default), high=4096, ultra=-1 → NOT SENT (engine
+   default/unrestricted — the honest encoding of "no client-side cap").
+   Pointer-typed field keeps the explicit 0 on the wire; local engines
+   only (same gating as TopK/NumCtx/MinP); non-thinking models ignore the
+   budget (no fabricated reasoning); the native C++ path is
+   documented-inert. The level rides EVERY run request; legacy
+   auto/fast/thinking values migrate at the wire and persistence
+   boundaries. Tier posture: low keeps the latency-first floor, mid is
+   neutral, high/ultra never inflate context (depth = budget, not
+   context). Coverage: 9 Go suites (normalization, budgets, local/remote
+   gating, ultra-nil, legacy migration, wire field name, defensive) +
+   the tier-posture pin + 4 store-level scripted-transport suites
+   (payload always carries the level; visibility split).
+
+3. **P0 — Show Thinking / Hide Thinking (visibility only).** A persisted
+   presentation preference gating the rendering of backend-reported
+   reasoning on the live bubble, the safety-net bubble and history
+   messages. It never touches the request payload (pinned), never changes
+   the reasoning level or budget, keeps the store folding reasoning
+   snapshots, and displays only what the backend actually reported —
+   unavailable reasoning stays unavailable. Shared Chat/Agent semantics
+   through the shared surfaces.
+
+4. **P1 — the engine leaves the user's critical path.** The Start/Stop
+   engine toggle is removed from the ordinary workflow; the engine boots
+   on first use (run gate), restarts after engine-affecting changes
+   (settings flow) and recovers through internal supervision; the UI
+   represents engine state. Internal lifecycle operations (startup,
+   update, restart, recovery, shutdown) unchanged — supervision
+   ownership untouched.
+
+5. **Phase 2 foundation — the ONE execution/evidence ladder.**
+   `internal/llm/execution.go` + `/api/engine`'s `execution` block:
+   detected → backend-available → device-selected → model-loaded →
+   generation-executed → execution-evidence → verified, a PURE composer
+   over the existing authorities (device presence, backend health, the
+   accelerator selection memo, verified model, measured generation ring,
+   runtime offload lines). Monotone by construction: device enumeration
+   can never equal verified execution; unknowns stay unknown; gaps are
+   named. Coverage: 5 deterministic ladder suites incl. the cardinal
+   rule and the wire contract.
+
+6. **Version identity** — all release surfaces at 1.8.5 through the ONE
+   canonical gate (`node scripts/release-version.mjs --check`).
+
+Not claimed by this release: physical GPU execution proof, the unified
+C++ execution path, native reasoning budgets, Windows CPU telemetry —
+all explicitly Phase 2 scope (`ROADMAP.md` §Phase 2). CI remains CI, not
+physical-host runtime evidence.
+
+---
+
 ## v1.8.4 — 2026-10-01
 
 Focus: four P0 defect families — (A) live streaming visibility, (B) the

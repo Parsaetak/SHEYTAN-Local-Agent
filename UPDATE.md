@@ -1,15 +1,83 @@
-# UPDATE.md — v1.8.4 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.8.5 Release Notes & Maintenance Behavior
 
-**Release:** `v1.8.4` (canonical application version; single version
+**Release:** `v1.8.5` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ ca44b08` (`v1.8.3`) · **Date:** 2026-10-01
-**Package:** `SHEYTAN-Local-Agent-v1.8.4-FINAL.zip` (complete repository
+**Base:** `main @ ef2e15f` (`v1.8.4`) · **Date:** 2026-10-03
+**Package:** `SHEYTAN-Local-Agent-v1.8.5-PHASE1-FINAL.zip` (complete repository
 tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior.
+
+## v1.8.5 changes (Phase 1 of the staged engine program)
+
+1. **P0 — live streaming, server side of the wire closed.** The v1.8.4
+   frontend scheduler repaired the RENDER-side loss (triple-boundary,
+   self-healing flush); the remaining bottleneck sat in the SERVER's run
+   hub: a plain 128-deep channel whose overflow policy DROPPED THE NEWEST
+   event. For cumulative response/reasoning snapshots that discards the
+   frame carrying the FULL text while the buffer keeps stale prefixes —
+   exactly the "streamed text visible only after Stop" class under a
+   backpressured/stalled client transport. The hub now delivers through a
+   bounded, conflation-aware queue: overflow evicts the OLDEST conflatable
+   snapshot (newest-wins), order and the seq replay contract are
+   preserved, terminal events are never preferentially evicted, the
+   publisher never blocks, memory stays bounded, and every event write
+   carries a generous deadline so a wedged client tears down
+   deterministically and recovers through the reconnect snapshot replay.
+   Deterministic hub/queue suites (9 tests) + the race gate; the full API
+   suite stays green.
+
+2. **P0 — the reasoning-depth ladder Low / Mid / High / Ultra (real
+   backend meaning, end-to-end).** Each level carries a numeric
+   thinking-token budget onto the generation request via the llama.cpp
+   request-level `reasoning_budget_tokens` parameter — verified present
+   in BOTH managed engine builds (b10642 default, b11205) by reading the
+   actual server sources: low = 0 (thinking off, the engine's own
+   "immediate end" semantics), mid = 1024 (bounded default), high = 4096,
+   ultra = the engine default (no client-side cap — the honest encoding).
+   Local engines only (the same gating as the other llama.cpp-specific
+   request fields); remote providers never receive the field; a
+   non-thinking model ignores it (reasoning is never fabricated); the
+   native C++ path has no budget control and the level is documented-inert
+   there. The wire/Go/store/front ladder is one contract — the level
+   travels with EVERY run request; the legacy Auto/Fast/Thinking
+   vocabulary migrates at both boundaries and is never re-emitted.
+
+3. **P0 — Show Thinking / Hide Thinking (visibility only).** A persisted
+   presentation preference that gates the RENDERING of backend-reported
+   reasoning across the live generation bubble, the settled safety-net
+   bubble and history messages. It never changes generation settings: the
+   reasoning level and its budget travel with every request regardless,
+   the store keeps folding reasoning snapshots, and unavailable reasoning
+   stays unavailable. Chat and Agent share the semantics through the
+   shared composer/message surfaces.
+
+4. **P1 — the engine is supervised machinery.** The user-facing Start/Stop
+   engine toggle is removed from the ordinary workflow. The engine boots
+   on first use through the run gate (EnsureLLMContext), restarts through
+   the settings flow after engine-affecting changes, and recovers through
+   internal supervision; the UI represents engine state (runtime pill,
+   badge, live phase). All internal lifecycle operations — startup,
+   engine update, restart, recovery, shutdown — are unchanged.
+
+5. **Phase 2 foundation — the execution/evidence ladder.** ONE shared
+   structure (`internal/llm/execution.go`, surfaced as `/api/engine`'s
+   `execution` block) composes the existing authorities into the monotone
+   ladder detected → backend-available → device-selected → model-loaded →
+   generation-executed → execution-evidence → verified. Device
+   enumeration can never equal verified execution: the pure composer
+   stops at the first unproven rung and names the gap. No new sampler, no
+   second policy engine — inputs come from device detection, backend
+   health, the accelerator selection memo, verified model loading,
+   measured generation telemetry and runtime offload lines. The deep
+   physical-GPU execution proof and the unified C++ execution path remain
+   Phase 2 work (see `ROADMAP.md` §Phase 2).
+
+6. **Version identity.** All release surfaces at 1.8.5 through the ONE
+   canonical gate (`node scripts/release-version.mjs --check`).
 
 ## v1.8.4 changes
 
@@ -104,6 +172,18 @@ behavior.
   are forced by causality over a scripted transport; zero-session Send is
   proven store-level AND through the real stack in a browser (including
   visible-before-completion with requestAnimationFrame suspended).
+* v1.8.5 evidence: the hub's drop-newest overflow policy is reproduced
+  deterministically (a full, never-drained queue must still end on the
+  NEWEST snapshot — the v1.2.x policy fails the test and the conflation
+  queue passes); terminal-event survival, publish-never-blocks, close
+  drains and eviction order are pinned the same way; the reasoning ladder
+  is pinned at the wire field name, the budget numbers, the local/remote
+  gating and the legacy migration (Go suite) AND at the payload/persistence
+  split (store-level scripted-transport suite); the execution ladder's
+  detected ≠ verified rule is pinned by the monotone-stage suites. The
+  reasoning_budget_tokens parameter was verified against the ACTUAL
+  server sources of both managed builds (b10642/b11205) — not against
+  documentation alone.
 * Vulkan GPU execution is NOT claimed by this release: the AUTO path and
   the identity window are repaired and deterministically tested, but a
   real-GPU offload claim still requires the physical execution evidence

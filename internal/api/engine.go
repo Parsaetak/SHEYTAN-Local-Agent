@@ -29,7 +29,9 @@ import (
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
 )
 
 // engineSnapshot is the /api/engine payload.
@@ -111,6 +113,15 @@ type engineSnapshot struct {
 	// machine (select → analyzing → configuring → loading → ready |
 	// failed, plus calibrating) once a selection flow has started.
 	Selection *selectionState `json:"selection,omitempty"`
+
+	// Execution (v1.8.5) is the ONE shared execution/evidence ladder
+	// composed from the existing authorities (device detection, backend
+	// health, the accelerator selection memo, verified model loading,
+	// measured generation telemetry, runtime offload lines). Stage is
+	// monotone and stops at the first unproven rung — device
+	// enumeration can never equal verified execution. Phase 2's deep
+	// engine/backend work consumes exactly this structure.
+	Execution *llm.ExecutionReport `json:"execution,omitempty"`
 }
 
 // nativeEngineSnapshot is the native engine status block (local reads
@@ -269,6 +280,15 @@ func (s *Server) engineSnapshot() engineSnapshot {
 	diag := s.llama.EngineDiagnostics(s.src.Load())
 	snap.Diagnostics = &diag
 
+	// v1.8.5 EXECUTION/EVIDENCE LADDER: compose the ONE shared report
+	// from the existing authorities — cheap, honest reads only (the
+	// accelerator resolution comes from the memo written by the /api/perf
+	// selection path; hardware presence is the cached snapshot; nothing
+	// spawns on this poll path). Detection is NEVER conflated with
+	// verified execution: the pure composer stops the ladder at the
+	// first unproven rung and names it in Gaps.
+	snap.Execution = s.composeExecutionReport(snap)
+
 	// v1.1.5: native engine status block (local reads only).
 	if s.native != nil {
 		native := &nativeEngineSnapshot{
@@ -315,6 +335,65 @@ func (s *Server) engineSnapshot() engineSnapshot {
 	}
 
 	return snap
+}
+
+// composeExecutionReport builds the v1.8.5 execution/evidence ladder
+// for the engine snapshot from CHEAP, honest reads of the existing
+// authorities — no spawning, no new probes, no second policy engine:
+//
+//   - detected:     hardware presence (cached snapshot) or the Vulkan
+//     backend's presence — pure DETECTION, never execution;
+//   - backend-available: the serving engine's authoritative state;
+//   - device-selected:   the accelerator resolution memo (written by the
+//     ONE selection authority on the /api/perf path);
+//   - model-loaded:      the engine's verified-model proof;
+//   - generation-executed: the measured perf ring (real generations only);
+//   - execution-evidence: the runtime offload line the engine printed;
+//   - verified:          the selection's execution-verification contract.
+//
+// The pure composer (llm.ComposeExecutionReport) enforces monotonicity;
+// this helper only GATHERS inputs. Unknowns stay unknown.
+func (s *Server) composeExecutionReport(snap engineSnapshot) *llm.ExecutionReport {
+	cfg := s.src.Load()
+
+	hw := hardware.Snapshot(cfg)
+
+	devicesKnown := len(hw.GPUs) > 0 || hw.NPU != nil || llm.VulkanAvailable(cfg)
+
+	backendHealthy := snap.State == llm.StateReady ||
+		snap.State == llm.StateRunning ||
+		snap.State == llm.StateBusy
+
+	// Native-serving snapshots keep their own verified-model proof
+	// (snap.VerifiedModel above); the llama path fills it too.
+	deviceSelected := ""
+	selectionVerified := false
+	verification := ""
+
+	s.resolutionMu.Lock()
+	if s.lastResolution != nil {
+		deviceSelected = string(s.lastResolution.Selected)
+		selectionVerified = s.lastResolution.ExecutionVerified
+		verification = s.lastResolution.Verification
+	}
+	s.resolutionMu.Unlock()
+
+	perf := llm.SnapshotEnginePerf()
+
+	report := llm.ComposeExecutionReport(llm.ExecutionReportInputs{
+		DevicesKnown:               devicesKnown,
+		BackendHealthy:             backendHealthy,
+		BackendName:                snap.Backend,
+		EngineTag:                  updater.InstalledEngineTag(cfg),
+		DeviceSelected:             deviceSelected,
+		SelectionExecutionVerified: selectionVerified,
+		Verification:               verification,
+		VerifiedModel:              snap.VerifiedModel,
+		GenerationSamples:          perf.SamplesAvailable,
+		OffloadEvidence:            s.llama.OffloadEvidence(),
+	})
+
+	return &report
 }
 
 // enginePhase maps the raw engine state onto the 1.1.6 §9 startup flow

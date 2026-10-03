@@ -1664,6 +1664,18 @@ func (o *Orchestrator) RunDetailed(
                         effCtx.Effective,
                 )
 
+                // v1.8.5 REASONING BUDGET: the composer's reasoning level
+                // carries a REAL numeric thinking-token budget onto the
+                // generation request (llm.ChatRequest.ReasoningBudget →
+                // the llama.cpp request-level `reasoning_budget_tokens`
+                // parameter, verified in both managed engine builds).
+                // Local engines only — the same gating as the other
+                // llama.cpp-specific request fields; a nil budget (remote)
+                // changes nothing. This is the actual backend meaning of
+                // the Low/Mid/High/Ultra surface; the thinking nudge and
+                // tier posture are complementary, not the control itself.
+                applyReasoningBudget(cfg, ro.thinking, req)
+
                 clock.Mark(StageSerialized)
                 // NOTE (v1.2.6 continuation): StageRequestSent is NO LONGER
                 // marked here — the previous code marked it immediately
@@ -3310,10 +3322,10 @@ func familyForTokenizer(label string) string {
 // compactToolResults brings an over-ceiling prompt back inside the budget
 // (in-loop fit guard):
 //
-//	pass 1 — elide every tool result except the freshest (explicit
-//	         marker replaces the body; message structure preserved);
-//	pass 2 — if still over, BOUND the freshest result to the remaining
-//	         room (head kept, tail replaced by an explicit marker).
+//      pass 1 — elide every tool result except the freshest (explicit
+//               marker replaces the body; message structure preserved);
+//      pass 2 — if still over, BOUND the freshest result to the remaining
+//               room (head kept, tail replaced by an explicit marker).
 //
 // The model keeps the newest evidence either way; older results carry a
 // re-run hint. Returns the number of tool results touched and the

@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.8.4
+Current release:  v1.8.5
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -56,7 +56,14 @@ coalescing latch, with a task controller that recovers from a lost or
 suspended MessageChannel delivery instead of wedging: live text appears
 without any user action, updates continuously, the run settles on its own
 without depending on any single scheduling primitive, and the final
-message replaces it exactly once.
+message replaces it exactly once. v1.8.5 closes the same failure class on
+the SERVER side of the wire: the run hub now delivers through a bounded,
+conflation-aware queue — a slow or backpressured subscriber's queue evicts
+the OLDEST cumulative snapshot (subsumed by the newest) instead of
+dropping the NEWEST one, so a stalled transport can no longer freeze the
+visible text at a stale prefix until the run ends; every event write also
+carries a generous deadline so a wedged client is torn down
+ deterministically and recovers through the reconnect snapshot replay.
 
 ## Model self-knowledge
 
@@ -119,6 +126,21 @@ evidence class named in parentheses:
   controller self-heals from a lost MessageChannel delivery
   (deterministic scheduler tests reproducing the wedge + a real-browser
   E2E that streams and settles with requestAnimationFrame suspended);
+  v1.8.5 adds the server-side half: the run hub's conflation-aware
+  subscriber queue keeps the NEWEST cumulative snapshot under subscriber
+  backpressure and never drops it in favor of stale ones (deterministic
+  hub/queue suites + race gate);
+* the four-level reasoning-depth control — Low / Mid / High / Ultra —
+  where every level carries a REAL numeric thinking-token budget onto
+  the generation request (the llama.cpp request-level
+  `reasoning_budget_tokens` parameter, verified against both managed
+  engine builds' server sources: 0 = thinking off, 1024 = bounded
+  default, 4096 = deep, engine default = unrestricted), gated to local
+  engines, with the legacy Auto/Fast/Thinking vocabulary migrated at the
+  boundary (deterministic Go + store-level suites); a separate
+  Show/Hide Thinking control gates the PRESENTATION of backend-reported
+  reasoning only — never generation settings (store-level payload-split
+  suite);
 * zero-session Send: deleting the final session leaves a usable
   zero-session state and pressing Send creates + activates a session in
   the current mode and continues the run (store-level scripted-transport
@@ -181,6 +203,22 @@ read-model, not a configuration file.
   the engine's own device enumeration, verified at provisioning time. The
   AUTO Vulkan path is repaired and deterministically tested, but no GPU
   execution claim is made without that runtime evidence on real hardware.
+  v1.8.5 ships the shared execution/evidence ladder
+  (`detected → backend-available → device-selected → model-loaded →
+  generation-executed → execution-evidence → verified`) surfaced on
+  `/api/engine` — a monotone composition over the existing authorities
+  where device enumeration can never equal verified execution; the deep
+  physical-GPU execution proof itself remains Phase 2 work.
+* The reasoning-depth budgets are REAL request-level parameters on the
+  llama.cpp serving backend, applied when the model's chat template
+  exposes a thinking section — a non-thinking model simply ignores the
+  budget (no reasoning is fabricated); the native C++ path has no
+  reasoning-budget control and the level is inert there, documented
+  rather than faked.
+* The engine is supervised machinery, not a manual control (v1.8.5): it
+  boots on first use, restarts after engine-affecting changes and recovers
+  on its own; the UI represents its state. Internal lifecycle operations
+  (startup gate, engine updates, restart, recovery, shutdown) remain.
 * CI (Windows and Linux) is build/test evidence, not physical-host runtime
   evidence.
 * The v1.9+ roadmap (AI System builder, computer-use, evaluation framework,

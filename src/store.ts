@@ -181,17 +181,45 @@ function persistNetSearch(v: boolean): void {
 
 function initialThinkingControl(): ThinkingControl {
   try {
+    // v1.8.5: persisted values pass through the same normalization as the
+    // wire — legacy auto/fast/thinking settings migrate onto the
+    // low/mid/high/ultra ladder at read time (never stored back as
+    // legacy values by this session's writes).
     return normalizeThinkingControl(
       window.localStorage.getItem(THINKING_STORAGE_KEY),
     );
   } catch {
-    return "auto";
+    return "mid";
   }
 }
 
 function persistThinkingControl(v: ThinkingControl): void {
   try {
     window.localStorage.setItem(THINKING_STORAGE_KEY, v);
+  } catch {
+    // in-memory only
+  }
+}
+
+// v1.8.5 SHOW/HIDE THINKING — a pure VISIBILITY preference. It never
+// changes generation settings: the reasoning level/budget travel with
+// every request regardless of this flag, the store keeps folding
+// reasoning snapshots, and only the PRESENTATION is gated. Persisted
+// through the same settings authority as the other composer controls.
+const SHOWTHINKING_STORAGE_KEY = "sheytan.showThinking";
+
+function initialShowThinking(): boolean {
+  try {
+    // Absent key → visible (the previous implicit behavior).
+    return window.localStorage.getItem(SHOWTHINKING_STORAGE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function persistShowThinking(v: boolean): void {
+  try {
+    window.localStorage.setItem(SHOWTHINKING_STORAGE_KEY, v ? "1" : "0");
   } catch {
     // in-memory only
   }
@@ -298,6 +326,10 @@ type RuntimeState = {
   // run — they shape the actual backend request).
   thinkingControl: ThinkingControl;
   setThinkingControl: (v: ThinkingControl) => void;
+  // v1.8.5 SHOW/HIDE THINKING — visibility-only. Never changes the
+  // request; reasoning data keeps flowing and stays in the store.
+  showThinking: boolean;
+  setShowThinking: (v: boolean) => void;
   toolPolicyMode: ToolPolicyMode;
   setToolPolicyMode: (v: ToolPolicyMode) => void;
   toolAllowlist: string[];
@@ -1962,6 +1994,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   memoryEvidence: null,
   thinkingPanelOpen: false,
   thinkingControl: initialThinkingControl(),
+  showThinking: initialShowThinking(),
   toolPolicyMode: initialToolPolicyMode(),
   toolAllowlist: initialToolAllowlist(),
   netSearch: initialNetSearch(),
@@ -2032,6 +2065,14 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     const control = normalizeThinkingControl(v);
     persistThinkingControl(control);
     set({ thinkingControl: control });
+  },
+
+  // v1.8.5: SHOW/HIDE THINKING — pure visibility. Persisted through the
+  // same authority; NEVER part of the run payload, never touches the
+  // reasoning level, the budget or the tier posture.
+  setShowThinking: (v) => {
+    persistShowThinking(v);
+    set({ showThinking: v });
   },
 
   setToolPolicyMode: (v) => {
@@ -2841,9 +2882,10 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
         // v1.2.5: the composer controls travel with the request — they
         // change the actual backend behaviour (tier posture, tool surface).
-        ...(state.thinkingControl !== "auto"
-          ? { thinking: state.thinkingControl }
-          : {}),
+        // v1.8.5: the reasoning level ALWAYS travels — every rung of the
+        // low/mid/high/ultra ladder has a real numeric thinking budget
+        // (the backend normalizes legacy values for older clients).
+        thinking: state.thinkingControl,
         ...(state.toolPolicyMode === "manual"
           ? { toolMode: "manual", toolAllow: state.toolAllowlist }
           : {}),
@@ -2934,9 +2976,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
         sessionId,
         message: "",
         regenerate: true,
-        ...(state.thinkingControl !== "auto"
-          ? { thinking: state.thinkingControl }
-          : {}),
+        // v1.8.5: same reasoning ladder contract as a fresh run — the
+        // level (and its budget) always travels.
+        thinking: state.thinkingControl,
         ...(state.toolPolicyMode === "manual"
           ? { toolMode: "manual", toolAllow: state.toolAllowlist }
           : {}),

@@ -203,6 +203,12 @@ const MessageBubble = memo(function MessageBubble({
 }) {
   const isUser = message.role === "user";
 
+  // v1.8.5 SHOW/HIDE THINKING: visibility only — the persisted user
+  // preference gates the PRESENTATION of backend-reported reasoning; it
+  // never changes what was (or is) generated. Absent reasoning stays
+  // absent — nothing is fabricated when hidden or shown.
+  const showThinking = useRuntimeStore((state) => state.showThinking);
+
   // v1.1.4: recall feedback. 👍/👎 on an assistant reply steers the
   // recall engine's future relevance scoring (the backend steering has
   // existed since v1.0.6 — this is its first user-facing write path).
@@ -233,7 +239,7 @@ const MessageBubble = memo(function MessageBubble({
       </div>
 
       <div className="message-bubble">
-        {message.reasoning ? (
+        {message.reasoning && showThinking ? (
           <ReasoningPanel reasoning={message.reasoning} live={false} />
         ) : null}
 
@@ -401,20 +407,32 @@ function GenerationBubble() {
   const reasoning = streaming?.reasoning ?? "";
   const content = streaming?.content ?? "";
 
+  // v1.8.5 SHOW/HIDE THINKING (live bubble): the same persisted
+  // visibility preference gates the LIVE reasoning presentation.
+  // Visibility only — the reasoning stream keeps folding into the store
+  // (cumulative snapshots unchanged), the request's reasoning level and
+  // budget are unaffected, and switching back reveals the real
+  // backend-reported reasoning that accumulated while hidden.
+  const showThinking = useRuntimeStore((s) => s.showThinking);
+
   // v1.2.5: the panel follows the backend's OWN thinking_start/end
   // markers (store thinkingPanelOpen) — auto-open while the model thinks,
   // fold when the answer streams (explicit user choice overrides both).
   const thinkingPanelOpen = useRuntimeStore((s) => s.thinkingPanelOpen);
   const reasoningLive =
-    thinkingPanelOpen || runPhase === "thinking" || runPhase === "preparing";
+    showThinking &&
+    (thinkingPanelOpen || runPhase === "thinking" || runPhase === "preparing");
 
   // v1.8.2: a concise FACTUAL state while the run is in the thinking
   // phase and the model has emitted no reasoning stream. Never fake
   // reasoning, never generated labels presented as model thoughts — a
   // plain statement of what is (not) happening, replaced the moment real
-  // reasoning arrives.
+  // reasoning arrives. v1.8.5: hidden reasoning is NOT "no reasoning" —
+  // the honest note only renders while the surface is visible.
   const noReasoningNote =
-    !reasoning && (runPhase === "thinking" || runPhase === "preparing")
+    showThinking &&
+    !reasoning &&
+    (runPhase === "thinking" || runPhase === "preparing")
       ? "Thinking · this model is not exposing a reasoning stream"
       : null;
 
@@ -448,7 +466,7 @@ function GenerationBubble() {
           </span>
         </div>
 
-        {reasoning ? (
+        {reasoning && showThinking ? (
           <ReasoningPanel reasoning={reasoning} live={reasoningLive} />
         ) : noReasoningNote ? (
           <p className="generation-memory" data-role="no-reasoning">
@@ -537,6 +555,9 @@ function RunOutcomeNote() {
 function StreamingBubble() {
   const streaming = useRuntimeStore((state) => state.streaming);
   const runPhase = useRuntimeStore((state) => state.runPhase);
+  // v1.8.5: the same visibility preference gates this safety-net surface
+  // (presentation only — the data path is untouched).
+  const showThinking = useRuntimeStore((state) => state.showThinking);
 
   if (!streaming) {
     return null;
@@ -556,7 +577,7 @@ function StreamingBubble() {
       </div>
 
       <div className="message-bubble streaming">
-        {streaming.reasoning ? (
+        {streaming.reasoning && showThinking ? (
           <p className="message-reasoning-body">{streaming.reasoning}</p>
         ) : null}
 

@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.4 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.8.5 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -6,10 +6,23 @@ durable invariants, and the surfaces most sensitive to regression. Full
 truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (future),
 `UPDATE.md` (release evidence), `worklog.md` (session log).
 
-**Current release: v1.8.4.** Version identity is exactly `1.8.4`
-everywhere (canonical gate: `node scripts/release-version.mjs --check`).
-Release history lives ONLY in `changelog.md` (the README is
-current-only).
+**Current release: v1.8.5 = PHASE 1 of the staged engine program
+(COMPLETE).** Version identity is exactly `1.8.5` everywhere (canonical
+gate: `node scripts/release-version.mjs --check`). Release history lives
+ONLY in `changelog.md` (the README is current-only).
+
+**THE NEXT PROGRAM IS PHASE 2 — deep execution-engine / resource
+integration.** Its full scope is `ROADMAP.md` §Phase 2 (read that section
+first): finish the unified C++ execution path behind the v1.8.5 execution
+ladder, mature llama.cpp/ggml integration, real coordinated CPU/GPU
+execution and model placement where supported, real memory/KV accounting,
+backend selection from PROVEN runtime evidence (consume
+`llm.ExecutionReport`'s verified rung — never detection posture), physical
+GPU execution proof through the existing identity transaction, stronger
+fallback/recovery, and the measured performance foundations (prefill,
+cache reuse, TTFT, wire efficiency, Windows CPU telemetry through the
+EXISTING Governor seam). Phase 3+ (AI System Builder, computer-use,
+evaluation, routing) stays out of scope until Phase 2 lands.
 
 ---
 
@@ -48,18 +61,26 @@ proposes. The tools execute. The laboratory verifies."
   context clamp. FIRST local-provider run-level E2E tests exist in
   `internal/api` (fake llama-server subprocess, real engine contract).
 * **v1.8.2 dual-boundary streaming flush → v1.8.4 TRIPLE-BOUNDARY
-  SELF-HEALING FLUSH** — `src/stream-fast-path.ts` still folds
-  stream-critical WS events into the streaming accumulator at receive
-  time; `src/stream-flush-scheduler.ts` arms THREE independent boundaries
-  (a REUSABLE MessageChannel macrotask, a 0ms timer task, an animation
+  SELF-HEALING FLUSH → v1.8.5 SERVER-SIDE CONFLATION DELIVERY** —
+  `src/stream-fast-path.ts` still folds stream-critical WS events into
+  the streaming accumulator at receive time;
+  `src/stream-flush-scheduler.ts` arms THREE independent boundaries (a
+  REUSABLE MessageChannel macrotask, a 0ms timer task, an animation
   frame) behind ONE coalescing latch, and the task controller is
   recoverable: latest-callback-wins + in-flight handshake + a
   deterministic microtask fallback whenever a post arrives while a
-  message is still undelivered. A lost MessageChannel delivery — which
-  permanently wedged the v1.8.2 one-shot controller (text visible only
-  after Stop) — now degrades to microtask delivery. The ACTIVITY flush
-  (statuses/tools/done/error/aborted) uses the same scheduler (it was
-  rAF-only before v1.8.4). done/error/abort still flush synchronously.
+  message is still undelivered. The ACTIVITY flush uses the same
+  scheduler; done/error/abort still flush synchronously. v1.8.5 closed
+  the SERVER half of the same failure class: the run hub's subscriber
+  delivery is a bounded, conflation-aware queue (`activitySub` in
+  `internal/api/server.go`) — overflow evicts the OLDEST cumulative
+  snapshot (newest-wins) instead of dropping the NEWEST event (the
+  v1.2.x policy froze visible text at a stale prefix under transport
+  backpressure — text appeared only after Stop, via the reconnect
+  replay). Terminal events are never preferentially evicted; the
+  publisher never blocks; event writes carry a generous deadline so a
+  wedged client tears down deterministically. Regression suites:
+  `internal/api/hub_conflation_v185_test.go` (9 tests, race-gated).
 * **v1.8.4 zero-session Send** — a zero-session space is first-class:
   the composer stays usable and pressing Send runs the store's lazy
   `createSession()` in the current mode and continues the same run
@@ -78,6 +99,45 @@ proposes. The tools execute. The laboratory verifies."
   marker (`engine-stage-pending.json`) — the boot probe probes and
   reports the byte-verified staged binary, never a stale recorded tag
   (`internal/updater/staged_identity_v184_test.go`).
+* **v1.8.5 REASONING-DEPTH LADDER (P0, real backend meaning)** — the
+  composer control is low/mid/high/ultra; EVERY run request carries the
+  level and its numeric thinking-token budget lands on the generation
+  request (`agent.applyReasoningBudget` →
+  `llm.ChatRequest.ReasoningBudget` → the llama.cpp request-level
+  `reasoning_budget_tokens` parameter, VERIFIED against both managed
+  builds' actual server sources: b10642 AND b11205). low=0 (thinking
+  off), mid=1024 (default), high=4096, ultra=NOT SENT (engine default).
+  Local engines only; non-thinking models ignore it; the native path is
+  documented-inert. Legacy auto/fast/thinking migrate at BOTH the wire
+  (`agent.NormalizeThinkingControl`) and persistence
+  (`normalizeThinkingControl` in `src/run-events.ts`) boundaries —
+  never re-emitted. Tier posture: low = latency floor, mid = neutral,
+  high/ultra = thinking nudge WITHOUT context inflation (depth is the
+  budget, not the tier). Suites:
+  `internal/agent/reasoning_budget_v185_test.go` (9 tests) +
+  `src/reasoning-controls.test.ts` (4 store-level suites).
+* **v1.8.5 SHOW/HIDE THINKING (P0, visibility only)** — the persisted
+  `showThinking` preference gates ONLY the rendering of backend-reported
+  reasoning (live bubble, safety-net bubble, history messages —
+  `src/MessageStream.tsx`); it never enters the payload (pinned), never
+  changes the level/budget, and the store keeps folding reasoning
+  snapshots while hidden. Chat and Agent share the semantics.
+* **v1.8.5 ENGINE = SUPERVISED MACHINERY (P1)** — the user-facing
+  Start/Stop engine toggle is REMOVED from `src/AgentBody.tsx`; the
+  engine boots on first use (run gate `EnsureLLMContext`), restarts via
+  the settings flow, recovers via internal supervision; the UI
+  represents state. Internal lifecycle operations are all intact.
+* **v1.8.5 EXECUTION/EVIDENCE LADDER (the Phase 2 boundary contract)** —
+  `internal/llm/execution.go` + the `execution` block of
+  `/api/engine`: a PURE composer over the existing authorities produces
+  the monotone stage detected → backend-available → device-selected →
+  model-loaded → generation-executed → execution-evidence → verified.
+  Detection can never equal verified execution; gaps are named;
+  unknowns stay unknown. The accelerator selection memo
+  (`Server.lastResolution`, written by the ONE selection authority on
+  /api/perf) feeds the device-selected rung — it is a read-through
+  cache, NOT a second policy engine. Suites:
+  `internal/llm/execution_v185_test.go` (5 tests).
 * **v1.8.4 config-write atomicity** — every config write uses a unique
   same-directory temp file (the fixed `config.json.tmp` name raced
   concurrent writers into hard engine-start failures).
@@ -191,6 +251,19 @@ proposes. The tools execute. The laboratory verifies."
   must NEVER wedge the latch; the activity flush must never be
   rAF-dependent again; cumulative-replace and no-double-processing
   contracts are unchanged.
+* v1.8.5 hub delivery: the conflation queue
+  (`internal/api/hub_conflation_v185_test.go`) — a full, never-drained
+  queue must end on the NEWEST snapshot; terminal events must survive a
+  full conflatable queue; publish must never block; close drains before
+  reporting closure.
+* v1.8.5 reasoning ladder: `internal/agent/reasoning_budget_v185_test.go`
+  + `src/reasoning-controls.test.ts` — the wire field name
+  (`reasoning_budget_tokens`), the exact budgets (0/1024/4096/nil),
+  local-vs-remote gating, legacy migration, and the payload/visibility
+  split (showThinking NEVER enters the payload).
+* v1.8.5 execution ladder: `internal/llm/execution_v185_test.go` —
+  detection never equals verified; the stage is monotone; the JSON wire
+  contract is pinned.
 * Context surface: only the newest context response may write
   `sessionContext`; deletion/creation/mode/run transitions invalidate
   (`src/context-refresh-race.test.ts`).
@@ -208,8 +281,36 @@ proposes. The tools execute. The laboratory verifies."
 
 ## Next strategic direction
 
-`ROADMAP.md` owns it: v1.8 is the CURRENT release (adaptive runtime
-intelligence — this handoff's Governor slice); v1.9 AI System Builder,
-v1.10 Universal Agent, v1.11 Learning & Evaluation, v1.12 Advanced Model
-Intelligence, v2.0 platform end state are FUTURE — NOT IMPLEMENTED, and
-must never be marked complete merely because they are documented.
+`ROADMAP.md` owns it, now phased: v1.8.5 (CURRENT) completed PHASE 1 —
+the runtime/user-surface foundation (server-side streaming conflation,
+the reasoning-depth ladder with real budgets, Show/Hide Thinking,
+engine-as-supervised-machinery, the execution/evidence ladder).
+**PHASE 2 is next and NOT started: the deep execution-engine / resource
+integration** (unified C++ execution path behind the ladder, matured
+llama.cpp/ggml integration, coordinated CPU/GPU execution, real
+memory/KV accounting, evidence-driven backend selection, physical GPU
+execution proof through the existing identity transaction, measured
+performance foundations). PHASE 3+ (v1.9 AI System Builder, v1.10
+Universal Agent, v1.11 Learning & Evaluation, v1.12 Advanced Model
+Intelligence, v2.0 platform end state) stays FUTURE — NOT IMPLEMENTED,
+and must never be marked complete merely because it is documented.
+
+### Phase 2 entry notes (start here)
+
+* The execution contract to consume: `internal/llm/execution.go`
+  (`ComposeExecutionReport` + the stage ladder) and its `/api/engine`
+  surface; selection decisions should key off the VERIFIED rung, never
+  detection posture.
+* The engine identity transaction (stage → exact executable → probe →
+  launch → health → generation → evidence → commit/rollback) is the
+  existing authority for any GPU proof — never verify one binary and
+  serve another.
+* Reasoning budgets are per-request on the llama.cpp path
+  (`reasoning_budget_tokens`, both managed builds verified); the NATIVE
+  engine has no budget control yet — wiring real native thinking budgets
+  is Phase 2 native-engine work, never a prompt-side fake.
+* The Governor stays the ONE policy authority; RAM stays memory capacity;
+  no second sampler, no second policy engine, no fake VRAM/offload
+  numbers; unknown measurements stay unknown.
+* The v1.8.5 conflation queue is verified — do not redesign it absent a
+  measured regression.

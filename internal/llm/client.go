@@ -198,6 +198,19 @@ type ChatRequest struct {
 	Stream           bool       `json:"stream,omitempty"`
 	Tools            []ToolSpec `json:"tools,omitempty"`
 	NumCtx           int        `json:"n_ctx,omitempty"`
+	// ReasoningBudget (v1.8.5) is the REAL numeric thinking-token
+	// budget for the request: 0 = end thinking immediately, > 0 = cap
+	// thinking at that many tokens, nil = no client-side budget
+	// (the engine default). It rides the llama.cpp OpenAI-compatible
+	// endpoint as `reasoning_budget_tokens` — verified present in BOTH
+	// managed engine builds (b10642 and b11205) at the REQUEST level
+	// (the server only applies it when the model's chat template
+	// exposes a thinking section; a non-thinking model ignores it —
+	// never fabricated reasoning). A pointer keeps 0 (disable) on the
+	// wire — omitempty drops only the unset (nil) case. Set by the
+	// orchestrator from the composer's reasoning level; remote
+	// providers never receive it.
+	ReasoningBudget *int `json:"reasoning_budget_tokens,omitempty"`
 	// CachePrompt asks llama.cpp to reuse the KV cache across turns
 	// (v1.0.4). Together with --cache-reuse on the server this collapses
 	// the repeated agent prefix (AI context + tool schemas) to a near-zero
@@ -257,7 +270,11 @@ func (r *ChatRequest) MarshalJSON() ([]byte, error) {
 		Stream           bool        `json:"stream,omitempty"`
 		Tools            []ToolSpec  `json:"tools,omitempty"`
 		NumCtx           int         `json:"n_ctx,omitempty"`
-		CachePrompt      bool        `json:"cache_prompt"`
+		// v1.8.5 reasoning budget: pointer keeps the explicit 0
+		// (disable thinking) on the wire; omitempty drops only
+		// the unset case.
+		ReasoningBudget *int `json:"reasoning_budget_tokens,omitempty"`
+		CachePrompt     bool `json:"cache_prompt"`
 	}{
 		Model:            r.Model,
 		Messages:         msgs,
@@ -274,6 +291,7 @@ func (r *ChatRequest) MarshalJSON() ([]byte, error) {
 		Stream:           r.Stream,
 		Tools:            r.Tools,
 		NumCtx:           r.NumCtx,
+		ReasoningBudget:  r.ReasoningBudget,
 		CachePrompt:      r.CachePrompt,
 	})
 }

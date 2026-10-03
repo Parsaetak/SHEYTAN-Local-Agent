@@ -106,9 +106,20 @@ export function isRunEvidence(kind: CanonicalEventKind): boolean {
   );
 }
 
-// ThinkingControl is the composer's per-request depth control. It is sent
-// with every run request and changes the actual backend behaviour.
-export type ThinkingControl = "auto" | "fast" | "thinking";
+// ThinkingControl is the composer's per-request REASONING DEPTH control
+// (v1.8.5 four-level ladder). It is sent with every run request and each
+// level carries a REAL numeric thinking-token budget that reaches the
+// generation request (llama.cpp `reasoning_budget_tokens` — verified in
+// both managed engine builds):
+//
+//   low  — budget 0: thinking disabled, latency first (legacy "fast")
+//   mid  — budget 1024: bounded thinking, the balanced default
+//   high — budget 4096: deeper reasoning (legacy "thinking")
+//   ultra — engine default: unrestricted thinking
+//
+// Legacy persisted values (auto/fast/thinking) are migrated by
+// normalizeThinkingControl — never re-emitted.
+export type ThinkingControl = "low" | "mid" | "high" | "ultra";
 
 export const THINKING_OPTIONS: {
   value: ThinkingControl;
@@ -116,25 +127,44 @@ export const THINKING_OPTIONS: {
   hint: string;
 }[] = [
   {
-    value: "auto",
-    label: "Auto",
-    hint: "Adaptive: the agent picks the context tier from the task",
+    value: "low",
+    label: "Low",
+    hint: "Thinking off (budget 0) — latency first, smallest context",
   },
   {
-    value: "fast",
-    label: "Fast",
-    hint: "Latency first: smallest context, no reasoning overhead",
+    value: "mid",
+    label: "Mid",
+    hint: "Bounded thinking (1024-token budget) — the balanced default",
   },
   {
-    value: "thinking",
-    label: "Thinking",
-    hint: "Depth first: reasoning enabled, deeper context escalation",
+    value: "high",
+    label: "High",
+    hint: "Deep reasoning (4096-token budget) for complex work",
+  },
+  {
+    value: "ultra",
+    label: "Ultra",
+    hint: "Unrestricted thinking — the engine's own maximum budget",
   },
 ];
 
-// normalizeThinkingControl validates a persisted control value.
+// normalizeThinkingControl validates a persisted control value onto the
+// v1.8.5 ladder, migrating the legacy v1.2.5 vocabulary (auto → mid,
+// fast → low, thinking → high).
 export function normalizeThinkingControl(v: unknown): ThinkingControl {
-  return v === "fast" || v === "thinking" ? v : "auto";
+  if (v === "low" || v === "mid" || v === "high" || v === "ultra") {
+    return v;
+  }
+
+  if (v === "fast") {
+    return "low";
+  }
+
+  if (v === "thinking" || v === "deep") {
+    return "high";
+  }
+
+  return "mid";
 }
 
 // ToolPolicyMode is the composer's per-request tool control.

@@ -60,6 +60,30 @@ object, and every consumer follows the documented fallback (configured
 context, conservative estimator) — never a dereference. The capability
 resolution itself is uniformly nil-config-safe.
 
+**Execution/evidence ladder (v1.8.5, the Phase 2 boundary contract):**
+ONE shared structure (`internal/llm/execution.go`, surfaced as the
+`execution` block of `/api/engine`) composes the existing authorities —
+device detection, backend health, the accelerator selection memo, verified
+model loading, measured generation telemetry, runtime offload lines — into
+the monotone ladder `detected → backend-available → device-selected →
+model-loaded → generation-executed → execution-evidence → verified`. The
+composer is PURE over explicit inputs; the stage stops at the first
+unproven rung and names the gap, so device enumeration can never equal
+verified execution. Go stays the control plane; the C++/serving backend
+stays the execution plane; Phase 2's deep engine work consumes exactly
+this contract.
+
+**Reasoning-depth budgets (v1.8.5):** the composer's four-level control
+(low/mid/high/ultra) carries a numeric thinking-token budget onto every
+generation request (`llm.ChatRequest.ReasoningBudget` → the llama.cpp
+request-level `reasoning_budget_tokens` parameter, verified in BOTH
+managed builds' server sources). low = 0 (thinking off), mid = 1024
+(bounded default), high = 4096, ultra = not sent (engine default). Local
+engines only; a non-thinking model ignores the budget (reasoning is never
+fabricated); the native path has no budget control and is documented-inert.
+The persisted Show/Hide Thinking preference is VISIBILITY ONLY — it never
+enters the request.
+
 ## 3. Session / run lifecycle
 
 A run is: POST /api/run → registered (one registry entry, one hub, one
@@ -108,6 +132,20 @@ timeline batch, a self-draining ledger guarantees the batch never processes
 them twice, and cumulative replace semantics, replay/reconnect idempotence,
 sequence/stale-run protection and the synchronous done/error/abort flush
 are unchanged.
+
+**Subscriber delivery (v1.8.5):** the run hub's per-client delivery is a
+bounded, CONFLATION-AWARE queue (`activitySub`, `internal/api/server.go`)
+— the v1.2.x buffered channel dropped the NEWEST event on overflow, which
+for cumulative snapshots discarded the frame carrying the full text while
+the buffer kept stale prefixes (a backpressured transport therefore froze
+visible text until the run ended — the server-side twin of the v1.8.4
+MessageChannel wedge). Overflow now evicts the OLDEST conflatable event
+(response/assistant_delta, reasoning/thinking_delta, status — the kinds
+whose newest frame subsumes older ones); order and the sequence replay
+contract are preserved; terminal events are never preferentially evicted;
+the publisher never blocks; every event write carries a generous deadline
+so a wedged client tears down deterministically and recovers through the
+reconnect snapshot replay.
 
 **Live memory evidence (v1.8.2):** the orchestrator composes
 `contextplan.MemoryEvidence` from the survival-reconciled injection facts

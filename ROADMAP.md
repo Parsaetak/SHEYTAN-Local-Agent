@@ -86,6 +86,61 @@ one-time honest migration of the legacy derived state, and the engine
 update's deferred-commit window now reports and probes the byte-verified
 staged binary through a window-scoped identity marker.
 
+### v1.8.5 — Phase 1 of the staged engine program — **CURRENT RELEASE**
+
+v1.8.5 completes PHASE 1 — the core runtime / user-surface foundation —
+and leaves the deep execution-engine work explicitly to Phase 2:
+
+* **Live streaming, server side closed (P0):** the run hub's subscriber
+  delivery became a bounded, conflation-aware queue. The v1.2.x channel
+  dropped the NEWEST event when a subscriber's buffer was full — for
+  cumulative `response`/`reasoning` snapshots that policy discarded the
+  frame carrying the FULL text while the buffer kept stale prefixes, so
+  a backpressured/stalled transport froze visible text until the run
+  ended (Stop included) and the reconnect replay revealed everything at
+  once — the server-side twin of the v1.8.4 MessageChannel wedge. The
+  queue evicts the OLDEST conflatable snapshot instead (newest-wins),
+  preserves order and the seq replay contract, never preferentially
+  drops terminal events, never blocks the publisher, and bounds memory;
+  every event write now carries a generous deadline so a wedged client
+  is torn down deterministically (deterministic hub/queue suites + race
+  gate; the full API suite stays green).
+* **Reasoning-depth ladder (P0):** the composer control is now
+  Low / Mid / High / Ultra, and every level carries a REAL numeric
+  thinking-token budget onto the generation request — the llama.cpp
+  request-level `reasoning_budget_tokens` parameter, verified present
+  in BOTH managed engine builds (b10642 default, b11205) by reading the
+  actual server sources (low=0 thinking off, mid=1024 bounded default,
+  high=4096, ultra=engine default/unrestricted). Local engines only
+  (the same gating as the other llama.cpp-specific request fields);
+  legacy Auto/Fast/Thinking values migrate at both the wire and the
+  persisted-settings boundary. Not cosmetic, not prompt-faked.
+* **Show/Hide Thinking (P0):** a visibility-only presentation control —
+  the reasoning level and budget travel with every request regardless,
+  the store keeps folding reasoning snapshots, and only the rendering
+  of backend-reported reasoning is gated (persisted through the same
+  settings authority; Chat and Agent share the semantics through the
+  shared composer/message surfaces).
+* **Engine is supervised machinery (P1):** the user-facing Start/Stop
+  engine toggle is removed from the ordinary workflow; the engine boots
+  on first use through the run gate, restarts after engine-affecting
+  changes through the settings flow, and recovers through internal
+  supervision. The UI represents engine state. All internal lifecycle
+  operations (startup, update, restart, recovery, shutdown) are kept.
+* **Execution/evidence ladder (Phase 2 foundation):** ONE shared
+  structure (`internal/llm/execution.go`, surfaced as `/api/engine`'s
+  `execution` block) composes the existing authorities into the monotone
+  ladder `detected → backend-available → device-selected →
+  model-loaded → generation-executed → execution-evidence → verified`.
+  Device enumeration can never equal verified execution — the ladder
+  stops at the first unproven rung and names it. No new sampler, no
+  second policy engine: a pure composer over inputs from device
+  detection, backend health, the accelerator selection memo, verified
+  model loading, measured generation telemetry and runtime offload
+  lines (deterministic ladder suites).
+
+Phase 1 deliberately does NOT attempt the Phase 2 work below.
+
 Exit condition: SHEYTAN can operate for long periods without unnecessarily
 degrading the host and can explain measurable reasons for its runtime
 decisions, with the critical-protection path (cooperative cancellation)
@@ -94,6 +149,72 @@ unchanged in its existing owner.
 Scope boundary — v1.8 deliberately does NOT include the AI System builder,
 computer-use, a full evaluation framework, multi-model routing or model
 pools. Clean seams were created only where v1.8 needed them.
+
+---
+
+## PHASE 2 — Deep execution-engine / resource integration — **NEXT, NOT YET STARTED**
+
+Phase 1 (v1.8.5, above) built the runtime/user-surface foundation. Phase 2
+is the remaining DEEP execution work — the next engineering program, NOT
+implemented by being listed here. Its scope, in priority order:
+
+### Deep engine integration (HIGH)
+
+* Finish the unified C++ execution path behind the ONE execution boundary
+  (Go = control plane, C++/serving backend = execution plane; the v1.8.5
+  `llm.ExecutionReport` ladder is the shared contract both planes speak). (I)
+* Mature the llama.cpp/ggml integration where the repository's own evidence
+  justifies it — model placement/splitting where the serving engine
+  supports it, real memory/KV/resource accounting fed by the existing
+  Governor seams, stronger engine/backend fallback and recovery. (I)
+* Backend selection driven by PROVEN runtime evidence — consume the
+  execution/evidence ladder's verified rung instead of detection-level
+  posture wherever a selection decision is made. (I)
+* The native C++ path has no reasoning-budget control today (the level is
+  documented-inert there); wiring real native thinking budgets belongs to
+  the native engine work, never a prompt-side fake. (I)
+
+### Real GPU execution proof (HIGH)
+
+* Physical/runtime offload evidence on supported hardware: correct
+  device/backend selection, execution verification, truthful resource
+  reporting — all keyed off the EXISTING stage → exact executable →
+  probe → launch → health → generation → evidence → commit/rollback
+  engine identity transaction. Never verify one binary and claim another. (D — the transaction rules exist; the physical validation is new)
+* No hard-coded Intel/Arc claims; no Vulkan/SYCL/OpenVINO execution claim
+  merely because a backend or device exists — the v1.8.5 ladder's
+  detected ≠ verified rule is the contract. (D — invariant)
+
+### Runtime performance foundations (MEDIUM/HIGH — only where measured)
+
+* Prompt prefill measurement and cache/prefix reuse evidence (the
+  existing I/H backlog items below roll up here). (I/H)
+* TTFT and streaming wire efficiency — measured before any change; the
+  v1.8.5 conflation queue is verified and is not to be redesigned absent
+  a measured regression. (I)
+* CPU telemetry on Windows through the EXISTING Governor/CPU sampler
+  seam — no second sampler, no second authority. (I)
+* Resource-aware generation/context budgets under the ONE Governor
+  policy authority; RAM stays memory capacity, never an accelerator;
+  unknown measurements stay unknown; no fake VRAM/offload numbers. (D — invariants; the budgeting itself is Phase 2 work)
+
+### Remaining user-facing runtime polish (as it fits safely)
+
+* Only items that cannot land in a Phase 1-style vertical slice without
+  destabilizing the current surfaces — the Phase 1 disciplines (one
+  authority per concern, no sleep-based correctness, no weakened tests)
+  apply unchanged.
+
+---
+
+## PHASE 3+ — New product capabilities — **FUTURE**
+
+The longer product ladder is unchanged and NOT implemented: the AI System
+Builder (v1.9), Universal Agent (v1.10), Learning & Evaluation (v1.11),
+Advanced Model Intelligence (v1.12) and the SHEYTAN Local AI Platform end
+state (v2.0) — see the sections below. Nothing from these stages is pulled
+into Phase 1 or Phase 2 unless an existing dependency explicitly requires
+it.
 
 ---
 

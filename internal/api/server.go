@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
@@ -118,6 +119,17 @@ type Server struct {
 	selectionMu sync.Mutex
 	selection   *selectionState
 	calibrating atomic.Bool
+
+	// v1.8.5 EXECUTION/EVIDENCE LADDER: memo of the LAST accelerator
+	// resolution composed by the ONE selection authority
+	// (buildAcceleratorResolution — the /api/perf path). The engine
+	// snapshot reads it to fill the device-selected rung of
+	// llm.ComposeExecutionReport without re-running the resolution
+	// on the (faster) engine poll. This is a read-through cache of
+	// the authority's output, NOT a second selection/policy engine;
+	// nil = honest unknown until the first resolution runs.
+	resolutionMu   sync.Mutex
+	lastResolution *accelerator.Resolution
 
 	// outcomes (v1.2.6) is the bounded authoritative run-state registry:
 	// the last few terminal outcomes per session, replayed on the idle
@@ -251,36 +263,36 @@ func (rs *runState) cancelCurrent() {
 }
 
 // activityHub broadcasts activity events to all WebSocket subscribers of a
-// single active run. Each client receives its own buffered channel so clients
-// do not consume events from one another.
+// single active run. Each client receives its own bounded, conflation-aware
+// delivery queue so clients do not consume events from one another.
 type activityHub struct {
 	mu      sync.RWMutex
-	clients map[int]chan agent.Activity
+	clients map[int]*activitySub
 	nextID  int
 	closed  bool
 }
 
 func newActivityHub() *activityHub {
 	return &activityHub{
-		clients: make(map[int]chan agent.Activity),
+		clients: make(map[int]*activitySub),
 	}
 }
 
-func (h *activityHub) subscribe() (int, <-chan agent.Activity, func()) {
+func (h *activityHub) subscribe() (int, *activitySub, func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if h.closed {
-		ch := make(chan agent.Activity)
-		close(ch)
-		return 0, ch, func() {}
+		dead := newActivitySub(0)
+		dead.close()
+		return 0, dead, func() {}
 	}
 
 	id := h.nextID
 	h.nextID++
 
-	ch := make(chan agent.Activity, 128)
-	h.clients[id] = ch
+	sub := newActivitySub(subscriberQueueCap)
+	h.clients[id] = sub
 
 	var once sync.Once
 
@@ -291,25 +303,20 @@ func (h *activityHub) subscribe() (int, <-chan agent.Activity, func()) {
 
 			if existing, ok := h.clients[id]; ok {
 				delete(h.clients, id)
-				close(existing)
+				existing.close()
 			}
 		})
 	}
 
-	return id, ch, unsubscribe
+	return id, sub, unsubscribe
 }
 
 func (h *activityHub) publish(ev agent.Activity) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	for _, ch := range h.clients {
-		select {
-		case ch <- ev:
-		default:
-			// A slow WebSocket must never block the agent run.
-			// Only that slow subscriber may lose an event.
-		}
+	for _, sub := range h.clients {
+		sub.offer(ev)
 	}
 }
 
@@ -323,9 +330,159 @@ func (h *activityHub) close() {
 
 	h.closed = true
 
-	for id, ch := range h.clients {
+	for id, sub := range h.clients {
 		delete(h.clients, id)
-		close(ch)
+		sub.close()
+	}
+}
+
+// subscriberQueueCap bounds one subscriber's pending delivery queue. The
+// v1.2.x hub used a 128-deep channel with the same numeric bound.
+const subscriberQueueCap = 128
+
+// isConflatableKind reports whether one activity kind is a CUMULATIVE
+// snapshot or rolling telemetry whose NEWEST value subsumes every older
+// buffered copy: response/assistant_delta and reasoning/thinking_delta
+// captions are full cumulative snapshots by the orchestrator contract, and
+// status is a rolling caption. For these kinds an older buffered copy can
+// be discarded without losing information — the newest frame carries the
+// entire state.
+func isConflatableKind(t string) bool {
+	switch t {
+	case "response", "assistant_delta", "reasoning", "thinking_delta", "status":
+		return true
+	}
+	return false
+}
+
+// activitySub is ONE subscriber's bounded, conflation-aware delivery queue.
+//
+// THE v1.8.5 REPAIR (the remaining P0 live-streaming bottleneck): the
+// v1.2.x hub delivered through a plain buffered channel and, when a
+// subscriber's buffer was FULL, DROPPED THE NEWEST EVENT ("a slow WebSocket
+// must never block the agent run. Only that slow subscriber may lose an
+// event."). For cumulative event kinds that policy is exactly backwards:
+// the dropped event is the one carrying the FULL text so far, while the
+// buffer keeps holding older, SHORTER snapshots. A subscriber whose writer
+// stalls — precisely the failing runtime class where the browser's
+// transport backpressures the socket while the JS event loop, React and
+// the generation itself keep running — therefore watches the buffer fill
+// with stale snapshots and every NEWER snapshot get discarded: streamed
+// text freezes at whatever was last delivered and only reappears when the
+// run ends (Stop included), the hub closes and the reconnect replay
+// delivers the final run_snapshot. Same failure surface as the v1.8.4
+// MessageChannel loss, on the SERVER side of the wire.
+//
+// The queue keeps the same non-blocking publish contract (a slow
+// subscriber never blocks the agent run) but replaces drop-NEWEST with
+// CONFLATION: when the queue is full, the OLDEST conflatable (cumulative)
+// event is evicted first — the newest snapshot subsumes it — and only a
+// queue with no conflatable events left evicts its oldest entry. Order is
+// preserved; the seq replay contract is unchanged (the newest surviving
+// event always carries the highest sequence); terminal events are never
+// PREFERENTIALLY evicted (a done/aborted/error frame only drops when the
+// queue is entirely non-conflatable, and the idle-sentinel/settlement
+// recovery paths own that case exactly as before).
+//
+// Backpressure on the WRITE side stays bounded: the reader writes with a
+// generous deadline so a wedged transport is torn down deterministically
+// instead of parking the goroutine forever, and conflation bounds the
+// queue's memory while it is stalled.
+type activitySub struct {
+	mu        sync.Mutex
+	buf       []agent.Activity
+	wake      chan struct{}
+	closed    chan struct{}
+	closedNow bool
+}
+
+func newActivitySub(capacity int) *activitySub {
+	return &activitySub{
+		buf:    make([]agent.Activity, 0, capacity+1),
+		wake:   make(chan struct{}, 1),
+		closed: make(chan struct{}),
+	}
+}
+
+// offer enqueues one event without ever blocking the publisher. When the
+// queue is at capacity the oldest conflatable event is evicted (its newest
+// sibling subsumes it); a queue with no conflatable events evicts its
+// oldest entry (bounded memory — the previous behavior dropped the newest
+// instead, which is strictly worse for every kind).
+func (s *activitySub) offer(ev agent.Activity) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closedNow {
+		return
+	}
+
+	if len(s.buf) >= subscriberQueueCap {
+		s.evictOldestConflatableLocked()
+	}
+
+	s.buf = append(s.buf, ev)
+
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+// evictOldestConflatableLocked removes the oldest conflatable event when
+// one exists, otherwise the oldest buffered event. Order of the survivors
+// is preserved.
+func (s *activitySub) evictOldestConflatableLocked() {
+	victim := 0
+
+	for i := range s.buf {
+		if isConflatableKind(s.buf[i].Type) {
+			victim = i
+			break
+		}
+	}
+
+	s.buf = append(s.buf[:victim], s.buf[victim+1:]...)
+}
+
+// next blocks until one event is available or the subscription is closed
+// (every buffered event is drained BEFORE close is reported — a subscriber
+// that lagged behind still receives the conflation survivors, ending with
+// the newest cumulative snapshot and the terminal marker).
+func (s *activitySub) next() (agent.Activity, bool) {
+	for {
+		s.mu.Lock()
+
+		if len(s.buf) > 0 {
+			ev := s.buf[0]
+			s.buf = s.buf[1:]
+			s.mu.Unlock()
+			return ev, true
+		}
+
+		if s.closedNow {
+			s.mu.Unlock()
+			return agent.Activity{}, false
+		}
+
+		s.mu.Unlock()
+
+		select {
+		case <-s.wake:
+		case <-s.closed:
+		}
+	}
+}
+
+// close marks the subscription finished and releases every blocked reader.
+// Buffered events remain drainable (next drains before reporting closure).
+func (s *activitySub) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.closedNow {
+		s.closedNow = true
+		close(s.closed)
 	}
 }
 
@@ -1662,7 +1819,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 		// v1.2.5 per-request controls — they shape the ACTUAL backend
 		// request (tier posture, tool surface), never just the UI.
-		Thinking  string   `json:"thinking,omitempty"`  // "auto" | "fast" | "thinking"
+		// v1.8.5: the reasoning-depth ladder "low" | "mid" |
+		// "high" | "ultra" (legacy "auto"/"fast"/"thinking" are
+		// accepted and normalized at the orchestrator boundary).
+		// Each level carries a REAL numeric thinking budget onto
+		// the generation request — see agent.applyReasoningBudget.
+		Thinking  string   `json:"thinking,omitempty"`
 		ToolMode  string   `json:"toolMode,omitempty"`  // "auto" | "manual"
 		ToolAllow []string `json:"toolAllow,omitempty"` // manual-mode allow-list
 
@@ -2728,6 +2890,17 @@ func (s *Server) handleFeedback(w http.ResponseWriter, r *http.Request) {
 // protocol level so half-open TCP sockets are detected and released.
 const wsPingInterval = 25 * time.Second
 
+// wsEventWriteDeadline (v1.8.5) bounds ONE run-event write to a live
+// subscriber. Local run frames are a few KB — a healthy transport writes
+// them in microseconds — so 30 s is far beyond any legitimate delivery
+// while still guaranteeing a wedged/stalled client transport (the exact
+// runtime class whose backpressure froze streamed text until Stop) fails
+// the write deterministically instead of parking the subscriber goroutine
+// forever. A failed write tears the socket down; the client's reconnect
+// attaches to the authoritative run_snapshot and recovers the full state.
+// Not a timeout on generation: the publisher-side offer never blocks.
+const wsEventWriteDeadline = 30 * time.Second
+
 // idleSettleWaitBudget (v1.3.7) bounds how long an idle sentinel may WAIT on
 // a terminal-but-unsettled run's settlement edge before degrading to the
 // legacy no-lastRun sentinel. Real settle-tails are pure durable file I/O
@@ -2971,7 +3144,21 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
 
 			served := false
 
-			for ev := range updates {
+			// v1.8.5: the conflation-aware subscription replaces
+			// the channel range. next() blocks exactly like the
+			// old channel receive, drains every survivor before
+			// reporting closure, and preserves the replay filters
+			// verbatim. Each event write carries a generous
+			// deadline: a wedged client transport fails the write
+			// deterministically instead of parking this goroutine
+			// forever — the client's reconnect + run_snapshot
+			// replay then recovers the full state.
+			for {
+				ev, ok := updates.next()
+				if !ok {
+					break
+				}
+
 				// Replay filter: skip events already folded
 				// into the snapshot (seq ≤ N) and stale
 				// events of an older run that drained after
@@ -2983,6 +3170,9 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
 				if ev.Seq > 0 && ev.Seq <= snap.Sequence {
 					continue
 				}
+
+				_ = conn.SetWriteDeadline(
+					time.Now().Add(wsEventWriteDeadline))
 
 				if err := conn.WriteJSON(ev); err != nil {
 					served = true

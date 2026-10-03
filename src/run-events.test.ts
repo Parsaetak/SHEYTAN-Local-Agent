@@ -9,6 +9,7 @@ import {
   normalizeThinkingControl,
   normalizeToolAllowlist,
   normalizeToolPolicyMode,
+  THINKING_OPTIONS,
 } from "./run-events.ts";
 
 test("legacy event names keep their canonical meaning", () => {
@@ -65,13 +66,30 @@ test("run evidence covers every live-proof event kind", () => {
   assert.equal(isRunEvidence("unknown"), false);
 });
 
-test("thinking control normalization", () => {
-  assert.equal(normalizeThinkingControl("fast"), "fast");
-  assert.equal(normalizeThinkingControl("thinking"), "thinking");
-  assert.equal(normalizeThinkingControl("AUTO"), "auto");
-  assert.equal(normalizeThinkingControl(null), "auto");
-  assert.equal(normalizeThinkingControl(undefined), "auto");
-  assert.equal(normalizeThinkingControl("bogus"), "auto");
+test("thinking control normalization (v1.8.5 four-level ladder)", () => {
+  // The ladder normalizes onto itself.
+  assert.equal(normalizeThinkingControl("low"), "low");
+  assert.equal(normalizeThinkingControl("mid"), "mid");
+  assert.equal(normalizeThinkingControl("high"), "high");
+  assert.equal(normalizeThinkingControl("ultra"), "ultra");
+
+  // The legacy v1.2.5 vocabulary migrates and is never re-emitted.
+  assert.equal(normalizeThinkingControl("fast"), "low");
+  assert.equal(normalizeThinkingControl("auto"), "mid");
+  assert.equal(normalizeThinkingControl("thinking"), "high");
+  assert.equal(normalizeThinkingControl("deep"), "high");
+
+  // Unknown / absent values degrade to the balanced default.
+  assert.equal(normalizeThinkingControl("AUTO"), "mid");
+  assert.equal(normalizeThinkingControl(null), "mid");
+  assert.equal(normalizeThinkingControl(undefined), "mid");
+  assert.equal(normalizeThinkingControl("bogus"), "mid");
+
+  // The option surface IS the ladder (labels render from it).
+  assert.deepEqual(
+    THINKING_OPTIONS.map((o) => o.value),
+    ["low", "mid", "high", "ultra"],
+  );
 });
 
 test("tool policy mode normalization", () => {

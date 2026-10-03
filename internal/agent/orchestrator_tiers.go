@@ -36,21 +36,100 @@ import (
 )
 
 // ThinkingControl values (composer → backend request).
+//
+// v1.8.5: the surface is the four-level REASONING DEPTH ladder
+// low / mid / high / ultra. Each level carries a REAL numeric thinking
+// token budget applied to the llama.cpp serving backend through the
+// verified request-level `reasoning_budget_tokens` parameter (present in
+// BOTH managed engine builds — b10642 and b11205 — verified against the
+// actual server sources; a budget of 0 ends thinking immediately, a
+// positive value caps it, -1 leaves the engine default/unrestricted).
+// The engine applies the budget only when the model's chat template
+// exposes a thinking section — a non-thinking model never fabricates
+// reasoning; the level is simply inert there.
+//
+// Legacy v1.2.5 values (auto / fast / thinking) still arrive from older
+// clients and persisted settings; they map onto the ladder and are
+// normalized away at the boundary (never stored, never re-emitted).
 const (
+	ThinkingLow   = "low"
+	ThinkingMid   = "mid"
+	ThinkingHigh  = "high"
+	ThinkingUltra = "ultra"
+
+	// Legacy values (accepted at the wire boundary, normalized to the
+	// ladder above; kept as constants so the migration is explicit).
 	ThinkingAuto     = "auto"
 	ThinkingFast     = "fast"
 	ThinkingThinking = "thinking"
 )
 
-// NormalizeThinkingControl validates a thinking control string.
+// Numeric reasoning budgets per level (thinking tokens).
+//
+//	low  →   0: thinking disabled ("0 for immediate end" — the engine's
+//	             own documented semantics; latency first)
+//	mid  → 1024: a bounded default — real thinking, predictably short
+//	high → 4096: deeper reasoning for complex work
+//	ultra→   -1: the engine default — unrestricted thinking
+//
+// These are REQUEST budgets on the llama.cpp OAI-compatible endpoint
+// (verified in both managed builds' server sources), not prompt-side
+// suggestions.
+func reasoningBudgetTokens(control string) int {
+	switch control {
+	case ThinkingLow:
+		return 0
+	case ThinkingMid:
+		return 1024
+	case ThinkingHigh:
+		return 4096
+	case ThinkingUltra:
+		return -1
+	}
+	return -1
+}
+
+// applyReasoningBudget stamps the level's numeric thinking-token budget
+// onto ONE generation request. Local llama.cpp serving only — remote
+// providers never receive the field (the same gating BuildChatRequest
+// applies to TopK/NumCtx/MinP/RepeatLastN), and the native C++ path has
+// no reasoning-budget control (its GenerationRequest carries no thinking
+// channel — the level is documented-inert there rather than faked).
+// ro.thinking is expected to be NORMALIZED (WithThinkingMode guarantees
+// this); unknown values degrade to no budget, never to a fabricated one.
+func applyReasoningBudget(cfg *config.Config, thinking string, req *llm.ChatRequest) {
+	if cfg == nil || req == nil || cfg.IsRemote() {
+		return
+	}
+
+	level := NormalizeThinkingControl(thinking)
+
+	// -1 (ultra) means "engine default / unrestricted": the wire contract
+	// treats -1 identically to omitting the field (the server falls back
+	// to its own configured budget), so send NOTHING for it — the honest
+	// encoding of "no client-side cap".
+	budget := reasoningBudgetTokens(level)
+	if budget < 0 {
+		req.ReasoningBudget = nil
+		return
+	}
+
+	req.ReasoningBudget = &budget
+}
+
+// NormalizeThinkingControl validates a thinking control string onto the
+// v1.8.5 four-level ladder, migrating the legacy v1.2.5 vocabulary.
 func NormalizeThinkingControl(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "fast":
-		return ThinkingFast
-	case "thinking", "deep":
-		return ThinkingThinking
+	case "fast", "low":
+		return ThinkingLow
+	case "thinking", "deep", "high":
+		return ThinkingHigh
+	case "ultra", "max":
+		return ThinkingUltra
 	default:
-		return ThinkingAuto
+		// "auto", "", unknown → the balanced default.
+		return ThinkingMid
 	}
 }
 
@@ -666,13 +745,17 @@ func (c *turnComposer) HistoryShare() float64 {
 }
 
 // ThinkingEnabled resolves the per-request thinking control against the
-// global config: "fast" disables the nudge for THIS request (latency
-// first); "thinking" enables it even when the global toggle is off.
+// global config: "low" disables the nudge for THIS request (latency
+// first); "high"/"ultra" enable it even when the global toggle is off.
+// v1.8.5: the nudge is the PROMPT-side posture only — the REAL per-level
+// backend control is the numeric reasoning budget applied to the request
+// (orchestrator.go's applyReasoningBudget); legacy values are normalized
+// before they reach here.
 func (c *turnComposer) ThinkingEnabled() bool {
 	switch c.thinkMode {
-	case ThinkingFast:
+	case ThinkingLow, ThinkingFast:
 		return false
-	case ThinkingThinking:
+	case ThinkingHigh, ThinkingUltra, ThinkingThinking:
 		return true
 	default:
 		return c.cfg.ThinkingMode

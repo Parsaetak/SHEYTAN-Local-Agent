@@ -1,10 +1,19 @@
-// ComposerControls.tsx — v1.2.5 per-request composer controls.
+// ComposerControls.tsx — per-request composer controls.
 //
-// Three REAL controls (not visual-only):
+// REAL controls (not visual-only):
 //
-//   Thinking ▾    auto | fast | thinking — sent with every run request;
-//                 changes the backend's tier posture, the thinking nudge
-//                 and the verification depth (see agent.WithThinkingMode).
+//   Thinking ▾    low | mid | high | ultra — sent with every run request;
+//                 each level carries a REAL numeric thinking-token budget
+//                 that reaches the generation request (llama.cpp
+//                 `reasoning_budget_tokens`), plus the tier posture
+//                 (v1.8.5 four-level ladder; see agent.WithThinkingMode).
+//
+//   Show/Hide Thinking — VISIBILITY ONLY (v1.8.5). Never changes
+//                 generation settings: the reasoning level and budget
+//                 travel with every request regardless, the store keeps
+//                 folding reasoning snapshots, and only the presentation
+//                 is gated. Actual displayed reasoning always comes from
+//                 backend-reported reasoning — never fabricated.
 //
 //   Tools ▾       AUTO | MANUAL + per-tool checkboxes — in MANUAL only
 //                 the selected tools are offered and executable; the
@@ -32,6 +41,8 @@ import {
 function ComposerControls() {
   const thinkingControl = useRuntimeStore((s) => s.thinkingControl);
   const setThinkingControl = useRuntimeStore((s) => s.setThinkingControl);
+  const showThinking = useRuntimeStore((s) => s.showThinking);
+  const setShowThinking = useRuntimeStore((s) => s.setShowThinking);
   const toolPolicyMode = useRuntimeStore((s) => s.toolPolicyMode);
   const setToolPolicyMode = useRuntimeStore((s) => s.setToolPolicyMode);
   const toolAllowlist = useRuntimeStore((s) => s.toolAllowlist);
@@ -50,7 +61,7 @@ function ComposerControls() {
 
   const thinkingLabel = useMemo(() => {
     const found = THINKING_OPTIONS.find((o) => o.value === thinkingControl);
-    return found ? found.label : "Auto";
+    return found ? found.label : "Mid";
   }, [thinkingControl]);
 
   const allowedCount = toolAllowlist.length;
@@ -61,14 +72,14 @@ function ComposerControls() {
       <div className="control-menu">
         <button
           type="button"
-          className={`control-button${thinkingControl !== "auto" ? " active" : ""}`}
+          className={`control-button${thinkingControl !== "mid" ? " active" : ""}`}
           aria-haspopup="listbox"
           aria-expanded={thinkingOpen}
           onClick={() => {
             setThinkingOpen((v) => !v);
             setToolsOpen(false);
           }}
-          title="Controls how much reasoning and context the agent uses for this request"
+          title="Reasoning depth for this request: every level carries a real thinking-token budget on the generation request"
         >
           Thinking · {thinkingLabel} ▾
         </button>
@@ -95,6 +106,22 @@ function ComposerControls() {
             ))}
           </div>
         ) : null}
+      </div>
+
+      {/* v1.8.5 SHOW/HIDE THINKING — visibility ONLY. Never changes the
+          generation settings: the reasoning level and its budget travel
+          with every request regardless of this toggle, and the store keeps
+          folding reasoning snapshots — only the presentation is gated. */}
+      <div className="control-menu">
+        <button
+          type="button"
+          className={`control-button${showThinking ? "" : " active"}`}
+          aria-pressed={!showThinking}
+          onClick={() => setShowThinking(!showThinking)}
+          title="Shows or hides the model's backend-reported reasoning. Visibility only — it never changes the reasoning level, the thinking budget or any generation setting."
+        >
+          {showThinking ? "Hide Thinking" : "Show Thinking"}
+        </button>
       </div>
 
       {/* Tool policy control */}

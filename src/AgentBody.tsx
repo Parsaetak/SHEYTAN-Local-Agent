@@ -159,12 +159,14 @@ function AgentBody() {
   // owns the next step (the engine never loads an arbitrary model).
   const selectionRequired = engine?.selectionRequired === true;
 
-  // v1.1.4: the toggle and the badge previously read DIFFERENT sources
-  // (models.llamaRunning vs engine.state) and could disagree transiently.
-  const engineAlive =
-    engine?.state === "ready" ||
-    engine?.state === "running" ||
-    engine?.state === "busy";
+  // v1.8.5: the user-facing Start/Stop ENGINE TOGGLE IS REMOVED — the
+  // engine is supervised machinery, not a manual control: startup,
+  // engine updates, restart-after-change, recovery and shutdown are
+  // owned by the internal lifecycle paths (startup gate,
+  // EnsureLLMContext run gate, the settings restart flow, shutdown), and
+  // the UI REPRESENTS engine state (the runtime pill in the header, the
+  // engine badge in Settings, the live phase in the generation timeline)
+  // instead of requiring the user to operate it.
   const pendingAttachments = useRuntimeStore((state) => state.pendingAttachments);
   const attachmentsUploading = useRuntimeStore((state) => state.attachmentsUploading);
 
@@ -201,7 +203,6 @@ function AgentBody() {
   const setMessage = useRuntimeStore((state) => state.setComposerDraft);
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [modelBusy, setModelBusy] = useState(false);
-  const [engineBusy, setEngineBusy] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [showActivity, setShowActivity] = useState(false);
@@ -411,27 +412,14 @@ function AgentBody() {
     }
   }
 
-  async function toggleEngine() {
-    if (engineBusy) {
-      return;
-    }
-
-    setEngineBusy(true);
-    setModelError(null);
-
-    try {
-      await api.llama(engineAlive ? "stop" : "start");
-      await refreshModels();
-    } catch (engineError) {
-      setModelError(
-        engineError instanceof Error
-          ? engineError.message
-          : "Unable to control the local engine.",
-      );
-    } finally {
-      setEngineBusy(false);
-    }
-  }
+  // v1.8.5: toggleEngine is REMOVED from the ordinary workflow (manual
+  // engine operation was a workflow hazard, not a feature): the engine
+  // boots on first use through the run gate (EnsureLLMContext), restarts
+  // through the settings restart flow after engine-affecting changes,
+  // and recovers through the internal supervision paths. The engine
+  // STATE stays visible (the badge below + the runtime pill). Download
+  // cancellation — an asset-level action, not engine lifecycle — remains
+  // user-facing.
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
@@ -748,19 +736,6 @@ function AgentBody() {
             )}
 
             <div className="header-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => void toggleEngine()}
-                disabled={engineBusy}
-              >
-                {engineBusy
-                  ? "Working…"
-                  : engineAlive
-                    ? "Stop engine"
-                    : "Start engine"}
-              </button>
-
               <button
                 type="button"
                 className="text-button"
