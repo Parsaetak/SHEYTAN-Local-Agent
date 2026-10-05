@@ -18,6 +18,7 @@ import (
         "syscall"
         "time"
 
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
@@ -162,10 +163,25 @@ type LlamaServer struct {
         verifiedCtx   int
 
         // offloadEvidence (v1.2.6) is the MEASURED runtime offload line the
-        // engine printed during the current/last boot (e.g. "offloaded
+        // engine printed during the CURRENT boot (e.g. "offloaded
         // 33/33 layers to GPU"). Empty = no offload observed yet — an honest
         // unknown, never a guess. Guarded by mu.
+        //
+        // v1.8.6 PER-BOOT TRUTH: the line is RESET at every launch
+        // (launchArgs) — evidence belongs to the process boot that
+        // produced it, so a restart or model swap can never inherit the
+        // previous boot's GPU execution claim. Each boot re-proves.
         offloadEvidence string
+
+        // gpuCandidateProving (v1.8.6) is true ONLY while a bounded GPU
+        // candidate transaction is PROVING the Vulkan variant inside
+        // updateEngineVariantTx (extraVerify != nil): the candidate launch
+        // may enable GPU offload from SELECTION evidence (enumeration) —
+        // the transaction's verification hook then REQUIRES the measured
+        // offload line, so the proof is still enforced downstream. A
+        // normal serving launch never sets this: serving AUTO stays
+        // CPU-safe until execution is proven. Guarded by mu.
+        gpuCandidateProving bool
 
         // subs receive every state transition (never blocked; slow subscribers
         // drop events). Registered via SubscribeEvents.
@@ -1581,6 +1597,16 @@ func (s *LlamaServer) launchArgs(
         modelPath string,
         args []string,
 ) error {
+        // v1.8.6 PER-BOOT EVIDENCE RESET: the offload line belongs to the
+        // process boot that prints it. A restart or model swap must never
+        // inherit the previous boot's GPU execution evidence — each boot
+        // re-proves (ObserveEngineLine re-fills it when the new process
+        // actually offloads). This is the stale-evidence guard for the
+        // strongest per-boot proof.
+        s.mu.Lock()
+        s.offloadEvidence = ""
+        s.mu.Unlock()
+
         cmd := proc.Command(
                 binPath,
                 args...,
@@ -2270,11 +2296,79 @@ func (s *LlamaServer) deterministicDevice(cfg *config.Config) (string, bool) {
         return best.Backend, true
 }
 
+// autoGPUOffload decides whether AUTO may turn on GPU offload
+// (--n-gpu-layers 99) for THIS launch. v1.8.6 TRUTH MODEL:
+//
+//      GPU detected ≠ GPU available ≠ GPU selected ≠ GPU executed ≠ GPU verified
+//
+// Two very different modes:
+//
+//   - CANDIDATE PROVING (s.gpuCandidateProving, set only inside the
+//     bounded variant transaction while the verification hook runs):
+//     enumeration/selection evidence MAY enable offload — the
+//     transaction's autoProbeVerify hook then REQUIRES real generation
+//     AND the measured offload line, so an enumeration-only candidate
+//     still cannot commit. This is exactly "a candidate transaction may
+//     temporarily boot Vulkan to prove it".
+//
+//   - NORMAL SERVING: offload is enabled ONLY by PROVEN execution —
+//     the CURRENT boot's measured offload line, or a still-valid
+//     persisted GPU execution receipt (the committed bounded
+//     transaction outcome, engine-tag+variant identity-checked).
+//     Enumeration alone and DLL presence are NOT sufficient: AUTO stays
+//     CPU-safe until the accelerator has actually been proven.
+//
+// Manual configuration is untouched by this function: an explicit
+// cfg.LLM.NumGPU > 0 is applied verbatim in buildArgs (the user's own
+// posture), and CPU-forced mode (accelerator profile CPU) never enables
+// auto-offload because the CPU profile is checked by the launcher first.
 func (s *LlamaServer) autoGPUOffload(cfg *config.Config) bool {
         if !cfg.GPUAutoOffload {
                 return false
         }
 
+        // v1.8.6: the CPU-forced profile stays CPU — exactly as before, and
+        // now enforced at the launcher too (a CPU request with a stale
+        // gpuAutoOffload=true must not silently serve GPU).
+        if accelerator.NormalizeRequested(cfg.Accelerator) == accelerator.RequestCPU {
+                logging.Default().Info("engine",
+                        "GPU offload OFF: the requested accelerator profile is CPU (forced) — AUTO honors it")
+                return false
+        }
+
+        if s.gpuProvingActive() {
+                ok := s.provisionableGPUPresent(cfg)
+                logging.Default().Info("engine",
+                        "GPU offload ON (candidate proving): selection evidence present — the transaction's verification hook requires the measured offload line before commit")
+                return ok
+        }
+
+        if proven, why := s.gpuExecutionProven(cfg); proven {
+                logging.Default().Info("engine",
+                        "GPU offload ON: proven GPU execution (%s)", why)
+                return true
+        }
+
+        // Enumeration or DLL presence alone: AUTO stays CPU-safe — the
+        // honest posture until real execution evidence exists.
+        logging.Default().Info("engine",
+                "GPU offload OFF: no proven GPU execution for this engine identity (enumeration/DLL presence is selection evidence, not execution proof) — AUTO stays CPU-safe")
+        return false
+}
+
+// gpuProvingActive reports whether the current launch happens inside a
+// bounded GPU candidate verification transaction.
+func (s *LlamaServer) gpuProvingActive() bool {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+        return s.gpuCandidateProving
+}
+
+// provisionableGPUPresent reports SELECTION-level evidence: the engine
+// enumerated at least one device, or the current boot already measured
+// offload, or the documented enumeration-unsupported DLL fallback. Valid
+// for candidate proving ONLY — never for a verified serving claim.
+func (s *LlamaServer) provisionableGPUPresent(cfg *config.Config) bool {
         bin := cfg.LlamaBinPath
         if bin == "" {
                 bin = filepath.Join(cfg.DataDir, "bin", llamaBinaryName())
@@ -2284,36 +2378,64 @@ func (s *LlamaServer) autoGPUOffload(cfg *config.Config) bool {
 
         switch {
         case err == nil && supported && len(devices) > 0:
-                logging.Default().Info("engine",
-                        "GPU offload ON: engine enumerated %d device(s) (%s)",
-                        len(devices), devices[0].Name)
                 return true
-
-        case err == nil && supported && len(devices) == 0:
-                logging.Default().Info("engine",
-                        "GPU offload OFF: engine enumerated zero accelerator devices")
-                return false
-
         case s.OffloadEvidence() != "":
-                logging.Default().Info("engine",
-                        "GPU offload ON: runtime log measured real offload (%s)",
-                        s.OffloadEvidence())
                 return true
-
         case err == nil && !supported && s.hasVulkanBackend(cfg):
-                logging.Default().Info("engine",
-                        "GPU offload ON (fallback): enumeration unsupported by this build; Vulkan backend present — verifying from the runtime log")
                 return true
-
         default:
                 if err != nil {
                         logging.Default().Warn("engine", "device enumeration failed: %v", err)
                 }
-
-                logging.Default().Info("engine",
-                        "GPU offload OFF: no enumerated device, no runtime offload evidence, no fallback evidence")
                 return false
         }
+}
+
+// gpuExecutionProven reports whether GPU execution is PROVEN for the
+// CURRENT engine identity — the only basis a normal AUTO serving launch
+// may enable GPU offload:
+//
+//  1. the CURRENT boot printed a measured offload line (the strongest
+//     per-boot proof — refreshed on every model load); or
+//  2. a persisted, still-valid GPU execution receipt exists: the
+//     committed bounded transaction outcome whose engine tag and variant
+//     still match the installed engine (stale receipts are rejected —
+//     never verify one binary and serve another).
+//
+// Enumeration and DLL presence are deliberately absent: they are
+// selection evidence, not execution proof.
+func (s *LlamaServer) gpuExecutionProven(cfg *config.Config) (bool, string) {
+        if evidence := s.OffloadEvidence(); evidence != "" {
+                return true, "current-boot measured offload line: " + evidence
+        }
+
+        st, ok := LoadGPUProbeState(cfg)
+        if ok && st.Status == GPUProbeStatusVerified {
+                tag := updater.InstalledEngineTag(cfg)
+                variant := string(updater.InstalledEngineVariant(cfg))
+
+                receipt := accelerator.ExecutionReceipt{
+                        Kind:      accelerator.ReceiptKindVerifiedProbe,
+                        Line:      st.Evidence,
+                        EngineTag: st.EngineTag,
+                        Variant:   st.Variant,
+                        Device:    st.Device,
+                        Model:     st.Model,
+                        Status:    st.Status,
+                }
+
+                if receipt.ValidFor(tag, variant) {
+                        return true, fmt.Sprintf(
+                                "committed GPU execution receipt for engine %s/%s (device %q, evidence %q)",
+                                st.EngineTag, st.Variant, st.Device, st.Evidence)
+                }
+
+                logging.Default().Info("engine",
+                        "persisted GPU probe receipt is stale for the current engine identity (%s/%s vs receipt %s/%s) — GPU execution unproven until re-proven",
+                        tag, variant, st.EngineTag, st.Variant)
+        }
+
+        return false, ""
 }
 
 func (s *LlamaServer) hasVulkanBackend(cfg *config.Config) bool {
@@ -2959,6 +3081,27 @@ func (s *LlamaServer) updateEngineVariantTx(
                 }
 
                 return "", fmt.Errorf("install %s engine: %w", variant, err)
+        }
+
+        // v1.8.6 CANDIDATE-PROVING MODE: while the verification extension
+        // (the AUTO GPU candidate's execution-evidence contract) runs, the
+        // candidate launch may enable GPU offload from SELECTION evidence
+        // (enumeration) — autoProbeVerify then REQUIRES the measured offload
+        // line + a real generation before commit, so enumeration alone can
+        // never produce a verified serving posture. The flag is strictly
+        // transaction-scoped: the deferred reset covers EVERY exit path
+        // (rollback, restart, error, commit) so a later normal launch can
+        // never inherit proving semantics.
+        if extraVerify != nil {
+                s.mu.Lock()
+                s.gpuCandidateProving = true
+                s.mu.Unlock()
+
+                defer func() {
+                        s.mu.Lock()
+                        s.gpuCandidateProving = false
+                        s.mu.Unlock()
+                }()
         }
 
         if startErr := s.startLocked(); startErr != nil {

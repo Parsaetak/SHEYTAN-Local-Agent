@@ -11,6 +11,136 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.8.6 — 2026-10-05 — Phase 2: execution truth, GPU transaction authority, resource integration
+
+Focus: PHASE 2's deep runtime/execution work — make the v1.8.5
+execution/evidence foundation actually CONTROL backend selection and
+resource behavior, prove GPU execution correctly, and integrate
+CPU/GPU/RAM truth — through the EXISTING authorities (no second runtime,
+no second selection authority, no second sampler, no second policy
+engine). Five verticals landed, each pinned by deterministic suites:
+
+1. **P0 — the execution-truth contradiction closed (enumeration is
+   selection evidence, never execution proof).** The v1.8.5 ladder was
+   correct conceptually but consumed an accelerator contract that could
+   mark a GPU `ExecutionVerified=true` from `--list-devices` enumeration
+   alone. v1.8.6 enforces the full invariant
+   `GPU detected ≠ GPU available ≠ GPU selected ≠ GPU executed ≠ GPU
+   verified` at the ONE accelerator authority
+   (`internal/accelerator/resolveGPU`): enumeration now SELECTS
+   GPU_VULKAN with the pending-execution verification plan and the CPU
+   safety net; verification requires the measured runtime offload line
+   or a still-valid **ExecutionReceipt** — a new small structured
+   object (`accelerator.ExecutionReceipt`) carrying the identity the
+   evidence was produced under (kind, line, engine tag, variant,
+   device, model, status, time) with `ValidFor(engineTag, variant)`
+   stale-evidence invalidation: a receipt from another engine build,
+   another variant or a failed probe can NEVER verify the current
+   selection. Coverage:
+   `internal/accelerator/execution_truth_v186_test.go` (enumeration
+   never verifies; offload line verifies; valid receipt verifies;
+   stale/failed receipts never verify; CPU stays verified by
+   definition; the receipt identity matrix) plus the corrected v1.2.6/
+   v1.6.1 contracts.
+
+2. **P0 — the GPU transaction is authoritative; premature activation
+   removed.** The launcher (`LlamaServer.autoGPUOffload`) could turn on
+   `--n-gpu-layers 99` from device enumeration (or even Vulkan DLL
+   presence) BEFORE the bounded transaction proved real GPU execution.
+   v1.8.6 splits the two modes: a NORMAL serving launch enables
+   auto-offload ONLY on PROVEN execution (the current boot's measured
+   offload line, or a persisted verified GPU-probe receipt whose engine
+   tag+variant still match — `gpuExecutionProven`); enumeration/DLL
+   presence keep AUTO CPU-safe. A CANDIDATE verification transaction
+   (`gpuCandidateProving`, set strictly inside `updateEngineVariantTx`
+   when the execution-evidence verify hook runs, transaction-scoped via
+   deferred reset) may boot Vulkan from selection evidence to PROVE it
+   — the transaction still requires a real generation AND the measured
+   offload line before commit, so enumeration alone can never produce a
+   verified serving posture. Manual `numGpu` config is applied verbatim
+   and the CPU-forced profile is now enforced at the launcher too. The
+   offload evidence became PER-BOOT (`launchArgs` resets it): a restart
+   or model swap can never inherit the previous boot's GPU execution
+   claim. Coverage: `internal/llm/gpu_activation_v186_test.go` (10
+   tests: enumeration/DLL/failed-receipt never activate; offload line/
+   valid receipt do; CPU-forced stays CPU; manual config respected;
+   proving mode; per-boot reset) plus the existing v1.7.2 rollback
+   suites unchanged.
+
+3. **P0 — `/api/engine` and `/api/perf` agree (one authority, one
+   evidence path).** The engine execution ladder previously depended on
+   a memo written only by the `/api/perf` poll — the authoritative
+   engine state accidentally depended on whether the performance page
+   happened to poll first. v1.8.6: ONE accessor
+   (`currentAcceleratorResolution`) serves BOTH surfaces; the memo now
+   records its input SIGNATURE (engine tag + variant + requested
+   profile + loaded model + offload evidence + probe state) and a stale
+   memo is recomputed before any consumer can read it — no stale
+   poll-only snapshot can claim a current backend; the engine surface
+   refreshes the memo itself (a background warm-up at server start
+   keeps the first poll off the enumeration cost); model/engine/device
+   identity stays aligned, and the stage cannot move backwards because
+   a UI poll happened later (only because serving reality changed).
+   Coverage: `internal/api/engine_perf_consistency_v186_test.go`
+   (engine-first polling, verdict agreement both orders, monotone
+   stage across polls, stale-memo invalidation, fresh-memo reuse).
+
+4. **P0 — real CPU/GPU/RAM resource integration through the ONE
+   Governor.** The Governor now accounts for the CURRENT inference
+   workload: a new injected footprint source (wired on the Stack from
+   the EXISTING model-card/context authorities — model file bytes as a
+   FILE fact, planned KV at the serving window) folds into the resource
+   state and the envelope (a footprint that consumes the resident
+   budget reduces background work through the existing honest
+   adjustment class, reason stated; unknown stays unknown — RAM is
+   memory, never an accelerator). The v1.8.6 RESOURCE-AWARE RUN GATE
+   (`Stack.GovernorAdmitsModelLoad`, consulted by EnsureLLM and
+   EnsureLLMContext BEFORE any engine start) admits the model load
+   against the Governor's measured envelope using the SAME resident
+   plan the preflight authority computes (weights + KV + runtime
+   overhead); sustained pressure defers the load with the explainable
+   reason; an unmeasured Governor falls through to the preflight gate
+   exactly as before. The measured engine RSS now actually flows:
+   LlamaBackend.Metrics reads the engine process resident set through
+   the existing `resources.ProcRAM` authority (the same sampler family
+   the live monitor uses), feeding the Governor's engine facts. A new
+   `/api/perf` `engineMemory` block carries the serving engine's REAL
+   memory evidence with provenance labels — measured process RSS (from
+   the one monitor cadence), the model FILE size (explicitly never
+   "RAM used"), the runtime offload line, and unknown KV allocation
+   named as unknown (never a guessed figure). Coverage:
+   `internal/governor/inference_footprint_v186_test.go` (6),
+   `internal/runtime/governor_gate_v186_test.go` (6: wiring, unknown
+   fallbacks, healthy admission, sustained-pressure deferral).
+
+5. **P1 — Windows CPU telemetry through the EXISTING seam; native and
+   GPU-backend truth preserved.** The Governor's Windows CPU seam
+   (`governor.CPULoadPlatform`) now measures real load via kernel32
+   `GetSystemTimes` through the ONE shared priming/delta state machine
+   (`internal/governor/cpu_delta.go`): the first sample primes,
+   subsequent samples compute the real busy-fraction delta, failures
+   stay unknown (the cumulative-counter baseline is kept so the next
+   delta stays true), and the Linux seam is untouched — no second
+   sampler, no second cadence, the Governor's poll-path ownership
+   unchanged. Coverage: `internal/governor/cpu_delta_test.go` (5,
+   cross-platform, race-gated). The native C++ engine keeps Go as the
+   control plane with its capabilities explicit (CPU-only execution,
+   no GPU claim, no faked reasoning budgets — now stated in the
+   engineMemory surface); the Intel/GPU direction stays the PROVEN
+   llama.cpp Vulkan transaction (no SYCL/OpenVINO backend was added —
+   the repository can not yet provision, launch, test and verify one,
+   so none is claimed).
+
+Phase 1 surfaces are preserved unchanged: live streaming conflation
+queue, server conflation, the reasoning ladder, Show/Hide Thinking,
+zero-session Send, generation guards, pause/edit/resume, abort
+honesty, engine identity transaction, config atomicity, Governor
+ownership, reconnect/replay and the one-authority architecture
+(full llm/api/runtime/governor/accelerator suites + the race gates
+green; 213 frontend unit tests and the release-metadata gate green).
+
+---
+
 ## v1.8.5 — 2026-10-03 — Phase 1 of the staged engine program
 
 Focus: PHASE 1 — the core runtime / user-surface foundation of the staged

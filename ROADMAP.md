@@ -35,7 +35,53 @@ actually known, never from what a report asserted:
 
 ---
 
-## v1.8 — Adaptive Runtime Intelligence — **CURRENT RELEASE**
+## v1.8 — Adaptive Runtime Intelligence
+
+### v1.8.6 — Phase 2 of the staged engine program — **CURRENT RELEASE**
+
+v1.8.6 delivers Phase 2's execution-truth and resource-integration core
+(evidence in `changelog.md` §v1.8.6 and the suites listed there):
+
+* **Execution truth enforced end-to-end** — `GPU detected ≠ GPU available
+  ≠ GPU selected ≠ GPU executed ≠ GPU verified`: enumeration selects but
+  never verifies; verification requires the measured offload line or a
+  still-valid `accelerator.ExecutionReceipt` (identity-checked — stale
+  evidence can never verify a new engine); CPU stays verified by
+  definition. (D — `internal/accelerator` suites)
+* **The GPU transaction is authoritative, premature activation removed** —
+  AUTO serving launches enable offload only on proven execution
+  (per-boot offload line or valid persisted receipt); the bounded
+  candidate transaction keeps its proving path (real generation +
+  measured offload before commit; rollback truthful); manual GPU config
+  and CPU-forced mode respected; offload evidence is per-boot. (D —
+  `internal/llm` suites)
+* **`/api/engine` and `/api/perf` agree** — one accessor, one evidence
+  path, signature-validated memo (no stale poll-only snapshot can claim a
+  current backend; poll order cannot move the stage backwards). (D —
+  `internal/api` suites)
+* **Resource integration through the ONE Governor** — the inference
+  footprint (model file fact + planned KV) folds into the resource state
+  and envelope; the run gate consults the Governor's measured envelope
+  before any engine start; the engine process RSS is MEASURED and flows
+  into the Governor; `/api/perf` serves the engine's real memory evidence
+  with provenance (measured RSS / file facts / unknown KV named unknown).
+  (D — governor/runtime/api suites)
+* **Windows CPU telemetry through the existing seam** — GetSystemTimes
+  delta with priming, shared state machine, Linux untouched, no second
+  sampler. (D — `internal/governor/cpu_delta_test.go`)
+
+Remaining Phase 2 scope (NOT implemented, listed for the next pass):
+
+* The unified C++ execution path behind the ONE execution boundary
+  (native engine still CPU-only; its capabilities are now explicit on
+  every surface). (I)
+* Measured prefill/cache/TTFT performance work — measure first, no
+  speculative optimization. (I/H)
+* A second GPU backend (SYCL/OpenVINO) is justified ONLY when the
+  repository can provision, launch, test and verify it without a second
+  provisioning/selection system. (I)
+
+### v1.8.5 — Phase 1 of the staged engine program
 
 Primary objective: SHEYTAN continuously understands its machine and adapts
 runtime behavior while preserving host responsiveness.
@@ -86,7 +132,7 @@ one-time honest migration of the legacy derived state, and the engine
 update's deferred-commit window now reports and probes the byte-verified
 staged binary through a window-scoped identity marker.
 
-### v1.8.5 — Phase 1 of the staged engine program — **CURRENT RELEASE**
+### v1.8.5 — Phase 1 of the staged engine program
 
 v1.8.5 completes PHASE 1 — the core runtime / user-surface foundation —
 and leaves the deep execution-engine work explicitly to Phase 2:
@@ -152,11 +198,12 @@ pools. Clean seams were created only where v1.8 needed them.
 
 ---
 
-## PHASE 2 — Deep execution-engine / resource integration — **NEXT, NOT YET STARTED**
+## PHASE 2 — Deep execution-engine / resource integration — **IN PROGRESS (core delivered in v1.8.6)**
 
-Phase 1 (v1.8.5, above) built the runtime/user-surface foundation. Phase 2
-is the remaining DEEP execution work — the next engineering program, NOT
-implemented by being listed here. Its scope, in priority order:
+Phase 1 (v1.8.5, above) built the runtime/user-surface foundation; v1.8.6
+(the CURRENT RELEASE section above) delivered Phase 2's execution-truth /
+resource-integration core with deterministic evidence. The remaining
+scope below is NOT implemented by being listed here. Its priority order:
 
 ### Deep engine integration (HIGH)
 

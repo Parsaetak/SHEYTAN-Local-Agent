@@ -1,15 +1,89 @@
-# UPDATE.md — v1.8.5 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.8.6 Release Notes & Maintenance Behavior
 
-**Release:** `v1.8.5` (canonical application version; single version
+**Release:** `v1.8.6` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ ef2e15f` (`v1.8.4`) · **Date:** 2026-10-03
-**Package:** `SHEYTAN-Local-Agent-v1.8.5-PHASE1-FINAL.zip` (complete repository
+**Base:** `main @ c7f335d` (`v1.8.5`) · **Date:** 2026-10-05
+**Package:** `SHEYTAN-Local-Agent-v1.8.6-PHASE2-FINAL.zip` (complete repository
 tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior.
+
+## v1.8.6 changes (Phase 2: deep execution-engine / resource integration)
+
+1. **P0 — execution truth: enumeration is selection evidence, never
+   execution proof.** The ONE accelerator authority now enforces
+   `GPU detected ≠ GPU available ≠ GPU selected ≠ GPU executed ≠ GPU
+   verified` end-to-end: `--list-devices` enumeration selects GPU_VULKAN
+   with the pending-execution verification plan and the CPU safety net;
+   `ExecutionVerified` requires the measured runtime offload line or a
+   still-valid **ExecutionReceipt** (a new structured identity-carrying
+   object — engine tag, variant, device, model, status — whose
+   `ValidFor(engineTag, variant)` check rejects receipts from another
+   engine build, another variant or a failed bounded probe: stale
+   evidence can never falsely verify a new engine). CPU stays verified
+   by definition of execution.
+
+2. **P0 — the GPU transaction is authoritative; premature activation
+   removed.** A NORMAL serving launch enables `--n-gpu-layers 99` (AUTO)
+   ONLY on proven execution — the current boot's measured offload line or
+   a persisted verified GPU-probe receipt whose engine identity still
+   matches. Enumeration alone and Vulkan DLL presence keep AUTO CPU-safe.
+   The bounded candidate transaction may still boot Vulkan to PROVE it
+   (a strictly transaction-scoped proving mode inside
+   `updateEngineVariantTx`): commit still requires a real generation AND
+   the measured offload line, failure rolls back to the known-good
+   CPU/fallback with the truthful state — the v1.7.2 bounded
+   `gpu-probe.json` behavior is preserved exactly. Manual `numGpu`
+   configuration is respected verbatim; the CPU-forced profile is
+   enforced at the launcher too. The offload evidence is PER-BOOT now: a
+   restart or model swap re-proves (no inherited GPU claim).
+
+3. **P0 — `/api/engine` and `/api/perf` agree.** One accessor serves both
+   surfaces; the accelerator resolution memo records its input signature
+   (engine tag + variant + requested profile + loaded model + offload
+   evidence + probe state) and any stale memo is recomputed before a
+   consumer can read it. The engine surface no longer depends on the
+   performance page polling first; a background warm-up at server start
+   keeps the first poll off the one-time enumeration cost; the execution
+   stage cannot move backwards because a later UI poll happened — only
+   because the serving reality itself changed.
+
+4. **P0 — real resource integration through the ONE Governor.** The
+   Governor's resource state now folds the CURRENT inference workload
+   (model file bytes as a FILE fact + planned KV at the serving window,
+   from the existing model-card/context authorities); the envelope
+   accounts for a footprint that consumes the resident budget (background
+   work reduced through the existing honest adjustment class, reason
+   stated; RAM stays memory capacity, never an accelerator; unknown
+   stays unknown). A resource-aware run gate consults the Governor's
+   measured envelope BEFORE any engine start (EnsureLLM /
+   EnsureLLMContext): sustained pressure defers the model load with the
+   explainable reason; an unmeasured Governor falls through to the
+   existing preflight gate exactly as before. The engine process RSS is
+   now MEASURED (through the existing `resources.ProcRAM` authority) and
+   flows into the Governor's engine facts; a new `/api/perf`
+   `engineMemory` block serves the engine's real memory evidence with
+   provenance labels — measured process RSS, the model FILE size
+   (explicitly never "RAM used"), the runtime offload line, and the
+   KV-cache allocation named UNKNOWN where the engine exposes no
+   measured surface (never a guessed figure).
+
+5. **P1 — Windows CPU telemetry + preserved truth surfaces.** The
+   Governor's Windows CPU seam measures real load via kernel32
+   `GetSystemTimes` through the one shared priming/delta state machine
+   (first sample primes; deltas are real; failures stay unknown) — no
+   second sampler, no second cadence; the Linux seam is untouched. The
+   native C++ engine's capabilities stay explicit (CPU-only execution,
+   no GPU claim, no faked reasoning budgets); the GPU backend direction
+   remains the PROVEN llama.cpp Vulkan transaction (no SYCL/OpenVINO
+   backend is claimed — the repository cannot yet provision, launch,
+   test and verify one).
+
+6. **Version identity.** All release surfaces at 1.8.6 through the ONE
+   canonical gate (`node scripts/release-version.mjs --check`).
 
 ## v1.8.5 changes (Phase 1 of the staged engine program)
 

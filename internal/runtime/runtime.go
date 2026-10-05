@@ -1366,6 +1366,14 @@ func (s *Stack) EnsureLLM() error {
                 s.prewarmNative()
         }
 
+        // v1.8.6 RESOURCE-AWARE RUN GATE: the ONE policy authority (the
+        // Governor) decides whether the current envelope admits this
+        // model load/generation boot BEFORE the engine starts. Unknown
+        // Governor state falls through to the existing preflight gate.
+        if err := s.GovernorAdmitsModelLoad(); err != nil {
+                return err
+        }
+
         if err := s.Llama.Start(); err != nil {
                 return err
         }
@@ -1493,6 +1501,14 @@ func (s *Stack) EnsureLLMContext(ctx context.Context) error {
                                 )
                         }
                 }
+        }
+
+        // v1.8.6 RESOURCE-AWARE RUN GATE (the run path's own copy of the
+        // EnsureLLM gate — EnsureLLMContext does NOT delegate): the ONE
+        // policy authority decides BEFORE the bounded boot starts.
+        // Unknown Governor state falls through (preflight gate remains).
+        if err := s.GovernorAdmitsModelLoad(); err != nil {
+                return err
         }
 
         errCh := make(chan error, 1)

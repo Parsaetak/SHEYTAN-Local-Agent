@@ -281,36 +281,61 @@ proposes. The tools execute. The laboratory verifies."
 
 ## Next strategic direction
 
-`ROADMAP.md` owns it, now phased: v1.8.5 (CURRENT) completed PHASE 1 —
-the runtime/user-surface foundation (server-side streaming conflation,
-the reasoning-depth ladder with real budgets, Show/Hide Thinking,
-engine-as-supervised-machinery, the execution/evidence ladder).
-**PHASE 2 is next and NOT started: the deep execution-engine / resource
-integration** (unified C++ execution path behind the ladder, matured
-llama.cpp/ggml integration, coordinated CPU/GPU execution, real
-memory/KV accounting, evidence-driven backend selection, physical GPU
-execution proof through the existing identity transaction, measured
-performance foundations). PHASE 3+ (v1.9 AI System Builder, v1.10
-Universal Agent, v1.11 Learning & Evaluation, v1.12 Advanced Model
-Intelligence, v2.0 platform end state) stays FUTURE — NOT IMPLEMENTED,
-and must never be marked complete merely because it is documented.
+`ROADMAP.md` owns it, now phased: v1.8.6 (CURRENT) delivered PHASE 2's
+execution-truth / resource-integration core (the full
+`GPU detected ≠ … ≠ verified` invariant at the accelerator authority
+with the structured `ExecutionReceipt`; the authoritative GPU
+candidate transaction with premature launcher activation removed;
+`/api/engine` + `/api/perf` on one accessor; the Governor's inference
+footprint + measured engine RSS + the resource-aware run gate; Windows
+CPU telemetry through the existing seam). **The REMAINING Phase 2 work
+is next: the unified C++ execution path behind the ladder (native is
+CPU-only, capabilities explicit), measured prefill/cache/TTFT
+performance foundations (measure first), and a second GPU backend only
+when the repository can provision, launch, test and verify it without a
+second provisioning/selection system.** PHASE 3+ (v1.9 AI System
+Builder, v1.10 Universal Agent, v1.11 Learning & Evaluation, v1.12
+Advanced Model Intelligence, v2.0 platform end state) stays FUTURE —
+NOT IMPLEMENTED, and must never be marked complete merely because it is
+documented.
 
 ### Phase 2 entry notes (start here)
 
 * The execution contract to consume: `internal/llm/execution.go`
   (`ComposeExecutionReport` + the stage ladder) and its `/api/engine`
-  surface; selection decisions should key off the VERIFIED rung, never
-  detection posture.
+  surface; selection decisions key off the VERIFIED rung, never
+  detection posture. v1.8.6 NOTE: the accelerator's
+  `ExecutionVerified` now means exactly that — enumeration selects
+  (pending plan, CPU safety net) and the structured
+  `accelerator.ExecutionReceipt` (`ValidFor(engineTag, variant)`) is
+  the only persisted cross-boot verification evidence.
 * The engine identity transaction (stage → exact executable → probe →
   launch → health → generation → evidence → commit/rollback) is the
   existing authority for any GPU proof — never verify one binary and
-  serve another.
+  serve another. v1.8.6 NOTE: the transaction's candidate proving mode
+  (`gpuCandidateProving` inside `updateEngineVariantTx`) is the ONLY
+  launch context where enumeration may enable offload — the verify hook
+  still requires the measured offload line before commit; a normal
+  serving launch enables AUTO offload only on proven execution, and the
+  offload evidence is PER-BOOT (launchArgs resets it).
+* The launcher seam for the truth model: `LlamaServer.autoGPUOffload`
+  (serving = proven execution only; proving = selection evidence;
+  CPU-forced enforced; manual `numGpu` verbatim). The resolution memo
+  the engine surface consumes is signature-validated
+  (`currentAcceleratorResolution`) — extend the signature, never bypass
+  it.
 * Reasoning budgets are per-request on the llama.cpp path
   (`reasoning_budget_tokens`, both managed builds verified); the NATIVE
   engine has no budget control yet — wiring real native thinking budgets
-  is Phase 2 native-engine work, never a prompt-side fake.
-* The Governor stays the ONE policy authority; RAM stays memory capacity;
-  no second sampler, no second policy engine, no fake VRAM/offload
-  numbers; unknown measurements stay unknown.
+  is remaining Phase 2 native-engine work, never a prompt-side fake.
+* The Governor stays the ONE policy authority; RAM stays memory
+  capacity; no second sampler, no second policy engine, no fake
+  VRAM/offload numbers; unknown measurements stay unknown. v1.8.6
+  NOTE: the Governor folds the inference footprint
+  (`SetInferenceSource`) and the run gate consults
+  `GovernorAdmitsModelLoad` before every engine start — wire new
+  resource facts through those seams, never around them. The Windows
+  CPU seam is `governor/cpu_windows.go` over the shared
+  `cpu_delta.go` state machine.
 * The v1.8.5 conflation queue is verified — do not redesign it absent a
   measured regression.

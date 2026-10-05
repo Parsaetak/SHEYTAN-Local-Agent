@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.8.5
+Current release:  v1.8.6
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -85,11 +85,18 @@ The Governor (`internal/governor`) is fed by the EXISTING live-pressure
 monitor — one sampler, one cadence, one protection path. It computes:
 
 * **Resource state** — measurable current reality with explicit unknowns;
+  v1.8.6 folds the CURRENT inference workload's memory model too (model
+  file bytes as a FILE fact + planned KV at the serving window, from the
+  existing model-card/context authorities);
 * **Envelope** — what may be admitted and what should be reduced, with the
-  adjustment class that says how a recommendation can honestly be applied;
+  adjustment class that says how a recommendation can honestly be applied
+  (a footprint that consumes the resident budget reduces background work
+  through the existing honest adjustment class, with the reason stated);
 * **Admission** — heavyweight workloads and model loads are admitted
   against a resident budget (available RAM − host headroom − measured
-  process RSS); unknown facts refuse conservatively;
+  process RSS); unknown facts refuse conservatively; v1.8.6 the run gate
+  consults this envelope BEFORE any engine start (sustained pressure
+  defers the model load with the explainable reason);
 * **Self-model** — verified facts with provenance (measured at, sustained
   for, what is unknown), served through `/api/governor` and rendered in the
   System Centre.
@@ -194,21 +201,30 @@ read-model, not a configuration file.
 
 * The Governor is a POLICY authority: it computes envelopes, admission
   decisions and explanations. Enforcement lives in the existing subsystems
-  and is wired where control points exist; it is not yet a full closed-loop
-  actuator over every background subsystem.
-* CPU load is measured on Linux (normalized load average); on Windows the
-  live CPU seam reports unknown and CPU policy stays off until a live
-  Windows authority exists — never a fabricated utilization number.
+  and is wired where control points exist (v1.8.6: the run gate's model-load
+  admission); it is not yet a full closed-loop actuator over every
+  background subsystem.
+* CPU load is measured on Linux (normalized load average) and, since
+  v1.8.6, on Windows (the kernel32 GetSystemTimes delta through the one
+  shared priming/delta seam — first sample primes, deltas are real,
+  failures stay unknown); other platforms report unknown and CPU policy
+  stays off — never a fabricated utilization number.
 * GPU/NPU facts on all surfaces are DETECTION-level; execution evidence is
-  the engine's own device enumeration, verified at provisioning time. The
-  AUTO Vulkan path is repaired and deterministically tested, but no GPU
-  execution claim is made without that runtime evidence on real hardware.
-  v1.8.5 ships the shared execution/evidence ladder
-  (`detected → backend-available → device-selected → model-loaded →
-  generation-executed → execution-evidence → verified`) surfaced on
-  `/api/engine` — a monotone composition over the existing authorities
-  where device enumeration can never equal verified execution; the deep
-  physical-GPU execution proof itself remains Phase 2 work.
+  the measured runtime offload line or a still-valid execution receipt
+  from the committed bounded transaction. The v1.8.6 truth model enforces
+  `GPU detected ≠ GPU available ≠ GPU selected ≠ GPU executed ≠ GPU
+  verified` end-to-end: `--list-devices` enumeration SELECTS (provisioning
+  posture) but never VERIFIES; the launcher's AUTO offload activates only
+  on proven execution; a candidate transaction may boot Vulkan to prove
+  itself (real generation + measured offload line required before commit);
+  the offload evidence is per-boot (a restart re-proves). The
+  execution/evidence ladder (`detected → backend-available →
+  device-selected → model-loaded → generation-executed →
+  execution-evidence → verified`) is surfaced on `/api/engine` and agrees
+  with `/api/perf`'s accelerator block by construction (one authority, one
+  evidence path). Physical GPU execution is still only claimed when the
+  runtime evidence exists on real hardware — no GPU claim from a device
+  name, a DLL or a build success.
 * The reasoning-depth budgets are REAL request-level parameters on the
   llama.cpp serving backend, applied when the model's chat template
   exposes a thinking section — a non-thinking model simply ignores the

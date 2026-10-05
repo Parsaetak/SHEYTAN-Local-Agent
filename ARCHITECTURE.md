@@ -73,6 +73,54 @@ verified execution. Go stays the control plane; the C++/serving backend
 stays the execution plane; Phase 2's deep engine work consumes exactly
 this contract.
 
+**Execution truth enforced end-to-end (v1.8.6):** the ladder's inputs are
+now TRUTHFUL at the source. The ONE accelerator authority
+(`internal/accelerator`) enforces
+`GPU detected ≠ GPU available ≠ GPU selected ≠ GPU executed ≠ GPU
+verified`: `--list-devices` enumeration SELECTS GPU_VULKAN with the
+pending-execution verification plan and the CPU safety net; the
+`ExecutionVerified` verdict requires the measured runtime offload line or
+a still-valid `ExecutionReceipt` — a structured identity-carrying object
+(kind, line, engine tag, variant, device, model, status) whose
+`ValidFor(engineTag, variant)` check rejects stale receipts (another
+engine build, another variant, a failed bounded probe). The LAUNCHER
+(`LlamaServer.autoGPUOffload`) activates AUTO `--n-gpu-layers` only on
+PROVEN execution (the current boot's offload line, or a persisted
+verified GPU-probe receipt with a matching engine identity); enumeration
+and DLL presence keep AUTO CPU-safe. The bounded candidate transaction
+keeps a strictly transaction-scoped proving mode
+(`gpuCandidateProving` inside `updateEngineVariantTx`, deferred reset)
+where enumeration MAY enable offload to prove the candidate — commit
+still requires a real generation AND the measured offload line. The
+offload evidence is PER-BOOT (`launchArgs` resets it — a restart or model
+swap re-proves). `/api/engine` and `/api/perf` consume the ONE accessor
+(`currentAcceleratorResolution`): the resolution memo is validated
+against its input signature (engine tag + variant + profile + model +
+evidence + probe state) and recomputed when stale, so the engine surface
+never depends on the perf poll order and a stale poll-only snapshot can
+never claim a current backend.
+
+**Resource integration (v1.8.6):** the Governor's resource state folds
+the CURRENT inference workload (an injected footprint source on the
+Stack: model file bytes as a FILE fact + planned KV at the serving
+window, from the existing model-card/context authorities); the envelope
+accounts for a footprint that consumes the resident budget (background
+reduced through the existing honest adjustment class, reason stated);
+the run gate (`Stack.GovernorAdmitsModelLoad`, consulted by EnsureLLM
+and EnsureLLMContext before any engine start) admits model loads against
+the Governor's measured envelope using the same resident plan preflight
+computes — sustained pressure defers with the explainable reason, an
+unmeasured Governor falls through to the preflight gate. The engine
+process RSS is MEASURED (`LlamaBackend.Metrics` via `resources.ProcRAM`)
+and flows into the Governor's engine facts; `/api/perf`'s `engineMemory`
+block serves the engine's memory evidence with provenance labels
+(measured RSS / model FILE size never "RAM used" / offload line / KV
+named unknown where no measured surface exists). The Windows CPU seam
+(`governor/cpu_windows.go`) measures real load via kernel32
+`GetSystemTimes` over the ONE shared priming/delta state machine
+(`governor/cpu_delta.go`) — no second sampler, no second cadence; Linux
+stays on `/proc/loadavg`.
+
 **Reasoning-depth budgets (v1.8.5):** the composer's four-level control
 (low/mid/high/ultra) carries a numeric thinking-token budget onto every
 generation request (`llm.ChatRequest.ReasoningBudget` → the llama.cpp
