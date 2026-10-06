@@ -1,15 +1,70 @@
-# UPDATE.md — v1.8.6 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.8.7 Release Notes & Maintenance Behavior
 
-**Release:** `v1.8.6` (canonical application version; single version
+**Release:** `v1.8.7` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ c7f335d` (`v1.8.5`) · **Date:** 2026-10-05
-**Package:** `SHEYTAN-Local-Agent-v1.8.6-PHASE2-FINAL.zip` (complete repository
-tree)
+**Base:** `main @ 47cbbee` (`v1.8.6`) · **Date:** 2026-10-05
+**Package:** `SHEYTAN-Local-Agent-v1.8.7-FINAL.zip` (complete repository tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior.
+
+## v1.8.7 changes (deterministic discovery + data-analysis authority)
+
+1. **Deterministic Tier-2 discovery (Windows CI root cause repaired).**
+   The v1.8.6 frontier sealed the scan on first ARRIVAL of the
+   `MaxCandidates`-th candidate, so with parallel workers a deeper
+   worker could report before a shallower one and win. v1.8.7 adds a
+   deterministic retention barrier: workers only ever receive jobs of
+   the current priority level (parallelism within the level), candidates
+   are retained in (level, path) order at each level drain, and the scan
+   seals only at the drain of the level that satisfied the cap. The
+   winning candidate is a pure function of the dataset — proven across
+   worker counts 1–16 with repeated executions.
+
+2. **Repeated-scan cache inversion removed.** Cache-parent seeds no
+   longer pre-mark directories at class 1 before the user tree is
+   scanned (which demoted naturally-higher-priority discoveries on
+   repeated scans); they are deferred until the barrier reaches the
+   class-1 band, and the persisted cache is written in deterministic
+   (tier, path) order.
+
+3. **Avoidable scan work reduced.** `noiseDirs` now skips
+   language-toolchain caches (`hostedtoolcache`, `.cargo`, `.rustup`,
+   `.go`, `.nuget`, `.dotnet`, …) and per-run temp churn (`temp`,
+   `tmp`) — the trees that drove the 126 s Windows package runtime.
+   Real engine hosts stay scanned.
+
+4. **dataAnalysis is the deterministic data-analysis authority.** New
+   actions `analyze` (one-call compact analysis with configurable
+   sections and key findings), `aggregate` (multi-aggregation,
+   multi-group), `join` (inner/left/right/full, explicit keys, 2 M-row
+   cap), `quality` (compact diagnostics) and `export` (CSV/TSV/JSON
+   artifacts) — all in-process pure Go, all deterministic, all with
+   compact/table/json output modes and provenance metadata
+   (backend/bytes/rows/cols). The model receives compact results and
+   artifact paths instead of raw datasets.
+
+5. **JSON column order is deterministic.** `loadJSON` now decodes
+   objects in document key order (the previous map-iteration order was
+   randomized between loads).
+
+6. **Data-tool test surface established** — loading, inference, all new
+   actions, output modes, limits, materialization, cancellation,
+   malformed inputs, path restrictions, the 256 MB bound, byte-for-byte
+   determinism, orchestrator registration and toolset selection.
+
+**Backend and platform limitations (stated, not hidden):** the
+data-analysis engine is the in-process pure-Go fast path. DuckDB (cgo,
+statically linked) was evaluated and rejected — it would add a C
+toolchain requirement and tens of megabytes to every packaged target
+for no workload the 256 MB bound does not already cover. SQL and
+Parquet are therefore not offered; `query`, `aggregate` and `join`
+are the relational surface. Datasets past 256 MB are rejected with
+guidance (no streaming claim). Charts stay deterministic server-side
+SVG under the existing chart/workspace authority. The native C++ GPU
+work remains open and is NOT marked complete.
 
 ## v1.8.6 changes (Phase 2: deep execution-engine / resource integration)
 

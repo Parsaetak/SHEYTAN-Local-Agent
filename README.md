@@ -13,7 +13,7 @@ Licensed under a **conservative mixed model** — Apache-2.0 for explicitly desi
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
-Current release:  v1.8.6
+Current release:  v1.8.7
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   Parsaetak.SHEYTAN-LA
 Branch:           main
@@ -39,6 +39,21 @@ frontend is a React/TypeScript surface embedded into the binary. A Runtime
 Governor folds the existing live-pressure telemetry into a policy
 authority — it owns policy only; every action stays with its existing
 subsystem. Full truth: `ARCHITECTURE.md`.
+
+### Deterministic data analysis (v1.8.7)
+
+The one `dataAnalysis` tool is the application's data authority: CSV/
+TSV/JSON load with type inference and a parse-once numeric cache, then
+deterministic in-process analysis — `analyze` (one compact call: schema,
+missingness, statistics, top categories, correlations, outliers, key
+findings), `aggregate` (multi-aggregation over multiple grouping
+columns), `join` (inner/left/right/full with explicit keys), `quality`
+(diagnostics) and `export` (CSV/TSV/JSON artifacts). Results are compact
+and model-oriented — key findings plus artifact paths, never raw-row
+dumps — and every result is byte-for-byte deterministic for the same
+dataset. Backend: pure Go, in-process, honest 256 MB input bound; no
+external engine, no SQL surface (see `ARCHITECTURE.md` §5 and
+`changelog.md` §v1.8.7 for the evaluated-and-rejected DuckDB path).
 
 ## The live generation surface
 

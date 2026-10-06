@@ -281,7 +281,7 @@ proposes. The tools execute. The laboratory verifies."
 
 ## Next strategic direction
 
-`ROADMAP.md` owns it, now phased: v1.8.6 (CURRENT) delivered PHASE 2's
+`ROADMAP.md` owns it, now phased: v1.8.7 (CURRENT) made Tier-2 engine discovery deterministic under parallel workers and upgraded the one dataAnalysis tool into the deterministic data-analysis authority (analyze/aggregate/join/quality/export, compact outputs, provenance); v1.8.6 delivered PHASE 2's
 execution-truth / resource-integration core (the full
 `GPU detected ≠ … ≠ verified` invariant at the accelerator authority
 with the structured `ExecutionReceipt`; the authoritative GPU

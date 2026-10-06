@@ -304,6 +304,25 @@ one scheduler; research as ONE service behind the research tool; the coding
 lab with isolated workspaces, repair and verifier loops; repository
 indexing with hybrid search.
 
+The data authority is the ONE `dataAnalysis` tool (v1.8.7): CSV/TSV/JSON
+loading with type inference (JSON column order = document key order,
+deterministic), a byte-budgeted LRU dataset cache and parse-once numeric
+columns, and the deterministic actions `analyze` / `aggregate` / `join` /
+`quality` / `export` on top of the existing profile/stats/correlation/
+filter/sort/query/histogram family. Every analysis result is a pure
+function of the dataset (groups key-sorted, joins file-order, findings in
+column order) and carries provenance metadata (backend, bytes, rows,
+cols). The backend is the in-process pure-Go engine with an honest
+256 MB input bound; DuckDB (cgo, static) was evaluated and rejected for
+packaging/CI complexity, so there is no SQL/Parquet surface and no
+streaming claim — large work goes through filter/aggregate first.
+Tier-2 engine discovery (`internal/engdiscovery`) is likewise
+deterministic since v1.8.7: a priority/level barrier retains candidates
+in (level, path) order and seals the scan at level drain, so the winner
+never depends on worker completion order; cache-parent seeds are
+deferred until the class-1 band so repeated scans keep the priority
+contract.
+
 ## 6. Evidence model
 
 Evidence classes, always named: deterministic unit · race gate ·

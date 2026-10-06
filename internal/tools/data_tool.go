@@ -1,17 +1,29 @@
 // Package tools — DataTool: the agent-facing data-analysis tool.
 //
-//	{"action":"profile",    "path":"sales.csv"}
-//	{"action":"stats",      "path":"sales.csv"}
-//	{"action":"correlation","path":"sales.csv"}
-//	{"action":"groupby",    "path":"sales.csv","by":"region","column":"revenue","agg":"sum"}
-//	{"action":"filter",     "path":"sales.csv","column":"revenue","op":">","value":"1000"}
-//	{"action":"sort",       "path":"sales.csv","column":"revenue","desc":true,"limit":10}
-//	{"action":"query",      "path":"sales.csv","columns":["region","revenue"],"column":"revenue","op":">","value":"0","limit":20}
-//	{"action":"histogram",  "path":"sales.csv","column":"revenue","bins":12}
-//	{"action":"convert",    "path":"sales.csv","format":"json"}
-//	{"action":"chart",      "path":"sales.csv","chart":"bar","labelCol":"region","valueCol":"revenue","name":"revenue-by-region"}
-//	{"action":"chart",      "path":"sales.csv","chart":"scatter","column":"price","column2":"sales"}
-//	{"action":"missing",    "path":"sales.csv"}
+//		{"action":"analyze",   "path":"sales.csv"}                 — ONE compact call: schema+missing+stats+top values+outliers+findings
+//		{"action":"aggregate", "path":..,"by":"region","aggs":["count","sum:revenue","mean:revenue"]}
+//		{"action":"join",      "path":"orders.csv","path2":"customers.csv","key":"customer_id","how":"left"}
+//		{"action":"quality",   "path":"sales.csv"}                 — missing/duplicate/constant/invalid/mixed/high-cardinality report
+//		{"action":"export",    "path":..,"format":"csv","columns":["a","b"],"limit":5000,"name":"result"}
+//
+//	     {"action":"analyze",   "path":"sales.csv"}                 — ONE compact call: schema+missing+stats+top values+outliers+findings
+//	     {"action":"aggregate", "path":..,"by":"region","aggs":["count","sum:revenue","mean:revenue"]}
+//	     {"action":"aggregate", "path":..,"byList":["region","product"],"aggs":["sum"],"columns":["revenue","units"]}
+//	     {"action":"join",      "path":"orders.csv","path2":"customers.csv","key":"customer_id","how":"left"}
+//	     {"action":"quality",   "path":"sales.csv"}                 — missing/duplicate/constant/invalid/mixed/high-cardinality report
+//	     {"action":"export",    "path":..,"format":"csv","columns":["a","b"],"column":"x","op":">","value":"0","limit":5000,"name":"result"}
+//	     {"action":"profile",    "path":"sales.csv"}
+//	     {"action":"stats",      "path":"sales.csv"}
+//	     {"action":"correlation","path":"sales.csv"}
+//	     {"action":"groupby",    "path":"sales.csv","by":"region","column":"revenue","agg":"sum"}
+//	     {"action":"filter",     "path":"sales.csv","column":"revenue","op":">","value":"1000"}
+//	     {"action":"sort",       "path":"sales.csv","column":"revenue","desc":true,"limit":10}
+//	     {"action":"query",      "path":"sales.csv","columns":["region","revenue"],"column":"revenue","op":">","value":"0","limit":20}
+//	     {"action":"histogram",  "path":"sales.csv","column":"revenue","bins":12}
+//	     {"action":"convert",    "path":"sales.csv","format":"json"}
+//	     {"action":"chart",      "path":"sales.csv","chart":"bar","labelCol":"region","valueCol":"revenue","name":"revenue-by-region"}
+//	     {"action":"chart",      "path":"sales.csv","chart":"scatter","column":"price","column2":"sales"}
+//	     {"action":"missing",    "path":"sales.csv"}
 package tools
 
 import (
@@ -41,16 +53,27 @@ func NewDataTool(cfg *config.Config) *DataTool { return &DataTool{cfg: cfg} }
 func (t *DataTool) Name() string { return "dataAnalysis" }
 
 func (t *DataTool) Description() string {
-	return `Analyze datasets (CSV/TSV/JSON) and render charts. No Python needed — everything runs in-process.
+	return `Analyze datasets (CSV/TSV/JSON) deterministically in-process. Prefer ONE analyze/aggregate call over many small ones — results are compact and model-oriented, never raw-row dumps.
 Actions (flat JSON, one per call):
+  analyze      {"path":"sales.csv"}                            — ONE call: schema, missing, numeric stats, top categories, outliers, key findings
+               {"path":..,"sections":"schema,stats,correlations,groupby","by":"region","column":"revenue","agg":"sum"}
+               sections: schema|missing|stats|categorical|correlations|outliers|groupby|sample|findings|all
+  aggregate    {"path":..,"by":"region","aggs":["count","sum:revenue","mean:revenue","min:revenue","max:revenue","median:revenue","std:revenue","quantile:revenue"],"q":0.9}
+               {"path":..,"byList":["region","product"],"aggs":["sum","mean"],"columns":["revenue","units"]}
+               — many aggregations + many grouping columns in ONE call; groups sorted by key
+  join         {"path":"orders.csv","path2":"customers.csv","key":"customer_id","key2":"id","how":"inner|left|right|full"}
+               {"path":..,"path2":..,"leftKeys":["a","b"],"rightKeys":["x","y"]} — composite keys; add "format":"csv","name":"joined" to materialize
+  quality      {"path":"sales.csv"}                            — missing, duplicate rows, constant columns, invalid numerics, mixed types, high cardinality, outliers
+  export       {"path":..,"format":"csv|tsv|json","name":"result"}  — materialize rows as a file artifact (model gets the path, not the rows)
+               {"path":..,"format":"csv","columns":["a","b"],"column":"x","op":">","value":"0","desc":true,"limit":5000}
   profile      {"path":"sales.csv"}                            — shape, column types, missing counts, first rows
   stats        {"path":"sales.csv"}                            — count/mean/std/min/q1/median/q3/max/sum per numeric column
   correlation  {"path":"sales.csv"}                            — Pearson correlation matrix of numeric columns
   groupby      {"path":..,"by":"region","column":"revenue","agg":"sum"}   — aggregate (count|sum|mean|min|max)
   filter       {"path":..,"column":"revenue","op":">","value":"1000"}     — rows where condition holds
-               ops: = != > < >= <= contains startswith endswith in
+               ops: = != > < >= <= contains startswith endswith in empty
   sort         {"path":..,"column":"revenue","desc":true,"limit":10}      — order rows by a column
-  query        {"path":..,"columns":["a","b"],"column":..,"op":..,"value":..,"desc":true,"limit":20}
+  query        {"path":..,"columns":["region","revenue"],"column":"revenue","op":">","value":"0","desc":true,"limit":20}
                                                               — combined select+filter+sort (report generator)
   histogram    {"path":..,"column":"revenue","bins":12}       — value distribution
   missing      {"path":..}                                    — per-column missing-value report
@@ -64,54 +87,78 @@ Actions (flat JSON, one per call):
   convert      {"path":"sales.csv","format":"json"}           — csv↔json↔tsv conversion (writes next to source)
   chart        {"path":..,"chart":"bar|line|pie","labelCol":"region","valueCol":"revenue","name":"rev"}
                {"path":..,"chart":"scatter","column":"price","column2":"units"}   — scatter uses two numeric columns
-                                                              — renders a fire-themed SVG into <app>/charts/ and returns the path
-Tips: relative paths resolve against the app folder (same as the files tool).
-Chain: files write CSV → profile → stats → regression → outliers → chart → tell the user the chart path.
-Numeric columns are parsed once and cached — chained analysis on the same file is fast.
-Chart files land in the charts/ folder of the app and can be opened from the GUI Data view.`
+                                                              — renders an SVG into <app>/charts/ and returns the path
+Output modes (analyze/aggregate/join/quality/export): "mode":"compact" (default) | "table" | "json". Compact reports end with key findings; large results return row counts + artifact paths instead of raw rows.
+Tips: relative paths resolve against the app folder (same as the files tool). Every result is deterministic — same dataset + same action = same result.
+Chain: files write CSV → analyze → aggregate/join → export or chart → tell the user the artifact path.
+Datasets load up to 256 MB in-process (pure Go, no external engine); numeric columns are parsed once and cached.`
 }
 
 func (t *DataTool) Parameters() any {
 	return struct {
-		Action   string   `json:"action"`
-		Path     string   `json:"path"`
-		Column   string   `json:"column,omitempty"`
-		Column2  string   `json:"column2,omitempty"`
-		Columns  []string `json:"columns,omitempty"`
-		By       string   `json:"by,omitempty"`
-		Agg      string   `json:"agg,omitempty"`
-		Op       string   `json:"op,omitempty"`
-		Value    string   `json:"value,omitempty"`
-		Bins     int      `json:"bins,omitempty"`
-		Chart    string   `json:"chart,omitempty"`
-		LabelCol string   `json:"labelCol,omitempty"`
-		ValueCol string   `json:"valueCol,omitempty"`
-		Name     string   `json:"name,omitempty"`
-		Format   string   `json:"format,omitempty"`
-		Limit    int      `json:"limit,omitempty"`
-		Desc     bool     `json:"desc,omitempty"`
+		Action    string   `json:"action"`
+		Path      string   `json:"path"`
+		Column    string   `json:"column,omitempty"`
+		Column2   string   `json:"column2,omitempty"`
+		Columns   []string `json:"columns,omitempty"`
+		By        string   `json:"by,omitempty"`
+		Agg       string   `json:"agg,omitempty"`
+		Op        string   `json:"op,omitempty"`
+		Value     string   `json:"value,omitempty"`
+		Bins      int      `json:"bins,omitempty"`
+		Chart     string   `json:"chart,omitempty"`
+		LabelCol  string   `json:"labelCol,omitempty"`
+		ValueCol  string   `json:"valueCol,omitempty"`
+		Name      string   `json:"name,omitempty"`
+		Format    string   `json:"format,omitempty"`
+		Mode      string   `json:"mode,omitempty"`
+		Sections  string   `json:"sections,omitempty"`
+		Path2     string   `json:"path2,omitempty"`
+		How       string   `json:"how,omitempty"`
+		Key       string   `json:"key,omitempty"`
+		Key2      string   `json:"key2,omitempty"`
+		LeftKeys  []string `json:"leftKeys,omitempty"`
+		RightKeys []string `json:"rightKeys,omitempty"`
+		ByList    []string `json:"byList,omitempty"`
+		Aggs      []string `json:"aggs,omitempty"`
+		Q         float64  `json:"q,omitempty"`
+
+		Limit int  `json:"limit,omitempty"`
+		Desc  bool `json:"desc,omitempty"`
 	}{}
 }
 
 // dataParams mirrors Parameters() with json.RawMessage-friendly fields.
 type dataParams struct {
-	Action   string   `json:"action"`
-	Path     string   `json:"path"`
-	Column   string   `json:"column"`
-	Column2  string   `json:"column2"`
-	Columns  []string `json:"columns"`
-	By       string   `json:"by"`
-	Agg      string   `json:"agg"`
-	Op       string   `json:"op"`
-	Value    string   `json:"value"`
-	Bins     int      `json:"bins"`
-	Chart    string   `json:"chart"`
-	LabelCol string   `json:"labelCol"`
-	ValueCol string   `json:"valueCol"`
-	Name     string   `json:"name"`
-	Format   string   `json:"format"`
-	Limit    int      `json:"limit"`
-	Desc     bool     `json:"desc"`
+	Action    string   `json:"action"`
+	Path      string   `json:"path"`
+	Column    string   `json:"column"`
+	Column2   string   `json:"column2"`
+	Columns   []string `json:"columns"`
+	By        string   `json:"by"`
+	Agg       string   `json:"agg"`
+	Op        string   `json:"op"`
+	Value     string   `json:"value"`
+	Bins      int      `json:"bins"`
+	Chart     string   `json:"chart"`
+	LabelCol  string   `json:"labelCol"`
+	ValueCol  string   `json:"valueCol"`
+	Name      string   `json:"name"`
+	Format    string   `json:"format"`
+	Mode      string   `json:"mode"`
+	Sections  string   `json:"sections"`
+	Path2     string   `json:"path2"`
+	How       string   `json:"how"`
+	Key       string   `json:"key"`
+	Key2      string   `json:"key2"`
+	LeftKeys  []string `json:"leftKeys"`
+	RightKeys []string `json:"rightKeys"`
+	ByList    []string `json:"byList"`
+	Aggs      []string `json:"aggs"`
+	Q         float64  `json:"q"`
+
+	Limit int  `json:"limit"`
+	Desc  bool `json:"desc"`
 }
 
 func (t *DataTool) Run(ctx context.Context, args json.RawMessage) (string, error) {
@@ -120,13 +167,23 @@ func (t *DataTool) Run(ctx context.Context, args json.RawMessage) (string, error
 		return "", fmt.Errorf("bad args: %w — expected a FLAT object like {\"action\":\"profile\",\"path\":\"sales.csv\"}", err)
 	}
 	if p.Action == "" {
-		return "", fmt.Errorf("action is required (profile|stats|correlation|groupby|filter|sort|query|histogram|missing|regression|valueCounts|pivot|dedupe|sample|outliers|movingavg|convert|chart)")
+		return "", fmt.Errorf("action is required (analyze|aggregate|join|quality|export|profile|stats|correlation|groupby|filter|sort|query|histogram|missing|regression|valueCounts|pivot|dedupe|sample|outliers|movingavg|convert|chart)")
 	}
 	if p.Action != "chart" && p.Path == "" {
 		return "", fmt.Errorf("path is required (CSV/TSV/JSON dataset; relative paths resolve against the app folder)")
 	}
 
 	switch strings.ToLower(p.Action) {
+	case "analyze":
+		return t.actionAnalyze(ctx, &p)
+	case "aggregate":
+		return t.actionAggregate(ctx, &p)
+	case "join":
+		return t.actionJoin(ctx, &p)
+	case "quality":
+		return t.actionQuality(ctx, &p)
+	case "export":
+		return t.actionExport(ctx, &p)
 	case "profile":
 		return t.actionProfile(&p)
 	case "stats", "describe":
@@ -170,7 +227,7 @@ func (t *DataTool) Run(ctx context.Context, args json.RawMessage) (string, error
 	case "chart", "plot":
 		return t.actionChart(&p)
 	default:
-		return "", fmt.Errorf("unknown action %q (profile|stats|correlation|groupby|filter|sort|query|histogram|missing|regression|valueCounts|pivot|dedupe|sample|outliers|movingavg|convert|chart)", p.Action)
+		return "", fmt.Errorf("unknown action %q (analyze|aggregate|join|quality|export|profile|stats|correlation|groupby|filter|sort|query|histogram|missing|regression|valueCounts|pivot|dedupe|sample|outliers|movingavg|convert|chart)", p.Action)
 	}
 }
 

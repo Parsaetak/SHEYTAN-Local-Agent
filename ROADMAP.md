@@ -37,7 +37,31 @@ actually known, never from what a report asserted:
 
 ## v1.8 — Adaptive Runtime Intelligence
 
-### v1.8.6 — Phase 2 of the staged engine program — **CURRENT RELEASE**
+### v1.8.7 — deterministic discovery + data-analysis authority — **CURRENT RELEASE**
+
+v1.8.7 repairs the v1.8.6 Windows CI failure at its root and upgrades
+the one `dataAnalysis` tool into the deterministic data-analysis
+authority (evidence in `changelog.md` §v1.8.7 and the suites listed
+there):
+
+* **Deterministic Tier-2 discovery** — a priority/level barrier retains
+  candidates in (level, path) order and seals the scan at level drain;
+  the winning candidate is a pure function of the dataset for any
+  worker count (D — `internal/engdiscovery/discovery_barrier_test.go`).
+* **Repeated-scan cache inversion removed** — deferred cache-parent
+  seeds + deterministic cache persistence (D — same suite).
+* **Avoidable scan work reduced** — toolchain-cache/temp noise dirs,
+  no post-cap child enqueues (D — existing suites, honest measurement).
+* **Data-analysis authority** — `analyze` / `aggregate` / `join` /
+  `quality` / `export`, compact/table/json output modes, provenance
+  metadata, deterministic JSON column order, orchestrator + toolset
+  integration coverage (D — `internal/tools`, `internal/agent`,
+  `internal/toolsets` suites).
+* **Backend honesty** — pure-Go engine kept after the DuckDB
+  evaluation; no SQL/Parquet surface; 256 MB bound stated, not
+  hidden (D — documented in `ARCHITECTURE.md` §5 / `changelog.md`).
+
+### v1.8.6 — Phase 2 of the staged engine program
 
 v1.8.6 delivers Phase 2's execution-truth and resource-integration core
 (evidence in `changelog.md` §v1.8.6 and the suites listed there):

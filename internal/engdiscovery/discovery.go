@@ -22,9 +22,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -338,11 +340,38 @@ func DefaultScanOptions() ScanOptions {
 // noiseDirs are skipped wholesale during Tier 2 scans: OS internals,
 // package-manager noise and VCS dirs that can never contain a user's
 // engine install (bounded scan, no wasted IO).
+//
+// v1.8.7 — the list now also covers language-toolchain caches and
+// per-run temp churn (Actions run 37273354268 reported a 126 s
+// package runtime driven by deep, high-latency walks of exactly these
+// trees — .rustup/.cargo/.go/.nuget/.dotnet on the runners, the
+// hostedtoolcache roots, and %TEMP%). None of these locations is a
+// plausible user engine install (deliberately NOT skipped: .local,
+// bin, scoop shims, .ollama — all real engine hosts); skipping them
+// removes avoidable IO on every platform without weakening discovery.
 var noiseDirs = map[string]bool{
+	// OS internals / system reserved.
 	"$recycle.bin": true, "windows": true, "winsxs": true, "system volume information": true,
-	"node_modules": true, ".git": true, ".hg": true, ".svn": true,
+	"$windows.~bt": true, "$windows.~ws": true, "perflogs": true,
 	"proc": true, "sys": true, "dev": true, "run": true,
-	"vendor": true, "cache": true, "temporary items": true, "vmware": true,
+	"temporary items": true, "vmware": true,
+
+	// VCS / dependency trees.
+	"node_modules": true, ".git": true, ".hg": true, ".svn": true,
+	"vendor": true, "cache": true, ".cache": true,
+
+	// Per-run temp churn — never a stable engine install location.
+	"temp": true, "tmp": true,
+
+	// Language toolchain / package-manager caches (Tier 1 covers PATH,
+	// so tools actually installed for use remain discoverable).
+	".cargo": true, ".rustup": true, ".go": true, ".npm": true,
+	".nuget": true, ".dotnet": true, ".gradle": true, ".m2": true,
+	".android": true, ".bun": true, ".deno": true, ".pnpm-store": true,
+	".pyenv": true, ".rbenv": true, "__pycache__": true,
+	".vscode": true, ".vscode-server": true, ".kube": true,
+	".docker": true, ".vagrant.d": true, ".terraform": true,
+	"hostedtoolcache": true,
 }
 
 // FullScan enumerates available volumes and scans them with a bounded
@@ -381,6 +410,36 @@ var noiseDirs = map[string]bool{
 // skipping, candidate deduplication, static inspection, architecture
 // validation, bounded executable validation, cache integration and
 // symlink/reparse-point safety all keep their previous semantics.
+//
+// v1.8.7 — DETERMINISTIC RETENTION BARRIER (the v1.8.6 Windows CI
+// failure, Actions run 37273354268). The frontier ordered QUEUED
+// directories correctly, but multiple workers executed jobs
+// concurrently and emit() sealed the whole scan on first arrival of
+// the MaxCandidates-th candidate. Candidate discovery order was
+// therefore race-dependent: an already-running deeper worker could
+// report before a shallower worker and seal the scan, violating the
+// documented contract that shallower discovery outranks deeper work
+// regardless of worker completion order. The repair keeps parallelism
+// WITHIN one discovery priority level and adds a deterministic
+// priority barrier before a candidate can cause scan termination:
+//
+//	level barrier — a worker is only ever handed a job of the
+//	current (lowest outstanding) priority value; deeper levels are
+//	not started while the current level has queued or active work;
+//
+//	level-drain retention — candidates are buffered per level and
+//	retained in (level, path) order when the level fully drains, so
+//	the retained set is a pure function of the scanned dataset;
+//
+//	sealed-at-level — MaxCandidates seals the scan at the drain of
+//	the level that satisfied it: every higher-priority level has
+//	been exhausted and every same-level peer has been visited, so a
+//	deeper or faster worker can never preempt a better candidate.
+//
+// Proof obligation (pinned by the regression suite): parallel scan +
+// same dataset + repeated executions → same winning candidate, for
+// any worker count and any interleaving. No sleeps, no timing
+// assumptions, Workers never reduced to 1.
 func FullScan(ctx context.Context, cfg *config.Config, engineName string, opts ScanOptions) []Candidate {
 	if opts.Workers <= 0 {
 		opts.Workers = 4
@@ -405,7 +464,7 @@ func FullScan(ctx context.Context, cfg *config.Config, engineName string, opts S
 	scanCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
-	f := newScanFrontier()
+	f := newScanFrontier(opts.MaxCandidates)
 
 	// Seed the frontier in mission priority order: (1) the user's own
 	// tree, (2) per-user application roots, (5) previously observed
@@ -416,44 +475,31 @@ func FullScan(ctx context.Context, cfg *config.Config, engineName string, opts S
 	for _, root := range roots {
 		f.seed(root, scanRootClass(root))
 	}
+	// Cache-parent seeds are DEFERRED, not enqueued here: materializing
+	// them up front pre-marked their directories as visited and demoted
+	// any location inside the user tree to the seed's class-1 priority —
+	// so a repeated scan could rank a previously-cached deep directory
+	// above a fresh shallow one. The barrier flushes the deferred seeds
+	// only when it enters the class-1 band (all class-0 work drained),
+	// preserving the v1.4.0 intent (cached locations rank ahead of
+	// broad volume recursion) without the priority inversion.
 	for _, cached := range LoadCache(cfg) {
-		f.seed(filepath.Dir(cached.Path), 1)
+		f.deferSeed(filepath.Dir(cached.Path))
 	}
 
-	// Candidate sink: dedupe by path, cap at MaxCandidates, seal the
-	// frontier when the cap is reached. The frontier's own mutex guards
-	// the found slice — one lock domain for all scan state (v1.5.0 race
-	// audit: every shared read/write stays under this mutex).
-	var found []Candidate
-
-	emit := func(cand Candidate) bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-
-		if f.stopped {
-			return false
-		}
-
-		// Dedupe by path.
-		for _, prev := range found {
-			if filepath.Clean(prev.Path) == filepath.Clean(cand.Path) {
-				return true
-			}
-		}
-
-		found = append(found, cand)
-
-		if len(found) >= opts.MaxCandidates {
-			f.stopped = true
-			f.cond.Broadcast()
-			return false
-		}
-
-		return true
-	}
+	// Candidate sink (v1.8.7): the frontier itself dedupes by path,
+	// buffers per-level candidates and retains them in (level, path)
+	// order at each level drain. The scan seals only at the drain of
+	// the level that satisfied MaxCandidates — never on first
+	// arrival — so candidate selection is a deterministic function of
+	// the dataset, not of worker completion order. One lock domain
+	// for all scan state (v1.5.0 race audit preserved: every shared
+	// read/write stays under the frontier mutex).
 
 	// Bounded worker pool: at most opts.Workers goroutines ever exist,
-	// each pulling the next-highest-priority directory from the frontier.
+	// each pulling the next-highest-priority directory from the
+	// frontier. Parallelism stays within one priority level; the
+	// barrier in next() advances the level only after its full drain.
 	var wg sync.WaitGroup
 
 	for i := 0; i < opts.Workers; i++ {
@@ -472,7 +518,7 @@ func FullScan(ctx context.Context, cfg *config.Config, engineName string, opts S
 					return
 				}
 
-				f.visit(scanCtx, job, name, opts, emit)
+				f.visit(scanCtx, job, name, opts, f.emit)
 				f.release()
 			}
 		}()
@@ -495,6 +541,8 @@ func FullScan(ctx context.Context, cfg *config.Config, engineName string, opts S
 
 	wg.Wait()
 	close(finished)
+
+	found := f.result()
 
 	// Validate the most promising candidates now (bounded: each is a
 	// static check + one bounded probe).
@@ -679,6 +727,15 @@ func (h *dirHeap) Pop() any {
 // more work). All state lives under one mutex; no production path ever
 // sleeps — waiting is condition-variable based, so shutdown is
 // immediate at budget expiry, at MaxCandidates, or at full drain.
+//
+// v1.8.7 deterministic retention barrier: workers are only ever handed
+// jobs of currentLevel — the lowest outstanding priority value. A level
+// advances only after its full drain (queue empty AND no active job),
+// so a deeper job can never run while shallower work is queued or in
+// flight. Candidates are buffered per level (pending) and retained in
+// (level, path) order (retained) at the level drain; the scan seals at
+// the drain of the level that satisfied maxCandidates. Retention is
+// therefore a pure function of the scanned dataset.
 type scanFrontier struct {
 	mu      sync.Mutex
 	cond    *sync.Cond
@@ -687,10 +744,40 @@ type scanFrontier struct {
 	seq     int64
 	active  int
 	stopped bool
+
+	// Deterministic retention state (all guarded by mu).
+	maxCandidates int
+	currentLevel  int64 // lowest outstanding priority value; math.MinInt64 = unseeded
+	capReached    bool  // retained+pending satisfied maxCandidates at the current level
+	retained      []Candidate
+	pending       []Candidate
+	seenPaths     map[string]bool // defensive path dedupe across retained+pending
+
+	// Deferred cache-parent seeds (all class 1, guarded by mu). They are
+	// enqueued only when the barrier reaches their priority band, so a
+	// cached location never pre-marks a directory that the higher-priority
+	// natural roots would have discovered — pre-marking it there demoted
+	// discovery to the seed class and made repeated scans order-dependent
+	// (the v1.8.7 determinism audit finding).
+	deferredSeeds []string
 }
 
-func newScanFrontier() *scanFrontier {
-	f := &scanFrontier{visited: map[string]bool{}}
+// maxPendingCandidates bounds the per-level candidate buffer. Real
+// machines host a handful of engine binaries; the bound exists only so
+// a pathological dataset cannot grow the buffer without limit. Past
+// the bound extra same-level candidates are dropped (the higher-value
+// shallow levels are always processed first, so this can only trim
+// retention inside a single over-large level — never the priority
+// contract between levels).
+const maxPendingCandidates = 4096
+
+func newScanFrontier(maxCandidates int) *scanFrontier {
+	f := &scanFrontier{
+		visited:       map[string]bool{},
+		seenPaths:     map[string]bool{},
+		maxCandidates: maxCandidates,
+		currentLevel:  math.MinInt64, // unseeded: the first next() call adopts the top priority
+	}
 	f.cond = sync.NewCond(&f.mu)
 
 	return f
@@ -699,6 +786,41 @@ func newScanFrontier() *scanFrontier {
 // seed enqueues a scan root at depth 0.
 func (f *scanFrontier) seed(path string, class int) {
 	f.enqueue(path, 0, class)
+}
+
+// deferSeed records a cache-parent seed for deferred enqueue. The seed
+// is materialized by flushDeferredSeedsLocked exactly when the barrier
+// reaches the class-1 priority band — after every class-0 (user tree)
+// level has fully drained — so it can never pre-empt or demote a
+// higher-priority natural discovery.
+func (f *scanFrontier) deferSeed(path string) {
+	clean := filepath.Clean(path)
+	if clean == "" || clean == "." {
+		return
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.deferredSeeds = append(f.deferredSeeds, clean)
+}
+
+// flushDeferredSeedsLocked materializes the deferred cache-parent seeds
+// (class 1, depth 0). Called only at level-drain decision points with
+// mu held and active == 0 — no worker can race the enqueue. The
+// visited set discards seeds whose directories the natural roots
+// already covered.
+func (f *scanFrontier) flushDeferredSeedsLocked() {
+	if len(f.deferredSeeds) == 0 {
+		return
+	}
+
+	seeds := f.deferredSeeds
+	f.deferredSeeds = nil
+
+	for _, p := range seeds {
+		f.enqueueLocked(p, 0, 1)
+	}
 }
 
 // enqueue adds one directory unless the scan is stopped, the directory
@@ -714,6 +836,11 @@ func (f *scanFrontier) enqueue(path string, depth int, class int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	f.enqueueLocked(clean, depth, class)
+}
+
+// enqueueLocked is the lock-held body of enqueue.
+func (f *scanFrontier) enqueueLocked(clean string, depth int, class int) {
 	if f.stopped || f.visited[clean] || len(f.jobs) >= maxQueuedDirs {
 		return
 	}
@@ -756,6 +883,14 @@ func (f *scanFrontier) stop() {
 // scan is stopped or the frontier is fully drained (heap empty and no
 // worker processing — the only safe exit, because a running worker may
 // still enqueue children).
+//
+// v1.8.7 barrier: a job is handed out only when it belongs to the
+// current level (top prio == currentLevel). When the current level's
+// queue is exhausted and no worker is still active in it, the level's
+// pending candidates are retained (deterministically) and the barrier
+// either advances to the next level or — if the candidate budget was
+// satisfied inside the level — seals the scan. A deeper job therefore
+// cannot start while any higher-priority work is queued or active.
 func (f *scanFrontier) next() (dirJob, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -766,18 +901,168 @@ func (f *scanFrontier) next() (dirJob, bool) {
 		}
 
 		if len(f.jobs) > 0 {
-			job := heap.Pop(&f.jobs).(*dirJob)
-			f.active++
+			top := f.jobs[0].prio
 
-			return *job, true
+			if top == f.currentLevel {
+				job := heap.Pop(&f.jobs).(*dirJob)
+				f.active++
+
+				return *job, true
+			}
+
+			// top > currentLevel: the current level's queued work is
+			// exhausted. The barrier may move only when no worker is
+			// still processing a job of this level — an active visit
+			// can still emit a same-level candidate (which must take
+			// part in this level's deterministic retention).
+			if f.active == 0 {
+				f.mergePendingLocked()
+
+				if f.capReached {
+					// The candidate budget is satisfied and every job
+					// of its level has been visited: seal the scan.
+					// Deeper levels are never started — this is the
+					// contract the v1.8.6 race violated.
+					f.stopped = true
+					f.cond.Broadcast()
+
+					return dirJob{}, false
+				}
+
+				// Entering the class-1 band: materialize the deferred
+				// cache-parent seeds now (prioClassBand = the class-1
+				// base). Every class-0 level has fully drained above,
+				// so a seed can no longer pre-mark a directory the
+				// user tree would have discovered at its natural
+				// (higher) priority.
+				if top >= prioClassBand && len(f.deferredSeeds) > 0 {
+					f.flushDeferredSeedsLocked()
+					continue
+				}
+
+				f.currentLevel = top
+				continue
+			}
+
+			f.cond.Wait()
+			continue
 		}
 
+		// Queue empty.
 		if f.active == 0 {
+			// Deferred cache seeds still pending: materialize them
+			// (defensive — the natural root set is never empty in
+			// production, but the flush must not be skippable).
+			if !f.capReached && len(f.deferredSeeds) > 0 {
+				f.flushDeferredSeedsLocked()
+				continue
+			}
+
+			// Fully drained: retain the last level's pending
+			// candidates (if any) and end the scan.
+			f.mergePendingLocked()
+
+			if f.capReached {
+				f.stopped = true
+				f.cond.Broadcast()
+			}
+
 			return dirJob{}, false
 		}
 
 		f.cond.Wait()
 	}
+}
+
+// mergePendingLocked retains the drained level's candidates in
+// deterministic (path) order, bounded by maxCandidates. Called only at
+// level-drain decision points with mu held. The pending buffer is
+// reset, so the next level buffers into a clean slate.
+func (f *scanFrontier) mergePendingLocked() {
+	if len(f.pending) > 0 {
+		sort.Slice(f.pending, func(i, j int) bool {
+			return f.pending[i].Path < f.pending[j].Path
+		})
+
+		for _, c := range f.pending {
+			if f.maxCandidates > 0 && len(f.retained) >= f.maxCandidates {
+				break
+			}
+
+			f.retained = append(f.retained, c)
+		}
+
+		f.pending = f.pending[:0]
+	}
+}
+
+// emit records one discovered candidate into the current level's
+// pending buffer. It reports false only when the scan is stopped (the
+// caller, visit, then aborts its directory iteration). The scan is NOT
+// sealed here on candidate arrival: sealing happens at the level drain
+// in next(), after every same-level peer has been visited — that is
+// the v1.8.7 determinism repair (the v1.8.6 code sealed here, which
+// made retention race-dependent on worker completion order).
+func (f *scanFrontier) emit(cand Candidate) bool {
+	clean := filepath.Clean(cand.Path)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.stopped {
+		return false
+	}
+
+	// Defensive path dedupe (the visited set already prevents double
+	// visits; this also guards against dataset aliasing).
+	if f.seenPaths[clean] {
+		return true
+	}
+
+	f.seenPaths[clean] = true
+
+	if len(f.pending) < maxPendingCandidates {
+		f.pending = append(f.pending, cand)
+	}
+
+	if !f.capReached && f.maxCandidates > 0 &&
+		len(f.retained)+len(f.pending) >= f.maxCandidates {
+		// Budget satisfied at THIS level. The scan seals at the level
+		// drain (next()); broadcast so workers blocked on the barrier
+		// re-evaluate immediately.
+		f.capReached = true
+		f.cond.Broadcast()
+	}
+
+	return true
+}
+
+// isCapReached reports whether the candidate budget is already
+// satisfied at the current level. visit() uses it to skip enqueueing
+// child directories that could never be visited (the scan seals at the
+// current level's drain) — avoidable-work reduction, not a semantic
+// change: those children were unreachable in any case.
+func (f *scanFrontier) isCapReached() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.capReached
+}
+
+// result returns the deterministically retained candidates. The
+// pending buffer is merged first so a scan interrupted by timeout or
+// cancellation still reports the candidates discovered inside its
+// final, in-flight level (best-effort on that path — the deterministic
+// contract applies to scans that complete their levels; cancellation
+// is inherently timing-dependent). Normal completion paths drain the
+// buffer themselves, so this merge is a no-op for them.
+func (f *scanFrontier) result() []Candidate {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.mergePendingLocked()
+
+	return f.retained
 }
 
 // release marks one job fully processed and wakes peers when the last
@@ -817,6 +1102,13 @@ func (f *scanFrontier) visit(
 		return // inaccessible — ignore without crashing (spec §11)
 	}
 
+	// Avoidable-work guard (v1.8.7): once the candidate budget is
+	// satisfied, the scan seals at this level's drain, so child
+	// directories can never be visited. Skip enqueueing them. The flag
+	// is sampled once per visit; a mid-visit flip only means a few
+	// harmless never-visited enqueues (bounded by maxQueuedDirs).
+	skipEnqueue := f.isCapReached()
+
 	for _, e := range entries {
 		if ctx.Err() != nil || f.isStopped() {
 			return
@@ -847,7 +1139,9 @@ func (f *scanFrontier) visit(
 				continue
 			}
 
-			f.enqueue(filepath.Join(job.path, name), job.depth+1, job.class)
+			if !skipEnqueue {
+				f.enqueue(filepath.Join(job.path, name), job.depth+1, job.class)
+			}
 
 			continue
 		}
@@ -884,6 +1178,18 @@ func mergeCacheAll(cfg *config.Config, cands []Candidate) {
 	for _, c := range byPath {
 		out = append(out, c)
 	}
+
+	// v1.8.7 determinism: the persisted cache order feeds the next
+	// scan's deferred seed order (same-level seq tiebreak), so it must
+	// be a pure function of the cache contents — not of map iteration
+	// order. Sort by (tier, path).
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Tier != out[j].Tier {
+			return out[i].Tier < out[j].Tier
+		}
+
+		return out[i].Path < out[j].Path
+	})
 
 	_ = SaveCache(cfg, out)
 }

@@ -11,6 +11,132 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.8.7 — 2026-10-05 — deterministic Tier-2 discovery + the data-analysis authority upgrade
+
+Focus: repair the v1.8.6 Windows CI failure in `internal/engdiscovery`
+(Actions run 37273354268) at its root, then upgrade the EXISTING
+`dataAnalysis` tool into the application's deterministic data-analysis
+authority — computation moves out of the model and into local
+execution, and the model receives compact results instead of raw
+datasets. One data tool; no second manager; no speculative dependency.
+
+1. **P0 — deterministic Tier-2 discovery (the Windows CI root cause).**
+   The v1.8.6 frontier ordered QUEUED directories correctly, but
+   multiple workers executed jobs concurrently and `emit()` sealed the
+   whole scan on first ARRIVAL of the `MaxCandidates`-th candidate.
+   Candidate discovery order was therefore race-dependent: an
+   already-running deeper worker could report before a shallower worker
+   and seal the scan
+   (`TestFullScanPrefersShallowOverDeepLexicallyEarlierCandidate`:
+   got `aaa-early\deep\llama-server.exe`, want
+   `zzz-late-engine\llama-server.exe`). v1.8.7 keeps the bounded worker
+   pool and the priority frontier and adds a DETERMINISTIC RETENTION
+   BARRIER: workers are only ever handed jobs of the current (lowest
+   outstanding) priority value — parallelism stays within one discovery
+   level; candidates are buffered per level and retained in
+   (level, path) order at the level drain; the scan seals at the drain
+   of the level that satisfied `MaxCandidates`, never on first arrival.
+   Retention is a pure function of the scanned dataset: parallel scan +
+   same dataset + repeated executions → same winning candidate, for any
+   worker count and any interleaving. `Workers` stays ≥ 1 configurable
+   (not reduced to force determinism); no sleeps, no retries, no timing
+   assumptions; timeout, cancellation, `MaxDepth`, noise skipping,
+   deduplication and bounded memory preserved. Coverage:
+   `internal/engdiscovery/discovery_barrier_test.go` (deterministic
+   winner across worker counts 1–16, same-depth lexical determinism,
+   multi-root class priority, sealed-scan leak/deadlock guard) plus the
+   strengthened existing suite.
+
+2. **P0 — repeated-scan priority inversion in the discovery cache
+   removed.** The cache-parent seeding path enqueued every previously
+   observed candidate's parent directory at class 1 BEFORE the scan
+   started, pre-marking those directories as visited and DEMOTING any
+   location the user tree would have discovered at its natural (higher)
+   priority — a repeated scan could rank a previously-cached DEEP
+   directory above a fresh SHALLOW one, and the retained winner could
+   alternate between runs. v1.8.7 DEFERS cache-parent seeds until the
+   barrier enters the class-1 band (every class-0 level fully drained),
+   preserving the v1.4.0 intent (cached locations still rank ahead of
+   broad volume recursion) without the inversion.
+   `mergeCacheAll` now persists the cache in deterministic (tier, path)
+   order so the next scan's same-level tiebreak is a pure function of
+   the cache contents.
+
+3. **P1 — avoidable Tier-2 scan work reduced (the 126 s Windows
+   package runtime).** `noiseDirs` now also skips language-toolchain
+   caches (`.cargo`, `.rustup`, `.go`, `.nuget`, `.dotnet`, `.gradle`,
+   `.m2`, `.android`, `hostedtoolcache`, …), per-run temp churn
+   (`temp`, `tmp`) and Windows update remnants — deep, high-latency
+   trees that change every run and can never host a user engine
+   install. Real engine hosts (`.local`, `bin`, scoop shims, `.ollama`)
+   remain scanned; Tier 1 still covers PATH. Once the candidate budget
+   is satisfied, child directories are no longer enqueued (they could
+   never be visited — the scan seals at the current level's drain).
+
+4. **P1 — the data-analysis authority upgrade (ONE tool: `dataAnalysis`).**
+   Five new deterministic actions, all in-process pure Go on the
+   existing dataset model and parse-once numeric cache:
+   - `analyze` — ONE call for a complete compact dataset analysis:
+     schema, missingness, numeric summary, categorical top values,
+     distinct counts, strong correlations (|r| ≥ 0.6), IQR outlier
+     summary, optional group-by and sample, and deterministic key
+     findings. Configurable `sections` (default:
+     `schema,missing,stats,categorical,outliers,findings`).
+   - `aggregate` — multiple aggregations in ONE call
+     (count/sum/mean/min/max/median/std/quantile with `q`) over one or
+     more grouping columns (`by`/`byList`), with a `"<agg>:<column>"`
+     spec grammar and a bare-agg × `columns` shorthand; groups sorted
+     ascending by key.
+   - `join` — deterministic local joins between two datasets
+     (inner/left/right/full), explicit keys required (single or
+     composite `leftKeys`/`rightKeys`), SQL-standard semantics with
+     file-order determinism, a 2,000,000-row materialization cap, and
+     bounded preview + optional artifact file.
+   - `quality` — compact machine-readable diagnostics: missing values,
+     duplicate rows, invalid numerics (±Inf in numeric columns),
+     constant columns, high-cardinality columns, mixed numeric/text
+     type inconsistencies and per-column outlier counts.
+   - `export` — materialize rows (optionally filtered, projected,
+     sorted, limited) as CSV/TSV/JSON artifacts under the workspace
+     path authority; the model gets a path + counts, not pasted rows.
+   All five stamp compact provenance metadata (backend, bytes, rows,
+   cols) and honor three output modes: `compact` (default),
+   `table` and `json`. Analysis results now answer most data questions
+   from one deterministic tool call.
+
+5. **P1 — JSON loading determinism repaired.** `loadJSON` derived its
+   column order from Go map iteration, which is randomized — the same
+   JSON file could produce a different column order (and therefore a
+   different analysis result) on every load. Objects are now decoded
+   with `json.Decoder` token streaming so column order follows the
+   DOCUMENT's first-seen key order, deterministically, for both JSON
+   arrays and JSONL. Pinned by `TestJSONColumnOrderIsDeterministic`.
+
+6. **P1 — data-tool test surface established.** The package previously
+   had no dedicated suite; `internal/tools/data_tool_test.go` adds
+   focused coverage: CSV/TSV/JSON loading, type inference, missing
+   values, the parse-once numeric cache, all five new actions,
+   compact/table/json output modes, output limits, result
+   materialization, cancellation, malformed datasets, path
+   restrictions (traversal and absolute escapes rejected through the
+   path authority), the honest 256 MB size bound and byte-for-byte
+   deterministic repeated results. Orchestrator integration:
+   `internal/agent/datatool_orchestrator_test.go` proves the real
+   registration path; `internal/toolsets/datatool_selection_test.go`
+   pins that `dataAnalysis` stays selected for data tasks.
+
+Backend decision (documented, not hidden): the heavy-data backend
+evaluation kept the pure-Go in-process engine. DuckDB's Go client is
+cgo with a statically linked bundled engine — unacceptable packaging
+and CI complexity (a C toolchain on the Windows/Linux packaging paths
+plus tens of megabytes per target binary) for workload sizes the
+256 MB fast path already covers. Parquet and SQL are therefore NOT
+added; `query`/`aggregate`/`join` remain the relational authority, and
+the 256 MB input bound is stated honestly (no streaming claim). The
+remaining native C++ GPU work is unchanged and still not complete.
+
+---
+
 ## v1.8.6 — 2026-10-05 — Phase 2: execution truth, GPU transaction authority, resource integration
 
 Focus: PHASE 2's deep runtime/execution work — make the v1.8.5

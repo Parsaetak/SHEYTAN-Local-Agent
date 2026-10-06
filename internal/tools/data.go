@@ -254,14 +254,32 @@ func dsEvictLocked() {
 	}
 }
 
+// maxDatasetBytes is the honest in-process input bound (pure-Go
+// backend — see data_insights.go for the v1.8.7 backend decision).
+// Package-level so the bound is testable without materializing a
+// 256 MB fixture.
+var maxDatasetBytes int64 = 256 << 20
+
+// checkDatasetSize enforces the in-process input bound. There is no
+// streaming claim: files past the bound are rejected with guidance, and
+// heavy relational work stays on the pure-Go fast path (filter first,
+// then aggregate).
+func checkDatasetSize(size int64) error {
+	if size > maxDatasetBytes {
+		return fmt.Errorf("dataset too large (>%d MB) — filter or aggregate it in chunks, or sample it first (the in-process engine has no streaming mode)", maxDatasetBytes>>20)
+	}
+
+	return nil
+}
+
 func (t *DataTool) load(path string) (*dataset, error) {
 	abs := ResolvePath(path)
 	fi, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("dataset not found: %s (relative paths resolve against the app folder)", abs)
 	}
-	if fi.Size() > 256<<20 {
-		return nil, fmt.Errorf("dataset too large (>%d MB) — split it with the files tool (combine/replace) or sample it first", 256)
+	if err := checkDatasetSize(fi.Size()); err != nil {
+		return nil, err
 	}
 	key := cacheKey{path: abs, mtime: fi.ModTime().UnixNano(), size: fi.Size()}
 	dsMu.Lock()
@@ -342,17 +360,78 @@ func loadDelimited(path string) (*dataset, error) {
 	return buildDataset(records[0], records[1:]), nil
 }
 
+// decodeJSONObject decodes one JSON object preserving the DOCUMENT order
+// of its keys. encoding/json map iteration is randomized, so deriving the
+// column order from the decoded map directly made every JSON analysis
+// result order-nondeterministic between runs (v1.8.7 determinism audit
+// finding). Returns the value map plus the first-seen key order.
+func decodeJSONObject(dec *json.Decoder) (map[string]any, []string, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, nil, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, nil, fmt.Errorf("expected a JSON object, got %v", tok)
+	}
+
+	obj := map[string]any{}
+	var order []string
+
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, nil, err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, nil, fmt.Errorf("object key is not a string")
+		}
+
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			return nil, nil, err
+		}
+
+		if _, seen := obj[key]; !seen {
+			order = append(order, key)
+		}
+		obj[key] = v
+	}
+
+	// Consume the closing '}'.
+	if _, err := dec.Token(); err != nil {
+		return nil, nil, err
+	}
+
+	return obj, order, nil
+}
+
 func loadJSON(path string) (*dataset, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	// Support both a JSON array and JSONL.
+	// Support both a JSON array and JSONL. Both paths decode objects in
+	// DOCUMENT order so the column order is deterministic.
 	trimmed := strings.TrimSpace(string(raw))
+
 	var objs []map[string]any
+	var orders [][]string
+
 	if strings.HasPrefix(trimmed, "[") {
-		if err := json.Unmarshal(raw, &objs); err != nil {
+		dec := json.NewDecoder(strings.NewReader(trimmed))
+		if t, err := dec.Token(); err != nil {
 			return nil, fmt.Errorf("parse JSON array: %w", err)
+		} else if d, ok := t.(json.Delim); !ok || d != '[' {
+			return nil, fmt.Errorf("parse JSON array: not an array")
+		}
+		for dec.More() {
+			obj, order, err := decodeJSONObject(dec)
+			if err != nil {
+				return nil, fmt.Errorf("parse JSON array: %w", err)
+			}
+			objs = append(objs, obj)
+			orders = append(orders, order)
 		}
 	} else {
 		// v1.0.9: JSONL parses through the same quote-aware splitter; each
@@ -363,22 +442,23 @@ func loadJSON(path string) (*dataset, error) {
 			if ln == "" {
 				continue
 			}
-			var obj map[string]any
-			if err := json.Unmarshal([]byte(ln), &obj); err != nil {
+			obj, order, err := decodeJSONObject(json.NewDecoder(strings.NewReader(ln)))
+			if err != nil {
 				return nil, fmt.Errorf("parse JSONL line: %w", err)
 			}
 			objs = append(objs, obj)
+			orders = append(orders, order)
 		}
 	}
 	if len(objs) == 0 {
 		return nil, fmt.Errorf("no records in JSON")
 	}
 
-	// Column order: first-seen order across all objects.
+	// Column order: first-seen document order across all objects.
 	colSet := map[string]bool{}
 	var cols []string
-	for _, o := range objs {
-		for k := range o {
+	for _, order := range orders {
+		for _, k := range order {
 			if !colSet[k] {
 				colSet[k] = true
 				cols = append(cols, k)
