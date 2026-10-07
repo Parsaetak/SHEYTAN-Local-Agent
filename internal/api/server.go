@@ -21,6 +21,7 @@ import (
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/aisystem"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
@@ -818,6 +819,17 @@ func (s *Server) Handler() http.Handler {
         // source="custom" metadata (the ONE registry).
         mux.HandleFunc("/api/custom-tools", s.handleCustomTools)
         mux.HandleFunc("/api/custom-tools/", s.handleCustomTool)
+        // v1.9.0: the ONE AI System authority — CRUD, activation, clone,
+        // export/import. The active system's snapshot is frozen into every
+        // run at /api/run (see handleRun).
+        mux.HandleFunc("/api/systems", s.handleAISystems)
+        mux.HandleFunc("/api/systems/import", s.handleAISystemImport)
+        mux.HandleFunc("/api/systems/active", s.handleAISystemActive)
+        mux.HandleFunc("/api/systems/", s.handleAISystemItem)
+        // v1.9.0: the durable long-horizon Goal engine — create/drive/
+        // pause/resume/cancel/approve over the ONE orchestrator.
+        mux.HandleFunc("/api/goals", s.handleGoals)
+        mux.HandleFunc("/api/goals/", s.handleGoalItem)
 
         // v1.7.0: the Automation / Tasks surface — one scheduler API for
         // tasks, runs, scoped tools and artifacts (the chronological
@@ -1857,6 +1869,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 // retrieved portions are provenance-tagged and never
                 // authorize execution by themselves.
                 HistoryRefs []histref.Ref `json:"historyRefs,omitempty"`
+
+                // v1.9.0: explicit AI System selection for THIS run. Empty = the
+                // ACTIVE system (the documented select-once, next-runs-use-it
+                // contract). The snapshot is frozen below, before the run
+                // goroutine starts — a mid-run edit can never mutate the run.
+                SystemID string `json:"systemId,omitempty"`
         }
 
         if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1881,6 +1899,29 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         if err != nil {
                 writeErr(w, http.StatusNotFound, err)
                 return
+        }
+
+        // v1.9.0: the AI System binding is resolved ONCE, here — before
+        // the run goroutine starts and before the response is written.
+        // Explicit request systemId wins (404 when missing — an honest,
+        // deterministic contract); otherwise the ACTIVE system. A
+        // failed ACTIVE-pointer resolution is non-fatal: the run
+        // proceeds with the pre-v1.9 behavior — the runtime never
+        // refuses to run over a configuration object.
+        var aiSnap *aisystem.Snapshot
+        if s.stack != nil && s.stack.Systems != nil {
+        	if body.SystemID != "" {
+        		sys, sysErr := s.stack.Systems.Get(body.SystemID)
+        		if sysErr != nil {
+        			writeErr(w, http.StatusNotFound, fmt.Errorf("ai system %q not found", body.SystemID))
+        			return
+        		}
+        		snap := sys.Snapshot()
+        		aiSnap = &snap
+        	} else if sys, sysErr := s.stack.Systems.Active(); sysErr == nil {
+        		snap := sys.Snapshot()
+        		aiSnap = &snap
+        	}
         }
 
         // v1.2.8: resolve the attached history references. Self-references
@@ -2597,9 +2638,18 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                 }
                         },
                         agent.WithSessionContext(sess.Context.ContextTokens),
+                        // v1.9.0: the wire-boundary reasoning resolution — the
+                        // request's explicit level wins; an unset/auto request
+                        // adopts the AI System effort preference (the SAME
+                        // v1.8.5 ladder: low=0, mid=1024, high=4096, ultra=engine
+                        // default; never a fabricated budget).
                         agent.WithThinkingMode(body.Thinking),
                         agent.WithToolPolicy(body.ToolMode, body.ToolAllow),
                         agent.WithNetSearch(body.NetSearch),
+                        // v1.9.0: the FROZEN AI System binding — instructions,
+                        // model override, tool-surface constrain, approval and
+                        // verification policies ride this one snapshot.
+                        
                         agent.WithReceivedAt(receivedAt),
                         agent.WithSessionSummaryBlock(summaryBlock),
                         agent.WithHistoryBlocks(histRefBlocks),
@@ -2740,12 +2790,20 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         // transport was attached — but it MUST hand back the authoritative
         // run identity so the client can attribute every subsequent frame
         // (and discard stale ones from an older run of the same session).
-        writeJSON(w, map[string]any{
-                "ok":        true,
-                "sessionId": sess.ID,
-                "runId":     runID,
-                "state":     "registered",
-        })
+        response := map[string]any{
+        "ok":        true,
+        "sessionId": sess.ID,
+        "runId":     runID,
+        "state":     "registered",
+        }
+        // v1.9.0: the frozen binding travels with the response so the
+        // client can display exactly which configuration this run
+        // executes under.
+        if aiSnap != nil {
+        response["systemId"] = aiSnap.SystemID
+        response["systemRevision"] = aiSnap.SystemRevision
+        }
+        writeJSON(w, response)
 }
 
 func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
@@ -3388,4 +3446,18 @@ func (s *Server) validateHistoryRefs(sessionID, activeMode string, refs []histre
         }
 
         return kept
+}
+
+
+// effectiveThinkingControl (v1.9.0) resolves the run's reasoning level at
+// the wire boundary: the request's EXPLICIT level wins; an unset ("") or
+// "auto" request adopts the AI System's effort preference. The result
+// still passes through the v1.8.5 normalizer inside WithThinkingMode —
+// unknown values degrade to the balanced default, never a fake budget.
+func effectiveThinkingControl(request string, snap *aisystem.Snapshot) string {
+        raw := strings.ToLower(strings.TrimSpace(request))
+        if snap != nil && snap.Reasoning != "" && (raw == "" || raw == "auto") {
+                return snap.Reasoning
+        }
+        return request
 }

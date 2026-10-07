@@ -151,6 +151,14 @@ type ToolPolicy struct {
 	Mode      string
 	Allowed   []string
 	NetSearch bool
+
+	// AISystemConstrain (v1.9.0) is the ACTIVE AI System's allowed tool
+	// surface. Non-empty, it restricts the offered AND executable tool
+	// set in BOTH policy modes — server-side, never prompt-side. It can
+	// never widen anything: it only removes. The Net Search intent
+	// (below) is likewise subject to it: a system whose surface excludes
+	// research never offers research, whatever the request intent.
+	AISystemConstrain []string
 }
 
 // NormalizeToolPolicyMode validates a policy mode string.
@@ -164,6 +172,22 @@ func NormalizeToolPolicyMode(s string) string {
 
 // allows reports whether a tool may run under the policy.
 func (p ToolPolicy) allows(name string) bool {
+	// v1.9.0: the AI System surface binds FIRST — no intent, no policy
+	// mode, no escalation can re-enable a tool the active system
+	// excludes. Execution stays inside the user-owned surface.
+	if len(p.AISystemConstrain) > 0 {
+		ok := false
+		for _, a := range p.AISystemConstrain {
+			if strings.EqualFold(a, name) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+
 	// v1.3.6: an explicit Net Search request authorizes exactly the
 	// research tool — server-side enforcement of the user's intent,
 	// never inferred from message text, never extended to other tools.
@@ -247,6 +271,10 @@ type turnComposer struct {
 	policy    ToolPolicy
 	thinkMode string
 
+	// skillsAllow (v1.9.0) is the AI System's enabled-skills surface
+	// (nil/empty = every installed skill remains discoverable).
+	skillsAllow []string
+
 	tier string
 	spec taskclassify.TierSpec
 
@@ -294,6 +322,7 @@ func (o *Orchestrator) newTurnComposer(
 	safety int,
 	policy ToolPolicy,
 	thinkMode string,
+	skillsAllow []string,
 	tier string,
 	task string,
 	recaller Recaller,
@@ -303,14 +332,15 @@ func (o *Orchestrator) newTurnComposer(
 	spec := taskclassify.Spec(tier)
 
 	c := &turnComposer{
-		orch:      o,
-		cfg:       cfg,
-		effCtx:    effCtx,
-		safety:    safety,
-		policy:    policy,
-		thinkMode: thinkMode,
-		tier:      tier,
-		spec:      spec,
+		orch:        o,
+		cfg:         cfg,
+		effCtx:      effCtx,
+		safety:      safety,
+		policy:      policy,
+		thinkMode:   thinkMode,
+		skillsAllow: skillsAllow,
+		tier:        tier,
+		spec:        spec,
 	}
 
 	// Enabled tools.
@@ -371,6 +401,23 @@ func (o *Orchestrator) newTurnComposer(
 		}
 	}
 
+	// v1.9.0: the AI System surface intersects the tier/policy selection
+	// — the OFFERED schema surface matches what allows() will execute.
+	if len(policy.AISystemConstrain) > 0 {
+		constrained := make([]string, 0, len(selected))
+		for _, name := range selected {
+			for _, a := range policy.AISystemConstrain {
+				if strings.EqualFold(a, name) {
+					constrained = append(constrained, name)
+					break
+				}
+			}
+		}
+		// A zero-tool selection is valid (the v1.2.6 rule): a system
+		// whose surface intersects nothing runs as pure conversation.
+		selected = constrained
+	}
+
 	c.setTools(selected, task)
 
 	// Optional composition — gated by the tier BEFORE any I/O happens.
@@ -387,7 +434,7 @@ func (o *Orchestrator) newTurnComposer(
 	}
 
 	if spec.IncludeSkills && o.skillSource != nil && task != "" {
-		if matched := o.skillSource.MatchTask(task, 2); len(matched) > 0 {
+		if matched := filterSkillsBySystem(o.skillSource.MatchTask(task, 2), skillsAllow); len(matched) > 0 {
 			c.skillBlk = renderSkills(matched, 400)
 			c.skillsOn = c.skillBlk != ""
 
@@ -617,7 +664,7 @@ func (c *turnComposer) Escalate(reason taskclassify.EscalationReason, task, refu
 	}
 
 	if c.spec.IncludeSkills && !c.skillsOn && c.orch.skillSource != nil && task != "" {
-		if matched := c.orch.skillSource.MatchTask(task, 2); len(matched) > 0 {
+		if matched := filterSkillsBySystem(c.orch.skillSource.MatchTask(task, 2), c.skillsAllow); len(matched) > 0 {
 			c.skillBlk = renderSkills(matched, 400)
 			c.skillsOn = c.skillBlk != ""
 			up.skills = c.skillBlk
@@ -966,4 +1013,26 @@ func (o *Orchestrator) recallProvider() Recaller {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.recaller
+}
+
+
+// filterSkillsBySystem (v1.9.0) narrows matched skills to the AI System's
+// enabled-skills surface. An empty allow list keeps every match (the
+// pre-v1.9 behavior); a non-empty list is the user-owned surface — skills
+// outside it never inflate the context.
+func filterSkillsBySystem(matched []skills.Skill, allow []string) []skills.Skill {
+	if len(allow) == 0 {
+		return matched
+	}
+	out := make([]skills.Skill, 0, len(matched))
+	for _, m := range matched {
+		id := m.Identity.ID
+		for _, a := range allow {
+			if strings.EqualFold(strings.TrimSpace(a), id) {
+				out = append(out, m)
+				break
+			}
+		}
+	}
+	return out
 }

@@ -1555,6 +1555,16 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const LONG_OPERATION_TIMEOUT_MS = 5 * 60_000;
 const uploadTimeoutMs = 2 * 60_000;
 
+async function requestRaw(path: string): Promise<string> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status} ${path}`);
+  }
+  return response.text();
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit,
@@ -2228,6 +2238,100 @@ export const api = {
     );
   },
 
+  // ---------------------------------------------------------------------
+  // v1.9.0 — the ONE AI System authority (CRUD, activation, clone,
+  // export/import) and the durable long-horizon Goal engine. Thin,
+  // honest adapters over the backend surfaces; no client-side policy.
+  // ---------------------------------------------------------------------
+
+  systems(): Promise<SystemsPayload> {
+    return request<SystemsPayload>("/systems");
+  },
+
+  system(id: string): Promise<AISystem> {
+    return request<AISystem>(`/systems/${encodeURIComponent(id)}`);
+  },
+
+  createSystem(payload: Partial<AISystem>): Promise<AISystem> {
+    return request<AISystem>("/systems", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateSystem(id: string, payload: Partial<AISystem>): Promise<AISystem> {
+    return request<AISystem>(`/systems/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteSystem(id: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/systems/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  activateSystem(id: string): Promise<SystemActivationResponse> {
+    return request<SystemActivationResponse>(
+      `/systems/${encodeURIComponent(id)}/activate`,
+      { method: "POST" },
+    );
+  },
+
+  cloneSystem(id: string): Promise<AISystem> {
+    return request<AISystem>(`/systems/${encodeURIComponent(id)}/clone`, {
+      method: "POST",
+    });
+  },
+
+  async exportSystem(id: string): Promise<string> {
+    const response = await requestRaw(
+      `/systems/${encodeURIComponent(id)}/export`,
+    );
+    return response;
+  },
+
+  importSystem(document: string): Promise<AISystem> {
+    return request<AISystem>("/systems/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: document,
+    });
+  },
+
+  goals(): Promise<GoalsPayload> {
+    return request<GoalsPayload>("/goals");
+  },
+
+  goal(id: string): Promise<GoalPayload> {
+    return request<GoalPayload>(`/goals/${encodeURIComponent(id)}`);
+  },
+
+  createGoal(payload: { goal: string; sessionId?: string; systemId?: string; start?: boolean }): Promise<Goal> {
+    return request<Goal>("/goals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  goalAction(id: string, action: "start" | "pause" | "resume" | "cancel" | "approve" | "reject", approvalId?: string): Promise<unknown> {
+    return request<unknown>(`/goals/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(approvalId ? { approvalId } : {}),
+    });
+  },
+
+  deleteGoal(id: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/goals/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
   // --- v1.7.0 Automation / Tasks -------------------------------------------
 
   automationTasks(signal?: AbortSignal): Promise<AutomationTask[]> {
@@ -2433,4 +2537,99 @@ export interface PreflightReport {
   recommendedAction?: string;
   unknown?: string[];
   refusalMessage?: string;
+}
+
+
+// ---------------------------------------------------------------------------
+// v1.9.0 — AI Systems + Goals payloads.
+// ---------------------------------------------------------------------------
+
+export interface AISystem {
+  systemId: string;
+  name: string;
+  revision: number;
+  instructions: string;
+  model?: string;
+  reasoning?: string;
+  allowedTools?: string[];
+  approvalPolicy: string;
+  enabledSkills?: string[];
+  knowledgeRefs?: string[];
+  memoryPolicy?: string;
+  compactionPolicy?: string;
+  runtimeProfile?: string;
+  verificationPolicy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SystemsPayload {
+  systems: AISystem[];
+  activeSystemId: string;
+}
+
+export interface SystemActivationResponse {
+  ok: boolean;
+  active: string;
+  revision: number;
+  snapshot: Record<string, unknown>;
+}
+
+export interface GoalPlanStep {
+  index: number;
+  objective: string;
+  status: string;
+  result?: string;
+}
+
+export interface GoalEvidence {
+  seq: number;
+  phase: string;
+  action: string;
+  target?: string;
+  status: string;
+  detail?: string;
+}
+
+export interface GoalPendingApproval {
+  approvalId: string;
+  toolName: string;
+  args?: Record<string, unknown>;
+  risk: string;
+  reason?: string;
+}
+
+export interface Goal {
+  goalId: string;
+  sessionId?: string;
+  systemId?: string;
+  systemRevision?: number;
+  originalGoal: string;
+  phase: string;
+  status: string;
+  plan?: GoalPlanStep[];
+  currentStep: number;
+  lastAction?: string;
+  nextAction?: string;
+  evidence?: GoalEvidence[];
+  changedFiles?: string[];
+  pendingApproval?: GoalPendingApproval;
+  verification?: string;
+  verificationPassed: boolean;
+  turnBudget: number;
+  turnsUsed: number;
+  replans: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GoalsPayload {
+  goals: Goal[];
+}
+
+export interface GoalPayload {
+  goal: Goal;
+  driving: boolean;
+  done: number;
+  total: number;
 }

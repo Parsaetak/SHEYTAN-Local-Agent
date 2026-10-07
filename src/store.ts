@@ -431,7 +431,12 @@ type RuntimeState = {
   refreshLab: () => Promise<void>;
   loadLabTask: (id: string) => Promise<void>;
 
-  createSession: () => Promise<Session>;
+  // v1.9.0: `keepRunState` — the lazy zero-session create inside run()
+  // must not reset the run-startup state (running/runPhase/runStartedAt)
+  // that run() set BEFORE dispatching the create. Resetting it re-opened
+  // the exact composer-idle window the v1.8.8 repair closed (the reload
+  // could still land before POST /api/run fired).
+  createSession: (opts?: { keepRunState?: boolean }) => Promise<Session>;
   selectSession: (id: string | null) => void;
   deleteSession: (id: string) => Promise<void>;
 
@@ -2555,7 +2560,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     }
   },
 
-  createSession: async () => {
+  createSession: async (opts?: { keepRunState?: boolean }) => {
     // v1.2.8: the new session is created in the CURRENT conversation
     // space and becomes that space's active session.
     const session = await api.createSession(get().mode);
@@ -2608,10 +2613,18 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       historyStatus: "ready",
       historyError: null,
       streaming: null,
-      running: false,
-      runPhase: "idle",
-      runStartedAt: null,
-      runNote: null,
+      // v1.9.0 (zero-session reload P0): when run() lazily creates the
+      // session, the run-startup state set BEFORE the create must survive
+      // it — otherwise `running` flickers back to false mid-startup and
+      // the composer reads idle while POST /api/run is still in flight.
+      ...(opts?.keepRunState
+        ? {}
+        : {
+            running: false,
+            runPhase: "idle" as const,
+            runStartedAt: null,
+            runNote: null,
+          }),
       pendingAttachments: [],
       historyRefs: [],
       agentTask: null,
@@ -2780,26 +2793,29 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   },
 
   run: async (message) => {
-    // v1.2.8.1: a session is created LAZILY on the first message when the
-    // current space has none (the documented v1.2.8 behavior — the
-    // composer previously threw "No active session." instead).
-    if (!get().activeSessionId) {
-      try {
-        await get().createSession();
-      } catch {
-        // fall through to the explicit error below when creation fails
-      }
-    }
-
-    const sessionId = get().activeSessionId;
-
-    if (!sessionId) {
-      throw new Error("No active session.");
-    }
-
+    // v1.9.0 (zero-session reload P0, root cause): EVERY async startup
+    // step — including the lazy session create — now happens while the
+    // composer provably reads "running". The v1.8.8 repair moved the
+    // running:true set before the attach wait but left ONE async window
+    // open in the zero-session path specifically: the lazy
+    // createSession() POST ran while running was still false, so an
+    // enabled-composer observation (the E2E "wait for run to settle"
+    // probe) could legitimately sample INSIDE it and reload the app
+    // before POST /api/run was ever dispatched — the session existed
+    // (server-side pending) but its transcript was permanently empty.
+    // The run-startup state is therefore set FIRST, the lazy create
+    // carries keepRunState so it cannot clobber it, and every failure
+    // path cleans the state up deterministically.
     if (!message.trim()) {
       return;
     }
+
+    // v1.9.0: snapshot the pending attachments BEFORE any transport work —
+    // the lazy create path clears pendingAttachments internally, so the
+    // optimistic bubble and the run payload must read the snapshot.
+    const pendingAttachmentsSnapshot = get().pendingAttachments;
+    const attachmentNames = pendingAttachmentsSnapshot.map((item) => item.name);
+    const attachmentIds = pendingAttachmentsSnapshot.map((item) => item.id);
 
     // v1.2.2: reset this run's bookkeeping BEFORE the optimistic bubble —
     // the generation timeline becomes visible the instant Send is
@@ -2840,6 +2856,41 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       agentTask: null,
     });
 
+    // v1.2.8.1: a session is created LAZILY on the first message when the
+    // current space has none (the documented v1.2.8 behavior — the
+    // composer previously threw "No active session." instead).
+    if (!get().activeSessionId) {
+      try {
+        // v1.9.0: keepRunState — see the run-startup note above.
+        await get().createSession({ keepRunState: true });
+      } catch {
+        // v1.9.0: a failed lazy create is a FAILED run start — the
+        // composer must not stay locked (the historical fall-through
+        // left running:true set with no run to settle it).
+        set({
+          running: false,
+          runPhase: "idle",
+          runStartedAt: null,
+          runNote: null,
+          liveStatus: null,
+        });
+        throw new Error("No active session.");
+      }
+    }
+
+    const sessionId = get().activeSessionId;
+
+    if (!sessionId) {
+      set({
+        running: false,
+        runPhase: "idle",
+        runStartedAt: null,
+        runNote: null,
+        liveStatus: null,
+      });
+      throw new Error("No active session.");
+    }
+
     // v1.2.6 continuation: the DETERMINISTIC ATTACH CONTRACT — the POST
     // fires only after the server acknowledged this session's socket
     // (`attached` frame). The v1.2.6 code merely started the connection
@@ -2860,8 +2911,8 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
 
     // v1.1.3: optimistic user bubble — the conversation shows the sent
     // message immediately, before any streaming event arrives.
-    const attachmentNames = get().pendingAttachments.map((item) => item.name);
-
+    // v1.9.0: attachment names/ids come from the pre-transport snapshot
+    // (the lazy create path clears pendingAttachments internally).
     set((state) => ({
       messages: [
         ...state.messages,
@@ -2875,8 +2926,6 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       ],
       streaming: null,
     }));
-
-    const attachmentIds = get().pendingAttachments.map((item) => item.id);
 
     set({ pendingAttachments: [] });
 

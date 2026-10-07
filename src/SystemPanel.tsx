@@ -9,6 +9,8 @@ import {
 import { useRuntimeStore } from "./store";
 import { useResource } from "./useResource";
 import { DownloadProgressPanel } from "./DownloadProgress";
+import { AISystemsCard } from "./AISystemsCard";
+import { GoalsCard } from "./GoalsCard";
 
 // v1.2.0 — the Environment Centre (System Centre): one honest view over
 // device, runtime, verified health and the recommendation engine. Every
@@ -698,6 +700,11 @@ const SystemPanel = function SystemPanel() {
 
   return (
     <section className="system-panel">
+      {/* v1.9.0: the AI System selector/editor and the durable Goal
+          surface — user-owned configuration and long-horizon state live
+          in the System Centre, reusing the existing card grammar. */}
+      <AISystemsCard />
+      <GoalsCard />
       <DeviceCard env={env} status={status} onRetry={load} />
       <RuntimeCard env={env} />
       <RecommendationCard env={env} />

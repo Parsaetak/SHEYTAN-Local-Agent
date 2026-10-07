@@ -632,3 +632,94 @@ Stage Summary:
 - Deliverable: SHEYTAN-Local-Agent-v1.8.8-FINAL.zip (728 files, ZIP audit:
   opens, root present, required sources present, no junk, version 1.8.8,
   no stale identity, no codename leakage).
+
+---
+
+Task ID: v1.9.0-release
+Agent: release engineering session (2026-10-08)
+Task: v1.8.8 -> v1.9.0 — the AI System Builder + long-horizon agentic
+engineering layer; root-cause repair of the v1.8.8 Linux zero-session
+reload-persistence E2E blocker; version/doc restructure; packaging.
+
+Work Log:
+- P0 root cause (Actions 37654274420, e2e/zero-session.spec.ts reload
+  test): the zero-session lazy `createSession()` POST ran while the store
+  still read `running:false` — the v1.8.8 repair moved the startup state
+  before the attach wait but left this ONE async window; the E2E
+  "composer enabled" probe legitimately sampled INSIDE it and reloaded
+  before POST /api/run (session exists server-side pending; transcript
+  total:0 forever). Product fix in `src/store.ts`: startup state set
+  BEFORE all transport work; lazy create carries `keepRunState` (it
+  previously reset running/runPhase mid-startup); failure paths clean up
+  deterministically; attachment snapshot before transport. E2E waits for
+  the deterministic run-dispatch marker (optimistic user bubble) + the
+  assistant row, then reloads and asserts the DURABLE transcript.
+  Deterministic store regressions: zero-session-send.test.ts #6/#7 (+#4
+  cleanup assertions).
+- AI System authority: internal/aisystem (durable per-document store,
+  atomic writes, bounded, deterministic, corruption-tolerant, reserved
+  default system, non-destructive migration, revision monotonicity,
+  clone/export/import, active pointer with repair). HTTP /api/systems.
+  Execution binding frozen per run (systemId + systemRevision):
+  instructions block, model override, reasoning preference (existing
+  v1.8.5 ladder; explicit request wins), tool-surface constrain
+  (ToolPolicy.AISystemConstrain — offer AND execution, remove-only),
+  skills filtering, approval policy. ai_system activity event + run
+  response identity.
+- Goal engine: internal/goal (phases, bounded plan, per-step +
+  goal-level evidence journal, checkpoints after planning/each step/
+  approval/terminal, bounded replanning that keeps failure evidence,
+  turn-budget parking, boot recovery marking found-live goals paused —
+  idempotent, terminal stays terminal). Drive executor = ONE orchestrator
+  with the frozen AI System snapshot. HTTP /api/goals (+start/pause/
+  resume/cancel/approve/reject). Goals UI card.
+- Approval authority: internal/approval (5 deterministic risk classes,
+  policy vocabulary, exact normalized call identity + bounded ledger),
+  per-run agent.WithApprovalGate seam installed ONLY by goal runs
+  (deny-by-default; chat/agent behavior byte-identical), durable
+  goal-level approval parking with exact-call resume + evidence on
+  rejection + stale-id rejection.
+- Bounded delegation: internal/multiagent/subtasks (read-only
+  parallelism <=2, mutating serialized, no nested spawning, fan-out <=8,
+  honest deadline blocks, deterministic subtaskId-order merge, failures
+  stay failed). Race-tested.
+- Repository navigation: internal/repoindex/navigation.go (`repo_nav`:
+  open/navigate/read/grep; bounded ranges, provenance, honest truncation;
+  same path-safety authority as repo_search). Registered in the runtime.
+- Frontend: System Centre hosts the AI System selector/editor (create/
+  edit/activate/clone/export/import/delete) and the Goals card (create+
+  start, honest state chips, plan progress from actual plan state,
+  pause/resume/cancel/approve/reject). Pure view-model unit-tested
+  (ai-systems-view.test.ts). New E2E: e2e/ai-systems.spec.ts.
+- Live-visibility fixture: e2e/make-e2e-live-model.py dims re-tuned
+  (emb=144, layers=6, heads=6, kv=3, head_dim=24, ffn=384) after
+  measured evidence: the previous dims generated the full 160-token
+  reply in ~6 ms on a fast host — first response frame and done 6 ms
+  apart — so the live surface legitimately never painted between two
+  renderer frames (pre-existing sensitivity recorded for v1.8.7/v1.8.8
+  sandboxes above); the first re-tune (emb=256/layers=10) overshot into
+  a >30 s generation (observation bound expired before the first token).
+  The shipped dims stream 22 response frames over a ~2 s window on this
+  host: real generation, deterministic visibility on any host speed.
+- Verification: go test ./internal/... -tags headless = ALL PASS; go vet
+  (headless) clean; race detector green on goal/multiagent/aisystem/
+  approval; npm typecheck/lint/220 unit/38 release tests green; full
+  Playwright suite 40/40 (including zero-session reload and the new
+  ai-systems flows) against the real headless server + real native
+  engine + fixture GGUF. Sandbox gaps (unchanged, honest): no root —
+  the Wails cgo desktop packages cannot compile here (gtk4/webkitgtk
+  headers absent; CI installs them); no codename literals in this log.
+
+Stage Summary:
+- v1.8.8 -> v1.9.0: every surface reads 1.9.0 through the ONE release
+  authority; changelog.md gains the v1.9.0 entry; ROADMAP restructured
+  (compact baseline, v1.9 current/future boundary, v1.10-2.0 future);
+  UPDATE.md = v1.9.0 notes; README current-only; ARCHITECTURE documents
+  the v1.9 authorities; agent.md is the repaired v1.9.0 handoff.
+- The Linux E2E blocker is fixed in the product; the full browser suite
+  is green on the real stack; Windows-side sources carry no regression
+  (platform-independent Go/TS only).
+- Deliverable: download/SHEYTAN-Local-Agent-v1.9.0-FINAL.zip
+  (repository tree; ZIP audit: opens, required sources present, version
+  1.9.0 everywhere, no stale current identity, no codename leakage,
+  exactly one LICENSE.md).

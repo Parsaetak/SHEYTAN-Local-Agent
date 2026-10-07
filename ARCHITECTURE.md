@@ -323,6 +323,84 @@ never depends on worker completion order; cache-parent seeds are
 deferred until the class-1 band so repeated scans keep the priority
 contract.
 
+## 5b. v1.9 authorities — AI System, Goals, approvals, delegation, navigation
+
+**AI System (`internal/aisystem`, the ONE store).** A user-owned,
+revisioned run-configuration object: instructions, model override,
+reasoning preference, allowed tool surface, approval policy, skills
+surface, knowledge/memory/compaction policy, verification policy.
+Persistence is the house pattern (one JSON per system under
+`<DataDir>/ai-systems/`, unique-temp+rename atomicity, bounded counts,
+deterministic (CreatedAt, systemId) ordering, corruption-tolerant
+listing) with a persisted active pointer and dangling-pointer repair.
+The reserved `default` system reproduces the pre-v1.9 behavior exactly;
+migration is non-destructive; import mints fresh identities (never
+overwrites); deleting the active system falls activation back to
+Default.
+
+**Per-run snapshot binding.** `handleRun` resolves the binding ONCE —
+explicit request `systemId` wins (404 when missing), otherwise the
+active system — and freezes a VALUE snapshot (`systemId` +
+`systemRevision`) into the run before the goroutine starts. The binding
+is enforced at five server-side seams: instructions ride the system
+prefix as one bounded block; the model override feeds every request
+build; the reasoning preference resolves at the wire boundary through
+the EXISTING v1.8.5 numeric ladder (explicit request level wins); the
+tool surface constrains offer AND execution (`ToolPolicy.
+AISystemConstrain`, checked first inside `allows()` — remove-only, and
+the Net Search intent is equally subject to it); the skills surface
+filters skill activation in the composer. The frozen identity is
+published as an `ai_system` activity and echoed on the run response.
+
+**Goal engine (`internal/goal`, the ONE store).** Durable per-goal
+documents (`<DataDir>/goals/`, same atomicity/ordering/tolerance
+discipline) hold the phase (understanding → planning → acting →
+verifying → completed), status (active / waiting_for_approval /
+waiting_for_resource / paused / blocked / failed / completed /
+cancelled), bounded plan, per-step status/result/evidence, a goal-level
+evidence journal, changed files, verification state, effort, turn
+budget, replans and checkpoints. The drive loop (`goal.Drive`) executes
+ONE run per phase segment through the injected `RunFunc` — bound in
+`api.goalRunFunc` to the ONE orchestrator with the frozen AI System
+snapshot and the approval gate — and persists a checkpoint after
+planning, each completed step, approval boundaries and terminal
+settlement. Resume continues from the checkpoint (no replay of committed
+mutations); replanning is bounded and keeps failure evidence at goal
+level; the turn budget parks; `RecoverOnBoot` marks found-live goals
+paused (idempotent; terminal stays terminal). Terminal settlement maps
+the orchestrator's OBJECTIVE `VerificationReport` — a model claim never
+completes a goal.
+
+**Approval authority (`internal/approval`).** One deterministic risk
+classification (read-only / workspace-write / external-network /
+destructive / privileged-host-level) from tool identity + normalized
+arguments (shell-fragment classification for destructive/privileged;
+conservative default for unknown tools). Policy vocabulary: `auto`,
+`ask-risky` (default), `ask-all`. The EXACT normalized call identity
+(`CallKey` = tool + risk + canonical args) is the only binding for a
+decision; the bounded ledger keeps approvals call-exact. The gate is a
+PER-RUN seam (`agent.WithApprovalGate`) — installed only by goal runs
+(deny-by-default so no risky call executes silently); chat/agent runs
+install none, preserving their behavior byte-for-byte. Goal-level
+approval parking is durable (`waiting_for_approval` + pending exact
+call survives reload; approve resumes the exact call; rejection is
+evidence; stale ids are rejected).
+
+**Bounded delegation (`internal/multiagent/subtasks`).** Executable
+subtasks beside the advisory specialists: per-subtask budgets (tool
+surface, read-only capability, context, deadline), read-only
+parallelism ≤ 2 (the concurrency seam can only tighten), mutating work
+serialized, fan-out ≤ 8, leaf executors (no nested spawning), honest
+blocks on deadline, DETERMINISTIC merge in `subtaskId` order, failures
+stay failed.
+
+**Repository navigation (`repo_nav`).** `open` / `navigate` / `read` /
+`grep` over identified sources through the SAME index and the SAME
+path-safety authority as `repo_search` (`relWithinRoot`); bounded
+ranges (120 lines / 8 KiB / 1 MiB file ceiling), provenance per result,
+honest total match counts and truncation flags; entire files are never
+returned.
+
 ## 6. Evidence model
 
 Evidence classes, always named: deterministic unit · race gate ·

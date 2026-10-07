@@ -1,429 +1,100 @@
-# UPDATE.md — v1.8.8 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.9.0 Release Notes & Maintenance Behavior
 
-**Release:** `v1.8.8` (canonical application version; single version
+**Release:** `v1.9.0` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ e9a8448` (`v1.8.7`) · **Date:** 2026-10-07
-**Package:** `SHEYTAN-Local-Agent-v1.8.8-FINAL.zip` (complete repository tree)
+**Base:** `main @ 0785d7d` (`v1.8.8`) · **Date:** 2026-10-08
+**Package:** `SHEYTAN-Local-Agent-v1.9.0-FINAL.zip` (complete repository tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior.
 
-## v1.8.8 changes (audit-job repair + hardening the shipped surface)
+## What v1.9.0 adds
 
-1. **Codename-gate fixture repair (CI run 37446279646 root cause).**
-   The v1.8.7 JSON column-order determinism fixtures
-   (`TestJSONColumnOrderIsDeterministic`) used the retired product
-   codename as a JSON key in four tracked lines
-   (`internal/tools/data_tool_test.go`), failing the `test:release`
-   gate so the audit job blocked both platform jobs. The fixture keys
-   were renamed to a codename-free alternative that preserves the
-   ordering semantics the regression pins (document order ≠
-   alphabetical order). The gate was NOT weakened: no exemption, no
-   allowlist, no removed assertion — the tracked tree is simply clean.
+1. **AI Systems — the first-class, user-owned run configuration.** Create,
+   edit, activate, clone, export, import and delete AI Systems from the
+   System Centre (`/api/systems` on the backend). The ACTIVE system binds
+   every NEXT run: instructions, model override, reasoning effort
+   (low/mid/high/ultra on the real budget ladder), the allowed tool
+   surface (server-side, remove-only), the skills surface, and the
+   approval + verification policies. Every run freezes a snapshot
+   (`systemId` + `systemRevision`) before it starts — editing a system
+   mid-run never mutates a running configuration. A fresh install gets
+   exactly one **Default** system whose behavior is identical to the
+   pre-1.9 product; upgrading is non-destructive.
 
-2. **Release metadata synchronized.** `package-lock.json` root
-   metadata (stale at 1.8.5 since v1.8.6) now matches the canonical
-   version; every surface reads 1.8.8 through the one
-   `release-version.mjs` authority in `--check` mode.
+2. **Goals — durable long-horizon work.** Describe a long-horizon
+   objective in the Goals card (or `POST /api/goals`); the engine drives
+   understanding → planning → acting → verifying → completed through the
+   ONE orchestrator, checkpointing after planning and after every
+   completed step. Goals pause, resume from their checkpoint without
+   replaying committed mutations, park when awaiting approval, block
+   honestly on recoverable failures (with bounded replanning), and
+   settle terminally ONLY on objective verification evidence. After a
+   restart, any goal found live with no run behind it is marked paused —
+   never falsely running.
 
-3. **Dependency security.** The `npm audit` high-severity advisory is
-   repaired at the exact vulnerable chain with a compatible upgrade;
-   the frontend dependency contract is preserved and the full
-   frontend stack (typecheck, lint, units, release tests) is green.
+3. **Approvals — one deterministic risk vocabulary.** Every tool call
+   classifies as read-only, workspace-write, external-network,
+   destructive or privileged/host-level. Goal runs deny (never silently
+   execute) calls whose risk class requires approval under the AI
+   System's policy; pending approvals persist durably, approval resumes
+   the EXACT call, rejection is recorded as evidence, and stale approval
+   ids are rejected. Chat and Agent runs behave exactly as before.
 
-4. **dataAnalysis hardening.** Correctness and determinism repairs on
-   the one data authority with regression coverage: parser edge cases,
-   explicit tie-breakers on externally visible orderings, join
-   cardinality semantics, aggregate/quality/export edge cases,
-   cancellation honoring, honest size-bound messaging.
+4. **Bounded delegation.** `internal/multiagent/subtasks` executes
+   bounded subtasks beside the advisory specialists: read-only
+   parallelism at most two, mutating work serialized, no nested
+   spawning, deadlines that block honestly, deterministic
+   subtaskId-order merge, and failures that stay failures.
 
-## v1.8.7 changes (deterministic discovery + data-analysis authority)
+5. **Repository navigation (`repo_nav`).** After `repo_search` locates
+   evidence, `repo_nav` opens, navigates, reads exact ranges and greps
+   inside identified files — bounded, provenance-tagged, truncation-
+   honest, and path-safe (traversal, absolute, volume and UNC forms are
+   refused identically on Linux and Windows).
 
-1. **Deterministic Tier-2 discovery (Windows CI root cause repaired).**
-   The v1.8.6 frontier sealed the scan on first ARRIVAL of the
-   `MaxCandidates`-th candidate, so with parallel workers a deeper
-   worker could report before a shallower one and win. v1.8.7 adds a
-   deterministic retention barrier: workers only ever receive jobs of
-   the current priority level (parallelism within the level), candidates
-   are retained in (level, path) order at each level drain, and the scan
-   seals only at the drain of the level that satisfied the cap. The
-   winning candidate is a pure function of the dataset — proven across
-   worker counts 1–16 with repeated executions.
+6. **P0 fixed — the zero-session reload defect.** The v1.8.8 Linux
+   Browser-E2E blocker is root-caused and repaired: the run-startup
+   state now precedes every transport step (including the lazy session
+   create), failures clean up deterministically, and the E2E waits for
+   the deterministic run-dispatch marker plus the durable post-reload
+   transcript. Deterministic store-level regressions pin the contract.
 
-2. **Repeated-scan cache inversion removed.** Cache-parent seeds no
-   longer pre-mark directories at class 1 before the user tree is
-   scanned (which demoted naturally-higher-priority discoveries on
-   repeated scans); they are deferred until the barrier reaches the
-   class-1 band, and the persisted cache is written in deterministic
-   (tier, path) order.
+## Maintenance behavior (unchanged where not stated)
 
-3. **Avoidable scan work reduced.** `noiseDirs` now skips
-   language-toolchain caches (`hostedtoolcache`, `.cargo`, `.rustup`,
-   `.go`, `.nuget`, `.dotnet`, …) and per-run temp churn (`temp`,
-   `tmp`) — the trees that drove the 126 s Windows package runtime.
-   Real engine hosts stay scanned.
+* **Update flow** — the existing updater/downloader authority checks,
+  stages and installs releases; staging keeps a resumable `.part` file;
+  cancel stops the download without deleting it.
+* **Data locations** — user config remains `config.json` under the
+  canonical data root; new durable stores live beside the existing ones:
+  `<data>/ai-systems/`, `<data>/goals/`. Deleting an AI System document
+  or goal document by hand is tolerated (the stores are corruption-
+  tolerant and repair the active pointer to Default).
+* **Default AI System** — reserved id `default`; it cannot be deleted;
+  deleting the ACTIVE system falls activation back to Default. Its
+  behavior is the pre-1.9 runtime behavior (no instructions, no
+  overrides).
+* **Engine/execution evidence** — unchanged from v1.8: detection ≠
+  availability ≠ selection ≠ execution ≠ verification; identity-bound
+  execution receipts; one accelerator authority; one Governor.
+* **Frontend verification stack** — typecheck, oxlint, the node unit
+  suite (`npm run test:units`, includes the v1.9 view-model tests), and
+  the release gates (`npm run test:release`) all run in `--check` mode
+  green on this release.
+* **Browser E2E** — `e2e/ai-systems.spec.ts` joins the suite: the
+  default-system-first contract, create+activate, activation surviving a
+  reload, and the goal create→cancel lifecycle against the real headless
+  server + engine fixture.
 
-4. **dataAnalysis is the deterministic data-analysis authority.** New
-   actions `analyze` (one-call compact analysis with configurable
-   sections and key findings), `aggregate` (multi-aggregation,
-   multi-group), `join` (inner/left/right/full, explicit keys, 2 M-row
-   cap), `quality` (compact diagnostics) and `export` (CSV/TSV/JSON
-   artifacts) — all in-process pure Go, all deterministic, all with
-   compact/table/json output modes and provenance metadata
-   (backend/bytes/rows/cols). The model receives compact results and
-   artifact paths instead of raw datasets.
+## Known boundaries (honest)
 
-5. **JSON column order is deterministic.** `loadJSON` now decodes
-   objects in document key order (the previous map-iteration order was
-   randomized between loads).
-
-6. **Data-tool test surface established** — loading, inference, all new
-   actions, output modes, limits, materialization, cancellation,
-   malformed inputs, path restrictions, the 256 MB bound, byte-for-byte
-   determinism, orchestrator registration and toolset selection.
-
-**Backend and platform limitations (stated, not hidden):** the
-data-analysis engine is the in-process pure-Go fast path. DuckDB (cgo,
-statically linked) was evaluated and rejected — it would add a C
-toolchain requirement and tens of megabytes to every packaged target
-for no workload the 256 MB bound does not already cover. SQL and
-Parquet are therefore not offered; `query`, `aggregate` and `join`
-are the relational surface. Datasets past 256 MB are rejected with
-guidance (no streaming claim). Charts stay deterministic server-side
-SVG under the existing chart/workspace authority. The native C++ GPU
-work remains open and is NOT marked complete.
-
-## v1.8.6 changes (Phase 2: deep execution-engine / resource integration)
-
-1. **P0 — execution truth: enumeration is selection evidence, never
-   execution proof.** The ONE accelerator authority now enforces
-   `GPU detected ≠ GPU available ≠ GPU selected ≠ GPU executed ≠ GPU
-   verified` end-to-end: `--list-devices` enumeration selects GPU_VULKAN
-   with the pending-execution verification plan and the CPU safety net;
-   `ExecutionVerified` requires the measured runtime offload line or a
-   still-valid **ExecutionReceipt** (a new structured identity-carrying
-   object — engine tag, variant, device, model, status — whose
-   `ValidFor(engineTag, variant)` check rejects receipts from another
-   engine build, another variant or a failed bounded probe: stale
-   evidence can never falsely verify a new engine). CPU stays verified
-   by definition of execution.
-
-2. **P0 — the GPU transaction is authoritative; premature activation
-   removed.** A NORMAL serving launch enables `--n-gpu-layers 99` (AUTO)
-   ONLY on proven execution — the current boot's measured offload line or
-   a persisted verified GPU-probe receipt whose engine identity still
-   matches. Enumeration alone and Vulkan DLL presence keep AUTO CPU-safe.
-   The bounded candidate transaction may still boot Vulkan to PROVE it
-   (a strictly transaction-scoped proving mode inside
-   `updateEngineVariantTx`): commit still requires a real generation AND
-   the measured offload line, failure rolls back to the known-good
-   CPU/fallback with the truthful state — the v1.7.2 bounded
-   `gpu-probe.json` behavior is preserved exactly. Manual `numGpu`
-   configuration is respected verbatim; the CPU-forced profile is
-   enforced at the launcher too. The offload evidence is PER-BOOT now: a
-   restart or model swap re-proves (no inherited GPU claim).
-
-3. **P0 — `/api/engine` and `/api/perf` agree.** One accessor serves both
-   surfaces; the accelerator resolution memo records its input signature
-   (engine tag + variant + requested profile + loaded model + offload
-   evidence + probe state) and any stale memo is recomputed before a
-   consumer can read it. The engine surface no longer depends on the
-   performance page polling first; a background warm-up at server start
-   keeps the first poll off the one-time enumeration cost; the execution
-   stage cannot move backwards because a later UI poll happened — only
-   because the serving reality itself changed.
-
-4. **P0 — real resource integration through the ONE Governor.** The
-   Governor's resource state now folds the CURRENT inference workload
-   (model file bytes as a FILE fact + planned KV at the serving window,
-   from the existing model-card/context authorities); the envelope
-   accounts for a footprint that consumes the resident budget (background
-   work reduced through the existing honest adjustment class, reason
-   stated; RAM stays memory capacity, never an accelerator; unknown
-   stays unknown). A resource-aware run gate consults the Governor's
-   measured envelope BEFORE any engine start (EnsureLLM /
-   EnsureLLMContext): sustained pressure defers the model load with the
-   explainable reason; an unmeasured Governor falls through to the
-   existing preflight gate exactly as before. The engine process RSS is
-   now MEASURED (through the existing `resources.ProcRAM` authority) and
-   flows into the Governor's engine facts; a new `/api/perf`
-   `engineMemory` block serves the engine's real memory evidence with
-   provenance labels — measured process RSS, the model FILE size
-   (explicitly never "RAM used"), the runtime offload line, and the
-   KV-cache allocation named UNKNOWN where the engine exposes no
-   measured surface (never a guessed figure).
-
-5. **P1 — Windows CPU telemetry + preserved truth surfaces.** The
-   Governor's Windows CPU seam measures real load via kernel32
-   `GetSystemTimes` through the one shared priming/delta state machine
-   (first sample primes; deltas are real; failures stay unknown) — no
-   second sampler, no second cadence; the Linux seam is untouched. The
-   native C++ engine's capabilities stay explicit (CPU-only execution,
-   no GPU claim, no faked reasoning budgets); the GPU backend direction
-   remains the PROVEN llama.cpp Vulkan transaction (no SYCL/OpenVINO
-   backend is claimed — the repository cannot yet provision, launch,
-   test and verify one).
-
-6. **Version identity.** All release surfaces at 1.8.6 through the ONE
-   canonical gate (`node scripts/release-version.mjs --check`).
-
-## v1.8.5 changes (Phase 1 of the staged engine program)
-
-1. **P0 — live streaming, server side of the wire closed.** The v1.8.4
-   frontend scheduler repaired the RENDER-side loss (triple-boundary,
-   self-healing flush); the remaining bottleneck sat in the SERVER's run
-   hub: a plain 128-deep channel whose overflow policy DROPPED THE NEWEST
-   event. For cumulative response/reasoning snapshots that discards the
-   frame carrying the FULL text while the buffer keeps stale prefixes —
-   exactly the "streamed text visible only after Stop" class under a
-   backpressured/stalled client transport. The hub now delivers through a
-   bounded, conflation-aware queue: overflow evicts the OLDEST conflatable
-   snapshot (newest-wins), order and the seq replay contract are
-   preserved, terminal events are never preferentially evicted, the
-   publisher never blocks, memory stays bounded, and every event write
-   carries a generous deadline so a wedged client tears down
-   deterministically and recovers through the reconnect snapshot replay.
-   Deterministic hub/queue suites (9 tests) + the race gate; the full API
-   suite stays green.
-
-2. **P0 — the reasoning-depth ladder Low / Mid / High / Ultra (real
-   backend meaning, end-to-end).** Each level carries a numeric
-   thinking-token budget onto the generation request via the llama.cpp
-   request-level `reasoning_budget_tokens` parameter — verified present
-   in BOTH managed engine builds (b10642 default, b11205) by reading the
-   actual server sources: low = 0 (thinking off, the engine's own
-   "immediate end" semantics), mid = 1024 (bounded default), high = 4096,
-   ultra = the engine default (no client-side cap — the honest encoding).
-   Local engines only (the same gating as the other llama.cpp-specific
-   request fields); remote providers never receive the field; a
-   non-thinking model ignores it (reasoning is never fabricated); the
-   native C++ path has no budget control and the level is documented-inert
-   there. The wire/Go/store/front ladder is one contract — the level
-   travels with EVERY run request; the legacy Auto/Fast/Thinking
-   vocabulary migrates at both boundaries and is never re-emitted.
-
-3. **P0 — Show Thinking / Hide Thinking (visibility only).** A persisted
-   presentation preference that gates the RENDERING of backend-reported
-   reasoning across the live generation bubble, the settled safety-net
-   bubble and history messages. It never changes generation settings: the
-   reasoning level and its budget travel with every request regardless,
-   the store keeps folding reasoning snapshots, and unavailable reasoning
-   stays unavailable. Chat and Agent share the semantics through the
-   shared composer/message surfaces.
-
-4. **P1 — the engine is supervised machinery.** The user-facing Start/Stop
-   engine toggle is removed from the ordinary workflow. The engine boots
-   on first use through the run gate (EnsureLLMContext), restarts through
-   the settings flow after engine-affecting changes, and recovers through
-   internal supervision; the UI represents engine state (runtime pill,
-   badge, live phase). All internal lifecycle operations — startup,
-   engine update, restart, recovery, shutdown — are unchanged.
-
-5. **Phase 2 foundation — the execution/evidence ladder.** ONE shared
-   structure (`internal/llm/execution.go`, surfaced as `/api/engine`'s
-   `execution` block) composes the existing authorities into the monotone
-   ladder detected → backend-available → device-selected → model-loaded →
-   generation-executed → execution-evidence → verified. Device
-   enumeration can never equal verified execution: the pure composer
-   stops at the first unproven rung and names the gap. No new sampler, no
-   second policy engine — inputs come from device detection, backend
-   health, the accelerator selection memo, verified model loading,
-   measured generation telemetry and runtime offload lines. The deep
-   physical-GPU execution proof and the unified C++ execution path remain
-   Phase 2 work (see `ROADMAP.md` §Phase 2).
-
-6. **Version identity.** All release surfaces at 1.8.5 through the ONE
-   canonical gate (`node scripts/release-version.mjs --check`).
-
-## v1.8.4 changes
-
-1. **P0 — live streaming visibility (response AND thinking) during an
-   active run.** The v1.8.2 dual-boundary flush carried a latent wedge:
-   the MessageChannel task controller was one-shot, and a post arriving
-   while a message was still in flight chained onto the armed callback
-   without posting a new one. One lost or indefinitely delayed MessageChannel
-   delivery — the failure class the reported Windows runtime exhibited —
-   left the flush latch pending forever; streamed text accumulated in the
-   accumulator until Stop's synchronous flush revealed it. The v1.8.4
-   scheduler arms THREE independent boundaries behind the ONE coalescing
-   latch (reusable MessageChannel macrotask + 0ms timer task + animation
-   frame); the task controller is recoverable by construction (latest-wins,
-   bounded handshake, deterministic microtask fallback). The ACTIVITY flush
-   (statuses, tool events, done/error/aborted) moved off its rAF-only
-   schedule onto the same scheduler. Streaming efficiency is unchanged:
-   cumulative snapshots, one coalescing latch, no per-token renders, no
-   sleeps, no polling.
-
-2. **P0 — AUTO Vulkan provisioning unblocked; explicit OFF stays
-   respected; the engine-identity verification window is truthful.**
-   (i) The stale derived CPU posture (`gpuAutoOffload=false` written by
-   the pre-1.8.4 recommendation pipeline) no longer blocks the AUTO
-   candidate: the recommendation never writes a derived OFF, the config
-   records explicit user actions (`gpuAutoOffloadUserSet`), and Load
-   repairs the legacy derived state once, with an honest note, persisted.
-   Explicit user OFF, manual layer counts and the CPU requested profile
-   are never touched. (ii) During the deferred-commit verification window
-   the boot path now derives identity from the installer's staged marker
-   and probes the ACTUAL swapped-in binary — "staged b11310, probe
-   reports b11310" — instead of misreporting the previous recorded tag
-   and reusing the old build's capability profile. Commit/Rollback clear
-   the marker; the transaction's stop → stage → verify → start → health
-   → execution-evidence → commit/rollback choreography is unchanged.
-
-3. **P0 — zero-session Send.** Deleting the final session leaves a valid
-   zero-session state, the composer stays usable, and pressing Send
-   automatically creates + activates a session in the current mode and
-   continues the same run (the store's lazy creation, now reachable).
-   Chat and Agent modes behave identically; the created session persists
-   across reloads.
-
-4. **P0 — monotonic context refresh.** The context UI can no longer show
-   stale usage: every context refresh carries a monotonic generation; only
-   the newest request for the still-active session may write
-   `sessionContext`. Session change, deletion (cleared + replacement
-   refreshed), creation, mode switch and fresh-run transitions invalidate
-   in-flight responses. The UX remains automatic/unlimited; physical
-   limits remain governed by model + engine + runtime (the backend stays
-   the ONE context authority).
-
-5. **P1 — config-write atomicity.** Every config write uses a unique
-   same-directory temp file (the fixed `config.json.tmp` name was a
-   latent cross-writer race, observed as a hard engine-start failure in
-   this repo's own verification funnel).
-
-## Maintenance / update / rollback behavior (current)
-
-* The maintenance gate (identity manifest + committed state) still owns
-  engine updates; two-boot idempotency and the corruption matrix are
-  unchanged (deterministic, fault-injected).
-* During a deferred engine update the serving binary is the byte-verified
-  staged candidate and the staged-identity marker (`engine-stage-pending.json`,
-  inside the managed bin directory) is its identity authority until
-  Commit records the new tag and removes the marker. Rollback restores
-  the previous package and the marker is gone with the staged tree.
-* The v1.8.4 GPU-posture repair is a ONE-TIME config migration: it fires
-  at Load only for a marker-less derived CPU posture under a non-CPU
-  requested profile, repairs to the AUTO default, appends an honest
-  PathNote and persists. After the repair it can never fire again. There
-  is no other data migration of any kind: the session store's on-disk
-  format, the index and the sidecars are byte-compatible with v1.8.3.
-* The update path still resolves engine variants through the ONE
-  authoritative resolver (pinned tag first, else newest release containing
-  the asset); unsupported variants are REFUSED, never silently CPU-fallen.
-* The AUTO Vulkan candidate evidence ladder is unchanged: supported
-  variant → resolved asset → staged package → byte identity → start →
-  health → device enumeration → bounded real generation → offload-line
-  evidence → commit (or rollback). Detection alone is never proof.
-* The Runtime Governor adds NO persistence, NO new scheduler and NO new
-  updater: it is a policy read-model over existing telemetry. Restarting
-  the app re-measures; nothing to migrate.
-
-## Evidence-truth statements (standing)
-
-* Deterministic unit / race / integration / E2E / CI / real-engine probe /
-  real-host runtime are DISTINCT evidence classes and are never conflated.
-* v1.8.4 evidence: the flush-scheduler wedge is reproduced deterministically
-  at the unit level (a lost channel message must self-heal — the design
-  fails the test before the repair and passes after); the context races
-  are forced by causality over a scripted transport; zero-session Send is
-  proven store-level AND through the real stack in a browser (including
-  visible-before-completion with requestAnimationFrame suspended).
-* v1.8.5 evidence: the hub's drop-newest overflow policy is reproduced
-  deterministically (a full, never-drained queue must still end on the
-  NEWEST snapshot — the v1.2.x policy fails the test and the conflation
-  queue passes); terminal-event survival, publish-never-blocks, close
-  drains and eviction order are pinned the same way; the reasoning ladder
-  is pinned at the wire field name, the budget numbers, the local/remote
-  gating and the legacy migration (Go suite) AND at the payload/persistence
-  split (store-level scripted-transport suite); the execution ladder's
-  detected ≠ verified rule is pinned by the monotone-stage suites. The
-  reasoning_budget_tokens parameter was verified against the ACTUAL
-  server sources of both managed builds (b10642/b11205) — not against
-  documentation alone.
-* Vulkan GPU execution is NOT claimed by this release: the AUTO path and
-  the identity window are repaired and deterministically tested, but a
-  real-GPU offload claim still requires the physical execution evidence
-  the transaction itself collects — CI and this repository cannot
-  manufacture it.
-* Build/typecheck ≠ runtime proof; CI ≠ physical-host runtime proof;
-  detection ≠ execution. The physical-Windows acceptance walkthrough
-  (launch, delete the final session, Send with zero sessions, live
-  streaming during generation, reload persistence) remains the user's own
-  acceptance step — no physical-PC claim is made by CI or by this release.
-
----
-
-# Historical records (compressed — authoritative detail lives in the tags, their tests, and `changelog.md`)
-
-## v1.8.3 record
-
-The Linux CI session-delete failure root-caused with instrumented
-evidence (measurement race in the test, not the product); the startup
-session-list write moved through the ONE generation guard; honest DELETE
-errors + idempotent create-prepend; deterministic three-layer
-session-delete coverage; ROADMAP evidence-ranking.
-
-## v1.8.2 record
-
-The "text visible only after Stop" live-rendering defect repaired by the
-dual-boundary flush (event-loop task + animation frame, one coalescing
-latch); factual no-reasoning-stream state; backend-truth memory evidence
-composed at the injection site; the deterministic capability self-model;
-the (path,size,mtime) model-card cache; central log redaction.
-
-## v1.8.1 record
-
-The real-Windows local-generation crash repaired at the root (Gemma-class
-projection-tensor quantization mismatch: verified before download,
-refused with the exact mismatch named); engine-build identity contract.
-
-## v1.8.0 record
-
-Runtime Governor: resource state, envelopes, admission, hysteresis,
-self-model, `/api/governor`; cooperative protection unchanged.
-
-## v1.7.6 record
-
-Continuum (chapter rollover) + vision-projector honesty surfaces.
-
-## v1.7.5 record
-
-Session-list generation guard (refreshSessions consumer), run-control
-E2E, stale-run protection hardening.
-
-## v1.7.4 record
-
-Pause/edit/resume (durable checkpoints, revision conflicts), live
-streaming fast path foundations.
-
-## v1.7.0–v1.7.3 record
-
-Scheduler RunNow settlement contract (close = persistence + bookkeeping
-complete); recovery/handoff durability; engine-lifecycle and stress
-hardening.
-
-## v1.7.1 record
-
-Preflight gate: one report over existing authorities, hard
-incompatibilities refuse runs BEFORE engine start; LiveMonitor with
-hysteresis and synchronous cooperative critical protection (active run
-contexts canceled — nothing killed); context-exhaustion recovery (typed
-conditions only, exactly one bounded restart); native engine first-class
-backend; license/doc cleanup.
-
-## v1.6.x record
-
-Engine-variant provisioning through the authoritative resolver with
-Windows-runner asset validation (HEAD-checked reachability ≠ runtime
-execution — labeled then and now); stable embedded-frontend asset
-contract; custom tools surface; workflow output-name repair.
-
-## v1.5 and earlier (compressed)
-
-Multi-agent context, memory/recall tiers, durable summaries, cross-mode
-history, task state, agent.md handoff, continuum rollover, repository
-index, Lab workspaces, downloader/installer foundations, environment
-centre, streaming replay contracts — each with the deterministic and
-integration evidence that shipped in its release.
+* The goal runner does not yet decompose steps into subtasks
+  automatically (the delegation engine is implemented and tested; the
+  integration is the first v1.9.x work item).
+* The protected-evaluation anti-hack guard is designed but not
+  implemented; until it lands, protected evaluation hygiene relies on
+  the existing Lab policy and workspace boundaries.
+* The MCP client remains implemented and tested but is not yet
+  registered into the runtime tool registry.

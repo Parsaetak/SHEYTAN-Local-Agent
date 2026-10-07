@@ -16,6 +16,8 @@ import (
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/aisystem"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/goal"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
@@ -118,6 +120,18 @@ type Stack struct {
         // hybrid search). Exposed so the Workspace surface can report
         // index state and so a workspace switch can refresh the index.
         RepoIndex *repoindex.Store
+
+        // Systems (v1.9.0) is the ONE AI System authority: user-owned,
+        // revisioned run configurations with a persisted active pointer.
+        // The API layer freezes the active snapshot into every run;
+        // in-flight runs never observe mid-run edits (value semantics).
+        Systems *aisystem.Store
+
+        // Goals (v1.9.0) is the ONE durable long-horizon Goal store. The
+        // engine (internal/goal) drives runs through the orchestrator via
+        // an injected executor; the store owns checkpoints, approvals and
+        // boot recovery (never falsely running after a restart).
+        Goals *goal.Store
 
         // Telemetry records per-turn context-effectiveness measurements.
         Telemetry *ctxtelemetry.Store
@@ -563,6 +577,30 @@ func NewStack(cfg *config.Config) *Stack {
         )
         stack.RepoIndex = repoIdx
 
+        // v1.9.0: the ONE AI System store — user-owned, revisioned run
+        // configurations (instructions/model/reasoning/tool surface/
+        // approval policy). Persisted under <DataDir>/ai-systems/; a
+        // fresh install gets the default system whose behavior is the
+        // pre-v1.9 runtime behavior exactly. Runs freeze the active
+        // snapshot at start (api.handleRun -> agent.WithAISystem).
+        // The store open cannot fail in practice (the directory is created
+        // under the already-created data root); a failure degrades to the
+        // default system lazily through the API layer instead of killing
+        // the whole stack — the runtime never refuses to boot over the
+        // AI System store.
+        if systems, sysErr := aisystem.Open(cfg.DataDir); sysErr == nil {
+                stack.Systems = systems
+        }
+        // v1.9.0: the durable Goal store — boot recovery marks any goal
+        // found live with no run behind it as paused (never falsely
+        // running); terminal goals stay terminal.
+        if goals, goalErr := goal.Open(cfg.DataDir); goalErr == nil {
+                stack.Goals = goals
+                if _, recErr := goals.RecoverOnBoot(); recErr != nil {
+                        logging.Default().Warn("goals", "boot recovery: %v", recErr)
+                }
+        }
+
         memMgr.RegisterTrim("repoindex-cache", func() int64 {
                 return repoIdx.TrimCache()
         })
@@ -589,6 +627,15 @@ func NewStack(cfg *config.Config) *Stack {
         }()
 
         orch.Register(repoindex.NewTool(repoIdx, func() string {
+                return src.Load().EffectiveWorkspaceRoot()
+        }))
+
+        // v1.9.0: deterministic repository NAVIGATION — open / navigate /
+        // read / grep over identified sources through the SAME index and
+        // the SAME path-safety authority as repo_search (spec §7: the
+        // search → inspect → refine → open → navigate → read/grep →
+        // verify workflow). Bounded ranges, provenance, truncation state.
+        orch.Register(repoindex.NewNavTool(repoIdx, func() string {
                 return src.Load().EffectiveWorkspaceRoot()
         }))
 

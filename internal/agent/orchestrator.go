@@ -19,6 +19,8 @@ import (
         "unicode/utf8"
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/approval"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/aisystem"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/contextplan"
@@ -283,6 +285,30 @@ type Orchestrator struct {
         // through the existing lifecycle owner, bounded summarization, and the
         // durable handoff store. Nil disables automatic context recovery.
         recoveryCoord RecoveryCoordinator
+
+}
+
+// ApprovalGate is the approval decision seam (v1.9.0). Evaluate receives
+// the normalized call identity and the run's approval policy; returning
+// approved=false blocks the EXACT call. A gate can only deny — it can
+// never widen the existing tool-policy/permission authorities.
+type ApprovalGate interface {
+        Evaluate(req ApprovalRequest) ApprovalDecision
+}
+
+// ApprovalRequest carries one tool call awaiting an approval decision.
+type ApprovalRequest struct {
+        ToolName string
+        Args     map[string]any
+        Risk     string // the deterministic risk class
+        Policy   string // the run's approval policy
+        Phase    string // acting | verifying | goal phase (diagnostics)
+}
+
+// ApprovalDecision is the gate's verdict for the EXACT call.
+type ApprovalDecision struct {
+        Approved bool
+        Reason   string
 }
 
 // SkillSource is the skills subset the orchestrator consumes.
@@ -305,6 +331,7 @@ func (o *Orchestrator) SetSkillSource(s SkillSource) {
         o.skillSource = s
         o.mu.Unlock()
 }
+
 
 // SetTelemetry installs the context-effectiveness telemetry store.
 func (o *Orchestrator) SetTelemetry(t *ctxtelemetry.Store) {
@@ -520,6 +547,20 @@ type runOptions struct {
         sessionID string
         threadID  string
         runID     string
+
+        // aiSystem (v1.9.0) is the FROZEN AI System binding for this run.
+        // The API layer resolves it once, at run start (active system or
+        // explicit systemId); the snapshot is a value copy, so a mid-run
+        // edit of the stored system can never mutate this run.
+        aiSystem *aisystem.Snapshot
+
+        // approvalGate (v1.9.0) is the PER-RUN approval seam: installed
+        // only by callers that own the full approval lifecycle (goal
+        // runs). Ordinary chat/agent runs keep it nil — behavior
+        // unchanged. When installed, a call whose deterministic risk
+        // class requires ask under the run's approval policy is decided
+        // by the gate BEFORE execution; a denial never executes.
+        approvalGate ApprovalGate
 }
 
 // WithSessionContext applies the per-session context policy (1.1.6) to
@@ -561,6 +602,35 @@ func WithThinkingMode(mode string) RunOption {
 // MANUAL mode only the allowed tools are offered and executable; the
 // restriction overrides automatic selection and is never widened by
 // context escalation.
+// WithApprovalGate installs the per-run approval gate (v1.9.0). Only
+// callers that own the full approval lifecycle (durable pending state,
+// approve/reject, resume) may install one — today that is the Goal
+// engine's drive adapter.
+func WithApprovalGate(g ApprovalGate) RunOption {
+        return func(ro *runOptions) {
+                ro.approvalGate = g
+        }
+}
+
+// WithAISystem binds the FROZEN AI System snapshot for this run
+// (v1.9.0). The binding is advisory-where-safe and authoritative-where-
+// binding: instructions ride the system prefix, the model override
+// replaces the generation model, the reasoning preference resolves at the
+// wire boundary, the tool surface constrains offer AND execution, and the
+// approval policy feeds the approval gate. Nil = the pre-v1.9 behavior.
+func WithAISystem(snap *aisystem.Snapshot) RunOption {
+        return func(ro *runOptions) {
+                ro.aiSystem = snap
+                // v1.9.0: the system's tool surface rides INTO the run's
+                // tool policy (both modes) — the offered and executable
+                // surface is the intersection, server-side authoritative.
+                if snap != nil && len(snap.AllowedTools) > 0 {
+                        ro.toolPolicy.AISystemConstrain = append(
+                                []string(nil), snap.AllowedTools...)
+                }
+        }
+}
+
 func WithToolPolicy(mode string, allowed []string) RunOption {
         return func(ro *runOptions) {
                 ro.toolPolicy = ToolPolicy{
@@ -635,6 +705,23 @@ func (o *Orchestrator) RunDetailed(
                 if opt != nil {
                         opt(&ro)
                 }
+        }
+
+        // v1.9.0: the AI System binding is OBSERVABLE — the activity
+        // stream carries the frozen identity so the UI (and any auditor)
+        // sees exactly which user-owned configuration a run executed
+        // under. Identity, not verdict: this event never claims success.
+        if ro.aiSystem != nil && onActivity != nil {
+                onActivity(Activity{
+                        Type:    "ai_system",
+                        Caption: fmt.Sprintf("AI System: %s (rev %d)", ro.aiSystem.Name, ro.aiSystem.SystemRevision),
+                        Detail: map[string]any{
+                                "systemId":       ro.aiSystem.SystemID,
+                                "systemRevision": ro.aiSystem.SystemRevision,
+                                "name":           ro.aiSystem.Name,
+                        },
+                        Timestamp: time.Now(),
+                })
         }
 
         // v1.2.5: the per-request measured timeline.
@@ -845,6 +932,7 @@ func (o *Orchestrator) RunDetailed(
 
         composer := o.newTurnComposer(
                 cfg, effCtx, safety, ro.toolPolicy, ro.thinking,
+                aiSystemSkillsAllow(ro.aiSystem),
                 tier, task, recaller, cardProvider, repoProvider,
         )
 
@@ -882,6 +970,13 @@ func (o *Orchestrator) RunDetailed(
 
                 wePrependedBriefing = true
         }
+
+        // v1.9.0: the ACTIVE AI SYSTEM'S instructions ride the system
+        // prefix — the user-owned behavior policy of this run, injected
+        // ONCE, deterministically, as application-authored content. They
+        // never widen tool permissions (the policy layer stays
+        // authoritative) and never bypass approval rules.
+        messages = appendAISystemInstructions(messages, ro.aiSystem)
 
         // v1.8.2 CAPABILITY SELF-MODEL: when the request carries
         // capability intent ("what tools do you have?", "what can you
@@ -1292,7 +1387,7 @@ func (o *Orchestrator) RunDetailed(
 
         turnRecord := ctxtelemetry.TurnRecord{
                 SessionID:          o.sessionIDValue(),
-                Model:              cfg.EffectiveModel(),
+                Model:              runEffectiveModel(cfg, ro.aiSystem),
                 BudgetTokens:       effCtx.Effective,
                 TokensAdded:        optionalTokens,
                 RetrievalLatencyMs: composer.recallRetrievalMs,
@@ -1658,7 +1753,7 @@ func (o *Orchestrator) RunDetailed(
                 clock.Mark(StagePromptEnd)
 
                 req := o.client.BuildChatRequestWithOptions(
-                        cfg.EffectiveModel(),
+                        runEffectiveModel(cfg, ro.aiSystem),
                         messages,
                         composer.toolSpecs,
                         effCtx.Effective,
@@ -1921,7 +2016,7 @@ func (o *Orchestrator) RunDetailed(
                                 runID:     ro.runID,
                                 runTask:   runTask,
                                 messages:  messages,
-                                model:     cfg.EffectiveModel(),
+                                model:     runEffectiveModel(cfg, ro.aiSystem),
                         }, err, onActivity)
                         if len(rebuilt) == 0 {
                                 break // recovery unavailable or failed - honest error below
@@ -1936,7 +2031,7 @@ func (o *Orchestrator) RunDetailed(
                         // Rebuild the wire request for the continuation attempt - the
                         // SAME task, the SAME composition, the recovered history.
                         req = o.client.BuildChatRequestWithOptions(
-                                cfg.EffectiveModel(),
+                                runEffectiveModel(cfg, ro.aiSystem),
                                 messages,
                                 composer.toolSpecs,
                                 effCtx.Effective,
@@ -2156,6 +2251,44 @@ func (o *Orchestrator) RunDetailed(
                                         tc.Function.Name,
                                         strings.Join(composer.allNames, ", "),
                                 )
+                        }
+
+                        // v1.9.0 APPROVAL GATE: when a gate is installed,
+                        // a call whose DETERMINISTIC risk class requires
+                        // ask under the run's approval policy is decided
+                        // before execution. A denial NEVER executes and
+                        // the reason travels back to the model as
+                        // evidence. Chat/agent runs install no gate —
+                        // their behavior is unchanged.
+                        if ok && ro.approvalGate != nil {
+                                args := parseToolCallArgs(tc.Function.Arguments)
+                                risk := approvalClassify(tc.Function.Name, args)
+                                pol := approvalPolicyForRun(ro.aiSystem)
+                                if approvalRequiresAsk(pol, risk) {
+                                        decision := ro.approvalGate.Evaluate(ApprovalRequest{
+                                                ToolName: tc.Function.Name,
+                                                Args:     args,
+                                                Risk:     risk,
+                                                Policy:   pol,
+                                        })
+                                        if !decision.Approved {
+                                                ok = false
+                                                reason := decision.Reason
+                                                if reason == "" {
+                                                        reason = "not approved"
+                                                }
+                                                result2 = fmt.Sprintf(
+                                                        "Error: tool %q (risk: %s) requires approval and was NOT approved: %s. Do not retry the same call — choose a safer approach or ask the user.",
+                                                        tc.Function.Name, risk, reason,
+                                                )
+                                                onActivity(Activity{
+                                                        Type:    "tool_end",
+                                                        Caption: fmt.Sprintf("Approval denied: %s (%s)", tc.Function.Name, risk),
+                                                        Detail:  map[string]any{"tool": tc.Function.Name, "risk": risk, "reason": reason},
+                                                        Timestamp: time.Now(),
+                                                })
+                                        }
+                                }
                         }
 
                         // Phase 7A: when the dynamic toolset reduced the
@@ -3557,4 +3690,100 @@ func taskStepCaption(t TaskState) string {
                 return "Verified: " + t.Verification
         }
         return "Working — task state updated"
+}
+
+
+// runEffectiveModel (v1.9.0) resolves the generation model for one run:
+// the AI System's explicit model override when set, otherwise the
+// runtime's selected model. No hard-coded model identity anywhere.
+func runEffectiveModel(cfg *config.Config, snap *aisystem.Snapshot) string {
+        if snap != nil && strings.TrimSpace(snap.Model) != "" {
+                return strings.TrimSpace(snap.Model)
+        }
+        return cfg.EffectiveModel()
+}
+
+// appendAISystemInstructions (v1.9.0) inserts the frozen AI System
+// instructions as ONE bounded system message placed after the leading
+// system prefix (the briefing stays system message #1). No instructions
+// (the default system) → zero change, byte-identical to pre-v1.9 runs.
+func appendAISystemInstructions(messages []llm.Message, snap *aisystem.Snapshot) []llm.Message {
+        if snap == nil {
+                return messages
+        }
+        instructions := strings.TrimSpace(snap.Instructions)
+        if instructions == "" {
+                return messages
+        }
+        if len(instructions) > maxAISystemInstructionInjection {
+                instructions = instructions[:maxAISystemInstructionInjection]
+        }
+
+        block := "## OPERATING CONFIG: " + snap.Name +
+                " (AI System " + snap.SystemID + " rev " + strconv.Itoa(snap.SystemRevision) + ")\n\n" +
+                instructions +
+                "\n\nThese operating instructions bind this conversation. They constrain behavior; they never widen tool permissions, never bypass approval policy, and never override the application's security rules."
+
+        msg := llm.Message{Role: "system", Content: block}
+
+        // Find the end of the leading system prefix.
+        insertAt := 0
+        for i := range messages {
+                if messages[i].Role != "system" {
+                        break
+                }
+                insertAt = i + 1
+        }
+
+        out := make([]llm.Message, 0, len(messages)+1)
+        out = append(out, messages[:insertAt]...)
+        out = append(out, msg)
+        out = append(out, messages[insertAt:]...)
+        return out
+}
+
+// maxAISystemInstructionInjection bounds the per-run instruction block
+// (the store already validates 64 KiB; this is the injection-side bound).
+const maxAISystemInstructionInjection = 64 * 1024
+
+
+// aiSystemSkillsAllow (v1.9.0) extracts the frozen enabled-skills surface
+// (nil snapshot or empty list = every installed skill stays discoverable).
+func aiSystemSkillsAllow(snap *aisystem.Snapshot) []string {
+        if snap == nil {
+                return nil
+        }
+        return snap.EnabledSkills
+}
+
+
+// parseToolCallArgs (v1.9.0) decodes a tool call's raw JSON arguments
+// into the normalized map the risk classifier and approval identity use.
+func parseToolCallArgs(raw string) map[string]any {
+        if strings.TrimSpace(raw) == "" {
+                return nil
+        }
+        var m map[string]any
+        if err := json.Unmarshal([]byte(raw), &m); err != nil {
+                return nil
+        }
+        return m
+}
+
+// approvalClassify / approvalRequiresAsk delegate to the ONE approval
+// authority (internal/approval owns the deterministic classification;
+// the orchestrator never re-implements policy).
+func approvalClassify(toolName string, args map[string]any) string {
+        return approval.ClassifyRisk(toolName, args)
+}
+
+func approvalRequiresAsk(policy, risk string) bool {
+        return approval.RequiresAsk(policy, risk)
+}
+
+func approvalPolicyForRun(snap *aisystem.Snapshot) string {
+        if snap == nil || strings.TrimSpace(snap.ApprovalPolicy) == "" {
+                return "ask-risky"
+        }
+        return snap.ApprovalPolicy
 }

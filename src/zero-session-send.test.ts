@@ -117,16 +117,25 @@ class ScriptedBackend {
   journal: { method: string; path: string; status: number }[] = [];
   runBodies: Record<string, unknown>[] = [];
   failSessionCreates = false;
+  // v1.9.0: deterministic observability for the zero-session reload fix —
+  // the create POST can be delayed (so the test can sample the store while
+  // the lazy create is provably in flight) and observed at dispatch time.
+  sessionCreateDelayMs = 0;
+  onSessionCreate: (() => void) | null = null;
 
   reset(): void {
     this.sessions.clear();
     this.journal.length = 0;
     this.runBodies.length = 0;
     this.failSessionCreates = false;
+    this.sessionCreateDelayMs = 0;
+    this.onSessionCreate = null;
   }
 
   async quiesce(): Promise<void> {
-    for (let i = 0; i < 50 && this.inflight > 0; i += 1) {
+    const deadline = Date.now() + 5_000;
+
+    while (this.inflight > 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -176,6 +185,14 @@ class ScriptedBackend {
         if (this.failSessionCreates) {
           this.journal.push({ method, path, status: 500 });
           return this.respond(500, { error: "backend refuses session create" });
+        }
+
+        this.onSessionCreate?.();
+
+        if (this.sessionCreateDelayMs > 0) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, this.sessionCreateDelayMs),
+          );
         }
 
         const body = init?.body ? JSON.parse(String(init.body)) : {};
@@ -417,6 +434,14 @@ describe("zero-session send (deterministic, scripted transport)", () => {
     );
 
     assert.equal(backend.runBodies.length, 0, "no run POST without a session");
+
+    // v1.9.0: the failed lazy create is a FAILED run start — the run
+    // startup state set before the create must be cleaned up, otherwise
+    // the composer stays locked with no run to settle it.
+    const state = useRuntimeStore.getState();
+    assert.equal(state.running, false, "composer unlocked after the failure");
+    assert.equal(state.runPhase, "idle");
+    assert.equal(state.runStartedAt, null);
   });
 
   it("5. the run-created session survives a session-list refresh", async () => {
@@ -441,5 +466,83 @@ describe("zero-session send (deterministic, scripted transport)", () => {
       "the created session appears in the refreshed list",
     );
     assert.equal(state.activeSessionId, activeAfterRun);
+  });
+
+  // ---------------------------------------------------------------------
+  // v1.9.0 (zero-session reload P0) — the deterministic regression pair
+  // for the Linux E2E defect: the lazy session create ran while the store
+  // still read idle, so an enabled-composer observation could legally
+  // sample INSIDE run()'s startup window and reload before POST /api/run
+  // was dispatched (session existed, transcript stayed empty forever).
+  // ---------------------------------------------------------------------
+
+  it("6. v1.9.0: running:true is visible SYNCHRONOUSLY, before the lazy create is dispatched", async () => {
+    backend.reset();
+    const { useRuntimeStore } = await runtime();
+    resetRuntime();
+
+    // Hold the create POST in flight — the assertion below runs while it
+    // is provably mid-startup.
+    backend.sessionCreateDelayMs = 40;
+
+    let runningAtCreateDispatch: boolean | null = null;
+    backend.onSessionCreate = () => {
+      runningAtCreateDispatch = useRuntimeStore.getState().running;
+    };
+
+    const runPromise = useRuntimeStore.getState().run("lock before create");
+
+    // SYNCHRONOUSLY after run() is invoked — before any of its awaits
+    // settle — the composer state must already read running. The v1.8.8
+    // code set this only AFTER the create resolved, which is exactly the
+    // window the Linux E2E reload probe sampled.
+    const stateNow = useRuntimeStore.getState();
+    assert.equal(
+      stateNow.running,
+      true,
+      "run() must lock the composer synchronously",
+    );
+    assert.equal(stateNow.runPhase, "preparing");
+
+    await runPromise;
+    await backend.quiesce();
+
+    // The state survived the ENTIRE lazy create (createSession no longer
+    // clobbers it mid-startup).
+    assert.equal(
+      runningAtCreateDispatch,
+      true,
+      "running must still be true when the create POST is dispatched",
+    );
+    assert.equal(backend.runBodies.length, 1, "the run continued");
+    assert.equal(useRuntimeStore.getState().running, true);
+  });
+
+  it("7. v1.9.0: the created session carries the run state forward (keepRunState contract)", async () => {
+    backend.reset();
+    const { useRuntimeStore } = await runtime();
+    resetRuntime();
+
+    await useRuntimeStore.getState().run("keep the run alive");
+    await backend.quiesce();
+
+    const state = useRuntimeStore.getState();
+    assert.equal(backend.runBodies.length, 1);
+    assert.equal(state.running, true, "run state survived the lazy create");
+    assert.equal(state.runPhase, "preparing");
+    assert.equal(state.runStartedAt !== null, true);
+    assert.equal(state.activeSessionId !== null, true);
+    assert.equal(state.messages.length, 1);
+    assert.equal(state.messages[0].role, "user");
+
+    // The plain (non-run) create path keeps its historical semantics: a
+    // fresh session resets the lifecycle to idle.
+    await useRuntimeStore.getState().createSession();
+    await backend.quiesce();
+
+    const fresh = useRuntimeStore.getState();
+    assert.equal(fresh.running, false, "plain create still resets to idle");
+    assert.equal(fresh.runPhase, "idle");
+    assert.equal(fresh.runStartedAt, null);
   });
 });

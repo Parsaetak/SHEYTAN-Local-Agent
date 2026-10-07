@@ -11,6 +11,221 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.9.0 — 2026-10-08 — the AI System Builder + long-horizon agentic engineering + the Linux zero-session reload repair
+
+Focus: turn the existing one-authority runtime into the first real **AI
+System Builder + long-horizon agentic engineering layer** — a durable,
+user-owned AI System object whose frozen snapshot binds every run; a
+durable Goal engine with checkpoints, bounded replanning, approvals and
+honest boot recovery; a bounded delegation engine; one deterministic
+approval classification; deterministic repository navigation — while
+fixing the v1.8.8 Linux Browser-E2E release blocker at its root and
+preserving every verified v1.8 behavior. Every new capability extends an
+existing authority; no competing manager, registry, store or runtime was
+created. Evidence in the sections below; the strategic boundary lives in
+`ROADMAP.md` (v1.9 current/future boundary).
+
+1. **P0 — the Linux zero-session reload-persistence defect, root-caused
+   and repaired (Actions run 37654274420).** The failing test was
+   `e2e/zero-session.spec.ts` — "reload after a zero-session Send". The
+   defect signature: the created session persisted but the expected
+   transcript marker was missing after reload. Root cause: in the
+   zero-session path specifically, `run()`'s lazy `createSession()` POST
+   executed while the store still read `running:false` — the v1.8.8
+   startup-race repair had moved `running:true` before the WebSocket
+   attach wait, but this ONE async window remained. The E2E "wait for
+   the run to settle" probe (`expect(composer).toBeEnabled()`) is a pure
+   state assertion, not a transition assertion: it was legitimately
+   satisfiable INSIDE the create window, and a reload landing there
+   killed the pipeline before `POST /api/run` was ever dispatched. The
+   session then existed server-side (pending sessions are listed), the
+   history fetch returned `total:0`, and the empty-transcript surface is
+   exactly what the marker assertion could not find. The repair:
+   (a) the run-startup state (`running:true`, `runPhase:"preparing"`,
+   bookkeeping resets, context invalidation) is set BEFORE any transport
+   work; (b) the lazy create carries `keepRunState` so it can no longer
+   clobber the startup state mid-flight; (c) every failure path cleans
+   the startup state deterministically (a failed create is a FAILED run
+   start — the composer never stays locked); (d) pending attachments are
+   snapshotted before transport so the zero-session path can no longer
+   drop them; (e) the E2E now waits for the deterministic "the run left
+   the client" marker (the optimistic user bubble, pushed synchronously
+   immediately before the run POST), waits for real settlement
+   (composer unlocked AND the assistant row present), and asserts the
+   DURABLE post-reload transcript (user AND assistant rows). The
+   deterministic regression pair lives at the store level:
+   `zero-session-send.test.ts` #6 proves `running:true` is visible
+   SYNCHRONOUSLY with the create POST provably in flight; #7 proves the
+   created session carries the run state forward (keepRunState) while
+   the plain create path keeps its historical idle semantics; #4 now
+   also asserts the failure cleanup. Chat/Agent semantics are unchanged.
+
+2. **AI System — the first-class, user-owned run configuration object.**
+   `internal/aisystem` implements the ONE AI System store:
+   `systemId`, name, monotonic `revision`, instructions, model override,
+   reasoning/effort preference, allowed tool surface, approval policy,
+   enabled skills, knowledge refs, memory/compaction policy, runtime
+   profile, verification policy, created/updated timestamps. Persistence
+   follows the house pattern: one JSON document per system under
+   `<DataDir>/ai-systems/`, atomic unique-temp+rename writes, bounded
+   counts and sizes, deterministic (CreatedAt, systemId) ordering,
+   corruption-tolerant listing, and a persisted active pointer with
+   dangling-pointer repair. A fresh install receives exactly ONE valid
+   default system whose behavior is byte-identical to the pre-v1.9
+   runtime; existing configs migrate non-destructively (nothing outside
+   the ai-systems directory is touched). Full CRUD, activation with
+   correct active-system fallback (deleting the active system falls back
+   to the default; the default can never be deleted), clone, export and
+   import (import mints a fresh identity — never an overwrite).
+   `internal/aisystem/aisystem_test.go` proves: fresh-install default,
+   reload persistence of the active selection, revision increments with
+   frozen-snapshot isolation, clone/export/import round trip, garbage
+   rejection, reservation, validation bounds and unknown-vocabulary
+   normalization, corruption tolerance, deterministic ordering and the
+   snapshot JSON identity contract.
+
+3. **Execution binding — the snapshot is frozen per run.** `handleRun`
+   resolves the binding ONCE, before the run goroutine starts and before
+   the response: an explicit request `systemId` wins (404 when missing —
+   an honest, deterministic contract), otherwise the ACTIVE system. The
+   frozen snapshot (`systemId` + `systemRevision`) rides the run as a
+   value copy, so a mid-run edit can never mutate a running
+   configuration. The binding is enforced server-side: instructions ride
+   the system prefix as one bounded block after the briefing; the model
+   override replaces the generation model at every request build; the
+   reasoning preference resolves at the wire boundary (an explicit
+   request level always wins; unset/auto adopts the system's preference)
+   through the EXISTING v1.8.5 numeric ladder — low=0, mid=1024,
+   high=4096, ultra=engine default — never a fabricated budget; the tool
+   surface constrains the OFFERED and EXECUTABLE tools in both policy
+   modes (`ToolPolicy.AISystemConstrain` — it can only remove, never
+   widen; the Net Search intent is equally subject to it); the skills
+   surface filters skill activation (irrelevant and excluded skills never
+   inflate context). The frozen identity is published as an `ai_system`
+   activity event and travels on the run response.
+
+4. **Durable Goal engine.** `internal/goal` implements the long-horizon
+   loop (UNDERSTAND → PLAN → DELEGATE/ACT → OBSERVE → VERIFY → REPLAN →
+   COMPLETE) over durable goal state: goalId, original goal, system
+   binding identity, phase (`understanding → planning → acting →
+   verifying → completed`), status (active, waiting_for_approval,
+   waiting_for_resource, paused, blocked, failed, completed, cancelled),
+   bounded plan (≤12 steps) with per-step status/result/evidence, a
+   bounded goal-level evidence journal, changed files, artifacts,
+   verification state, effort, turn budget, replans, checkpoints and
+   timestamps. Progress derives from actual plan state — no decorative
+   percentages. Checkpoints persist after planning, after EACH completed
+   step, at approval boundaries and at terminal settlement; resume
+   continues from the checkpoint WITHOUT replaying committed mutations.
+   Bounded replanning (default 2) revises only remaining work and keeps
+   the failure evidence at goal level — a plan revision can never erase
+   the failure record. Recoverable tool failures block the STEP, never
+   destroy the goal. The turn budget parks the goal instead of running
+   away. A model claim never completes a goal: the terminal settlement
+   maps the orchestrator's objective verification report
+   (`VerificationVerified`), never the model's prose. Boot recovery
+   (`RecoverOnBoot`) marks any goal found live with no run behind it as
+   paused — never falsely running — and is idempotent; terminal goals
+   stay terminal. HTTP: `/api/goals` (list/create+start), item
+   get/delete(cancel), start/pause/resume/cancel/approve/reject. The UI
+   surface is the Goals card in the System Centre.
+
+5. **Approval authority — one deterministic risk classification.**
+   `internal/approval` classifies every tool call into exactly one of
+   five risk classes (`read-only`, `workspace-write`, `external-network`,
+   `destructive`, `privileged/host-level`) from the tool identity and
+   normalized arguments — deterministic shell-fragment classification for
+   destructive/privileged commands, conservative defaults for unknown
+   tools. The policy vocabulary (`auto`, `ask-risky` — the default,
+   `ask-all`) decides which classes ask. The EXACT normalized call
+   identity (`CallKey`: tool + risk + canonical arguments) is the only
+   thing an approval decision can bind to; the bounded decision ledger
+   proves approvals never leak across different calls and argument order
+   never changes identity. The per-run `agent.WithApprovalGate` seam is
+   installed ONLY by goal runs (ordinary chat/agent runs keep the
+   pre-v1.9 behavior exactly): a call whose risk class requires ask under
+   the goal's AI System policy is DENIED before execution with an
+   instructive evidence message — nothing risky ever executes silently.
+   Goal-level approvals are DURABLE: `waiting_for_approval` + the pending
+   exact call persist (reload-safe), approve resumes the exact call,
+   rejection is recorded as evidence, and stale/mismatched approval ids
+   are rejected explicitly. Tests: `internal/approval/approval_test.go`
+   (risk matrix, policy defaults, identity binding, ledger exactness) and
+   the goal approval tests.
+
+6. **Bounded sub-agents — executable delegation alongside the advisory
+   specialists.** `internal/multiagent/subtasks` adds real bounded
+   delegation while the existing researcher/architect/coder/debugger/
+   tester/security consultations remain advisory. Every subtask carries
+   explicit budgets: role, objective, allowed tool surface, read/write
+   capability, workspace scope, context bound, deadline and evidence
+   requirement. Resource policy is enforced structurally: read-only
+   subtasks run at most 2 simultaneously (the concurrency seam can only
+   tighten the bound, never widen it), mutating subtasks run strictly
+   serialized, fan-out is bounded (≤8), the executor is a leaf (no nested
+   spawning is possible), and a deadline hit is an honest `blocked`
+   result. Results merge DETERMINISTICALLY in `subtaskId` order — never
+   in worker completion order (proven by a test whose completion order is
+   deliberately reversed). Failed subtasks stay failed with unresolved
+   issues; the parent receives concise structured evidence, never raw
+   transcripts. The goal runner does not yet decompose steps into
+   subtasks automatically — the engine is implemented, tested and
+   surface-ready (honest v1.9 boundary, see ROADMAP).
+
+7. **Repository navigation — the agentic retrieval workflow.**
+   `repo_nav` (`internal/repoindex/navigation.go`, registered in the
+   runtime beside `repo_search`) adds deterministic navigation actions
+   over the ONE persistent index: `open` (bounded head), `navigate`
+   (line/symbol context window), `read` (exact bounded range) and `grep`
+   (exact substring pattern in ONE identified file, honest TOTAL match
+   count with bounded content). Every result carries the source identity,
+   exact line range, workspace provenance and an explicit truncation
+   state; entire files are never returned (120-line and 8 KiB bounds;
+   1 MiB file ceiling). All paths go through the same path-safety
+   authority as `repo_search` — traversal, absolute paths, Windows volume
+   and UNC forms are refused identically on Linux and Windows (proven by
+   the hostile-path tests).
+
+8. **Version, docs and release-metadata synchronization.** Every release
+   surface reads 1.9.0 from the single canonical source: `package.json`,
+   `package-lock.json`, `internal/config/config.go`, `build/config.yml`,
+   `SIGNATURE`; `release-version.mjs --check` is green (canonical
+   surfaces + workflow contract). `ROADMAP.md` is restructured to its
+   mandated shape (purpose/evidence rules; the compact shipped baseline;
+   the v1.9 current/future boundary; v1.10–v2.0 future; the evidence-
+   driven backlog) — detailed v1.8.x release history now lives ONLY in
+   this changelog (the accidental duplicated v1.8.5 section in the
+   roadmap is gone with the restructure). `UPDATE.md` carries the v1.9.0
+   release notes only; `README.md` describes the current product;
+   `ARCHITECTURE.md` documents the implemented v1.9 behavior;
+   `agent.md` is the repaired v1.9.0 handoff.
+
+9. **Frontend — real state, minimal UI.** The System Centre hosts the two
+   new compact cards: the AI System selector/editor (create, edit with
+   revision bump, activate, clone, export, import, delete — all real
+   backend actions) and the Goals card (create+start, honest status chips
+   derived from durable state, plan progress from actual plan state,
+   pause/resume/cancel/approve/reject, live-goal polling only while a
+   goal is live). View-model logic is pure and unit-tested
+   (`ai-systems-view.test.ts`: deterministic selector rows, defensive
+   payload tolerance, evidence-derived progress, honest state
+   descriptions). The browser E2E flow (`e2e/ai-systems.spec.ts`) proves
+   the default-system-first contract, create+activate through the real
+   backend, activation SURVIVING A RELOAD, and the goal
+   create→terminal-cancel lifecycle surviving reload — against the same
+   real headless server + engine the release gate uses.
+
+10. **Preserved v1.8 behavior.** The full frontend unit suite (220
+    tests), the Go agent/api/runtime suites, `go vet`, typecheck and lint
+    run green on this release; Chat, Agent, sessions, zero-session Send,
+    streaming, pause/resume/abort, refresh/recovery, reasoning,
+    dataAnalysis, research, repoindex, the coding Lab, the scheduler,
+    custom tools, the updater/downloader, the Governor, execution
+    evidence and the native engine are untouched in their authority
+    structure.
+
+---
+
 ## v1.8.8 — 2026-10-07 — audit-job repair, metadata synchronization, dependency security
 
 Focus: repair the v1.8.7 `test:release` audit-job failure at its root

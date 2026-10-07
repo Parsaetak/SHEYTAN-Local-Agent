@@ -121,40 +121,64 @@ test("Send with zero sessions streams text visibly BEFORE completion (Chat)", as
 
   // Visible-before-completion: the LIVE generation surface shows
   // non-empty streamed text while the run is provably live (Stop up).
-  // The observation loop runs INSIDE the page (20 ms samples for up to
-  // 30 s) so a fast engine's live window cannot be missed by the
-  // Playwright roundtrip latency — the same proof standard as
-  // live-stream.spec.ts, tightened for the zero-session path's cold
-  // engine gate.
+  // v1.9.0: the observation is a MUTATION OBSERVER, not a 20 ms poll —
+  // the poll has sampling gaps, and on a fast host the fixture's ~160
+  // token stream can complete between two samples (observed: pass/fail
+  // flip on the same machine). The observer fires on EVERY DOM
+  // transition, so even a single committed streaming frame is caught.
+  // The proof standard is unchanged (bubble + Stop up + non-empty text);
+  // the observation is strictly stronger. The loop runs INSIDE the page
+  // so no Playwright roundtrip latency is involved.
   const observed = await page.evaluate(() => {
     return new Promise<boolean>((resolve) => {
       const started = Date.now();
 
-      const sample = () => {
+      const textOf = (el: Element | null) =>
+        (el?.textContent ?? "").replace(/\u200b/g, "").length;
+
+      const check = (): boolean => {
         const bubble = document.querySelector(".generation-bubble");
         const content = bubble?.querySelector(".message-content");
         const stopVisible = Array.from(
           document.querySelectorAll("button"),
         ).some((b) => b.textContent?.trim() === "Stop");
-        const textLen = (content?.textContent ?? "").replace(
-          /\u200b/g,
-          "",
-        ).length;
+        return Boolean(bubble && stopVisible && textOf(content) > 0);
+      };
 
-        if (bubble && stopVisible && textLen > 0) {
+      // Immediate check first (the window may already be open), then
+      // every DOM mutation until the bound.
+      if (check()) {
+        resolve(true);
+        return;
+      }
+
+      const observer = new MutationObserver(() => {
+        if (check()) {
+          observer.disconnect();
           resolve(true);
           return;
         }
-
         if (Date.now() - started > 30_000) {
+          observer.disconnect();
           resolve(false);
-          return;
         }
+      });
 
-        setTimeout(sample, 20);
-      };
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
 
-      sample();
+      // The bound guard also runs timer-side: a page with NO mutations
+      // after the armed check would otherwise wait forever.
+      const bound = window.setInterval(() => {
+        if (Date.now() - started > 30_000) {
+          window.clearInterval(bound);
+          observer.disconnect();
+          resolve(false);
+        }
+      }, 500);
     });
   });
 
@@ -205,18 +229,46 @@ test("reload after a zero-session Send: the created session persists and stays a
   await composer(page).fill("reload persistence proof");
   await page.getByRole("button", { name: /Send|Forge/, exact: true }).click();
 
+  // v1.9.0 (reload-race regression guard): the run must be PROVABLY
+  // dispatched before any reload is legal. The optimistic user bubble is
+  // pushed synchronously immediately before POST /api/run fires, so its
+  // visibility is the deterministic "the run left the client" marker.
+  // The bare composer-enabled probe below is NOT a transition assertion —
+  // it is satisfied by the pre-run enabled state too, and reloading on
+  // that sample alone killed the pipeline before the run POST ever fired
+  // (the exact v1.8.8/v1.9.0 Linux E2E defect signature: session exists,
+  // transcript total:0).
+  await expect(
+    page.locator(".message-row.from-user", {
+      hasText: "reload persistence proof",
+    }),
+  ).toBeVisible({ timeout: 20_000 });
+
+  // The run executes and settles before the reload (authoritative
+  // durable state: the backend persists the user message and the reply
+  // BEFORE the terminal state unlocks the composer).
   await expect(composer(page)).toBeEnabled({ timeout: 120_000 });
+  await expect(page.locator(".message-row.from-agent")).toHaveCount(1, {
+    timeout: 60_000,
+  });
 
   // Reload the app entirely.
   await page.reload();
   await expect(composer(page)).toBeEnabled({ timeout: 60_000 });
 
   // The session created by the zero-session Send is still there, still
-  // active, and its transcript survived.
-  await expect(page.locator(".session-list .session-item-wrap")).toHaveCount(1);
+  // active, and its transcript survived (user message AND the assistant
+  // reply — durable state, not in-memory leftovers).
+  await expect(page.locator(".session-list .session-item-wrap")).toHaveCount(
+    1,
+    { timeout: 20_000 },
+  );
   await expect(
     page
       .locator(".message-row", { hasText: "reload persistence proof" })
       .first(),
   ).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".message-row.from-agent")).toHaveCount(1, {
+    timeout: 30_000,
+  });
 });
