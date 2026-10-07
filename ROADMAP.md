@@ -37,7 +37,32 @@ actually known, never from what a report asserted:
 
 ## v1.8 — Adaptive Runtime Intelligence
 
-### v1.8.7 — deterministic discovery + data-analysis authority — **CURRENT RELEASE**
+### v1.8.8 — hardening the shipped surface — **CURRENT RELEASE**
+
+v1.8.8 makes no architectural bet and adds no new subsystem. It repairs
+the v1.8.7 audit-job failure at its root, synchronizes every release
+surface to one version, and removes the dependency-level security debt
+(evidence in `changelog.md` §v1.8.8):
+
+* **Codename-gate fixture repair** — the v1.8.7 JSON column-order
+  determinism fixtures in `internal/tools/data_tool_test.go` used the
+  retired product codename as a JSON key, so the tracked-tree scan
+  failed the audit job and skipped both platform jobs. The fixtures use
+  a codename-free key with identical ordering semantics; the gate stays
+  strict and the regression stays real.
+* **Release-metadata synchronization** — `package-lock.json` root
+  metadata (stale at 1.8.5) is synchronized through the canonical
+  version authority; every surface reads 1.8.8 from the one source.
+* **Dependency security** — the high-severity advisory reported by
+  `npm audit` is repaired through a compatible upgrade with the
+  frontend dependency contract preserved and the full frontend suite
+  re-run.
+* **dataAnalysis hardening** — correctness gaps in the existing one
+  data authority (parser edge cases, deterministic ordering with
+  explicit tie-breakers, join/aggregate/quality/export semantics) are
+  closed with regression coverage rather than new machinery.
+
+### v1.8.7 — deterministic discovery + data-analysis authority
 
 v1.8.7 repairs the v1.8.6 Windows CI failure at its root and upgrades
 the one `dataAnalysis` tool into the deterministic data-analysis

@@ -647,7 +647,10 @@ func TestFullAnalysisChainDeterministic(t *testing.T) {
 // order from the decoded map made every JSON analysis nondeterministic.
 // Column order must now follow the document order on every load.
 func TestJSONColumnOrderIsDeterministic(t *testing.T) {
-	content := `[{"zeta": 1, "alpha": 2, "mid": 3}, {"zeta": 4, "alpha": 5, "mid": 6}]`
+	// Fixture keys deliberately follow document order that differs from
+	// alphabetical order (omega,alpha,mid) so a sorted-order regression
+	// would fail. Key names must avoid the retired product codename.
+	content := `[{"omega": 1, "alpha": 2, "mid": 3}, {"omega": 4, "alpha": 5, "mid": 6}]`
 
 	for run := 0; run < 20; run++ {
 		tool, _ := newTestDataTool(t, map[string]string{"order.json": content})
@@ -655,7 +658,7 @@ func TestJSONColumnOrderIsDeterministic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Join(ds.Columns, ",") != "zeta,alpha,mid" {
+		if strings.Join(ds.Columns, ",") != "omega,alpha,mid" {
 			t.Fatalf("run %d: JSON column order must follow document order, got %v", run, ds.Columns)
 		}
 	}
@@ -663,13 +666,13 @@ func TestJSONColumnOrderIsDeterministic(t *testing.T) {
 	// JSONL too.
 	for run := 0; run < 20; run++ {
 		tool, _ := newTestDataTool(t, map[string]string{
-			"order.jsonl": "{\"zeta\":1,\"alpha\":2}\n{\"alpha\":5,\"zeta\":4,\"mid\":9}\n",
+			"order.jsonl": "{\"omega\":1,\"alpha\":2}\n{\"alpha\":5,\"omega\":4,\"mid\":9}\n",
 		})
 		ds, err := tool.LoadTest("order.jsonl")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Join(ds.Columns, ",") != "zeta,alpha,mid" {
+		if strings.Join(ds.Columns, ",") != "omega,alpha,mid" {
 			t.Fatalf("run %d: JSONL column order must be first-seen across lines, got %v", run, ds.Columns)
 		}
 	}

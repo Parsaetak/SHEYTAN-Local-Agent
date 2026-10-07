@@ -490,6 +490,11 @@ func (t *DataTool) actionJoin(ctx context.Context, p *dataParams) (string, error
 	rightByKey := map[string][]int{}
 	for r := range right.Rows {
 		rightByKey[keyOf(right, rIdx, r)] = append(rightByKey[keyOf(right, rIdx, r)], r)
+		if r%65536 == 0 {
+			if err := ctxErr(ctx); err != nil {
+				return "", err
+			}
+		}
 	}
 
 	// Join. Left rows in file order; per key the right matches in file
@@ -913,9 +918,18 @@ func (t *DataTool) actionExport(ctx context.Context, p *dataParams) (string, err
 	}
 
 	// Optional row limit.
+	// v1.8.8 correctness repair: the limit previously MUTATED d.Rows on
+	// the dataset returned by load() — which is the LRU-cached pointer
+	// whenever no projection ran — so a limited export permanently
+	// truncated the cached dataset for every subsequent action. The
+	// limited view is now a separate dataset; the cache is untouched.
+	outDataset := d
 	if p.Limit > 0 && p.Limit < len(rows) {
 		rows = rows[:p.Limit]
-		d.Rows = rows
+		if types == nil {
+			types = d.Types
+		}
+		outDataset = &dataset{Columns: d.Columns, Types: types, Rows: rows, Path: d.Path}
 	}
 
 	format := p.Format
@@ -929,7 +943,7 @@ func (t *DataTool) actionExport(ctx context.Context, p *dataParams) (string, err
 		name = strings.TrimSuffix(filepath.Base(d.Path), ext) + "-export"
 	}
 
-	artifact, err := materializeDataset(d, format, name, "export-result")
+	artifact, err := materializeDataset(outDataset, format, name, "export-result")
 	if err != nil {
 		return "", err
 	}
@@ -946,7 +960,7 @@ func (t *DataTool) actionExport(ctx context.Context, p *dataParams) (string, err
 			"artifact": artifact,
 			"format":   strings.ToLower(strings.TrimPrefix(format, ".")),
 			"rows":     len(rows),
-			"columns":  len(d.Columns),
+			"columns":  len(outDataset.Columns),
 			"bytes":    size,
 		})
 		if jerr != nil {
@@ -957,5 +971,5 @@ func (t *DataTool) actionExport(ctx context.Context, p *dataParams) (string, err
 	}
 
 	return fmt.Sprintf("Exported %d rows × %d cols → %s (%d bytes)\n%s",
-		len(rows), len(d.Columns), artifact, size, datasetMeta(d)), nil
+		len(rows), len(outDataset.Columns), artifact, size, datasetMeta(outDataset)), nil
 }

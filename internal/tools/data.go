@@ -264,9 +264,14 @@ var maxDatasetBytes int64 = 256 << 20
 // streaming claim: files past the bound are rejected with guidance, and
 // heavy relational work stays on the pure-Go fast path (filter first,
 // then aggregate).
+// v1.8.8 honesty repair: the previous text suggested "filter it in
+// chunks" — chunked processing the engine does NOT implement. The
+// message now states exactly what is true: the whole file must fit in
+// memory; oversized inputs must be split or pre-filtered outside this
+// tool.
 func checkDatasetSize(size int64) error {
 	if size > maxDatasetBytes {
-		return fmt.Errorf("dataset too large (>%d MB) — filter or aggregate it in chunks, or sample it first (the in-process engine has no streaming mode)", maxDatasetBytes>>20)
+		return fmt.Errorf("dataset too large (%d MB) for the in-process engine (honest bound: %d MB, whole file in memory) — split the file or pre-filter it outside dataAnalysis; there is no streaming or chunked mode", size>>20, maxDatasetBytes>>20)
 	}
 
 	return nil
@@ -319,6 +324,25 @@ func (t *DataTool) load(path string) (*dataset, error) {
 
 // --- loaders ---
 
+// countUnquoted counts occurrences of target outside double-quoted
+// spans (quote parity scan — same contract as splitLinesAny).
+func countUnquoted(s string, target byte) int {
+	n := 0
+	inQ := false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '"':
+			inQ = !inQ
+		case target:
+			if !inQ {
+				n++
+			}
+		}
+	}
+
+	return n
+}
+
 func loadDelimited(path string) (*dataset, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -340,8 +364,11 @@ func loadDelimited(path string) (*dataset, error) {
 	}
 
 	// Delimiter sniff on the header line (comma vs tab).
+	// v1.8.8: count only delimiters OUTSIDE quoted fields — a quoted
+	// comma in a TSV header (or a quoted tab in a CSV header) previously
+	// flipped the sniff and mis-split the whole file.
 	delim := byte('\t')
-	if strings.Count(lines[0], ",") >= strings.Count(lines[0], "\t") {
+	if countUnquoted(lines[0], ',') >= countUnquoted(lines[0], '\t') {
 		delim = ','
 	}
 

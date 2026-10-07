@@ -438,6 +438,13 @@ func (rep *analyzeReport) correlationsSection() {
 	d := rep.d
 	cols := d.numericCols()
 	if len(cols) < 2 {
+		// v1.8.8 honesty: a REQUESTED section must answer, not silently
+		// vanish — fewer than two numeric columns is a real finding.
+		if rep.mode == "json" {
+			rep.fields = append(rep.fields, map[string]any{"section": "correlations", "pairs": []string{}})
+		} else {
+			rep.lines = append(rep.lines, "", "Correlations: fewer than two numeric columns — nothing to correlate.")
+		}
 		return
 	}
 
@@ -467,8 +474,18 @@ func (rep *analyzeReport) correlationsSection() {
 		return
 	}
 
-	sort.Slice(strong, func(a, b int) bool {
-		return math.Abs(strong[a].r) > math.Abs(strong[b].r)
+	// v1.8.8 determinism: equal |r| pairs get an explicit tie-breaker
+	// (ascending column indexes) instead of relying on sort.Slice
+	// internals — the reported ordering is a pure function of the input.
+	sort.SliceStable(strong, func(a, b int) bool {
+		ra, rb := math.Abs(strong[a].r), math.Abs(strong[b].r)
+		if ra != rb {
+			return ra > rb
+		}
+		if strong[a].a != strong[b].a {
+			return strong[a].a < strong[b].a
+		}
+		return strong[a].b < strong[b].b
 	})
 
 	if rep.mode == "json" {

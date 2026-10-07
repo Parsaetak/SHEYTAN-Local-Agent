@@ -1,14 +1,43 @@
-# UPDATE.md — v1.8.7 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.8.8 Release Notes & Maintenance Behavior
 
-**Release:** `v1.8.7` (canonical application version; single version
+**Release:** `v1.8.8` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 47cbbee` (`v1.8.6`) · **Date:** 2026-10-05
-**Package:** `SHEYTAN-Local-Agent-v1.8.7-FINAL.zip` (complete repository tree)
+**Base:** `main @ e9a8448` (`v1.8.7`) · **Date:** 2026-10-07
+**Package:** `SHEYTAN-Local-Agent-v1.8.8-FINAL.zip` (complete repository tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior.
+
+## v1.8.8 changes (audit-job repair + hardening the shipped surface)
+
+1. **Codename-gate fixture repair (CI run 37446279646 root cause).**
+   The v1.8.7 JSON column-order determinism fixtures
+   (`TestJSONColumnOrderIsDeterministic`) used the retired product
+   codename as a JSON key in four tracked lines
+   (`internal/tools/data_tool_test.go`), failing the `test:release`
+   gate so the audit job blocked both platform jobs. The fixture keys
+   were renamed to a codename-free alternative that preserves the
+   ordering semantics the regression pins (document order ≠
+   alphabetical order). The gate was NOT weakened: no exemption, no
+   allowlist, no removed assertion — the tracked tree is simply clean.
+
+2. **Release metadata synchronized.** `package-lock.json` root
+   metadata (stale at 1.8.5 since v1.8.6) now matches the canonical
+   version; every surface reads 1.8.8 through the one
+   `release-version.mjs` authority in `--check` mode.
+
+3. **Dependency security.** The `npm audit` high-severity advisory is
+   repaired at the exact vulnerable chain with a compatible upgrade;
+   the frontend dependency contract is preserved and the full
+   frontend stack (typecheck, lint, units, release tests) is green.
+
+4. **dataAnalysis hardening.** Correctness and determinism repairs on
+   the one data authority with regression coverage: parser edge cases,
+   explicit tie-breakers on externally visible orderings, join
+   cardinality semantics, aggregate/quality/export edge cases,
+   cancellation honoring, honest size-bound messaging.
 
 ## v1.8.7 changes (deterministic discovery + data-analysis authority)
 

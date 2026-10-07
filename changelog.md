@@ -11,6 +11,44 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.8.8 — 2026-10-07 — audit-job repair, metadata synchronization, dependency security
+
+Focus: repair the v1.8.7 `test:release` audit-job failure at its root
+and leave every shipped surface backed by real implementation and
+evidence. No new subsystem, no second authority, no architectural bet.
+
+1. **Codename-gate fixture repair (CI run 37446279646 root cause).**
+   The v1.8.7 `TestJSONColumnOrderIsDeterministic` fixtures used the
+   retired product codename as a JSON key in four tracked lines, so the
+   token-aware tracked-tree scan failed the audit job and both platform
+   jobs were skipped. The fixture keys were renamed to a codename-free
+   alternative that preserves the regression's ordering semantics
+   (document order ≠ alphabetical order); the gate remains strict, the
+   regression remains real, and no gate exemption was introduced.
+
+2. **Release metadata synchronized to one version.** The
+   `package-lock.json` root metadata (stale at 1.8.5 since the v1.8.6
+   release) is repaired; every release surface — `package.json`,
+   `internal/config/config.go`, `build/config.yml`, `SIGNATURE`,
+   README current-release identity, ROADMAP marker, `UPDATE.md` — now
+   reads 1.8.8 from the single canonical source through the existing
+   `release-version.mjs` authority (`--check` mode green).
+
+3. **Dependency security repair.** The high-severity advisory reported
+   by `npm audit` is repaired at the exact vulnerable chain with a
+   compatible semver upgrade; the frontend dependency contract is
+   preserved and the full frontend verification stack (typecheck, lint,
+   unit, release) re-run green.
+
+4. **dataAnalysis hardening.** Regression coverage and correctness
+   repairs on the one data authority: RFC-4180 parsing edge cases,
+   deterministic ordering with explicit tie-breakers on every
+   externally visible sequence, join cardinality semantics,
+   aggregate/quality/export edge cases, cancellation honoring and
+   honest size-bound messaging. Details in the v1.8.8 test suite.
+
+---
+
 ## v1.8.7 — 2026-10-05 — deterministic Tier-2 discovery + the data-analysis authority upgrade
 
 Focus: repair the v1.8.6 Windows CI failure in `internal/engdiscovery`

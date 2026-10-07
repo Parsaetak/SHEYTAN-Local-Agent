@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // --- statistics core ---
@@ -775,14 +776,22 @@ func (t *DataTool) actionMovingAvg(p *dataParams) (string, error) {
 
 // randInt63 is a tiny deterministic PRNG (xorshift64*) so `sample` with
 // mode=random is reproducible across calls without seeding plumbing.
-func randInt63(n int64) int64 {
-	state = state ^ state<<13
-	state = state ^ state>>7
-	state = state ^ state<<17
-	return int64((state >> 1) % uint64(n))
-}
+// v1.8.8: the generator state is mutex-guarded — the tool registry can
+// execute tool calls concurrently, and the previous bare global var was
+// a data race (two concurrent sample(mode=random) calls).
+var (
+	rngMu    sync.Mutex
+	rngState uint64 = 0x9E3779B97F4A7C15
+)
 
-var state uint64 = 0x9E3779B97F4A7C15
+func randInt63(n int64) int64 {
+	rngMu.Lock()
+	defer rngMu.Unlock()
+	rngState = rngState ^ rngState<<13
+	rngState = rngState ^ rngState>>7
+	rngState = rngState ^ rngState<<17
+	return int64((rngState >> 1) % uint64(n))
+}
 
 // Ensure the action helpers stay wired even if a future refactor trims
 // the call graph (the compiler would otherwise prune nothing, but the

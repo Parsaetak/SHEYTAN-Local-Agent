@@ -2817,6 +2817,29 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // authoritative post-run refresh).
     invalidateSessionContext();
 
+    // v1.8.8 (the E2E reload-persistence race repair): the run-startup
+    // state becomes visible HERE — before the transport work below, not
+    // after it. run() previously kept `running:false` across the attach
+    // wait, so the composer read as idle while a Send was mid-startup;
+    // a reload in that window killed the pipeline before the run POST
+    // ever fired and the message silently never happened (proven by the
+    // zero-session reload E2E trace: no POST /api/run, total:0 transcript).
+    set({
+      running: true,
+      error: null,
+      runPhase: "preparing",
+      runStartedAt: Date.now(),
+      runNote: null,
+      // v1.2.5: fresh run — fresh status line and escalation trail.
+      // v1.8.2: fresh run — fresh memory evidence (the new turn's
+      // context report replaces it).
+      liveStatus: null,
+      tierEscalations: [],
+      memoryEvidence: null,
+      // v1.2.8: fresh run — fresh task-state view.
+      agentTask: null,
+    });
+
     // v1.2.6 continuation: the DETERMINISTIC ATTACH CONTRACT — the POST
     // fires only after the server acknowledged this session's socket
     // (`attached` frame). The v1.2.6 code merely started the connection
@@ -2834,22 +2857,6 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       // No acknowledged transport — the run still POSTs; recovery paths
       // (run_snapshot replay, idle grace re-check) own the resync.
     }
-
-    set({
-      running: true,
-      error: null,
-      runPhase: "preparing",
-      runStartedAt: Date.now(),
-      runNote: null,
-      // v1.2.5: fresh run — fresh status line and escalation trail.
-      // v1.8.2: fresh run — fresh memory evidence (the new turn's
-      // context report replaces it).
-      liveStatus: null,
-      tierEscalations: [],
-      memoryEvidence: null,
-      // v1.2.8: fresh run — fresh task-state view.
-      agentTask: null,
-    });
 
     // v1.1.3: optimistic user bubble — the conversation shows the sent
     // message immediately, before any streaming event arrives.

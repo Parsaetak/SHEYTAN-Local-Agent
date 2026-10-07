@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.8.4
+Current release:  v1.8.8
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
@@ -560,3 +560,75 @@ Work Log:
 Stage Summary:
 - v1.8.5 Phase 1 COMPLETE: the live-streaming failure class is now closed on BOTH sides of the wire (v1.8.4 render side + v1.8.5 server side); the reasoning surface has real, verified backend meaning; thinking visibility is a first-class control; the engine left the user's critical path; Phase 2 starts from an explicit execution/evidence contract and a precise roadmap.
 - Phase 2 entry: ROADMAP.md §Phase 2 + agent.md "Phase 2 entry notes".
+
+---
+Task ID: 1 (v1.8.8 session)
+Agent: v1.8.8 engineering session
+Task: v1.8.8 — audit-job repair, release-metadata synchronization, dependency
+security, dataAnalysis hardening, E2E zero-session reload-persistence repair;
+clean-room build and package of SHEYTAN-Local-Agent-v1.8.8-FINAL.zip
+
+Work Log:
+- Baseline: HEAD `e9a8448` (v1.8.7). Reproduced the CI run 37446279646
+  audit-job failure exactly: `codename-gate.mjs` flagged 4 tracked lines in
+  `internal/tools/data_tool_test.go` (650/658/666/672) — the v1.8.7
+  TestJSONColumnOrderIsDeterministic fixtures used the retired codename as a
+  JSON key. Renamed the fixture key to a codename-free alternative that
+  preserves the ordering semantics (document order ≠ alphabetical order);
+  the gate stays strict and the regression stays real (no exemption added).
+- Release metadata: package.json 1.8.8; release-version.mjs repaired
+  config.go / build/config.yml / SIGNATURE; package-lock.json root metadata
+  synchronized (stale at 1.8.5 since v1.8.6); README current-release marker,
+  ROADMAP CURRENT RELEASE section, UPDATE.md release notes, changelog §v1.8.8.
+- npm audit: the high-severity advisory (GHSA-68fv-2mgg-jv7q,
+  source-map-js <1.2.2 via vite→postcss) repaired with the semver-compatible
+  lockfile-only upgrade to 1.2.2; direct dependency contract untouched;
+  `npm audit` now reports 0 vulnerabilities.
+- dataAnalysis hardening (the ONE data authority — no new subsystem):
+  (a) export with `limit` mutated the LRU-cached dataset (cache poisoning)
+  — the limited view is now a separate dataset; (b) delimiter sniff counted
+  delimiters inside quoted fields — now quote-aware (countUnquoted);
+  (c) analyze correlations ordering relied on sort internals for equal |r| —
+  explicit (a,b) tie-breaker with SliceStable; (d) a requested correlations
+  section with <2 numeric columns silently vanished — now answers honestly;
+  (e) the 256 MB error text implied chunked processing — message corrected
+  to the honest in-process bound; (f) join's right-index build honors
+  cancellation; (g) the sample-mode PRNG global state is mutex-guarded.
+  New `data_tool_hardening_test.go` pins RFC-4180 edges, splitLinesAny
+  parity, delimiter sniff, numeric semantics, stats/outlier edges, aggregate
+  degenerate groups, join many-to-many/empty, quality ±Inf, export cache
+  containment/determinism, JSON later-keys/duplicate-keys, correlation
+  tie-break.
+- E2E (real stack, real engine): the zero-session reload-persistence spec
+  failed deterministically. Trace + network HAR + WS frame logs root-caused
+  it: run() kept `running:false` across session creation and the bounded
+  attach wait, so the composer read idle while a Send was mid-startup; a
+  reload in that window killed the pipeline before POST /api/run and the
+  message never persisted (HAR: POST /api/sessions ok, no POST /api/run,
+  messages total:0). Repair: the run-startup state (running/preparing) is
+  set BEFORE the transport work in run(). Spec green in isolation (2.2s) and
+  in the full suite.
+- Verification evidence: frontend typecheck/lint/213 units/38 release green;
+  codename gate green; release-version --check green; go test
+  ./internal/... -tags headless -count=1 green; -race audit green on
+  api/agent/sessions/contextplan/histref/runtime/tools/engdiscovery; native
+  engine cmake clean configure + 12/12 ctest; 15 TestRealCppHost* Go
+  integration tests RUN (not skipped) and pass; Playwright full suite
+  36-37/38 per run, remaining failure class = live-window sampling
+  sensitivity (proven pre-existing via stash experiment: live-stream:87
+  fails identically on unmodified v1.8.7 code in this sandbox; the
+  deterministic streaming siblings — Stop + rAF-suspended growth — pass).
+- Sandbox gaps recorded honestly (no root): `go test ./...` and `go vet`
+  fail only on the Wails cgo desktop packages (gtk4/webkitgtk-6.0 headers
+  absent; CI installs them); Playwright --with-deps unusable (sudo) but
+  chromium runs; all other gates executed for real.
+
+Stage Summary:
+- Every v1.8.8 surface reads 1.8.8 through the ONE release authority.
+- The audit job's blocker is repaired at the root; platform jobs unblocked.
+- The one dataAnalysis authority is hardened with regression coverage.
+- The zero-session reload-persistence defect is fixed in the product, not
+  the test.
+- Deliverable: SHEYTAN-Local-Agent-v1.8.8-FINAL.zip (728 files, ZIP audit:
+  opens, root present, required sources present, no junk, version 1.8.8,
+  no stale identity, no codename leakage).
