@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { startSheytan, type SheytanStack } from "./fixtures/sheytan-server";
 
 /**
- * live-stream.spec.ts — LIVE VISIBILITY PROOF (v1.8.2 P0).
+ * live-stream.spec.ts — LIVE VISIBILITY PROOF (v1.9.1 P0).
  *
  * Proves through the REAL stack (server + HTTP + WebSocket + the real
  * C++ engine executing the live fixture: real logits, real sampler,
@@ -20,6 +20,35 @@ import { startSheytan, type SheytanStack } from "./fixtures/sheytan-server";
  * A second test proves Stop during a live generation settles honestly.
  * No test here "only waits for final completion" — every visibility
  * assertion is taken while the run is provably live (Stop button up).
+ *
+ * v1.9.1 P0 REPAIR — THE PLACEHOLDER BASELINE (root-caused from Actions
+ * 37704905404 / job 113077751580, reproduced locally under measured CPU
+ * contention). The v1.8.2 observation contract sampled the live surface's
+ * textContent and accepted ANY non-empty text as "streamed text": the
+ * GenerationBubble renders PRESENTATION PLACEHOLDERS while no content
+ * snapshot has arrived ("Connecting to the engine and preparing the turn…"
+ * while preparing — 48 chars — and "…" afterwards), so waitForLiveText
+ * passed on the placeholder within ~100ms of Send and the growth poll's
+ * 30s budget was consumed by the ENGINE GATE + PREFILL phase — measured on
+ * this stack at ~40ms per prompt token (a 446-token system briefing ≈ 8s
+ * unloaded, >30s under contention) BEFORE the first real token exists.
+ * On CI the poll expired (or shrank to a sliver) before the real streaming
+ * window opened: exactly "first bubble visible, Stop visible, no strictly
+ * longer text within 30s". The observation now tracks REAL streamed
+ * content only: the live surface marks its placeholder arms with
+ * data-stream-placeholder (MessageStream.tsx), waitForLiveText requires a
+ * non-placeholder snapshot, and the growth baseline is the FIRST REAL
+ * streamed snapshot — the strictly-longer observation is measured inside
+ * the genuine live window on every host speed.
+ *
+ * v1.9.1 FIXTURE BUDGET: maxTokens 320 (was 160). The engine emits one
+ * event chunk per 8 tokens (kEmitTokenWindow), so the budget IS the number
+ * of real cumulative snapshots the live window carries (40 here). The
+ * window duration necessarily scales with host speed; the SNAPSHOT COUNT
+ * is the deterministic dimension — growth observation needs strictly more
+ * than one poll interval of chunks after the baseline, which 40 chunks
+ * provides on any plausible host (measured: ~55ms/chunk under 2-core
+ * contention, ~15ms/chunk on a fast host).
  */
 
 let stack: SheytanStack | undefined;
@@ -28,8 +57,9 @@ test.beforeAll(async () => {
   stack = await startSheytan({
     model: "e2e-live.gguf",
     modelGenerator: "make-e2e-live-model.py",
-    // ~160 tokens of slow-dims generation ≈ 1–3 s of live streaming.
-    maxTokens: 160,
+    // 40 real engine chunks of slow-dims generation — the deterministic
+    // snapshot budget of the live window (see the header note).
+    maxTokens: 320,
   });
 });
 
@@ -52,7 +82,9 @@ test.beforeEach(async ({ page }) => {
 const composer = (page: Page) => page.getByPlaceholder("Message SHEYTAN...");
 
 // liveSample reads the live generation surface's state in one evaluation:
-// phase label, cumulative text length, whether the run is still live.
+// phase label, cumulative text length, whether the run is still live, and
+// whether the rendered text is a PRESENTATION PLACEHOLDER (the bubble's
+// preparing/ellipsis arms — never model output).
 function liveSample(page: Page) {
   return page.evaluate(() => {
     const bubble = document.querySelector(".generation-bubble");
@@ -65,19 +97,26 @@ function liveSample(page: Page) {
       hasBubble: Boolean(bubble),
       phase: phase?.textContent?.trim() ?? null,
       textLen: (content?.textContent ?? "").replace(/\u200b/g, "").length,
+      // v1.9.1: true while the surface renders its placeholder arm —
+      // this text is presentation, never a streamed snapshot.
+      placeholder: Boolean(bubble?.querySelector("[data-stream-placeholder]")),
       stopVisible,
     };
   });
 }
 
-// waitForLiveText polls until the LIVE bubble shows non-empty streamed
-// text (never just waits for completion) — bounded, state-driven.
+// waitForLiveText polls until the LIVE bubble shows real, non-placeholder
+// streamed text (never just waits for completion) — bounded, state-driven.
+// The engine gate + prefill phase (measured ~8s unloaded, >30s under
+// contention, ~40ms/prompt-token) legitimately precedes the first token;
+// this poll is the honest bound on that wait (60s), and the growth
+// observation below starts only from real streamed content.
 async function waitForLiveText(page: Page) {
   await expect
     .poll(
       async () => {
         const s = await liveSample(page);
-        return s.hasBubble && s.stopVisible && s.textLen > 0;
+        return s.hasBubble && s.stopVisible && !s.placeholder && s.textLen > 0;
       },
       { timeout: 60_000, intervals: [50] },
     )
@@ -92,24 +131,29 @@ test("streamed text is visible WHILE the run is live and grows without Stop", as
   await composer(page).fill("tell me something long");
   await page.getByRole("button", { name: "Send", exact: true }).click();
 
-  // (1)+(2) The LIVE surface shows non-empty streamed text while the run
-  // is provably live (Stop button still up) — no user action required.
+  // (1)+(2) The LIVE surface shows non-empty REAL streamed text while the
+  // run is provably live (Stop button still up) — no user action required.
+  // Placeholder presentation does not satisfy this (v1.9.1 repair).
   await waitForLiveText(page);
 
   const first = await liveSample(page);
   expect(first.stopVisible, "run must still be live at first text").toBe(true);
+  expect(first.placeholder, "first snapshot must be real content, not the placeholder").toBe(false);
   expect(first.textLen, "first visible snapshot must be non-empty").toBeGreaterThan(0);
 
   // (3)+(4) MORE text becomes visible without pressing Stop, and the run
   // continues generating after the first visible text. The fixture
-  // generates its full token budget, so growth is deterministic; we
-  // require at least one strictly-later, strictly-longer snapshot while
-  // still live.
+  // generates its full token budget (40 real engine chunks), so growth is
+  // deterministic; we require at least one strictly-later, strictly-longer
+  // snapshot while still live. The baseline is the FIRST REAL streamed
+  // snapshot, so this observation is measured inside the genuine live
+  // window on every host speed (v1.9.1 repair).
   await expect
     .poll(
       async () => {
         const s = await liveSample(page);
         if (!s.stopVisible) return -1; // settled before we caught growth
+        if (s.placeholder) return 0; // placeholder arm — never model output
         return s.textLen > first.textLen ? s.textLen : 0;
       },
       { timeout: 30_000, intervals: [50] },
@@ -205,17 +249,19 @@ test("the run streams and settles while live even with requestAnimationFrame sus
   await composer(page).fill("suspended rAF streaming proof");
   await page.getByRole("button", { name: "Send", exact: true }).click();
 
-  // (1)+(2) The LIVE surface shows non-empty streamed text while the run
-  // is provably live (Stop up) — no frame callbacks involved.
+  // (1)+(2) The LIVE surface shows non-empty REAL streamed text while the
+  // run is provably live (Stop up) — no frame callbacks involved. The
+  // placeholder arm does not satisfy this (v1.9.1 repair).
   await expect
     .poll(async () => {
       const s = await liveSample(page);
-      return s.hasBubble && s.stopVisible && s.textLen > 0;
+      return s.hasBubble && s.stopVisible && !s.placeholder && s.textLen > 0;
     }, { timeout: 60_000, intervals: [100] })
     .toBe(true);
 
   const first = await liveSample(page);
   expect(first.stopVisible, "run must still be live at first text").toBe(true);
+  expect(first.placeholder, "first snapshot must be real content, not the placeholder").toBe(false);
   expect(first.textLen, "first visible snapshot must be non-empty").toBeGreaterThan(0);
 
   // (3) The run SETTLES without the frame callback: the activity path's

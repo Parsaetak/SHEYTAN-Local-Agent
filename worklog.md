@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.8.8
+Current release:  v1.9.1
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
@@ -723,3 +723,152 @@ Stage Summary:
   (repository tree; ZIP audit: opens, required sources present, version
   1.9.0 everywhere, no stale current identity, no codename leakage,
   exactly one LICENSE.md).
+
+---
+Task ID: v1.9.1-release
+Agent: v1.9.1 engineering session (2026-10-08)
+Task: v1.9.0 -> v1.9.1 — P0 root-cause + repair of the authoritative
+Linux CI live-stream failure (Actions run 37704905404, Linux Browser-E2E
+job 113077751580, e2e/live-stream.spec.ts "streamed text is visible
+WHILE the run is live and grows without Stop"; CI 39/40), evidence-
+discipline repair for the v1.9.0 "40/40" claim, Windows/Linux desktop
+RUNTIME SMOKE gates in CI, packaging.
+
+Work Log:
+- EVIDENCE CLASSIFICATION FIRST: the v1.9.0 entry below records "full
+  Playwright suite 40/40" — that was a LOCAL single-run claim. The
+  authoritative GitHub Actions run 37704905404 shows 39/40 with the
+  live-stream growth assertion failing. Correction recorded here: local
+  runs are local evidence only; GitHub Actions is the only CI authority;
+  the v1.9.1 verdict below is likewise local until the CI run carrying
+  this revision reports.
+- INSPECT: HEAD 4cdd392 (v1.9.0); the whole streaming chain was read
+  (orchestrator emitProgress -> runLive.observe -> activityHub (bounded,
+  conflation-aware) -> WS writer -> store fast path -> accumulator ->
+  triple-boundary scheduler -> GenerationBubble DOM).
+- MEASURED FIXTURE FACTS (this 2-core sandbox, real native engine):
+  standalone engine-host probe — decode ~130+ tok/s (160 tokens over 21
+  event frames in ~0.26 s warm), and PREFILL ~25-40 ms per prompt token
+  (2-token prompt TTFT 0.02 s; ~300-token prompt TTFT 8.15 s; ~450-token
+  prompt TTFT 15.9 s). Full-stack run telemetry: system briefing 440
+  tokens, context 446/3.6k, TTFT 7.6 s, classifyMs 4091 (the classify
+  stage includes the engine-gate wait), run total ~12.8 s, response
+  frames 22 over a ~1.2 s window (p50 inter-frame 62 ms), final persisted
+  reply 203 chars, exactly one assistant message.
+- REPRODUCE: the failing test passed in isolation UNLOADED (20.3 s), so
+  the CI failure was reproduced under MEASURED CPU CONTENTION (2 busy
+  workers saturating both cores): the test FAILED with the exact
+  authoritative signature — growth poll "Expected: > 0, Received: 0"
+  (predicate stuck at 0: Stop visible the whole time, text never past
+  the baseline) and the failure screenshot shows the run STILL LIVE at
+  30 s with the bubble rendering the "…" PLACEHOLDER arm.
+- ROOT CAUSE (test observation contract, NOT the product stream): the
+  v1.8.2 contract sampled the live bubble's textContent and accepted ANY
+  non-empty text as "streamed text". GenerationBubble renders
+  PRESENTATION PLACEHOLDERS before the first content snapshot
+  ("Connecting to the engine and preparing the turn…" — 48 chars — while
+  preparing, "…" afterwards), so waitForLiveText passed within ~100 ms
+  of Send on placeholder text; the growth poll's 30 s budget then ran
+  during the engine gate + prefill phase (measured above: >30 s under
+  contention), expiring before the real streaming window ever opened.
+  The product chain was verified healthy end to end (WS frame + DOM
+  timeline: browser received every cumulative snapshot; DOM followed at
+  50-70 ms cadence; one persisted reply).
+- REPAIR (observation only, never weaker):
+  1) src/MessageStream.tsx: both placeholder arms now carry
+     data-stream-placeholder in the DOM — presentation text is
+     distinguishable from streamed content.
+  2) e2e/live-stream.spec.ts: waitForLiveText + both growth observations
+     require NON-placeholder snapshots; the growth baseline is the FIRST
+     REAL streamed snapshot; the rAF-suspended proof uses the same
+     real-content contract. All original assertions preserved.
+  3) Fixture budget 160 -> 320 tokens: the engine emits one event chunk
+     per 8 tokens (kEmitTokenWindow), so the budget IS the deterministic
+     snapshot count of the live window (40 chunks); window duration
+     still scales with host speed, snapshot count does not.
+- MUTATION VERIFICATION: with the repaired test under the same 2-worker
+  contention — (a) repaired contract: PASS; (b) placeholder detection
+  disabled (the v1.9.0 contract restored by mutation): FAIL with the CI
+  signature; (c) restored: PASS unloaded and under load. The coverage
+  detects the defect class it was written for.
+- CI RUNTIME SMOKE GATES (wired for the CI environment; NOT executed in
+  this sandbox): build-linux gains "Desktop runtime smoke (native Wails
+  binary under Xvfb)" — the REAL CGO desktop executable launched under
+  Xvfb, session banner + boot markers asserted STATE-BASED in the
+  isolated data dir's logs/app.log, liveness + no-crash-report, bounded
+  SIGTERM shutdown — and "Headless surface runtime smoke" — the headless
+  build serving the REAL embedded UI + API: event-driven /api/health
+  readiness, GET / proves the embedded shell, /api/models discovery,
+  clean shutdown. build-windows gains "Desktop runtime smoke (real
+  executable, process + backend init)" — SHEYTAN-LA.exe launched with an
+  isolated SHEYTAN_DATA_DIR, banner/liveness/no-crash state-based,
+  CloseMainWindow + bounded exit (Kill only as a failing-run backstop).
+  Packaging remains a DISTINCT gate: packaging success never implies GUI
+  runtime success. Evidence levels are labelled explicitly in the steps.
+- LOCAL VERIFICATION OF THE SMOKE DESIGN: the headless-surface smoke was
+  executed HERE against the real binary and passed (embedded UI +
+  health + model discovery + clean shutdown). The native Wails desktop
+  binary CANNOT be built in this sandbox (no gtk4/webkitgtk pkg-config
+  headers, no root) — same documented boundary as v1.9.0; its smoke step
+  is CI-wired and its execution is recorded nowhere until CI runs it.
+- Version identity 1.9.1 through the canonical gate (release-version
+  --check green); changelog.md gains the factual v1.9.1 entry; UPDATE.md
+  rewritten as v1.9.1 current notes; agent.md is the v1.9.1 handoff;
+  ROADMAP gains the measured native-prefill batching work item; README
+  current-only.
+
+Verification (evidence classes; LOCAL Linux x86-64 sandbox, Go 1.27,
+Node 24, 2 cores — see the classification note above):
+- Frontend: typecheck green; oxlint 0 warnings/0 errors (108 files);
+  npm run test:units 220/220; npm run test:release 38/38 (includes the
+  codename gate); production build + embedded sync green;
+  verify-static-assets green.
+- Go: go test ./internal/... -tags headless -count=1 = 62 packages ok
+  (2 load-sensitive flake observations in internal/api on this 2-core
+  box while OTHER Go suites ran concurrently: TestGovernorEndpoint-
+  ServesComposedSelfModel and TestLocalGemmaHiChatCompletes (30 s
+  chat deadline) — both pass in isolation, both also flaked at the
+  v1.9.0 baseline the same way, and the api package passes cleanly
+  when run sequentially; not v1.9.1 regressions — CI runs suites
+  sequentially). go test ./... -run Test = 61 packages ok + the two
+  sandbox-blocked desktop packages (root + internal/desktop) failing
+  to BUILD for the documented no-GTK-headers boundary. go vet ./cmd/...
+  ./internal/... clean (the same two packages are the sandbox build
+  boundary; CI vets the full module with the deps installed). Race
+  gate (-race, headless): api/agent/sessions/contextplan/histref/
+  runtime ALL ok.
+- Native: clean cmake configure + build + ctest 12/12 green.
+- Browser E2E: FULL suite 40/40 green (5.6 min, real headless server +
+  real native engine + fixture GGUF, no skipped failures) — the
+  repaired live-stream spec (3 tests) included; additionally the
+  live-stream growth test was verified under 2-worker CPU contention
+  (PASS) and with the placeholder detection mutated away (FAIL with
+  the CI signature — the mutation evidence above).
+- Stress: 47 pass / 0 fail, hangs=0, crashes=0.
+- Headless-surface runtime smoke: executed HERE against the real
+  binary — PASS (embedded UI + /api/health overall=ok + model
+  discovery + clean SIGTERM shutdown).
+- NOT executed here (stated honestly): GitHub Actions (no runner
+  access from this sandbox), the native Wails desktop smoke (GTK4/
+  WebKitGTK headers absent — the binary cannot even build here),
+  Windows (no Windows). The authoritative v1.9.1 CI verdict is the
+  Actions run that carries this revision; until it reports, no CI
+  claim is made for v1.9.1.
+
+Stage Summary:
+- v1.9.0 -> v1.9.1: the authoritative live-stream CI failure is
+  root-caused (placeholder-baseline observation contract racing the
+  measured prefill phase — NOT a product streaming defect; the chain was
+  verified healthy end to end), repaired with strengthened (never
+  weakened) assertions, mutation-verified coverage, and a deterministic
+  fixture snapshot budget; the v1.9.0 "40/40" claim is re-classified as
+  local-only evidence with the CI 39/40 recorded as authoritative;
+  desktop runtime smoke gates (Linux Xvfb + Windows process/backend-init)
+  are wired into CI with explicit evidence-level labels; version
+  identity is exactly 1.9.1 through the canonical gate.
+- Full local regression green on this revision (see Verification above);
+  the CI verdict for this revision is pending by construction (no local
+  run may claim it).
+- Deliverable: download/SHEYTAN-Local-Agent-v1.9.1-FINAL.zip (complete
+  reproducible source tree; exclusions per the release contract; ZIP
+  audit recorded in this entry).

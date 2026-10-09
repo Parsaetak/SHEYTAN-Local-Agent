@@ -167,6 +167,15 @@ existing one-authority runtime, never by duplicating it.
 * Oversized-output spool handles for ordinary shell/tool results (the
   artifact/task-registry machinery exists since v1.7; the automatic spool
   trigger for arbitrary outputs is future work).
+* Native-engine PREFILL BATCHING (performance, evidence-backed — measured
+  in the v1.9.1 session): the native engine currently processes prompt
+  tokens one forward pass at a time (~25–40 ms/prompt-token measured on a
+  2-core host; a 446-token system briefing ≈ 8 s of TTFT unloaded, >30 s
+  under CPU contention; decode on the same fixture is 130+ tok/s). Batched
+  prompt processing is the highest-leverage native-path latency item — it
+  bounds first-token latency for every chat/agent/goal turn. Not started;
+  the measurement method (standalone engine-host probe + run telemetry
+  TTFT/classifyMs) is recorded in worklog §v1.9.1.
 
 ## v1.10 — Universal Agent — **FUTURE — NOT IMPLEMENTED**
 

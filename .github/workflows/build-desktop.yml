@@ -701,6 +701,124 @@ jobs:
 
           Remove-Item $probe -Force
 
+      # v1.9.1 RUNTIME SMOKE — the REAL desktop executable launched as a
+      # process. Build/version/package never prove runtime: this gate
+      # starts SHEYTAN-LA.exe (the windowsgui Wails binary) against an
+      # isolated SHEYTAN_DATA_DIR and asserts, STATE-BASED (never sleeps):
+      # (1) the process starts and STAYS alive; (2) the boot path
+      # completed far enough to write the session banner + boot markers
+      # into the isolated data dir's logs/app.log (backend/runtime init);
+      # (3) no crash report exists after boot; (4) the process shuts down
+      # when asked (CloseMainWindow, bounded wait, Kill only as the CI
+      # backstop for an already-failing run). Explicit evidence boundary:
+      # this proves PROCESS-START + BACKEND INIT — not real GUI
+      # interaction; interaction with the same stack is proven by the
+      # Browser E2E job and the runner-side flows where supported.
+      - name: Desktop runtime smoke (real executable, process + backend init)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $exe = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
+
+          if (-not (Test-Path $exe)) {
+            throw "runtime smoke: Windows executable was not produced."
+          }
+
+          $smokeDir = Join-Path $env:RUNNER_TEMP "sheytan-runtime-smoke"
+          if (Test-Path $smokeDir) {
+            Remove-Item $smokeDir -Recurse -Force
+          }
+          $dataDir = Join-Path $smokeDir "data"
+          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+
+          $env:SHEYTAN_DATA_DIR = $dataDir
+
+          $outLog = Join-Path $smokeDir "stdout.log"
+          $errLog = Join-Path $smokeDir "stderr.log"
+
+          $proc = Start-Process `
+            -FilePath $exe `
+            -WorkingDirectory (Split-Path $exe) `
+            -RedirectStandardOutput $outLog `
+            -RedirectStandardError $errLog `
+            -PassThru
+
+          if ($null -eq $proc) {
+            throw "runtime smoke: the desktop process could not be started."
+          }
+
+          Write-Host "Desktop process started (pid $($proc.Id))."
+
+          # STATE-BASED readiness: the session banner + boot marker in
+          # logs/app.log (bounded, 60s — no fixed sleeps).
+          $appLog = Join-Path $dataDir "logs/app.log"
+          $bannerSeen = $false
+          $deadline = (Get-Date).AddSeconds(60)
+
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) {
+              Write-Host "--- desktop process exited before the boot markers ---"
+              Get-Content $outLog -ErrorAction SilentlyContinue | Select-Object -Last 20
+              Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 20
+              if (Test-Path $appLog) {
+                Get-Content $appLog | Select-Object -Last 40
+              }
+              throw "runtime smoke: desktop process exited during startup (code $($proc.ExitCode))."
+            }
+
+            if ((Test-Path $appLog) -and
+                (Select-String -Path $appLog -Pattern "==== SHEYTAN-Local-Agent v$($env:APP_VERSION) session start" -Quiet) -and
+                (Select-String -Path $appLog -Pattern "starting \(windows/amd64" -Quiet)) {
+              $bannerSeen = $true
+              break
+            }
+
+            Start-Sleep -Milliseconds 500
+          }
+
+          if (-not $bannerSeen) {
+            Write-Host "--- runtime smoke: boot markers never appeared ---"
+            if (Test-Path $appLog) {
+              Get-Content $appLog | Select-Object -Last 40
+            }
+            throw "runtime smoke: the session banner never appeared in logs/app.log."
+          }
+
+          # Liveness: the process is still running with the backend up.
+          if ($proc.HasExited) {
+            throw "runtime smoke: desktop process exited right after boot."
+          }
+
+          Write-Host "--- desktop runtime: session banner + boot markers observed, process alive (pid $($proc.Id)) ---"
+
+          # Backend/runtime init ran clean: no crash report at boot.
+          $crashDir = Join-Path $dataDir "logs/crashes"
+          if (Test-Path $crashDir) {
+            $crashes = Get-ChildItem $crashDir -Filter "*.log" -ErrorAction SilentlyContinue
+            if ($crashes -and $crashes.Count -gt 0) {
+              Write-Host "--- runtime smoke: crash report present after boot ---"
+              $crashes | ForEach-Object { Write-Host $_.Name }
+              throw "runtime smoke: crash report exists after boot."
+            }
+          }
+
+          Select-String -Path $appLog -Pattern "==== SHEYTAN-Local-Agent v$($env:APP_VERSION) session start" |
+            Select-Object -First 1 | ForEach-Object { Write-Host $_.Line }
+
+          # Clean shutdown: ask the window to close, then require exit
+          # within the bounded window. Kill is the CI backstop for an
+          # already-failing run — never a passing path.
+          $null = $proc.CloseMainWindow()
+
+          if (-not $proc.WaitForExit(15000)) {
+            Write-Host "--- runtime smoke: the process ignored CloseMainWindow; stopping it ---"
+            Stop-Process -Id $proc.Id -Force
+            throw "runtime smoke: desktop process did not exit after CloseMainWindow."
+          }
+
+          Write-Host "Desktop RUNTIME SMOKE passed: process-start + backend/runtime init + clean shutdown (GUI-interaction proof remains the Browser E2E boundary)."
+
       - name: Prepare Windows portable package
         shell: pwsh
         run: |
@@ -1101,6 +1219,7 @@ jobs:
             libwebkitgtk-6.0-dev \
             libglib2.0-dev \
             libsoup-3.0-dev \
+            xvfb \
             zip \
             unzip \
             file
@@ -1351,6 +1470,203 @@ jobs:
             <<< "$output"
 
           echo "Linux executable version/platform smoke test passed."
+
+      # v1.9.1 RUNTIME SMOKE — the REAL native Wails desktop binary under a
+      # virtual display. Build/version/package steps never prove GUI runtime:
+      # this gate launches the desktop executable itself and asserts,
+      # STATE-BASED (never sleeps): (1) the process starts and STAYS alive;
+      # (2) the GTK4/WebKitGTK runtime initializes far enough for the boot
+      # path to complete (the session banner + boot markers land in the
+      # isolated data dir's logs/app.log); (3) the backend/runtime
+      # initialization ran without a crash report; (4) SIGTERM terminates
+      # the process within a bounded window (a wedged GUI loop fails here).
+      # Explicit evidence boundary: this proves PROCESS-START + RUNTIME
+      # INIT — not real GUI interaction (no click/submit inside the
+      # webview); interaction with the same stack is proven by the Browser
+      # E2E job against the headless surface of the SAME sources.
+      - name: Desktop runtime smoke (native Wails binary under Xvfb)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          exe="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
+
+          test -f "$exe"
+          test -x "$exe"
+
+          smokeDir="$(mktemp -d)"
+          dataDir="$smokeDir/data"
+          mkdir -p "$dataDir"
+
+          # The desktop entry reads config.json under SHEYTAN_DATA_DIR
+          # (the canonical portable resolution); an isolated dir keeps
+          # runtime state out of the workspace.
+          SHEYTAN_DATA_DIR="$dataDir" xvfb-run -a "$exe" >"$smokeDir/stdout.log" 2>"$smokeDir/stderr.log" &
+          appPid=$!
+
+          cleanup() {
+            kill "$appPid" 2>/dev/null || true
+            wait "$appPid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          # STATE-BASED readiness: the session banner + boot marker in
+          # logs/app.log (bounded, 60s — no fixed sleeps).
+          bannerOk=0
+          for _ in $(seq 1 120); do
+            if kill -0 "$appPid" 2>/dev/null; then
+              if grep -q "==== SHEYTAN-Local-Agent v${APP_VERSION} session start" \
+                "$dataDir/logs/app.log" 2>/dev/null && \
+                grep -q "starting (linux/amd64" \
+                  "$dataDir/logs/app.log" 2>/dev/null; then
+                bannerOk=1
+                break
+              fi
+            else
+              echo "--- desktop process exited before the boot markers ---"
+              cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
+              tail -40 "$dataDir/logs/app.log" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+
+          if [ "$bannerOk" -ne 1 ]; then
+            echo "--- runtime smoke: boot markers never appeared ---"
+            tail -40 "$dataDir/logs/app.log" 2>/dev/null || true
+            cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
+            exit 1
+          fi
+
+          # Liveness: the process is still running with the backend up.
+          kill -0 "$appPid"
+          echo "--- desktop runtime: session banner + boot markers observed, process alive (pid $appPid) ---"
+
+          # Backend/runtime init ran clean: no crash report at boot.
+          if ls "$dataDir/logs/crashes/"*.log >/dev/null 2>&1; then
+            echo "--- runtime smoke: crash report present after boot ---"
+            ls "$dataDir/logs/crashes/"
+            exit 1
+          fi
+
+          grep -m1 "==== SHEYTAN-Local-Agent v${APP_VERSION} session start" "$dataDir/logs/app.log"
+
+          # Clean shutdown: SIGTERM, then the process must exit within the
+          # bounded window (a hung GUI loop fails the gate).
+          kill -TERM "$appPid"
+          shutdownOk=0
+          for _ in $(seq 1 30); do
+            if ! kill -0 "$appPid" 2>/dev/null; then
+              shutdownOk=1
+              break
+            fi
+            sleep 0.5
+          done
+
+          if [ "$shutdownOk" -ne 1 ]; then
+            echo "--- runtime smoke: desktop process did not exit after SIGTERM ---"
+            exit 1
+          fi
+
+          wait "$appPid" 2>/dev/null || true
+          trap - EXIT
+
+          echo "Desktop RUNTIME SMOKE passed: process-start + GTK/WebKit runtime init + backend init + clean shutdown (GUI-interaction proof remains the Browser E2E boundary)."
+
+      # v1.9.1 HEADLESS-SURFACE RUNTIME SMOKE — the same sources, the
+      # `headless` build: the full runtime stack + embedded frontend over
+      # real HTTP. Event-driven readiness (/api/health), then three REAL
+      # probes: the embedded UI is served, the backend reports overall ok,
+      # and model discovery answers. Terminates cleanly.
+      - name: Headless surface runtime smoke (embedded UI + API over HTTP)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          go build -tags headless -o "$RUNNER_TEMP/sheytan-headless" .
+
+          smokeDir="$(mktemp -d)"
+          dataDir="$smokeDir/data"
+          mkdir -p "$dataDir"
+
+          # Explicit port: the smoke owns the runner, 18790 collides with
+          # nothing; the config is the deterministic boot source.
+          printf '%s' '{"host":"127.0.0.1","port":18790}' > "$dataDir/config.json"
+
+          SHEYTAN_DATA_DIR="$dataDir" \
+            "$RUNNER_TEMP/sheytan-headless" serve --no-browser \
+            >"$smokeDir/stdout.log" 2>"$smokeDir/stderr.log" &
+          appPid=$!
+
+          cleanup() {
+            kill -TERM "$appPid" 2>/dev/null || true
+            wait "$appPid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          # The serve banner names the bound URL; parse the port from it.
+          for _ in $(seq 1 120); do
+            if ! kill -0 "$appPid" 2>/dev/null; then
+              echo "--- headless server exited during startup ---"
+              cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
+              exit 1
+            fi
+            port="$(grep -oE 'http://localhost:[0-9]+' "$smokeDir/stdout.log" | head -1 | grep -oE '[0-9]+$' || true)"
+            if [ -n "$port" ]; then break; fi
+            sleep 0.5
+          done
+
+          if [ -z "$port" ]; then
+            echo "--- runtime smoke: the serve banner never named a port ---"
+            cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
+            exit 1
+          fi
+
+          # Event-driven health readiness (bounded).
+          healthOk=0
+          for _ in $(seq 1 120); do
+            body="$(curl -fsS "http://127.0.0.1:${port}/api/health" 2>/dev/null || true)"
+            if grep -q '"overall":"ok"' <<<"$body" 2>/dev/null; then
+              healthOk=1
+              break
+            fi
+            kill -0 "$appPid" 2>/dev/null || { echo "--- server exited during health wait ---"; cat "$smokeDir/stdout.log" "$smokeDir/stderr.log"; exit 1; }
+            sleep 0.5
+          done
+
+          if [ "$healthOk" -ne 1 ]; then
+            echo "--- runtime smoke: /api/health never reported ok ---"
+            exit 1
+          fi
+
+          # The EMBEDDED UI is reachable and is the real shell.
+          curl -fsS "http://127.0.0.1:${port}/" | grep -Fq '<div id="root"></div>'
+
+          # Model discovery answers (empty list is honest on a runner
+          # without models — the endpoint must exist and answer).
+          curl -fsS "http://127.0.0.1:${port}/api/models" >/dev/null
+
+          echo "--- headless surface: embedded UI + health + model discovery verified ---"
+
+          kill -TERM "$appPid"
+          shutdownOk=0
+          for _ in $(seq 1 30); do
+            if ! kill -0 "$appPid" 2>/dev/null; then
+              shutdownOk=1
+              break
+            fi
+            sleep 0.5
+          done
+
+          if [ "$shutdownOk" -ne 1 ]; then
+            echo "--- runtime smoke: headless server did not exit after SIGTERM ---"
+            exit 1
+          fi
+
+          wait "$appPid" 2>/dev/null || true
+          trap - EXIT
+
+          echo "Headless-surface RUNTIME SMOKE passed: process-start, embedded UI, backend health, model discovery, clean shutdown."
 
       - name: Prepare Linux portable package
         shell: bash

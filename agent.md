@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.0 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.1 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,11 +7,11 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.9.0 — the AI System Builder + long-horizon agentic
-engineering layer, on the v1.8 foundations.** Version identity is exactly
-`1.9.0` everywhere (canonical gate: `node scripts/release-version.mjs
---check`). No stale 1.8.x current-release claims exist outside
-`changelog.md`.
+**Current release: v1.9.1 — the live-stream observation-contract repair
+(P0) + desktop runtime smoke gates, on the v1.9.0 feature surface.**
+Version identity is exactly `1.9.1` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.9.0
+current-release claims exist outside `changelog.md`.
 
 **THE CURRENT PROGRAM (v1.9.x):** complete the v1.9 boundary honestly —
 see `ROADMAP.md` §"v1.9 current/future boundary": automatic sub-agent
@@ -87,6 +87,22 @@ tools execute. The laboratory verifies."**
   the E2E waits for the deterministic run-dispatch marker plus durable
   post-reload transcript. Regression pair: `zero-session-send.test.ts`
   #6/#7.
+* **P0 repaired (v1.9.1, the live-stream observation contract).** The
+  CI live-stream growth assertion baselined on the live bubble's
+  PRESENTATION PLACEHOLDER and spent its poll budget inside the engine
+  gate + prefill phase (~40 ms/prompt-token measured; a 446-token
+  briefing ≈ 8 s TTFT unloaded, >30 s under contention). Placeholders
+  now carry `data-stream-placeholder` in the DOM; the live-stream
+  proofs require real streamed content for the baseline and observe
+  strictly-longer growth inside the genuine live window; the fixture
+  budget is 320 tokens (40 real engine chunks — the deterministic
+  snapshot count). No product streaming path changed; the chain was
+  verified healthy end to end (WS frame + DOM timeline diagnostic).
+* **Measured fact to carry (native engine path).** Native prefill is
+  ~25–40 ms/prompt-token on a mid host (no batching yet); decode is
+  130+ tok/s on the live fixture. First-token latency on the native
+  path is dominated by prompt length until prefill batching lands
+  (ROADMAP performance item).
 
 ## Verified foundations (v1.8 — unchanged authorities)
 
@@ -152,10 +168,17 @@ tools execute. The laboratory verifies."**
 * Linux CI path: source/frontend audit → Go verification (headless) →
   native engine build/tests → Browser E2E (real headless server + real
   engine + fixture GGUF) → stress → executable build → version smoke →
+  desktop RUNTIME SMOKE (v1.9.1: real Wails binary launched under Xvfb,
+  embedded UI + `/api/health` probed over loopback, clean shutdown) →
   ZIP verification. Nothing is skipped because the other platform is
   green.
 * Windows x64 keeps its green release path (installer, execution
-  evidence, discovery and data tests).
+  evidence, discovery and data tests) plus the v1.9.1 RUNTIME SMOKE
+  step: the real desktop executable is launched, its process liveness
+  verified, the embedded UI + backend health probed over loopback HTTP,
+  and the process shut down cleanly. Runtime smoke is a DISTINCT gate
+  from build/package — packaging success never implies GUI runtime
+  success.
 * The Browser E2E fixtures run the REAL stack; no mock-only substitute
   for backend behavior is accepted. The zero-session reload flow and the
   v1.9 AI System / Goal UI flows are covered by

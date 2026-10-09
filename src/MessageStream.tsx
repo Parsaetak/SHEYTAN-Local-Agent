@@ -475,10 +475,13 @@ function GenerationBubble() {
         ) : null}
 
         <p className="message-content">
-          {content ||
-            (runPhase === "preparing"
-              ? "Connecting to the engine and preparing the turn…"
-              : "…")}
+          {content || (
+            <span data-stream-placeholder="true">
+              {runPhase === "preparing"
+                ? "Connecting to the engine and preparing the turn…"
+                : "…"}
+            </span>
+          )}
 
           {runPhase !== "finalising" ? (
             <span className="stream-cursor" aria-hidden="true" />
@@ -582,7 +585,9 @@ function StreamingBubble() {
         ) : null}
 
         <p className="message-content">
-          {streaming.content || "…"}
+          {streaming.content || (
+            <span data-stream-placeholder="true">…</span>
+          )}
 
           <span className="stream-cursor" aria-hidden="true" />
         </p>

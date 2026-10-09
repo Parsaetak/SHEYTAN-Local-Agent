@@ -11,6 +11,88 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.9.1 — 2026-10-08 — the live-stream observation-contract repair (P0) + desktop runtime smoke gates
+
+Focus: root-cause and repair the v1.9.0 Linux CI live-stream failure
+(Actions run `37704905404`, Linux Browser-E2E job `113077751580`,
+`e2e/live-stream.spec.ts` "streamed text is visible WHILE the run is live
+and grows without Stop" — 39/40), restore evidence discipline around the
+v1.9.0 suite claims, and add real desktop runtime smoke gates (Linux +
+Windows) to the CI workflow so packaging success can never again be
+confused with GUI runtime success. No product streaming path changed:
+the engine → hub → WebSocket → fast-path → accumulator → scheduler → DOM
+chain was verified healthy end to end; the defect was in the TEST'S
+observation contract.
+
+1. **P0 — the placeholder-baseline defect, root-caused with measured
+   evidence and repaired.** The failing growth assertion baselined its
+   "first visible streamed text" on ANY non-empty text in the live
+   bubble. The bubble legitimately renders PRESENTATION PLACEHOLDERS
+   before the first content snapshot exists ("Connecting to the engine
+   and preparing the turn…" while preparing, "…" afterwards), so
+   `waitForLiveText` passed within ~100 ms of Send — on placeholder
+   text, never model output. The growth poll's 30 s budget then ran
+   during the engine gate + prefill phase, which was measured on the
+   real stack at ~40 ms per prompt token (standalone host probe: a
+   446-token system briefing costs ~8 s of prefill unloaded, >30 s under
+   CPU contention; the run telemetry recorded TTFT 7.6 s and
+   classifyMs 4091 — the classify stage includes the engine-gate wait).
+   On the CI host the poll expired before the real streaming window
+   opened: exactly the authoritative signature "first bubble visible,
+   Stop visible, no strictly longer text snapshot within 30 s"
+   (poll predicate stuck at 0 — live the whole time, text never past the
+   48-char placeholder baseline). Reproduced locally under measured
+   2-core CPU contention (failed identically), and the full chain was
+   verified healthy with a WS-frame + DOM timeline diagnostic (22
+   cumulative response frames over a ~1.2 s window, DOM following every
+   frame at 50–70 ms cadence, exactly one persisted reply).
+
+   The repair (observation, never weaker):
+   - the live surfaces mark their placeholder arms with
+     `data-stream-placeholder` (`src/MessageStream.tsx`) — presentation
+     text is now distinguishable from streamed content in the DOM;
+   - `waitForLiveText` and both growth observations require a
+     NON-placeholder snapshot — the growth baseline is the FIRST REAL
+     streamed snapshot, so the strictly-longer observation is measured
+     inside the genuine live window on every host speed;
+   - the fixture budget rises to 320 tokens (the engine emits one event
+     chunk per 8 tokens, so the budget IS the deterministic snapshot
+     count of the live window — 40 chunks; window duration still scales
+     with host speed, snapshot count does not);
+   - the rAF-suspended proof uses the same real-content contract.
+   Every original assertion is preserved and strengthened: real streamed
+   text visible while live, a strictly longer cumulative snapshot while
+   Stop is up, honest settlement, exactly one persisted reply.
+
+2. **P0 — evidence discipline.** The v1.9.0 worklog recorded "full
+   Playwright suite 40/40" from a single LOCAL run while the
+   authoritative GitHub Actions run `37704905404` shows 39/40. The
+   v1.9.1 session re-classified that claim as local-only evidence, and
+   the worklog now separates local, CI and physical-platform evidence
+   explicitly. GitHub Actions remains the only authority for CI claims;
+   local runs never upgrade to suite-green claims.
+
+3. **P1 — desktop runtime smoke gates in CI (Linux + Windows).**
+   `.github/workflows/build-desktop.yml` gains a Linux desktop runtime
+   smoke job (GTK4/WebKitGTK 6.0 stack on ubuntu-24.04, real Wails
+   desktop binary built with CGO, launched under Xvfb, embedded UI +
+   `/api/health` probed over the loopback HTTP surface, clean SIGTERM
+   shutdown) and a Windows runtime smoke step (real desktop executable
+   built, launched, process liveness verified, embedded UI health
+   probed, clean shutdown) — both clearly labelled RUNTIME SMOKE and
+   kept strictly apart from build/package gates: packaging success never
+   implies GUI runtime success. These steps are wired for the CI
+   environment and are NOT executed by the v1.9.1 local verification
+   (this sandbox has no root, no GTK4/WebKitGTK headers, no Windows);
+   the worklog records exactly that evidence boundary.
+
+Verification (v1.9.1, local Linux x86-64 sandbox — Go 1.27, Node 24,
+2 cores): recorded in `worklog.md` with the local/CI separation; the
+authoritative CI verdict for v1.9.1 is the GitHub Actions run that
+carries this revision, never a local claim.
+
+---
+
 ## v1.9.0 — 2026-10-08 — the AI System Builder + long-horizon agentic engineering + the Linux zero-session reload repair
 
 Focus: turn the existing one-authority runtime into the first real **AI
