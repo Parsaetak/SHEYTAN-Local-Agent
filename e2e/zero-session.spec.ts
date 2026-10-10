@@ -129,6 +129,16 @@ test("Send with zero sessions streams text visibly BEFORE completion (Chat)", as
   // The proof standard is unchanged (bubble + Stop up + non-empty text);
   // the observation is strictly stronger. The loop runs INSIDE the page
   // so no Playwright roundtrip latency is involved.
+  //
+  // v1.9.2 REPAIR (the placeholder loophole): the bubble renders
+  // PRESENTATION PLACEHOLDERS before the first content snapshot
+  // ("Connecting to the engine and preparing the turn…" while preparing,
+  // "…" afterwards — MessageStream.tsx marks them with
+  // data-stream-placeholder). The v1.9.0 check accepted ANY non-empty
+  // .message-content, so the observation could pass on placeholder text
+  // during the engine-gate + prefill window — never model output. The
+  // check now requires a NON-PLACEHOLDER content snapshot (the same
+  // real-content contract live-stream.spec.ts enforces since v1.9.1).
   const observed = await page.evaluate(() => {
     return new Promise<boolean>((resolve) => {
       const started = Date.now();
@@ -142,7 +152,13 @@ test("Send with zero sessions streams text visibly BEFORE completion (Chat)", as
         const stopVisible = Array.from(
           document.querySelectorAll("button"),
         ).some((b) => b.textContent?.trim() === "Stop");
-        return Boolean(bubble && stopVisible && textOf(content) > 0);
+        // Real streamed text only: the placeholder arm is presentation,
+        // never model output (v1.9.2 — mirrors live-stream.spec.ts).
+        const placeholder =
+          Boolean(bubble?.querySelector("[data-stream-placeholder]"));
+        return Boolean(
+          bubble && stopVisible && !placeholder && textOf(content) > 0,
+        );
       };
 
       // Immediate check first (the window may already be open), then
@@ -152,13 +168,22 @@ test("Send with zero sessions streams text visibly BEFORE completion (Chat)", as
         return;
       }
 
+      // v1.9.2: the bound is 60s — the same honest contract as
+      // live-stream.spec.ts waitForLiveText. The engine gate + prefill
+      // phase (measured: ~13s unloaded for the ~1681-token engine-side
+      // encoding of the briefing; 2-3x under full-suite contention on a
+      // 2-4 core host) legitimately precedes the first real snapshot,
+      // and the v1.9.1 30s bound expired INSIDE that phase under load —
+      // the observation failed without any product defect. The bound
+      // covers the wait; the PROOF standard is unchanged and is not
+      // weakened: real non-placeholder content while the run is live.
       const observer = new MutationObserver(() => {
         if (check()) {
           observer.disconnect();
           resolve(true);
           return;
         }
-        if (Date.now() - started > 30_000) {
+        if (Date.now() - started > 60_000) {
           observer.disconnect();
           resolve(false);
         }
@@ -173,7 +198,7 @@ test("Send with zero sessions streams text visibly BEFORE completion (Chat)", as
       // The bound guard also runs timer-side: a page with NO mutations
       // after the armed check would otherwise wait forever.
       const bound = window.setInterval(() => {
-        if (Date.now() - started > 30_000) {
+        if (Date.now() - started > 60_000) {
           window.clearInterval(bound);
           observer.disconnect();
           resolve(false);

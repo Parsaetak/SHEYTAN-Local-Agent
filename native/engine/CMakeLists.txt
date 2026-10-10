@@ -5,6 +5,22 @@ project(shtn_native_engine
     DESCRIPTION "SHEYTAN Native AI Engine — C++ engine core and IPC host (Phase 4: tokenizer, KV cache, scheduler, sampler foundation)"
     LANGUAGES C CXX)
 
+# v1.9.2 (build hygiene): default to an OPTIMIZED build when the caller did
+# not choose a configuration. A bare `cmake -S . -B build` (single-config
+# generators) previously produced an engine with NO optimization flags at
+# all — an unsupported configuration for inference arithmetic (the measured
+# v1.9.2 bottleneck was per-row tensor-name resolution, fixed in the
+# forward path itself, but the dequantization/dot loops of quantized real
+# models are strongly optimization-sensitive and were never meant to ship
+# at -O0). The authoritative Actions run 37869632400 built the engine with
+# a bare configure. An explicit -DCMAKE_BUILD_TYPE=... (Debug for a
+# debugging session) still wins.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING
+        "Build type (Release default: unoptimized native inference is not a supported configuration)" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -143,4 +159,14 @@ if(SHTN_BUILD_TESTS)
     target_compile_definitions(test_generate PRIVATE
         SHTN_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     add_test(NAME generate COMMAND test_generate)
+
+    # v1.9.2: the batched-prefill parity gate — prefill_span's last-token
+    # logits and the full KV cache must match the serial token() path
+    # bit-for-bit (same ops, same order — the resolved weight table only
+    # removes per-row name resolution, never changes numerics).
+    add_executable(test_prefill_parity tests/test_prefill_parity.cpp)
+    target_link_libraries(test_prefill_parity PRIVATE shtn_engine)
+    target_compile_definitions(test_prefill_parity PRIVATE
+        SHTN_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    add_test(NAME prefill_parity COMMAND test_prefill_parity)
 endif()

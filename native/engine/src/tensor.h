@@ -52,6 +52,39 @@ const char* type_name(uint32_t ggml_type);
 // per-token heap churn.
 using RowBuf = std::vector<float>;
 
+// --- resolved tensor record (v1.9.2) ---------------------------------------
+//
+// ResolvedTensor is the once-validated access record for one 2-D tensor:
+// base points at the tensor's first row inside the (stable) file mapping;
+// row_bytes/row_elems_padded/block_* come from the same layout logic
+// row_f32 uses. The pointer math for row `r` is base + r*row_bytes —
+// bounds for EVERY row were validated at resolve() time (the whole
+// tensor's byte range), so the per-row access needs only the trivial
+// row < rows check.
+struct ResolvedTensor {
+    const uint8_t* base = nullptr;      // first row (inside the mapping)
+    uint32_t ne0 = 0;                   // elements per row (unpadded)
+    uint32_t rows = 0;                  // ne1 (2-D row count)
+    uint32_t type = 0;                  // GGML type id
+    uint32_t row_bytes = 0;             // padded row stride in bytes
+    uint32_t row_elems_padded = 0;      // row stride in elements (padded)
+    uint32_t block_size = 0;            // elements per quant block
+    uint32_t block_bytes = 0;           // bytes per quant block
+    bool valid() const { return base != nullptr && ne0 > 0 && rows > 0; }
+};
+
+// row_ptr returns the (bounds-checked) pointer to row `row` of a resolved
+// tensor, or nullptr when the row index is out of range.
+const uint8_t* row_ptr(const ResolvedTensor& t, uint64_t row);
+
+// dequant_row loads row `row` of a resolved tensor into out as fp32.
+// out must hold at least max(ne0, row_elems_padded) floats for quantized
+// types (block tail padding is written, then discarded by the caller's
+// dot over ne0). Same numerics as row_f32 — the switch exists ONCE here.
+// Returns SHTN_OK or a negative error code (never a crash).
+int32_t dequant_row(const ResolvedTensor& t, uint64_t row, float* out,
+                    std::string& error);
+
 // Weights is a read-only, bounds-checked view over the tensor data
 // section of ONE memory-mapped GGUF file. It does NOT own the mapping
 // (Model owns it); the view is valid while the model stays loaded.
@@ -111,6 +144,23 @@ public:
     // row_count / ne0 / ggml type of a tensor (validated 2-D access).
     int32_t shape2d(const std::string& name, uint32_t& ne0, uint32_t& ne1,
                     uint32_t& type, std::string& error) const;
+
+    // --- resolved tensor views (v1.9.2 prefill/decode fast path) ---------
+    //
+    // resolve validates a 2-D tensor ONCE (name lookup, shape expectations,
+    // type support, byte range of the WHOLE tensor against the mapped data
+    // section) and returns the stable access record: the row-0 base pointer
+    // inside the mapping, the row layout, and the shape. The record stays
+    // valid while the model stays loaded (the mapping never moves; Model
+    // owns it). This removes the per-row name resolution that dominated the
+    // measured per-token forward cost (measured 2026-10: ~8064 name
+    // resolutions per token ≈ 19 ms/token — the math itself is ~1 ms).
+    //
+    // Failure modes are the same as row_f32's (explicit errors, never
+    // guessed pointers).
+    int32_t resolve(const std::string& name, uint32_t expected_ne0,
+                    uint32_t expected_rows, ResolvedTensor& out,
+                    std::string& error) const;
 
 private:
     const gguf::GgufHeader* header_ = nullptr;

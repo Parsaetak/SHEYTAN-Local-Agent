@@ -49,6 +49,26 @@ import { startSheytan, type SheytanStack } from "./fixtures/sheytan-server";
  * than one poll interval of chunks after the baseline, which 40 chunks
  * provides on any plausible host (measured: ~55ms/chunk under 2-core
  * contention, ~15ms/chunk on a fast host).
+ *
+ * v1.9.2 ROOT CAUSE (authoritative Actions 37869632400 — the v1.9.1
+ * diagnosis was correct but INCOMPLETE): the v1.9.1 repair fixed the
+ * observation contract, yet all three tests still expired at the 60s
+ * waitForLiveText boundary. Measured on the reproduced stack: the E2E
+ * prompt's ~1785 briefing bytes encode to ~1681 ENGINE tokens (the
+ * fixture vocab carries 5 merges — ~1 token/byte; the Go-side estimate
+ * logged ~445), and the native engine prefilled SERIALLY at a measured
+ * 19.0 ms/token — the per-token cost dominated by per-row tensor-name
+ * resolution (~8064 rows/token resolved through std::map + ostringstream),
+ * not the arithmetic. First token ≈ 32s standalone, >60s under suite
+ * contention: the budget expired before the first real snapshot existed.
+ * The repair is the REAL optimization at the proven boundary: the
+ * resolved weight table (each layer's matrices resolved once per model
+ * binding; rows walked by pointer arithmetic — 5.2x measured per-token
+ * speedup, pinned bit-for-bit vs the serial path by the native
+ * prefill_parity gate) + the batched prefill_span (16-token chunks,
+ * last-token logits only, cancellation cadence preserved) + a
+ * Release-default native build. waitForLiveText remains the honest 60s
+ * bound; failures now attach compact structured diagnostics.
  */
 
 let stack: SheytanStack | undefined;
@@ -111,16 +131,33 @@ function liveSample(page: Page) {
 // contention, ~40ms/prompt-token) legitimately precedes the first token;
 // this poll is the honest bound on that wait (60s), and the growth
 // observation below starts only from real streamed content.
+//
+// v1.9.2 FAILURE DIAGNOSTICS: a poll timeout throws with a compact,
+// structured snapshot of the OBSERVATION BOUNDARY plus the server log
+// tail (context metrics, native-engine lines) — the timeline evidence
+// the authoritative Actions logs lacked — without dumping prompt/answer
+// content.
 async function waitForLiveText(page: Page) {
-  await expect
-    .poll(
-      async () => {
-        const s = await liveSample(page);
-        return s.hasBubble && s.stopVisible && !s.placeholder && s.textLen > 0;
-      },
-      { timeout: 60_000, intervals: [50] },
-    )
-    .toBe(true);
+  try {
+    await expect
+      .poll(
+        async () => {
+          const s = await liveSample(page);
+          return s.hasBubble && s.stopVisible && !s.placeholder && s.textLen > 0;
+        },
+        { timeout: 60_000, intervals: [50] },
+      )
+      .toBe(true);
+  } catch (err) {
+    const s = await liveSample(page);
+    const tail = (stack?.log() ?? "").split("\n").slice(-14).join("\n");
+    console.log(
+      `[live-stream diagnostics] waitForLiveText expired.\n` +
+        `live-surface: ${JSON.stringify(s)}\n` +
+        `server log tail:\n${tail}`,
+    );
+    throw err;
+  }
 }
 
 test("streamed text is visible WHILE the run is live and grows without Stop", async ({
@@ -251,13 +288,25 @@ test("the run streams and settles while live even with requestAnimationFrame sus
 
   // (1)+(2) The LIVE surface shows non-empty REAL streamed text while the
   // run is provably live (Stop up) — no frame callbacks involved. The
-  // placeholder arm does not satisfy this (v1.9.1 repair).
-  await expect
-    .poll(async () => {
-      const s = await liveSample(page);
-      return s.hasBubble && s.stopVisible && !s.placeholder && s.textLen > 0;
-    }, { timeout: 60_000, intervals: [100] })
-    .toBe(true);
+  // placeholder arm does not satisfy this (v1.9.1 repair). The v1.9.2
+  // diagnostics attach the same structured snapshot on expiry.
+  try {
+    await expect
+      .poll(async () => {
+        const s = await liveSample(page);
+        return s.hasBubble && s.stopVisible && !s.placeholder && s.textLen > 0;
+      }, { timeout: 60_000, intervals: [100] })
+      .toBe(true);
+  } catch (err) {
+    const s = await liveSample(page);
+    const tail = (stack?.log() ?? "").split("\n").slice(-14).join("\n");
+    console.log(
+      `[live-stream diagnostics] rAF-suspended waitForLiveText expired.\n` +
+        `live-surface: ${JSON.stringify(s)}\n` +
+        `server log tail:\n${tail}`,
+    );
+    throw err;
+  }
 
   const first = await liveSample(page);
   expect(first.stopVisible, "run must still be live at first text").toBe(true);

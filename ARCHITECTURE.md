@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Architecture Truth Table
 
-Current for **v1.8.4**. This document states the architecture that IS
+Current for **v1.9.2**. This document states the architecture that IS
 implemented and verified in this repository. Future R&D is NOT described as
 implemented; the roadmap (`ROADMAP.md`) owns the future. Historical
 release-specific architecture notes were consolidated at the end.
@@ -51,6 +51,30 @@ update transactions are deterministic and covered by fault-injection
 (v1.8.1: a rolled-back transaction also restores the recorded tag from the
 restored manifest, so state, manifest and serving binary can never
 disagree).
+
+**Native forward path (v1.9.2):** the forward pass owns a RESOLVED WEIGHT
+TABLE built once per model binding (`Forward::init` → `resolve_model`):
+every layer's seven weight matrices and the output projection are resolved
+through the tensor layer's `Weights::resolve` (name lookup, shape and type
+validation, whole-tensor byte-range check — the same bounds authority as
+the per-row path, executed ONCE), and the forward pass then walks rows by
+pointer arithmetic (`tensor::row_ptr` + `tensor::dequant_row`, one shared
+dequantization switch). Prefill runs through `Forward::prefill_span` in
+bounded 16-token chunks with the vocabulary logits projection ONLY for the
+final prompt token; cancellation is observed between chunks at the
+documented cadence. Numerical identity with the serial `Forward::token()`
+path is pinned bit-for-bit (last-token logits + full KV bytes) by the
+native `test_prefill_parity` gate across chunk sizes 1/3/7/16. The native
+CMake build defaults to the Release configuration when the caller does not
+choose one (an unflagged -O0 engine is not a supported inference build).
+
+**Desktop shell lifecycle (v1.9.2):** the native Wails window binds
+`events.Common.WindowClosing` to `app.Quit()` — verified against the
+`wails v3.0.0-beta.16` sources, where a webview window's platform close
+only emits the event and destroys the window while the application event
+loop keeps running with zero windows on both Windows and Linux. The
+single-window product therefore terminates its lifecycle on the visible
+close path, and the deferred `srv.Close()` cleanup runs.
 
 **Model capability cards (v1.8.1):** the GGUF header parser reads up to
 32 MiB of metadata (`ggufMetadataReadLimit`) — real Gemma-class tokenizer

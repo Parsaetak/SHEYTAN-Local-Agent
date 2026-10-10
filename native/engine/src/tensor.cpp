@@ -284,6 +284,133 @@ int32_t Weights::row_span(const std::string& name, uint64_t row,
     return SHTN_OK;
 }
 
+// --- resolved tensor views (v1.9.2) -------------------------------------------
+
+int32_t Weights::resolve(const std::string& name, uint32_t expected_ne0,
+                         uint32_t expected_rows, ResolvedTensor& out,
+                         std::string& error) const {
+    out = ResolvedTensor{};
+
+    const gguf::TensorInfo* t = find(name);
+    if (t == nullptr) {
+        error = "tensor not found: " + name;
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+    if (t->n_dims != 2) {
+        error = "tensor '" + name + "' has " + std::to_string(t->n_dims) +
+                " dims, expected 2";
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+    if (t->dims[0] > UINT32_MAX || t->dims[1] > UINT32_MAX) {
+        error = "tensor '" + name + "' shape exceeds 32-bit range";
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+
+    const uint32_t ne0 = static_cast<uint32_t>(t->dims[0]);
+    const uint32_t ne1 = static_cast<uint32_t>(t->dims[1]);
+
+    if (expected_ne0 > 0 && ne0 != expected_ne0) {
+        error = "tensor '" + name + "' ne0=" + std::to_string(ne0) +
+                ", expected " + std::to_string(expected_ne0);
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+    if (expected_rows > 0 && ne1 != expected_rows) {
+        error = "tensor '" + name + "' rows=" + std::to_string(ne1) +
+                ", expected " + std::to_string(expected_rows);
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+
+    RowLayout layout{};
+    if (!row_layout_for(t->type, ne0, layout)) {
+        error = "tensor '" + name + "' type id " + std::to_string(t->type) +
+                " is not supported for native inference";
+        return SHTN_ERR_UNSUPPORTED;
+    }
+
+    if (data_ == nullptr) {
+        error = "tensor data section not bound (model not mapped)";
+        return SHTN_ERR_MODEL_STATE;
+    }
+
+    // Whole-tensor byte range: base + rows*row_bytes must stay inside the
+    // mapped data section. Validated ONCE here — row_ptr() afterwards only
+    // re-checks the (already covered) row index against `rows`.
+    uint64_t span = 0;
+    if (!gguf::checked_mul_u64(ne1, layout.row_bytes, span)) {
+        error = "tensor '" + name + "' byte span overflow";
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+    uint64_t base_abs = 0;
+    if (!gguf::checked_add_u64(header_->data_start, t->offset, base_abs)) {
+        error = "tensor '" + name + "' absolute offset overflow";
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+    const uint64_t data_end = header_->data_start + data_size_;
+    if (base_abs > data_end || span > data_end - base_abs) {
+        error = "tensor '" + name + "' leaves the mapped data section";
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+
+    out.base = data_ + t->offset;
+    out.ne0 = ne0;
+    out.rows = ne1;
+    out.type = t->type;
+    out.row_bytes = layout.row_bytes;
+    out.row_elems_padded = layout.row_elems_padded;
+    out.block_size = layout.block_size;
+    out.block_bytes = layout.block_bytes;
+    return SHTN_OK;
+}
+
+const uint8_t* row_ptr(const ResolvedTensor& t, uint64_t row) {
+    if (!t.valid() || row >= t.rows) return nullptr;
+    return t.base + row * static_cast<uint64_t>(t.row_bytes);
+}
+
+int32_t dequant_row(const ResolvedTensor& t, uint64_t row, float* out,
+                    std::string& error) {
+    const uint8_t* src = row_ptr(t, row);
+    if (src == nullptr) {
+        error = "resolved tensor row " + std::to_string(row) +
+                " out of range (" + std::to_string(t.rows) + " rows)";
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+
+    switch (t.type) {
+    case 0: { // F32
+        const uint8_t* p = src;
+        for (uint32_t i = 0; i < t.ne0; ++i, p += 4) {
+            out[i] = load_f32_le(p);
+        }
+        return SHTN_OK;
+    }
+    case 1: { // F16
+        const uint8_t* p = src;
+        for (uint32_t i = 0; i < t.ne0; ++i, p += 2) {
+            out[i] = load_fp16_le(p);
+        }
+        return SHTN_OK;
+    }
+    default: {
+        // Quantized: dequantize whole blocks DIRECTLY into `out` (the
+        // caller sizes it to row_elems_padded), keeping only the first
+        // ne0 elements meaningful (block tail padding discarded by the
+        // caller's dot over ne0). Same switch as row_f32 — one numerics
+        // authority.
+        const uint32_t blocks =
+            static_cast<uint32_t>(t.row_bytes / t.block_bytes);
+        for (uint32_t b = 0; b < blocks; ++b) {
+            if (!dequant_block(t.type, src + b * t.block_bytes,
+                               out + static_cast<size_t>(b) * t.block_size)) {
+                error = "dequantization failed (resolved row)";
+                return SHTN_ERR_INTERNAL;
+            }
+        }
+        return SHTN_OK;
+    }
+    }
+}
+
 int32_t Weights::row_f32(const std::string& name, uint64_t row,
                          uint32_t expected_ne0, uint32_t expected_rows,
                          RowBuf& out, std::string& error) const {

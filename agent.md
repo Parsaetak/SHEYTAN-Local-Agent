@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.1 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.2 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,11 +7,47 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.9.1 — the live-stream observation-contract repair
-(P0) + desktop runtime smoke gates, on the v1.9.0 feature surface.**
-Version identity is exactly `1.9.1` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.9.0
+**Current release: v1.9.2 — the measured live-stream/TTFT engine repair
+(P0), the desktop window-close lifecycle fix (P0), and the zero-session
+live-surface fix (P1), on the v1.9.0 feature surface.** Version identity
+is exactly `1.9.2` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.9.1
 current-release claims exist outside `changelog.md`.
+
+**WHAT v1.9.2 CHANGED (the regression-sensitive surfaces):**
+
+1. **Native engine forward path** (`native/engine/src/forward.h/.cpp`,
+   `generate.cpp`, `tensor.h/.cpp`): the forward pass runs on a RESOLVED
+   WEIGHT TABLE (once-per-binding `Weights::resolve`; rows walked by
+   `row_ptr`/`dequant_row`) and prefill runs through `Forward::prefill_span`
+   (16-token chunks, last-token-only logits, cancel cadence 16). Measured
+   19.08 → 3.66 ms/token (5.2×). `Forward::token()` public semantics are
+   UNCHANGED. Bit-for-bit parity is pinned by `tests/test_prefill_parity.cpp`
+   (last-token logits + FULL KV bytes, chunk sizes 1/3/7/16) — any change
+   to the layer math MUST keep that gate bit-exact or be a deliberate,
+   documented numerics change. The native CMake build now DEFAULTS to
+   Release when no build type is given.
+2. **Desktop shell** (`internal/desktop/desktop.go`): the main window binds
+   `events.Common.WindowClosing` → `app.Quit()` (wails v3.0.0-beta.16
+   swallows webview-window closes on both platforms — verified in the
+   dependency sources). Do not remove this binding: closing the window
+   would strand a zombie process with the backend running.
+3. **Desktop smoke gates** (`.github/workflows/build-desktop.yml`):
+   Windows requires `MainWindowHandle != 0` + a true `CloseMainWindow()`
+   return + exit code 0; Linux owns a real Xvfb display, finds the app's
+   window via xdotool (`--pid` + `getwindowpid` ownership), closes it with
+   `WM_DELETE_WINDOW`, and requires normal-path exit. `xdotool` is a Linux
+   CI dependency. These gates are the authoritative GUI-runtime evidence —
+   keep them honest (Kill remains a failing-run backstop only).
+4. **Zero-session recovery** (`src/store.ts` `recoverRunFromIdle`): an
+   idle sentinel WITHOUT a lastRun block that lands within 250 ms of the
+   attach acknowledgement (`activityAttachAckAt`) is the attach handshake,
+   never recovery evidence — the measured clobber mechanism. The v1.2.6
+   Path A (idle + lastRun) and late-idle semantics are unchanged.
+5. **E2E contracts**: the live-stream + zero-session visibility proofs
+   observe REAL content only (`data-stream-placeholder` excluded); the
+   zero-session observation bound is 60 s; live-stream failures attach
+   compact structured diagnostics.
 
 **THE CURRENT PROGRAM (v1.9.x):** complete the v1.9 boundary honestly —
 see `ROADMAP.md` §"v1.9 current/future boundary": automatic sub-agent
@@ -168,15 +204,18 @@ tools execute. The laboratory verifies."**
 * Linux CI path: source/frontend audit → Go verification (headless) →
   native engine build/tests → Browser E2E (real headless server + real
   engine + fixture GGUF) → stress → executable build → version smoke →
-  desktop RUNTIME SMOKE (v1.9.1: real Wails binary launched under Xvfb,
-  embedded UI + `/api/health` probed over loopback, clean shutdown) →
-  ZIP verification. Nothing is skipped because the other platform is
-  green.
+  desktop RUNTIME SMOKE (v1.9.2: a REAL Xvfb display the step owns, the
+  app's real pid, the real top-level window located via xdotool with a
+  getwindowpid ownership check, a real WM_DELETE_WINDOW close, and a
+  normal-path exit — status 0) → ZIP verification. Nothing is skipped
+  because the other platform is green.
 * Windows x64 keeps its green release path (installer, execution
-  evidence, discovery and data tests) plus the v1.9.1 RUNTIME SMOKE
-  step: the real desktop executable is launched, its process liveness
-  verified, the embedded UI + backend health probed over loopback HTTP,
-  and the process shut down cleanly. Runtime smoke is a DISTINCT gate
+  evidence, discovery and data tests) plus the v1.9.2 RUNTIME SMOKE
+  step: the real desktop executable is launched, a real top-level
+  window is proven (`MainWindowHandle != 0`), `CloseMainWindow()`'s
+  BOOL is checked (a delivered close), and exit code 0 is required
+  through the normal path — with the exact unmet evidence level
+  reported when no window exists. Runtime smoke is a DISTINCT gate
   from build/package — packaging success never implies GUI runtime
   success.
 * The Browser E2E fixtures run the REAL stack; no mock-only substitute

@@ -108,6 +108,26 @@ public:
     int32_t token(uint32_t token_id, uint64_t pos, float* logits_out,
                   std::string& error);
 
+    // prefill_span (v1.9.2) processes a CONTIGUOUS span of prompt tokens
+    // at successive positions [pos, pos+count) with the SAME layer math
+    // as token() — per-token causal attention over all cached positions,
+    // K/V written at each position — but WITHOUT the vocabulary logits
+    // projection except for the span's LAST token (intermediate prompt
+    // logits were never consumed; on real models the output projection is
+    // the largest per-token cost). logits_out (capacity >= vocab_size) is
+    // written only when with_last_logits is true; it may be nullptr
+    // otherwise. Returns SHTN_OK or a negative error code; on error the
+    // cache state for THIS span's unconsumed tokens is defined only up to
+    // the failing token (the caller resets per request anyway).
+    //
+    // The generate loop calls this in bounded chunks (cancellation stays
+    // observed at the documented cadence between chunks). Numerical
+    // parity with token() is pinned by test_prefill_parity (last-token
+    // logits and full KV bytes must match bit-for-bit).
+    int32_t prefill_span(const uint32_t* ids, uint32_t count, uint64_t pos,
+                         bool with_last_logits, float* logits_out,
+                         std::string& error);
+
     // embed copies the token's embedding row into out (capacity >= emb)
     // without running the layers (used by tests).
     int32_t embed(uint32_t token_id, float* out, std::string& error) const;
@@ -122,16 +142,43 @@ public:
     float* logits_buf() { return logits_.data(); }
 
 private:
-    // matvec: out[i] = dot(row_i(M), x) for i in [0, n_out). Rows are
-    // dequantized into row_buf_ (reused). expected_ne0 is validated.
-    int32_t matvec(const std::string& tensor, const float* x,
-                   uint32_t expected_ne0, uint32_t n_out, float* out,
-                   std::string& error);
+    // ResolvedTensorView is one layer weight matrix resolved ONCE per
+    // model binding (v1.9.2): name lookup + shape + type + byte-range
+    // validation happen at init; the forward pass then walks rows by
+    // pointer arithmetic. This removes the per-row tensor-name
+    // resolution that dominated the measured per-token cost (19 ms/token
+    // → the actual math) for BOTH prefill and decode.
+    struct LayerWeights {
+        tensor::ResolvedTensor q;    // attn_q      [emb, attn_out_dim]
+        tensor::ResolvedTensor k;    // attn_k      [emb, kv_dim]
+        tensor::ResolvedTensor v;    // attn_v      [emb, kv_dim]
+        tensor::ResolvedTensor out;  // attn_out    [attn_out_dim, emb]
+        tensor::ResolvedTensor gate; // ffn_gate    [emb, ffn]
+        tensor::ResolvedTensor up;   // ffn_up      [emb, ffn]
+        tensor::ResolvedTensor down; // ffn_down    [ffn, emb]
+    };
 
-    // row_dot: dot(row_i(tensor), x) into out[i] using the shared
-    // dequantized row buffer.
-    int32_t load_row(const std::string& tensor, uint64_t row,
-                     uint32_t expected_ne0, std::string& error);
+    // matvec_resolved: out[i] = dot(row_i(M), x) for i in [0, M.rows),
+    // rows dequantized through the shared row buffer (no name
+    // resolution). Same numerics as the name-based matvec.
+    int32_t matvec_resolved(const tensor::ResolvedTensor& m, const float* x,
+                            float* out, std::string& error);
+
+    // run_layers executes the full layer stack for ONE token at position
+    // pos (embedding → attention block → FFN block, K/V written at pos,
+    // cache advanced by one). Leaves the residual stream in x_. Both
+    // token() and prefill_span run through this — one numerics authority.
+    int32_t run_layers(uint32_t token_id, uint64_t pos, std::string& error);
+
+    // resolve_model builds the per-layer resolved weight table + the
+    // output projection record. Called once per binding from init(); any
+    // failure aborts the binding (explicit error, never a guess).
+    int32_t resolve_model(std::string& error);
+
+    // project_logits computes the vocabulary logits from the final-norm
+    // residual (xb_) through the resolved output projection and copies
+    // them into logits_out (capacity >= vocab_size).
+    int32_t project_logits(float* logits_out, std::string& error);
 
     const tensor::Weights* w_ = nullptr;
     llama::Hyper h_{};
@@ -162,6 +209,14 @@ private:
     std::vector<std::vector<float>> attn_norm_;
     std::vector<std::vector<float>> ffn_norm_;
     std::vector<float> out_norm_;
+
+    // v1.9.2: per-layer resolved weight matrices + the logits projection
+    // (output.weight, or token_embd for tied models) — resolved once per
+    // binding (see resolve_model). The projected rows are walked by
+    // pointer arithmetic; bounds were validated at resolve time.
+    std::vector<LayerWeights> lw_;
+    tensor::ResolvedTensor out_proj_;
+    bool resolved_ = false;
 };
 
 } // namespace fwd

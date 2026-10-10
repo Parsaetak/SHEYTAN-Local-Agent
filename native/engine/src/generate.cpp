@@ -7,6 +7,7 @@
 #include "util.h"
 #include "tokenizer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -376,31 +377,52 @@ int32_t Runner::execute_impl(model::Model& model, const Spec& spec,
     };
 
     // --- prefill ------------------------------------------------------------------
+    //
+    // v1.9.2 BATCHED PREFILL (the measured P0 TTFT boundary): the prompt
+    // runs through Forward::prefill_span in bounded 16-token chunks —
+    // the same causal layer math as the serial path (KV written per
+    // position, attention over [0, pos]), with the vocabulary logits
+    // projection ONLY for the final prompt token (intermediate prompt
+    // logits were never consumed). Cancellation stays observed at the
+    // documented 16-token cadence — between chunks. The chunking bounds
+    // the un-cancellable window; no sleeps, no busy waits.
     {
         std::string error;
-        for (size_t i = 0; i < enc.ids.size(); ++i) {
-            // Cooperative cancellation during prefill: observed at window
-            // boundaries (every 16 tokens) and at the final token.
-            if (cancel.load(std::memory_order_acquire) &&
-                (i % 16 == 0 || i + 1 == enc.ids.size())) {
+        constexpr uint32_t kPrefillChunk = 16; // cancel-observation cadence
+        size_t i = 0;
+        while (i < enc.ids.size()) {
+            if (cancel.load(std::memory_order_acquire)) {
                 finish_reason = SHTN_FINISH_CANCELLED;
                 rc = SHTN_ERR_CANCELLED;
                 break;
             }
 
-            // The forward pass leaves its logits in the shared logits
-            // buffer; only the LAST prompt position's logits are consumed
-            // (the first sample below reads them where they were left).
-            std::lock_guard<std::mutex> lock(mu_);
-            const int32_t frc = forward_.token(
-                enc.ids[i], pos, forward_.logits_buf(), error);
+            const uint32_t chunk = static_cast<uint32_t>(
+                std::min<size_t>(kPrefillChunk, enc.ids.size() - i));
+            // Logits only from the FINAL prompt token (the decode loop's
+            // first sample reads them from forward_.logits_buf()).
+            const bool last = (i + chunk == enc.ids.size());
+            int32_t frc = SHTN_OK;
+            {
+                // Same lock discipline as the serial path and the decode
+                // feed step: forward state is touched under mu_ (bounded
+                // per chunk; unload is refused while a generation is in
+                // flight, so the mapping cannot move under this call).
+                std::lock_guard<std::mutex> lock(mu_);
+                frc = forward_.prefill_span(
+                    enc.ids.data() + i, chunk, pos, last,
+                    last ? forward_.logits_buf() : nullptr, error);
+            }
             if (frc != SHTN_OK) {
                 detail = "generation: prefill failed — " + error;
-                finish_reason = "error";
+                finish_reason = frc == SHTN_ERR_CANCELLED
+                                    ? SHTN_FINISH_CANCELLED
+                                    : "error";
                 rc = frc;
                 break;
             }
-            ++pos;
+            i += chunk;
+            pos += chunk;
         }
         t_prefill_end = Clock::now();
     }

@@ -11,6 +11,123 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.9.2 — 2026-10-10 — the measured live-stream/TTFT engine repair (P0) + the desktop window-close lifecycle fix (P0) + the zero-session live-surface fix (P1)
+
+Focus: repair the authoritative v1.9.1 CI failures — Actions run
+`37869632400` (Linux job `113625251074`: all three
+`e2e/live-stream.spec.ts` tests expired at the 60 s wait for real
+non-placeholder streamed text; Windows job `113625251146`: the desktop
+runtime smoke process survived `CloseMainWindow()` + 15 s) — by
+reproducing both on real stacks, measuring the true boundaries, and
+fixing the product where the evidence pointed. Also root-causes and
+fixes a zero-session live-surface clobber exposed by the engine
+speedup, and corrects the E2E observation contracts without weakening
+them.
+
+1. **P0 — live-stream/TTFT: the failure is the native prefill path, and
+   the fix is measured, real, and parity-pinned.** The v1.9.1
+   placeholder-baseline diagnosis was correct but INCOMPLETE: with the
+   observation contract fixed, CI still expired — the failure moved
+   earlier. The reproduced stack measured the complete chain: the E2E
+   prompt encodes to ~1681 ENGINE tokens (1785 briefing bytes at ~1
+   token/byte on the 5-merge fixture vocab; the Go estimate logs ~445),
+   serial prefill cost a measured 19.0 ms/token — dominated by ~8064
+   per-row tensor-name resolutions per token (std::map lookups +
+   ostringstream name construction in the matvec path), NOT the
+   arithmetic (a standalone -O0 vs -O2 benchmark times identically).
+   First token ≈ 32 s standalone, >60 s under suite contention: all
+   three tests expired before the first real snapshot existed. Repairs:
+   (a) the **resolved weight table** — every layer's weight matrices and
+   the output projection are resolved ONCE per model binding in
+   `Forward::init` (name → base pointer + shape + layout, validated
+   once through the same bounds machinery), and the forward pass walks
+   rows by pointer arithmetic: measured **19.08 → 3.66 ms/token
+   (5.2×)**, for prefill AND decode; (b) **`Forward::prefill_span`** —
+   the generate loop prefills in bounded 16-token chunks, computes the
+   vocabulary logits ONLY for the final prompt token (intermediate
+   prompt logits were never consumed; on real-vocab models the output
+   projection is the largest per-token cost), cancellation still
+   observed every 16 tokens; (c) the native CMake build defaults to
+   **Release** when no build type is given (a bare `cmake -S -B` —
+   exactly what CI ran — previously shipped an unflagged -O0 engine).
+   Numerical identity is pinned by the new `test_prefill_parity` native
+   gate: prefill_span's last-token logits and the FULL KV cache bytes
+   must match the serial `token()` path bit-for-bit, across chunk sizes
+   1/3/7/16, plus edge cases (empty span, null buffers, out-of-vocab,
+   context overflow) and mixed span→token() decode continuity. All 13
+   native tests pass.
+
+2. **P0 — desktop shutdown: closing the main window quit NOTHING; now
+   it quits the application.** Verified in the `wails v3.0.0-beta.16`
+   sources: a webview window's WM_CLOSE (Windows) / GTK close-request
+   (Linux) only EMITS the platform WindowClosing event and destroys the
+   window; the event loop keeps running with zero windows (Windows
+   quits only on the hidden `__wails_hidden_mainthread` window's
+   WM_CLOSE/WM_DESTROY; no quit-on-last-window logic exists for webview
+   windows on either platform). SHEYTAN-LA is a single-window
+   application with no tray: `internal/desktop` now binds
+   `events.Common.WindowClosing` to `app.Quit()`, so the user-visible
+   close path returns from `app.Run()` and the deferred `srv.Close()`
+   cleanup runs. This is the product-side repair for the authoritative
+   Windows smoke failure (process survived a DELIVERED close).
+
+3. **P0 — the desktop smoke gates now prove exactly what they claim.**
+   Windows: requires a real top-level window (`MainWindowHandle != 0`,
+   Refresh-bounded wait), checks `CloseMainWindow()`'s return (false ⇒
+   fail with "no window received the close request"), requires exit
+   code 0, and reports the precise unmet evidence level when no window
+   exists. Linux: owns a real Xvfb display (the `xvfb-run` wrapper's
+   PID was never the app's — the v1.9.1 step SIGTERMed the wrapper),
+   discovers the app's real window via xdotool with a `getwindowpid`
+   ownership check, closes it with the WM's own `WM_DELETE_WINDOW`
+   client message, requires normal-path exit (status 0), and keeps
+   SIGTERM only as the failing-run backstop. `xdotool` joins the Linux
+   dependency step.
+
+4. **P1 — zero-session live-surface clobber: root-caused with a frame +
+   transition trace and fixed.** With the faster engine, every
+   zero-session Send lost its live generation surface ~90 ms in (5/5
+   measured: bubble + Stop up, gone at +90 ms, "aborted" at +160 ms —
+   the backend run completed normally 14 s later). The trace: the
+   attach sequence `attached → idle → run_snapshot` lands just after
+   `run()` sets its startup state; the attach-time idle sentinel (no
+   session, no lastRun) hit `recoverRunFromIdle`'s final fallback —
+   declaring the live run "lost" — and the grace re-check would have
+   re-clobbered at +2.7 s (the real run's first gate evidence arrives
+   at ~4.6 s). The repair: the **attach-handshake exclusion** — a
+   lastRun-less idle sentinel within 250 ms of the attach
+   acknowledgement is handshake, never recovery evidence. The v1.2.6
+   fast-run recovery (idle + lastRun → Path A) and late-idle semantics
+   are unchanged. Proven 3/3 with the state-transition harness: the
+   live surface now holds 10–15 s and settles normally.
+
+5. **P1 — E2E observation contracts corrected, never weakened.**
+   `zero-session.spec.ts` excludes `data-stream-placeholder` arms from
+   its visible-before-completion proof (presentation text is never
+   model output) and observes within a 60 s bound (the engine gate +
+   prefill phase legitimately precedes the first snapshot; the v1.9.1
+   30 s bound expired inside it under load). The live-stream spec
+   attaches compact structured failure diagnostics (live-surface
+   snapshot + server log tail) on a poll timeout.
+
+6. **Verification (local evidence, Linux x86-64 sandbox, Go 1.26, Node
+   24, 2 cores — the CI verdict is the Actions run carrying this
+   revision):** native cmake configure + build + ctest 13/13 (incl. the
+   new prefill_parity gate); `go test ./internal/... -tags headless
+   -count=1` 62/62 packages ok; `go test ./... -run Test -count=1` green
+   except the documented no-GTK-headers sandbox boundary (the desktop
+   packages cannot BUILD without gtk4/webkitgtk pkg-config — CI
+   installs them); go vet clean on every compilable package; race gate
+   (api/agent/multiagent) clean; typecheck, oxlint, test:units 220/220,
+   test:release 38/38 green; stress 47/47 (hangs=0, crashes=0); the
+   FULL browser E2E suite 40/40 green (4.4 min) including all three
+   live-stream proofs and the corrected zero-session proofs. The
+   desktop smoke stages are wired for CI and were NOT executed locally
+   (no GTK headers, no Windows — the boundary is recorded, not claimed
+   away).
+
+---
+
 ## v1.9.1 — 2026-10-08 — the live-stream observation-contract repair (P0) + desktop runtime smoke gates
 
 Focus: root-cause and repair the v1.9.0 Linux CI live-stream failure

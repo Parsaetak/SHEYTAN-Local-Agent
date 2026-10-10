@@ -806,18 +806,64 @@ jobs:
           Select-String -Path $appLog -Pattern "==== SHEYTAN-Local-Agent v$($env:APP_VERSION) session start" |
             Select-Object -First 1 | ForEach-Object { Write-Host $_.Line }
 
-          # Clean shutdown: ask the window to close, then require exit
-          # within the bounded window. Kill is the CI backstop for an
-          # already-failing run — never a passing path.
-          $null = $proc.CloseMainWindow()
-
-          if (-not $proc.WaitForExit(15000)) {
-            Write-Host "--- runtime smoke: the process ignored CloseMainWindow; stopping it ---"
-            Stop-Process -Id $proc.Id -Force
-            throw "runtime smoke: desktop process did not exit after CloseMainWindow."
+          # v1.9.2 SMOKE REPAIR — the v1.9.1 script ignored CloseMainWindow()'s
+          # return value and never proved a top-level window existed, so its
+          # failure (process alive after the call) was unclassifiable. Now:
+          #   1. MainWindowHandle must be non-zero (a REAL top-level window
+          #      visible to this session) — Refresh() first because the
+          #      handle is cached by the Process object;
+          #   2. CloseMainWindow()'s BOOL is checked: false means NO window
+          #      received the close request (precise diagnosis, not a
+          #      generic timeout);
+          #   3. only a delivered close gates the bounded exit wait; Kill
+          #      remains the failing-run backstop, never a passing path.
+          # Product side (v1.9.2): the main window's WindowClosing now
+          # terminates the application lifecycle (desktop.go), so a
+          # delivered WM_CLOSE exits through the normal path and the
+          # deferred backend cleanup runs.
+          $proc.Refresh()
+          $deadline = (Get-Date).AddSeconds(15)
+          while ($proc.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline) {
+            if ($proc.HasExited) {
+              throw "runtime smoke: desktop process exited before a main window existed."
+            }
+            Start-Sleep -Milliseconds 250
+            $proc.Refresh()
           }
 
-          Write-Host "Desktop RUNTIME SMOKE passed: process-start + backend/runtime init + clean shutdown (GUI-interaction proof remains the Browser E2E boundary)."
+          if ($proc.MainWindowHandle -eq 0) {
+            throw ("runtime smoke: no top-level main window exists for pid {0} " +
+                   "after boot (MainWindowHandle == 0). Evidence level: " +
+                   "process + backend init ONLY — GUI window creation is not " +
+                   "verifiable in this session and the close path cannot be " +
+                   "exercised.") -f $proc.Id
+          }
+
+          $winMsg = ("Desktop main window present (pid {0}, hwnd {1})." -f $proc.Id, $proc.MainWindowHandle)
+          Write-Host $winMsg
+
+          $closeRequested = $proc.CloseMainWindow()
+
+          if (-not $closeRequested) {
+            $closeErr = ("runtime smoke: CloseMainWindow() returned false — no main window received the close request (pid {0}, hwnd {1})." -f $proc.Id, $proc.MainWindowHandle)
+            throw $closeErr
+          }
+
+          Write-Host "WM_CLOSE delivered to the main window; requiring exit within 15s."
+
+          if (-not $proc.WaitForExit(15000)) {
+            Write-Host "--- runtime smoke: the process ignored a DELIVERED WM_CLOSE; stopping it ---"
+            Stop-Process -Id $proc.Id -Force
+            $ignoreErr = ("runtime smoke: desktop process {0} did not exit after a delivered WM_CLOSE (hwnd {1}) — the window-close path does not terminate the application lifecycle." -f $proc.Id, $proc.MainWindowHandle)
+            throw $ignoreErr
+          }
+
+          $proc.Refresh()
+          if ($proc.ExitCode -ne 0) {
+            throw ("runtime smoke: desktop process exited with code {0} after the WM close." -f $proc.ExitCode)
+          }
+
+          Write-Host "Desktop RUNTIME SMOKE passed: process-start + real top-level window + delivered WM_CLOSE + normal-path exit (code 0) + backend/runtime init (GUI-interaction proof remains the Browser E2E boundary)."
 
       - name: Prepare Windows portable package
         shell: pwsh
@@ -1220,6 +1266,7 @@ jobs:
             libglib2.0-dev \
             libsoup-3.0-dev \
             xvfb \
+            xdotool \
             zip \
             unzip \
             file
@@ -1498,17 +1545,40 @@ jobs:
           dataDir="$smokeDir/data"
           mkdir -p "$dataDir"
 
-          # The desktop entry reads config.json under SHEYTAN_DATA_DIR
-          # (the canonical portable resolution); an isolated dir keeps
-          # runtime state out of the workspace.
-          SHEYTAN_DATA_DIR="$dataDir" xvfb-run -a "$exe" >"$smokeDir/stdout.log" 2>"$smokeDir/stderr.log" &
-          appPid=$!
-
+          # v1.9.2 SMOKE REPAIR — the v1.9.1 step tracked the xvfb-run
+          # WRAPPER pid and SIGTERMed it, which never proved the app's own
+          # lifecycle. Now: a real Xvfb display we own, the REAL app pid,
+          # a REAL top-level window located through X11, and a REAL
+          # WM close (WM_DELETE_WINDOW — the same client message the
+          # window manager sends for the title-bar X button). SIGTERM is
+          # only the failing-run backstop; the GATE is the window close.
+          xvfbPid=""
+          appPid=""
           cleanup() {
-            kill "$appPid" 2>/dev/null || true
-            wait "$appPid" 2>/dev/null || true
+            [ -n "$appPid" ] && kill -TERM "$appPid" 2>/dev/null || true
+            [ -n "$xvfbPid" ] && kill -TERM "$xvfbPid" 2>/dev/null || true
+            [ -n "$appPid" ] && wait "$appPid" 2>/dev/null || true
+            [ -n "$xvfbPid" ] && wait "$xvfbPid" 2>/dev/null || true
           }
           trap cleanup EXIT
+
+          # Own Xvfb process on a dedicated display (no xvfb-run wrapper:
+          # the wrapper's pid is NOT the app's pid and its SIGTERM path
+          # kills the X server, not the application lifecycle).
+          displayNum=77
+          Xvfb ":${displayNum}" -screen 0 1600x1000x24 -nolisten tcp &
+          xvfbPid=$!
+          for _ in $(seq 1 40); do
+            kill -0 "$xvfbPid" 2>/dev/null || { echo "Xvfb died at startup"; exit 1; }
+            [ -S "/tmp/.X11-unix/X${displayNum}" ] && break
+            sleep 0.25
+          done
+          test -S "/tmp/.X11-unix/X${displayNum}"
+
+          # The REAL application process (not a wrapper).
+          DISPLAY=":${displayNum}" SHEYTAN_DATA_DIR="$dataDir" \
+            "$exe" >"$smokeDir/stdout.log" 2>"$smokeDir/stderr.log" &
+          appPid=$!
 
           # STATE-BASED readiness: the session banner + boot marker in
           # logs/app.log (bounded, 60s — no fixed sleeps).
@@ -1551,9 +1621,38 @@ jobs:
 
           grep -m1 "==== SHEYTAN-Local-Agent v${APP_VERSION} session start" "$dataDir/logs/app.log"
 
-          # Clean shutdown: SIGTERM, then the process must exit within the
-          # bounded window (a hung GUI loop fails the gate).
-          kill -TERM "$appPid"
+          # REAL WINDOW PROOF: locate the app's actual top-level window on
+          # the display by its process id (xdotool resolves pid → windows)
+          # and verify it is a visible, named window. Without this, a
+          # "process alive" claim proves nothing about the GUI.
+          winId=""
+          for _ in $(seq 1 40); do
+            winId="$(DISPLAY=":${displayNum}" xdotool search --onlyvisible --pid "$appPid" 2>/dev/null | head -1 || true)"
+            [ -n "$winId" ] && break
+            sleep 0.5
+          done
+
+          if [ -z "$winId" ]; then
+            echo "--- runtime smoke: NO visible top-level window for pid $appPid on :${displayNum} ---"
+            cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
+            exit 1
+          fi
+
+          winName="$(DISPLAY=":${displayNum}" xdotool getwindowname "$winId" 2>/dev/null || true)"
+          winPidCheck="$(DISPLAY=":${displayNum}" xdotool getwindowpid "$winId" 2>/dev/null || echo 0)"
+          echo "--- real native window: id=$winId pid=$winPidCheck name=\"$winName\" ---"
+          if [ "$winPidCheck" != "$appPid" ]; then
+            echo "--- runtime smoke: window $winId does not belong to pid $appPid (resolved $winPidCheck) ---"
+            exit 1
+          fi
+
+          # REAL WM CLOSE: WM_DELETE_WINDOW client message — the exact
+          # protocol message the window manager delivers for the title-bar
+          # close button. The app must exit through its normal path
+          # (close-request → WindowClosing → Quit → Run returns → deferred
+          # backend cleanup) within the bounded window.
+          DISPLAY=":${displayNum}" xdotool windowclose "$winId"
+
           shutdownOk=0
           for _ in $(seq 1 30); do
             if ! kill -0 "$appPid" 2>/dev/null; then
@@ -1564,14 +1663,23 @@ jobs:
           done
 
           if [ "$shutdownOk" -ne 1 ]; then
-            echo "--- runtime smoke: desktop process did not exit after SIGTERM ---"
+            echo "--- runtime smoke: desktop process $appPid did not exit after WM_DELETE_WINDOW on window $winId ---"
             exit 1
           fi
 
-          wait "$appPid" 2>/dev/null || true
-          trap - EXIT
+          wait "$appPid" 2>/dev/null && appStatus=0 || appStatus=$?
+          echo "--- desktop app exited through the window-close path (status $appStatus) ---"
+          if [ "$appStatus" -ne 0 ]; then
+            echo "--- runtime smoke: the app exited NONZERO after the WM close (Run/error path) ---"
+            tail -40 "$dataDir/logs/app.log" 2>/dev/null || true
+            exit 1
+          fi
 
-          echo "Desktop RUNTIME SMOKE passed: process-start + GTK/WebKit runtime init + backend init + clean shutdown (GUI-interaction proof remains the Browser E2E boundary)."
+          trap - EXIT
+          [ -n "$xvfbPid" ] && kill -TERM "$xvfbPid" 2>/dev/null || true
+          wait "$xvfbPid" 2>/dev/null || true
+
+          echo "Desktop RUNTIME SMOKE passed: real Xvfb display + real app pid + REAL top-level window (id $winId, \"$winName\") + WM close + normal-path exit + backend init (GUI-interaction proof remains the Browser E2E boundary)."
 
       # v1.9.1 HEADLESS-SURFACE RUNTIME SMOKE — the same sources, the
       # `headless` build: the full runtime stack + embedded frontend over

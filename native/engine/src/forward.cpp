@@ -17,6 +17,7 @@
 
 #include "shtn/engine.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -168,6 +169,12 @@ int32_t Forward::init(const tensor::Weights* w, const llama::Hyper& h,
         return SHTN_ERR_MODEL_FORMAT;
     }
 
+    // --- resolved weight table (v1.9.2): once per binding -----------------
+    if (const int32_t rc = resolve_model(error); rc != SHTN_OK) {
+        kv_.release();
+        return rc;
+    }
+
     initialized_ = true;
     return SHTN_OK;
 }
@@ -176,20 +183,77 @@ void Forward::reset() {
     kv_.reset();
 }
 
-int32_t Forward::load_row(const std::string& tensor, uint64_t row,
-                          uint32_t expected_ne0, std::string& error) {
-    return w_->row_f32(tensor, row, expected_ne0, 0, row_buf_, error);
+// --- resolved-model setup (v1.9.2) --------------------------------------------
+
+int32_t Forward::resolve_model(std::string& error) {
+    lw_.clear();
+    resolved_ = false;
+    if (w_ == nullptr) {
+        error = "forward: null weights";
+        return SHTN_ERR_MODEL_STATE;
+    }
+
+    lw_.resize(h_.layers);
+    for (uint32_t l = 0; l < h_.layers; ++l) {
+        LayerWeights& lw = lw_[l];
+        if (w_->resolve(llama::tensor_attn_q(l), h_.emb, h_.attn_out_dim,
+                        lw.q, error) != SHTN_OK ||
+            w_->resolve(llama::tensor_attn_k(l), h_.emb, h_.kv_dim,
+                        lw.k, error) != SHTN_OK ||
+            w_->resolve(llama::tensor_attn_v(l), h_.emb, h_.kv_dim,
+                        lw.v, error) != SHTN_OK ||
+            w_->resolve(llama::tensor_attn_out(l), h_.attn_out_dim, h_.emb,
+                        lw.out, error) != SHTN_OK ||
+            w_->resolve(llama::tensor_ffn_gate(l), h_.emb, h_.ffn,
+                        lw.gate, error) != SHTN_OK ||
+            w_->resolve(llama::tensor_ffn_up(l), h_.emb, h_.ffn,
+                        lw.up, error) != SHTN_OK ||
+            w_->resolve(llama::tensor_ffn_down(l), h_.ffn, h_.emb,
+                        lw.down, error) != SHTN_OK) {
+            error = "forward: " + error + " (layer " + std::to_string(l) + ")";
+            return SHTN_ERR_MODEL_FORMAT;
+        }
+    }
+
+    // Logits projection: output.weight, or token_embd for tied models.
+    // rows == vocab_size (validated by llama::validate at load; re-checked
+    // here so the resolved record carries the real bound).
+    const std::string out_name = h_.output_tied
+                                     ? llama::tensor_token_embd()
+                                     : llama::tensor_output();
+    if (w_->resolve(out_name, h_.emb, h_.vocab_size, out_proj_, error) !=
+        SHTN_OK) {
+        error = "forward: " + error;
+        return SHTN_ERR_MODEL_FORMAT;
+    }
+
+    // The shared row buffer must hold any resolved row (padded stride).
+    uint32_t max_padded = 0;
+    for (const LayerWeights& lw : lw_) {
+        max_padded = std::max({max_padded, lw.q.row_elems_padded,
+                               lw.k.row_elems_padded, lw.v.row_elems_padded,
+                               lw.out.row_elems_padded,
+                               lw.gate.row_elems_padded,
+                               lw.up.row_elems_padded,
+                               lw.down.row_elems_padded});
+    }
+    max_padded = std::max(max_padded, out_proj_.row_elems_padded);
+    if (row_buf_.size() < max_padded) {
+        row_buf_.resize(max_padded);
+    }
+
+    resolved_ = true;
+    return SHTN_OK;
 }
 
-int32_t Forward::matvec(const std::string& tensor, const float* x,
-                        uint32_t expected_ne0, uint32_t n_out, float* out,
-                        std::string& error) {
-    for (uint32_t i = 0; i < n_out; ++i) {
-        const int32_t rc = load_row(tensor, i, expected_ne0, error);
-        if (rc != SHTN_OK) {
-            return rc;
+int32_t Forward::matvec_resolved(const tensor::ResolvedTensor& m,
+                                 const float* x, float* out,
+                                 std::string& error) {
+    for (uint32_t i = 0; i < m.rows; ++i) {
+        if (tensor::dequant_row(m, i, row_buf_.data(), error) != SHTN_OK) {
+            return SHTN_ERR_MODEL_FORMAT;
         }
-        out[i] = dot(row_buf_.data(), x, expected_ne0);
+        out[i] = dot(row_buf_.data(), x, m.ne0);
     }
     return SHTN_OK;
 }
@@ -236,6 +300,66 @@ int32_t Forward::token(uint32_t token_id, uint64_t pos, float* logits_out,
         scores_.resize(static_cast<size_t>(pos + 1), 0.0f);
     }
 
+    if (const int32_t rc = run_layers(token_id, pos, error); rc != SHTN_OK) {
+        return rc;
+    }
+
+    // --- final norm + logits -------------------------------------------------
+    rms_norm(x_.data(), out_norm_.data(), h_.emb, h_.rms_eps, xb_.data());
+    return project_logits(logits_out, error);
+}
+
+int32_t Forward::prefill_span(const uint32_t* ids, uint32_t count,
+                              uint64_t pos, bool with_last_logits,
+                              float* logits_out, std::string& error) {
+    if (!initialized_) {
+        error = "forward: not initialized";
+        return SHTN_ERR_MODEL_STATE;
+    }
+    if (count == 0) {
+        return SHTN_OK; // empty span: a no-op, not an error
+    }
+    if (ids == nullptr) {
+        error = "forward: null prompt token span";
+        return SHTN_ERR_INVALID_ARG;
+    }
+    if (count > h_.context || pos > h_.context - count) {
+        error = "forward: positions [" + std::to_string(pos) + ", " +
+                std::to_string(pos + count) + ") exceed context " +
+                std::to_string(h_.context);
+        return SHTN_ERR_CONTEXT_OVERFLOW;
+    }
+    if (with_last_logits && logits_out == nullptr) {
+        error = "forward: prefill_span requested last-token logits with a "
+                "null logits buffer";
+        return SHTN_ERR_INVALID_ARG;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t tok = ids[i];
+        if (tok >= h_.vocab_size) {
+            error = "forward: token id " + std::to_string(tok) +
+                    " (span index " + std::to_string(i) + ")" +
+                    " out of vocabulary range";
+            return SHTN_ERR_INVALID_ARG;
+        }
+        const uint64_t p = pos + i;
+        if (scores_.size() < p + 1) {
+            scores_.resize(static_cast<size_t>(p + 1), 0.0f);
+        }
+        if (const int32_t rc = run_layers(tok, p, error); rc != SHTN_OK) {
+            return rc;
+        }
+    }
+
+    if (with_last_logits) {
+        rms_norm(x_.data(), out_norm_.data(), h_.emb, h_.rms_eps, xb_.data());
+        return project_logits(logits_out, error);
+    }
+    return SHTN_OK;
+}
+
+int32_t Forward::run_layers(uint32_t token_id, uint64_t pos,
+                            std::string& error) {
     // --- embedding ---------------------------------------------------------
     {
         const int32_t rc = w_->row_f32(llama::tensor_token_embd(), token_id,
@@ -248,22 +372,21 @@ int32_t Forward::token(uint32_t token_id, uint64_t pos, float* logits_out,
     const uint32_t heads_per_kv = h_.heads / h_.kv_heads;
 
     for (uint32_t l = 0; l < h_.layers; ++l) {
+        const LayerWeights& lw = lw_[l];
+
         // --- attention block ------------------------------------------------
         rms_norm(x_.data(), attn_norm_[l].data(), h_.emb, h_.rms_eps,
                  xb_.data());
 
-        if (int32_t rc = matvec(llama::tensor_attn_q(l), xb_.data(), h_.emb,
-                                h_.attn_out_dim, q_.data(), error);
+        if (int32_t rc = matvec_resolved(lw.q, xb_.data(), q_.data(), error);
             rc != SHTN_OK) {
             return rc;
         }
-        if (int32_t rc = matvec(llama::tensor_attn_k(l), xb_.data(), h_.emb,
-                                h_.kv_dim, k_.data(), error);
+        if (int32_t rc = matvec_resolved(lw.k, xb_.data(), k_.data(), error);
             rc != SHTN_OK) {
             return rc;
         }
-        if (int32_t rc = matvec(llama::tensor_attn_v(l), xb_.data(), h_.emb,
-                                h_.kv_dim, v_.data(), error);
+        if (int32_t rc = matvec_resolved(lw.v, xb_.data(), v_.data(), error);
             rc != SHTN_OK) {
             return rc;
         }
@@ -331,9 +454,8 @@ int32_t Forward::token(uint32_t token_id, uint64_t pos, float* logits_out,
         }
 
         // Output projection + residual.
-        if (int32_t rc = matvec(llama::tensor_attn_out(l), attn_.data(),
-                                h_.attn_out_dim, h_.emb, ffn_d_.data(),
-                                error);
+        if (int32_t rc = matvec_resolved(lw.out, attn_.data(), ffn_d_.data(),
+                                         error);
             rc != SHTN_OK) {
             return rc;
         }
@@ -345,21 +467,21 @@ int32_t Forward::token(uint32_t token_id, uint64_t pos, float* logits_out,
         rms_norm(x_.data(), ffn_norm_[l].data(), h_.emb, h_.rms_eps,
                  xb_.data());
 
-        if (int32_t rc = matvec(llama::tensor_ffn_gate(l), xb_.data(), h_.emb,
-                                h_.ffn, ffn_g_.data(), error);
+        if (int32_t rc = matvec_resolved(lw.gate, xb_.data(), ffn_g_.data(),
+                                         error);
             rc != SHTN_OK) {
             return rc;
         }
-        if (int32_t rc = matvec(llama::tensor_ffn_up(l), xb_.data(), h_.emb,
-                                h_.ffn, ffn_u_.data(), error);
+        if (int32_t rc = matvec_resolved(lw.up, xb_.data(), ffn_u_.data(),
+                                         error);
             rc != SHTN_OK) {
             return rc;
         }
         for (uint32_t i = 0; i < h_.ffn; ++i) {
             ffn_g_[i] = silu(ffn_g_[i]) * ffn_u_[i];
         }
-        if (int32_t rc = matvec(llama::tensor_ffn_down(l), ffn_g_.data(),
-                                h_.ffn, h_.emb, ffn_d_.data(), error);
+        if (int32_t rc = matvec_resolved(lw.down, ffn_g_.data(), ffn_d_.data(),
+                                         error);
             rc != SHTN_OK) {
             return rc;
         }
@@ -370,16 +492,14 @@ int32_t Forward::token(uint32_t token_id, uint64_t pos, float* logits_out,
 
     // One POSITION consumed (all layers wrote their K/V slices).
     kv_.advance(1);
+    return SHTN_OK;
+}
 
-    // --- final norm + logits -------------------------------------------------
-    rms_norm(x_.data(), out_norm_.data(), h_.emb, h_.rms_eps, xb_.data());
-
-    const std::string& out_tensor =
-        h_.output_tied ? llama::tensor_token_embd() : llama::tensor_output();
+int32_t Forward::project_logits(float* logits_out, std::string& error) {
     for (uint32_t v = 0; v < h_.vocab_size; ++v) {
-        const int32_t rc = load_row(out_tensor, v, h_.emb, error);
-        if (rc != SHTN_OK) {
-            return rc;
+        if (tensor::dequant_row(out_proj_, v, row_buf_.data(), error) !=
+            SHTN_OK) {
+            return SHTN_ERR_MODEL_FORMAT;
         }
         logits_[v] = dot(row_buf_.data(), xb_.data(), h_.emb);
     }

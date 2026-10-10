@@ -537,6 +537,14 @@ let activityAttachResolve: (() => void) | null = null;
 let activityAttachReject: (() => void) | null = null;
 let activityAttachPromise: Promise<void> | null = null;
 
+// v1.9.2 (the zero-session live-surface clobber): the client-side clock of
+// the LAST attach acknowledgement. The server's attach sequence is
+// `attached` → `idle` → `run_snapshot`; the idle sentinel in that sequence
+// is HANDSHAKE — it was composed before any run of this socket existed and
+// says nothing about a run started afterwards. It must never be consumed
+// as run-liveness evidence (see recoverRunFromIdle).
+let activityAttachAckAt = 0;
+
 // beginActivityAttach arms the attach acknowledgement for a new socket.
 function beginActivityAttach(): void {
   activityAttachPromise?.catch(() => {
@@ -553,6 +561,9 @@ function beginActivityAttach(): void {
 // `attached` frame arrived — the transport is live and session-bound).
 function settleActivityAttach(): void {
   if (activityAttachResolve) {
+    // v1.9.2: recorded when the acknowledgement SETTLES (the attach
+    // handshake window opens here).
+    activityAttachAckAt = Date.now();
     activityAttachResolve();
     activityAttachResolve = null;
     activityAttachReject = null;
@@ -1485,6 +1496,32 @@ function handleRunSnapshot(payload: Record<string, unknown>): void {
 
 function recoverRunFromIdle(event: ActivityEvent): void {
   const state = useRuntimeStore.getState();
+
+  // v1.9.2 THE ATTACH-HANDSHAKE EXCLUSION (root-caused with a full frame +
+  // transition trace of the zero-session flow, Actions-class evidence):
+  // the server's attach sequence is `attached` -> `idle` -> `run_snapshot`.
+  // The idle sentinel in THAT sequence is composed before any run of this
+  // socket exists. In the zero-session flow the run() startup state
+  // (running + preparing) is set BEFORE the lazy create resolves, so the
+  // handshake idle is processed a few ms AFTER the run started — and the
+  // final fallback below then declared a live, healthy run "lost" ~90ms
+  // after Send (measured 5/5 runs: running=false at +90ms, aborted at
+  // +160ms, live surface gone, backend run completing 14s later). The
+  // grace re-check would re-clobber at +2.7s (the real run's first gate
+  // evidence arrives at ~4.6s), so excluding the handshake sentinel here
+  // is the fix for BOTH paths. A sentinel carrying a lastRun block is NOT
+  // handshake noise — it is the v1.2.6 authoritative fast-run recovery
+  // and keeps flowing through Path A below. A LATE idle (well after the
+  // attach window) is real "no active run" evidence and keeps the
+  // original semantics.
+  const lastRunPresent = readLastRunOutcome(event) !== null;
+  if (
+    !lastRunPresent &&
+    activityAttachAckAt !== 0 &&
+    Date.now() - activityAttachAckAt <= 250
+  ) {
+    return;
+  }
 
   const runStartedAt = state.runStartedAt;
   const sawRunEvidence = state.streaming !== null || runEventsReceived;

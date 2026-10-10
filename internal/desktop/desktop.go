@@ -13,6 +13,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/platform"
 	"github.com/Parsaetak/SHEYTAN-local-agent/web"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 const (
@@ -84,6 +85,27 @@ func Run(cfg *config.Config) int {
 
 	window.Center()
 	window.Show()
+
+	// v1.9.2 (P0 — verified against the wails v3.0.0-beta.16 sources):
+	// a webview window's WM_CLOSE (Windows) / GTK close-request (Linux)
+	// only EMITS the platform WindowClosing event and destroys the
+	// window — the application event loop keeps running with zero
+	// windows. On Windows only the hidden "__wails_hidden_mainthread"
+	// window's WM_CLOSE/WM_DESTROY triggers globalApplication.Quit()
+	// (application_windows.go), and no quit-on-last-window logic exists
+	// for webview windows on either platform. Without this binding,
+	// closing the main window leaves a zombie process with the backend
+	// still running and the deferred srv.Close() never executing —
+	// measured as the authoritative Actions 37869632400 Windows smoke
+	// failure (process survived CloseMainWindow + 15s).
+	//
+	// SHEYTAN-LA is a single-window application with no tray:
+	// closing the main window MUST terminate the lifecycle so
+	// app.Run() returns and the deferred cleanup runs.
+	window.OnWindowEvent(events.Common.WindowClosing,
+		func(*application.WindowEvent) {
+			app.Quit()
+		})
 
 	if err := app.Run(); err != nil {
 		fmt.Println("desktop: application:", err)

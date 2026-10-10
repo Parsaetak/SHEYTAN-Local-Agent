@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.9.1
+Current release:  v1.9.2
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
@@ -872,3 +872,208 @@ Stage Summary:
 - Deliverable: download/SHEYTAN-Local-Agent-v1.9.1-FINAL.zip (complete
   reproducible source tree; exclusions per the release contract; ZIP
   audit recorded in this entry).
+
+---
+
+## v1.9.2 session (2026-10-10) — the measured live-stream/TTFT engine repair, the desktop window-close lifecycle fix, the zero-session live-surface fix
+
+Authoritative starting point: Actions run 37869632400 (v1.9.1, HEAD
+f687489) — Linux job 113625251074: Browser E2E 37/40, ALL THREE
+e2e/live-stream.spec.ts tests expired at the 60 s wait for REAL
+non-placeholder streamed text; Windows job 113625251146: the desktop
+runtime smoke process survived CloseMainWindow() + 15 s. The v1.9.1
+release-level success claim is thereby corrected: local 40/40 was LOCAL
+evidence only, and the placeholder-baseline diagnosis, while correct,
+was not the complete root cause.
+
+REPRODUCE (Linux, 2-core sandbox, the full real stack built from this
+tree):
+- The three live-stream tests PASS in isolation against a Release-built
+  engine (matching the v1.9.1 local claim) and FAIL with the EXACT CI
+  signature (60 s expiry, run still live, zero real snapshots) with the
+  engine built the way CI builds it. Authoritative reproduction, not a
+  guess.
+- Server log evidence from the failing runs: promptBytes=1785
+  estTokens=445-446 (the GO estimate), and the native generation still
+  "before the first token" at 59-66 s (cancelled by the test's expiry).
+  The chain engine -> hub -> WS -> fast path -> accumulator -> scheduler
+  -> DOM was separately verified healthy (probe: every cumulative
+  snapshot rendered at 50-70 ms cadence).
+
+MEASURE (standalone C++ benchmarks against the live fixture GGUF,
+Release and default builds):
+- The E2E prompt encodes to 1681 ENGINE tokens (the fixture vocab has 5
+  merges: ~1 token per byte; the Go-side estimate is 3.8x lower). The
+  prefill budget question is decided by the ENGINE count, not the Go
+  estimate.
+- Serial per-token forward cost: 19.08 ms (-O2) and 19.02 ms (-O0,
+  CI's exact configure) — the optimization level is NOT the dominant
+  factor. Per-token arithmetic is ~1 ms; the rest is PER-ROW TENSOR-NAME
+  RESOLUTION: ~8064 weight rows per token, each resolved through an
+  ostringstream-built name plus std::map lookups (shape2d + find x2 +
+  layout) inside row_span/row_f32.
+- First token therefore ~= 1681 x 19 ms ~= 32 s standalone; under
+  browser-suite contention on 2-4 cores it exceeds the 60 s budget —
+  all three tests expire inside the gate+prefill phase. The v1.9.1
+  fixture budget increase (160 -> 320) cannot affect TTFT (confirmed).
+
+ROOT CAUSE (stream): serial prefill over a per-row-name-resolution
+forward path. FIX (in the engine, at the proven boundary):
+- tensor.h/.cpp: `Weights::resolve` validates a 2-D tensor ONCE (name,
+  shape, type, WHOLE-tensor byte range through the same checked
+  arithmetic) and returns a stable ResolvedTensor record; `row_ptr` +
+  `dequant_row` own the per-row pointer math and the ONE dequantization
+  switch (row_f32 keeps its behavior).
+- forward.h/.cpp: `resolve_model` builds the per-layer resolved table
+  (7 matrices/layer + the output projection) once per binding;
+  `run_layers` is the single numerics authority for token() AND
+  prefill_span; `matvec_resolved` replaces per-row name resolution.
+  Measured: 19.08 -> 3.66 ms/token (5.2x), prefill AND decode.
+- generate.cpp: the prefill loop calls `Forward::prefill_span` in
+  bounded 16-token chunks (cancellation cadence unchanged, mu_ held per
+  chunk exactly like the serial path), with the vocabulary logits
+  projection ONLY for the final prompt token (intermediate prompt
+  logits were never consumed; on real-vocab models the output
+  projection is the largest per-token cost — the fixture's 50-token
+  vocab makes it neutral there).
+- CMakeLists.txt: CMAKE_BUILD_TYPE defaults to Release when unset (a
+  bare `cmake -S -B` — CI's exact invocation — previously shipped an
+  unflagged -O0 engine; the recorded measurement shows -O0 == -O2 for
+  the name-resolution-dominated F32 fixture, and unoptimized inference
+  arithmetic was never a supported configuration).
+- PARITY GATE: tests/test_prefill_parity.cpp — prefill_span's
+  last-token logits and the FULL KV cache bytes must match the serial
+  token() path BIT-FOR-BIT across chunk sizes 1/3/7/16, plus edge cases
+  (empty span OK, null span INVALID_ARG, out-of-vocab INVALID_ARG,
+  position overflow CONTEXT_OVERFLOW, last-token logits with a null
+  buffer INVALID_ARG) and mixed span -> token() decode continuity.
+  Native suite: 13/13 (12 previous + this gate).
+
+ROOT CAUSE (Windows smoke -> PRODUCT defect): the wails v3.0.0-beta.16
+sources show a webview window's WM_CLOSE (Windows) / GTK close-request
+(Linux) only EMITS the platform WindowClosing event and destroys the
+window; the application event loop keeps running with zero windows
+(Windows quits only from the hidden "__wails_hidden_mainthread"
+window's WM_CLOSE/WM_DESTROY; no quit-on-last-window logic exists for
+webview windows on either platform). SHEYTAN-LA is single-window with
+no tray: closing the main window stranded a zombie process with the
+backend running and the deferred srv.Close() un-executed — the
+authoritative smoke failure was a REAL product defect, not a smoke
+measurement artifact. FIX: internal/desktop/desktop.go binds
+events.Common.WindowClosing -> app.Quit() (listener-order safe on both
+dispatch orders — the default close listener and this binding are
+idempotent in either order). Desktop lifecycle is thus: visible close
+-> Quit -> app.Run returns -> deferred cleanup.
+
+SMOKE GATE REPAIRS (evidence level made precise, never weakened):
+- Windows: requires MainWindowHandle != 0 (Refresh-bounded wait),
+  checks CloseMainWindow()'s BOOL (false => fail "no window received
+  the close request"), requires exit code 0 through the normal path,
+  and reports the exact unmet evidence level when no window exists.
+  Kill remains the failing-run backstop only.
+- Linux: the step owns a real Xvfb display on a dedicated display
+  number (the xvfb-run wrapper's PID was never the app's PID; SIGTERM
+  on the wrapper killed the X server, not the app lifecycle), locates
+  the app's REAL top-level window via `xdotool search --onlyvisible
+  --pid` + a `getwindowpid` OWNERSHIP CHECK, closes it with the WM's
+  own WM_DELETE_WINDOW client message, requires normal-path exit
+  (status 0), and keeps SIGTERM only as the failing-run backstop.
+  xdotool added to the Linux dependency step. YAML validated.
+
+P1 DISCOVERY + FIX — the zero-session live-surface clobber (exposed by
+the 5.2x engine speedup; a REAL product defect, 5/5 measured):
+- Symptom: after deleting the last session and sending, the live
+  generation surface died ~90 ms after Send (bubble + Stop up at t0,
+  stop gone at +90 ms, "aborted" at +160 ms) while the backend run
+  completed normally 14 s later; the zero-session visible-before-
+  completion E2E failed accordingly.
+- Evidence chain (temporary in-page tracers, removed after the fix):
+  the server's attach sequence attached -> idle -> run_snapshot lands
+  just after run() sets its startup state; the attach-time idle
+  sentinel (no session, no lastRun — composed BEFORE the run existed)
+  hit recoverRunFromIdle's final fallback ("lost") because the grace
+  branch saw run evidence that predates/belongs to no run; the armed
+  grace re-check would have re-clobbered at +2.7 s (the real run's
+  first gate evidence arrives at ~4.6 s). Bisection: without the
+  prior-session deletion the flow is textbook (10.7 s live surface,
+  clean settle).
+- FIX: the attach-handshake exclusion — a lastRun-less idle sentinel
+  within 250 ms of the attach acknowledgement
+  (activityAttachAckAt, set when the `attached` frame settles) is
+  handshake, never recovery evidence. Path A (idle + lastRun -> the
+  v1.2.6 fast-run recovery) and late-idle semantics are unchanged.
+  Post-fix harness runs 3/3: live surface holds 10-15.5 s, settles
+  normally.
+
+E2E CONTRACT CORRECTIONS (never weaker):
+- zero-session.spec.ts: the visible-before-completion MutationObserver
+  now excludes data-stream-placeholder arms (presentation text is never
+  model output) and observes within a 60 s bound (the gate+prefill
+  phase legitimately precedes the first snapshot; the v1.9.1 30 s bound
+  expired INSIDE that phase under load — measured ~13 s unloaded).
+- live-stream.spec.ts: a poll timeout now attaches compact structured
+  diagnostics (the live-surface snapshot + the server log tail — the
+  timeline evidence the authoritative Actions logs lacked) without
+  dumping prompt/answer content; the header documents the v1.9.2 root
+  cause with the measured numbers.
+
+VERIFY (local evidence classes; Linux x86-64 sandbox, Go 1.26, Node 24,
+2 cores — LOCAL ONLY, no Actions claim):
+- Frontend: typecheck green; oxlint 0/0 (106 files); test:units 220/220;
+  test:release 38/38; production build + embedded sync + verify:web
+  green.
+- Go: internal/... -tags headless 62/62 packages ok (first run, no
+  flakes); ./... green except the documented sandbox build boundary
+  (internal/desktop + the root package cannot BUILD without
+  gtk4/webkitgtk pkg-config headers — no root in this sandbox; CI
+  installs them); go vet clean on every compilable package; -race
+  (api/agent/multiagent) clean.
+- Native: clean cmake configure (default now lands Release) + build +
+  ctest 13/13.
+- Browser E2E: the FULL suite 40/40 green, 4.4 min (real headless
+  server + real native engine + fixture GGUF; the three live-stream
+  proofs included; the corrected zero-session proofs included). An
+  interim full-suite run surfaced the zero-session clobber (the P1
+  above); the final run is post-fix.
+- Stress: 47/47, hangs=0, crashes=0 (after the functional gates).
+- NOT executed here (stated honestly): GitHub Actions (no runner
+  access from this sandbox); the desktop runtime smokes (the Wails
+  binary cannot even build without the GTK4/WebKitGTK headers; no
+  Windows). The authoritative v1.9.2 CI verdict is the Actions run
+  that carries this revision; until it reports, no CI claim is made.
+
+Version identity 1.9.2 through the canonical gate (release-version
+--check green; package.json -> config.go / build/config.yml / SIGNATURE
+repaired by the canonical script). README current-only; UPDATE.md
+rewritten as v1.9.2 current notes; changelog.md carries the factual
+v1.9.2 entry; ROADMAP's prefill item replaced by the POST-v1.9.2
+arithmetic-optimization item (the name-resolution bottleneck is fixed
+and measured); ARCHITECTURE current for v1.9.2 (the resolved forward
+path + the desktop lifecycle); agent.md is the v1.9.2 handoff.
+
+ZIP AUDIT (download/SHEYTAN-Local-Agent-v1.9.2-FINAL.zip, 747 files,
+extracted to a clean room):
+- opens/extracts; root SHEYTAN-Local-Agent/ present;
+- required sources present: go.mod, main.go, main_windows.go,
+  internal/{desktop,agent,api}/..., src/{store,MessageStream}.tsx,
+  native/engine/{src/forward.cpp,src/generate.cpp,CMakeLists.txt,
+  tests/test_prefill_parity.cpp}, e2e/{live-stream,zero-session}.spec.ts
+  + fixtures + the live-model generator,
+  .github/workflows/build-desktop.yml, scripts/release-version.mjs,
+  web/static/index.html (the embedded frontend carries the store fix);
+- exact version 1.9.2: package.json / internal/config/config.go
+  AppVersion / build/config.yml productVersion / SIGNATURE first line;
+- no stale current-release identity (README/agent.md/worklog all v1.9.2;
+  UPDATE.md = the v1.9.2 notes);
+- exactly one LICENSE.md (root);
+- junk scan clean: no .git, no node_modules, no native build dir, no
+  e2e/.build, no e2e/.artifacts, no dist, no *.log, no ZIPs inside;
+  GGUF files only the COMMITTED test fixtures (tests/fixtures/);
+- codename gate: zero codename references (run on the extracted copy);
+- release-version --check: consistent (run on the extracted copy);
+- CLEAN-ROOM BUILD from the extracted copy: native cmake configure
+  (CMAKE_BUILD_TYPE=Release by default — the CI-class bare configure) +
+  build + ctest 13/13; go build -tags headless OK;
+  go test ./internal/api -tags headless ok; npm ci + test:units
+  220/220. The archive is a complete, independently buildable source
+  tree.
