@@ -1,10 +1,160 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.9.3
+Current release:  v1.9.4
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
 `UPDATE.md`, the future in `ROADMAP.md`.
+
+---
+Task ID: 1 (v1.9.4 session)
+Agent: v1.9.4 engineering session
+Task: v1.9.4 — P0 root cause and repair of the Windows live-answer
+defect ("the answer appears only after Stop"), the two zero-session E2E
+failures (Actions run 38069168867, e2e/zero-session.spec.ts:86 and :275
+at expectRealAssistantReply), the engine-transaction/run TOCTOU (P1),
+the publishMs metric clarification (P1), the opt-in sanitized stream
+trace (P0-A), and the real-Windows acceptance harness
+
+Work Log:
+- Baseline: HEAD `5bcd17b` (v1.9.3). The authoritative Actions run
+  38069168867 FAILED (Linux E2E 38/40: zero-session.spec.ts:86 and :275
+  at `expectRealAssistantReply`); v1.9.3 is NOT a green release. Local
+  reproduction on this session's host was WORSE (3/4 zero-session tests
+  failed the same helper) — Agent mode's CI pass was timing luck.
+- P0-C REPRODUCTION AND ROOT CAUSE (test defect, not a product defect):
+  local Playwright runs failed at `expectRealAssistantReply` with
+  "element(s) not found", while the failure ARTIFACTS show the settled
+  assistant reply rendered with real content. Proven: v1.9.3's helper
+  waits on `.message-row.from-agent .message-content`, but
+  `.message-content` exists ONLY on the live surfaces (GenerationBubble,
+  StreamingBubble). A SETTLED assistant message renders through
+  MessageBubble → `<Markdown>` → `div.message-markdown` — it never
+  carries `.message-content` at all. The helper could only ever match
+  inside the finalising window (the bubble's last live content), a pure
+  timing race; every other suite asserts settled replies via
+  `.message-bubble` for exactly this reason (chat.spec.ts:80,
+  agent.spec.ts:58, run-control.spec.ts:62, model-first.spec.ts:179,
+  composer.spec.ts:64). The helper was retargeted to the settled
+  Markdown surface — strength PRESERVED and tightened (non-whitespace
+  text asserted on the markdown surface itself; placeholder rows
+  excluded belt-and-braces; the generation/streaming bubbles can never
+  satisfy it).
+- P0-A/B REPRODUCTION AND ROOT CAUSE (the Windows live-answer defect),
+  proven from source at the exact pinned versions: Wails
+  v3.0.0-beta.16 serves packaged desktop builds through the webview's
+  resource-request interception. On Windows, WebView2 forwards ONLY
+  `http://wails.localhost` requests into the Go handler
+  (webview_window_windows.go: any request whose scheme is not "http" is
+  handed to the webview's default handler); on Linux production the
+  page rides the custom `wails://` URI scheme
+  (linux_cgo.go:1271). WebSocket handshakes are NOT web-resource
+  requests (documented WebView2 limitation), and no loopback listener
+  exists in the desktop build — so the activity socket derived from
+  window.location (`ws://wails.localhost/ws/activity`,
+  src/config.ts WS_BASE) NEVER reached the backend: WebView2 resolves
+  *.localhost to the loopback address on port 80, where nothing
+  listens. The client retried 20 times and gave up silently. Live run
+  frames (response/reasoning snapshots, status, done/error, run_snapshot
+  replays, idle sentinels) therefore never reached the UI on ANY
+  packaged desktop build: no streamed text, no done event, composer
+  locked. Stop worked because abort() is HTTP: it flushes the
+  accumulator synchronously (store.ts abort path) and schedules
+  finalisation, whose history reload recovers the persisted reply over
+  plain HTTP — exactly the user's symptom. This also explains why four
+  releases of client-side scheduling repairs (v1.8.1 fast path,
+  v1.8.2–v1.8.5 flush schedulers, hub conflation) never changed the
+  symptom: every one of them is downstream of a socket that never
+  connected on Windows. Linux E2E never saw it (real loopback
+  listener); the Windows runtime smoke never exercised a chat.
+- P0-B FIX (same endpoint, same authority, reachable transport):
+  `internal/api/loopback.go` binds the EXISTING API handler on a
+  loopback-only ephemeral listener (127.0.0.1:0) for desktop builds;
+  `GET /api/ws-origin` publishes the origin over the intercepted HTTP
+  surface ("" = stay same-origin — browser/headless behavior
+  unchanged); the client resolves it once (config.ts
+  ensureActivityWsOrigin, memoized, best-effort, loopback-only values
+  honoured) and opens the activity socket against it (store.ts
+  connectActivity → openActivitySocket, extracted verbatim). ws.go
+  allowedOrigin accepts the Wails page origin (http/wails +
+  wails.localhost exactly) against LOOPBACK request hosts only. Local-
+  first posture preserved: loopback bind, ephemeral port, origin-
+  checked upgrade, one handler, one /ws/activity, no second channel.
+  Regression tests: internal/api/loopback_v194_test.go (origin
+  discovery, REAL WebSocket upgrade through the loopback with the
+  Wails origin receiving the `attached` ack, close resets, origin
+  matrix incl. refusals).
+- P1 ENGINE/RUN TOCTOU (confirmed from source; the user's Windows log
+  showed candidate/rollback messages overlapping a run):
+  autoVulkanEligibility() checks anyRunActive() ONCE, then
+  AutoProvisionVulkanIfWorthy's transaction (updateEngineVariantTx) can
+  run for many minutes (resolve → download → swap → verify → rollback)
+  and stops a RUNNING engine with no re-check. Fix: SetRunGate seam
+  (internal/llm/llama.go) installed by the API layer (anyRunActive);
+  updateEngineVariantTx consults it at the top — a running engine plus
+  an active run fails CLOSED with ErrEngineBusyWithRun before anything
+  happens. The AUTO probe records the refusal as a DEFERRAL (never a
+  persisted bounded failure — a temporary condition must not disable
+  the candidate for the hardware identity). Tests:
+  internal/llm/rungate_v194_test.go (refusal, state untouched, gate
+  consulted once; clear-gate no-op path; nil-gate compatibility), plus
+  the existing strict transaction tests still pass.
+- P1 METRIC CLARIFICATION: the run summary's `publishMs` measured
+  acceptedAt→donePublished (run duration to terminal publication) and
+  read like a per-event socket latency. Renamed to
+  `acceptToDoneMs`; added `gateMs` (acceptedAt→gateReady), `ttftMs`
+  (the orchestrator's measured request_sent→first_token from
+  agent.Timing), and aggregate published-event counters
+  (`events`, `deltas`, `firstDeltaMs`) on runTimeline. Client-side
+  boundaries (queue delay, write time, browser receipt, DOM visibility)
+  are NOT derivable server-side; they live in the opt-in trace.
+- P0-A DIAGNOSTICS: `src/stream-trace.ts` — opt-in (localStorage
+  `SHEYTAN_STREAM_TRACE=1`), test-only, sanitized: monotonic
+  performance.now timestamps, ephemeral sequence numbers, canonical
+  kinds and LENGTHS ONLY (content asserted never to enter the trace by
+  its unit test), bounded 512-entry ring + aggregates, exposed to test
+  harnesses via window.__SHEYTAN_STREAM_TRACE_DUMP__ ONLY when enabled.
+  Wired into every client boundary (ws receive/attach/snapshot, fold,
+  flush, run start/end) and the GenerationBubble DOM commit
+  (MessageStream). The zero-session spec attaches the dump on failure
+  (testInfo.attach). Unit tests: src/stream-trace.test.ts (6).
+  Server-side aggregates (events/deltas/firstDeltaMs) ride the ordinary
+  run summary — counts only, no identifiers beyond the existing
+  run-summary contract.
+- WINDOWS ACCEPTANCE HARNESS: scripts/windows-live-answer-acceptance.mjs
+  launches the real desktop exe with WebView2 CDP enabled (TEST-ONLY
+  switch), asserts the exact release contract: ready surface → send →
+  real non-placeholder text WHILE Stop is visible → strictly longer DOM
+  text while Stop stays up → exactly one persisted answer → reload
+  persists one user + one assistant reply → clean close; dumps the
+  sanitized trace to the artifact dir on failure.
+- VERSION: 1.9.4 through the canonical flow (package.json →
+  release-version.mjs repaired config.go / build/config.yml / SIGNATURE;
+  --check green).
+
+Stage Summary:
+- The Windows "answer only after Stop" defect is root-caused to an
+  unreachable activity WebSocket in packaged desktop builds (Wails v3
+  beta.16 interception is HTTP-only) and repaired with a loopback
+  transport for the SAME API/WebSocket authority; proven server-side by
+  a real WebSocket upgrade + attach ack through the loopback with the
+  Wails page origin (Go test). The end-to-end Windows WebView2 proof
+  REMAINS UNVERIFIED on this Linux session (no Windows host, no
+  webview); the harness ships for a real Windows run and the native
+  evidence is labelled unverified everywhere.
+- Both zero-session E2E failures are root-caused to the v1.9.3 helper
+  selector (settled rows have no .message-content); the product was
+  rendering real replies all along. Fixed with strength preserved.
+- Local verification this session: unit tests 226/226 (incl. the new
+  stream-trace suite) and release tests 38/38; typecheck/lint clean;
+  go build + vet -tags headless clean; go test ./internal/... -tags
+  headless 62 pkgs ok, 0 FAIL; race gate green on api/agent/sessions/
+  contextplan/histref/runtime; native cmake+ctest 13/13; browser E2E
+  40/40 (both previously-failing zero-session tests green with the
+  strengthened assertions). Env-bound limitation: the non-headless
+  Wails desktop packages do not compile in this sandbox (GTK4/WebKitGTK
+  headers absent — the documented v1.9.3 limitation, unchanged).
+
 
 ---
 Task ID: 1 (v1.8.3 session)

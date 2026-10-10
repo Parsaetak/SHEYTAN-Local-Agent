@@ -161,6 +161,17 @@ type Server struct {
         engineStop chan struct{}
         engineDone chan struct{}
 
+        // v1.9.4 (P0): the desktop loopback activity transport — see
+        // loopback.go. The packaged desktop builds serve the webview through
+        // resource-request interception (HTTP only), which never carries
+        // WebSocket handshakes; the loopback listener gives the SAME API
+        // handler (one authority, one /ws/activity endpoint) a reachable
+        // transport. Empty origin = no loopback listener (headless/browser
+        // serving stays same-origin).
+        loopbackMu     sync.Mutex
+        loopbackSrv    *http.Server
+        loopbackOrigin string
+
         // v1.6.0 P0 — THE STARTUP MAINTENANCE GATE (maintenance.go).
         // One authoritative coordinator owns the startup decision
         // "maintain the engine BEFORE ever starting it": the gate runs
@@ -646,6 +657,20 @@ func New(cfg *config.Config) (*Server, error) {
         // CLOSED — quarantined with actionable logging, never guessed.)
         s.RecoverEditTransactions()
 
+        // v1.9.4 (P1): install the run-coordination seam on the engine
+        // lifecycle owner. An engine variant transaction must never stop a
+        // RUNNING engine while a run is active — the caller-side
+        // eligibility check happens once, before a transaction that can
+        // run for many minutes; the destructive boundary re-checks here.
+        s.llama.SetRunGate(s.anyRunActive)
+
+        // v1.9.4 (P1): install the run-coordination seam on the engine
+        // lifecycle owner. An engine variant transaction must never stop a
+        // RUNNING engine while a run is active — the caller-side
+        // eligibility check happens once, before a transaction that can
+        // run for many minutes; the destructive boundary re-checks here.
+        s.llama.SetRunGate(s.anyRunActive)
+
         // v1.1.3: the engine event bus fans authoritative state transitions
         // to every WebSocket as they happen.
         go func() {
@@ -782,6 +807,10 @@ func (s *Server) Handler() http.Handler {
 
         // REST API
         mux.HandleFunc("/api/state", s.handleState)
+
+        // v1.9.4 (P0): the desktop loopback activity-transport discovery
+        // endpoint — empty origin on every non-desktop serving mode.
+        mux.HandleFunc("/api/ws-origin", s.handleWSOrigin)
 
         // v1.8.0: the Runtime Governor / system-health surface — the ONE
         // runtime-policy read model composed from the existing authorities.
@@ -2345,6 +2374,14 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         // below has several exit paths; every one of them settles the run).
         var settled sync.Once
 
+        // v1.9.4: the run goroutine publishes the orchestrator's measured
+        // timeline here after RunDetailed returns; settle() reads it for
+        // the summary line. Written and read on the SAME goroutine (every
+        // settle path — including the panic-recover path — runs inside the
+        // run goroutine), so no synchronization is required. Zero on early
+        // settles (engine-gate refusals never reached the orchestrator).
+        var runTiming agent.Timing
+
         outcome := runOutcome{
                 RunID:     runID,
                 StartedAt: tl.registeredAt,
@@ -2386,14 +2423,45 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                 return b.Sub(a).Milliseconds()
                         }
 
+                        // v1.9.4 METRIC CLARIFICATION (P1): the previous
+                        // summary labelled acceptedAt→donePublished as
+                        // "publishMs", which read as a per-event WebSocket
+                        // write/publish latency — it never was one. The
+                        // line now names every boundary honestly:
+                        //
+                        //   gateMs          acceptedAt → engine gate ready
+                        //   ttftMs          the orchestrator's MEASURED
+                        //                   request_sent → first_token
+                        //                   (agent.Timing stage clock; 0
+                        //                   when no token was reached)
+                        //   persistMs       gate ready → reply persisted
+                        //   acceptToDoneMs  acceptedAt → done published
+                        //                   (the mislabelled publishMs —
+                        //                   dominated by generation time)
+                        //   totalMs         acceptedAt → settled
+                        //   events/deltas/  aggregate published-event
+                        //   firstDeltaMs    counters (counts only)
+                        //
+                        // Client-side boundaries (socket queue delay, write
+                        // time, browser receipt, DOM visibility) are NOT
+                        // derivable here; they live in the opt-in test-only
+                        // stream trace (src/stream-trace.ts), never in the
+                        // ordinary application log. All durations are
+                        // monotonic wall-clock ms; identifiers follow the
+                        // existing run-summary contract.
                         logging.Default().Info(
                                 "run",
-                                "runId=%s session=%s outcome=%s persistMs=%d publishMs=%d totalMs=%d replyChars=%d",
+                                "runId=%s session=%s outcome=%s gateMs=%d ttftMs=%d persistMs=%d acceptToDoneMs=%d totalMs=%d replyChars=%d events=%d deltas=%d firstDeltaMs=%d",
                                 runID, sess.ID, result,
+                                ms(tl.acceptedAt, tl.gateReady),
+                                runTiming.TTFTMs,
                                 ms(tl.gateReady, tl.persistedAt),
                                 ms(tl.acceptedAt, tl.donePublished),
                                 ms(tl.acceptedAt, outcome.EndedAt),
                                 len(replyText),
+                                tl.events,
+                                tl.deltas,
+                                ms(tl.acceptedAt, tl.firstDeltaAt),
                         )
                 })
         }
@@ -2496,6 +2564,18 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         a.Seq = live.nextSeq()
                         live.observe(a)
                         hub.publish(a)
+
+                        // v1.9.4: aggregate published-event counters for the
+                        // settle summary — counts and one timestamp, never
+                        // captions (see runTimeline).
+                        tl.events++
+                        switch a.Type {
+                        case "response", "assistant_delta", "reasoning", "thinking_delta":
+                                tl.deltas++
+                                if tl.firstDeltaAt.IsZero() {
+                                        tl.firstDeltaAt = time.Now()
+                                }
+                        }
                 }
 
                 // v1.6.0 P0 ordering invariant (repair): maintenance
@@ -2659,6 +2739,14 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         // safe boundaries when the pause handler flips it.
                         agent.WithRunControl(ctrl),
                 )
+
+                // v1.9.4: publish the measured timeline for the settle
+                // summary (same goroutine — see the runTiming note above).
+                runTiming = res.Timing
+
+                // v1.9.4: publish the measured timeline for the settle
+                // summary (same goroutine — see the runTiming note above).
+                runTiming = res.Timing
 
                 // v1.7.4 PAUSE: the run stopped at a SAFE BOUNDARY — not an
                 // error, not a completion. The durable checkpoint is

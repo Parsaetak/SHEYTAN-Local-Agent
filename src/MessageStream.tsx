@@ -8,6 +8,7 @@ import { useRuntimeStore } from "./store";
 import { memoryEvidenceLine } from "./memory-evidence";
 import { isLivePhase, PHASE_LABELS, type RunPhase } from "./run-phase";
 import { historySurfaceState } from "./history-surface";
+import { recordStreamTrace } from "./stream-trace";
 
 const MAX_RENDERED_MESSAGES = 200;
 
@@ -440,6 +441,21 @@ function GenerationBubble() {
   // the context report has not arrived yet — nothing is shown rather
   // than a guess).
   const memoryLine = memoryEvidenceLine(memoryEvidence);
+
+  // v1.9.4 (P0-A): the DOM-VISIBILITY boundary — what the live bubble
+  // actually renders after each commit, recorded as LENGTHS only. This
+  // is the last client boundary before the compositor; a run whose
+  // store/flush boundaries advance while this stays flat is the exact
+  // last-good/first-bad split the release contract requires the trace to
+  // identify. Disabled builds pay one boolean check per commit.
+  useEffect(() => {
+    recordStreamTrace("dom_visible", {
+      contentChars: content.length,
+      reasoningChars: reasoning.length,
+      batchDepth: runActivity.length,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- trace-only; the values above ARE the observation
+  }, [content, reasoning]);
 
   return (
     <article

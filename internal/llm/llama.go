@@ -183,6 +183,20 @@ type LlamaServer struct {
         // CPU-safe until execution is proven. Guarded by mu.
         gpuCandidateProving bool
 
+        // runGate (v1.9.4) is the run-coordination seam installed by the
+        // API layer (anyRunActive): it reports whether an agent/chat run
+        // is live RIGHT NOW. updateEngineVariantTx consults it at the
+        // DESTRUCTIVE boundary — before stopping a RUNNING engine — so an
+        // engine-changing transaction can never tear the serving engine
+        // out from under an active generation. The caller-side eligibility
+        // check evaluates the same condition once, BEFORE a transaction
+        // that can legitimately run for many minutes (download → swap →
+        // verify → rollback); without this re-check the gate is
+        // check-then-act across that whole window. Guarded by mu.
+        runGate func() bool
+
+
+
         // subs receive every state transition (never blocked; slow subscribers
         // drop events). Registered via SubscribeEvents.
         subsMu sync.Mutex
@@ -282,6 +296,39 @@ func NewLlamaServer(src *config.Source) *LlamaServer {
                 errRing: newRing(64),
                 subs:    make(map[int]chan EngineEvent),
         }
+}
+
+// ErrEngineBusyWithRun is the v1.9.4 coordination refusal: an
+// engine-changing transaction reached its destructive boundary (stopping
+// a RUNNING engine) while a run is active. The transaction fails CLOSED
+// — the serving engine is never torn down under an active generation.
+var ErrEngineBusyWithRun = errors.New(
+        "a run is active — engine variant transaction deferred to protect the live generation")
+
+// SetRunGate installs the run-coordination seam (the API layer's
+// anyRunActive). The gate is consulted by updateEngineVariantTx at the
+// destructive boundary; nil (tests without an API layer) preserves the
+// historical behavior.
+func (s *LlamaServer) SetRunGate(gate func() bool) {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        s.runGate = gate
+}
+
+// runActiveNow reports the installed gate's verdict under mu. A nil gate
+// (never wired) reports false — the transaction then behaves exactly as
+// before v1.9.4.
+func (s *LlamaServer) runActiveNow() bool {
+        s.mu.Lock()
+        gate := s.runGate
+        s.mu.Unlock()
+
+        if gate == nil {
+                return false
+        }
+
+        return gate()
 }
 
 // InvalidSamplingConfigError is the v1.6.1 P0 classification: the launch
@@ -3010,6 +3057,28 @@ func (s *LlamaServer) updateEngineVariantTx(
 
         defer lease.Release()
 
+        // v1.9.4 RUN-COORDINATION GATE — the DESTRUCTIVE boundary. The
+        // caller-side eligibility checks (AUTO probe, explicit variant
+        // request) evaluate "no run is active" ONCE, before a transaction
+        // that can run for many minutes (resolve → download → swap →
+        // verify → rollback). A run accepted inside that window would
+        // otherwise have its serving engine stopped underneath it. Fail
+        // closed instead: the transaction is refused before ANYTHING
+        // happens — no variant validation walk, no asset resolution, no
+        // stop — the engine keeps serving, and the bounded AUTO probe
+        // records the refusal as a DEFERRAL (never a bounded failure);
+        // the explicit user path surfaces the conflict. A non-running
+        // engine is not a disruption — the transaction proceeds and
+        // startLocked() owns the boot.
+        wasRunning := s.IsRunning()
+
+        if wasRunning && s.runActiveNow() {
+                logging.Default().Warn("updater",
+                        "engine variant transaction refused: a run is active — the serving engine is never stopped under a live generation")
+
+                return "", ErrEngineBusyWithRun
+        }
+
         // The gate: refuse impossible variants BEFORE stopping anything —
         // an explicit VULKAN request on an unserved platform must not
         // bounce the running engine for nothing. v1.6.2: the typed value
@@ -3043,8 +3112,6 @@ func (s *LlamaServer) updateEngineVariantTx(
                 }
                 tag = resolved
         }
-
-        wasRunning := s.IsRunning()
 
         s.mu.Lock()
         s.stopping = true

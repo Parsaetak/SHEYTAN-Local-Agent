@@ -1,105 +1,118 @@
-# UPDATE.md — v1.9.3 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.9.4 Release Notes & Maintenance Behavior
 
-**Release:** `v1.9.3` (canonical application version; single version
+**Release:** `v1.9.4` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ e5e1b79` (`v1.9.2`) · **Date:** 2026-10-10
-**Package:** `SHEYTAN-Local-Agent-v1.9.3-FINAL.zip` (complete repository tree)
+**Base:** `main @ 5bcd17b` (`v1.9.3`) · **Date:** 2026-10-10
+**Package:** `SHEYTAN-Local-Agent-v1.9.4-FINAL.zip` (complete repository tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior. The v1.9.0 feature surface (AI Systems, Goals, Approvals,
-bounded delegation, `repo_nav`) is unchanged in v1.9.3 and is documented
+bounded delegation, `repo_nav`) is unchanged in v1.9.4 and is documented
 in the changelog; its maintenance behavior below carries forward.
 
-## What v1.9.3 changes
+## What v1.9.4 changes
 
-1. **P0 — the Go race-gate failure is root-caused by real reproduction
-   and fixed with a pinned CPU policy contract plus deterministic test
-   seams.** The authoritative failure (Actions run `38035650428`, job
-   `114165397477`) failed `TestGovernorEndpointServesComposedSelfModel`
-   (`internal/api/governor_test.go:93`) with
-   `ok-pressure envelope class = live, want none`. The reproduced
-   mechanism: `runtime.StartGovernor` wires the production platform CPU
-   seam (`governor.CPULoadPlatform` — on Linux the 1-minute load average
-   normalized by core count) into the governor the API test folds
-   samples into; the test folded ONE OK-pressure RAM sample, and the
-   platform seam folded the runner's REAL host load with it.
-   `rollingSeries.observe` sets its first EWMA sample equal to the raw
-   value, so one high first sample (a busy CI runner above 85% of core
-   capacity) flipped the envelope to class `live` — contradicting the
-   documented "one noisy sample never drives policy" promise. The
-   reproduction was run on a real host under real generated load (4 busy
-   spinners, loadavg 2.87 on 2 cores ≈ 143%): the ORIGINAL v1.9.2 code
-   fails with the exact CI signature; the fixed code passes under
-   96–218% measured load. The fix has two coordinated parts, with no
-   production sampling disabled and no race coverage removed:
+1. **P0 — the Windows "answer appears only after Stop" defect is
+   root-caused and repaired at the TRANSPORT layer.** The proven root
+   cause: in packaged desktop builds the activity WebSocket never
+   reached the backend at all. Wails `v3.0.0-beta.16` serves the
+   webview through resource-request interception, which carries HTTP
+   only (Windows WebView2 forwards just `http://wails.localhost` into
+   the Go handler; Linux production serves the `wails://` custom
+   scheme). WebSocket handshakes are not web-resource requests and no
+   loopback listener existed, so `ws://wails.localhost/ws/activity`
+   resolved to loopback port 80 — nothing there — and the client's
+   20 reconnect attempts failed silently. Live run frames never reached
+   the UI: no streamed text, no `done`, a locked composer. Stop worked
+   only because abort is HTTP (synchronous flush + history reload) —
+   exactly the reported symptom, and exactly why four releases of
+   client-side scheduling repairs never changed it. The repair keeps
+   ONE authority: the desktop process additionally serves the EXISTING
+   API handler on a loopback-only ephemeral listener
+   (`internal/api/loopback.go`); `GET /api/ws-origin` publishes the
+   origin over the intercepted HTTP surface (empty = same-origin, the
+   unchanged browser/headless contract); the client resolves it once
+   and points ONLY the activity socket there; the upgrade is
+   origin-checked (the Wails page origin against loopback request hosts
+   only — no wildcard). Pinned by `internal/api/loopback_v194_test.go`
+   including a REAL WebSocket upgrade through the loopback with the
+   Wails page origin receiving the `attached` acknowledgement.
 
-   - **The CPU policy contract is pinned in code and tested in BOTH
-     directions** (`internal/governor`): the envelope's CPU-reduction
-     branch now requires a SUSTAINED rolling signal — at least
-     `cpuWarmupSamples` (3) folded samples AND a rolling average at or
-     above `CPUReduceAbove`. A lone spike (including the very first
-     sample, whose EWMA equals the raw value) never flips the envelope;
-     a genuinely sustained high load (~45 s at the shipped 15 s cadence)
-     still reduces background work and tool concurrency, matching the
-     sustained-pressure philosophy of the RAM branches. The folded
-     sample count is carried on `ResourceState.CPUSamples` and stated in
-     the reduction reason. `TestSustainedCPUHigherThanThresholdReduces`
-     now folds a genuinely sustained signal (its name means it), and the
-     new `TestLoneCPUSpikeDoesNotFlipEnvelope` pins that one high sample
-     leaves the OK-pressure envelope at class `none` while the same load
-     sustained past the warm-up floor engages class `live`.
-   - **The API integration test is deterministic regardless of host
-     load** (`internal/api/governor_test.go`): the envelope contract
-     under test is about PRESSURE, not the host's CPU, so the test pins
-     the injected CPU seam to an honest unknown (the same posture as a
-     platform that cannot measure CPU — every CPU policy branch stays
-     OFF) via the new `Governor.SetCPUSampler` seam. Production wiring
-     keeps `governor.CPULoadPlatform` as the ONE platform sampler.
+2. **P0 — the two zero-session E2E failures (Actions run 38069168867)
+   were a proof-selector defect.** The v1.9.3 helper
+   `expectRealAssistantReply` waited on `.message-content`, which exists
+   only on the LIVE surfaces; a settled assistant reply renders through
+   `div.message-markdown` and never carries that class, so the helper
+   could only match inside the finalising window (a timing race Agent
+   mode's CI run happened to win; local reproduction failed 3/4). The
+   failure artifacts show the settled reply rendered with real content
+   throughout. The helper now asserts the settled Markdown surface with
+   the strength contract preserved and tightened (placeholder rows
+   excluded, non-whitespace text asserted on the markdown surface
+   itself). No assertion weakened, no placeholder accepted.
 
-2. **P0 — the native prefill parity gate's claims are corrected to
-   exactly what is proven, and the proof is strengthened.** The v1.9.2
-   `test_prefill_parity.cpp` header claimed per-position logits parity,
-   but only the full prompt's FINAL logits were compared (the span path
-   projects logits only for a span's last token by design — skipping the
-   intermediate projections IS the optimization). The v1.9.3 gate proves
-   and claims: per-position logits parity through the chunk=1 span
-   cadence (every token is a span-final token there — bit-for-bit
-   against the serial path at all 20 fixture positions); final-token
-   logits for the production chunk sizes 3/7/16; full KV bytes (every
-   layer's K/V fp16 words at every written position) identical across
-   every chunking AND the serial run; chunk-boundary invariance of the
-   final logits; edge/error bounds (empty span, null args, out-of-vocab,
-   context overflow); and mixed prefill→decode continuity. Tied output
-   is explicitly NOT claimed (every shipped fixture carries a real
-   `output.weight`). Cancellation remains a between-chunks contract in
-   the generate loop and is documented as such. A clean CMake
-   configure/build/ctest of the native engine passes 13/13 locally
-   including the strengthened parity gate.
+3. **P1 — engine variant transactions can no longer stop a RUNNING
+   engine under an active run.** The AUTO Vulkan eligibility checked
+   "no run is active" once, before a transaction that can run for many
+   minutes and stops a running engine with no re-check (the supplied
+   Windows log's candidate/rollback messages overlapped a user
+   generation). `LlamaServer.SetRunGate` (wired to the API layer's
+   `anyRunActive`) is consulted before anything happens: running engine
+   + active run fails CLOSED with `ErrEngineBusyWithRun`; the AUTO probe
+   records a DEFERRAL, never a persisted bounded failure.
 
-3. **P1 — the zero-session E2E observation contract is closed against
-   the placeholder loophole in every test.** v1.9.2 repaired the
-   live-text test; the count-based assertions in the other three
-   zero-session tests could still be satisfied by the placeholder-
-   carrying generation bubble (it also carries `.message-row.from-agent`)
-   or by an empty persisted reply. Every zero-session test now proves
-   the settled assistant reply is REAL content — a `.message-content`
-   with non-empty visible text and no `[data-stream-placeholder]`
-   descendant — and the Agent-mode test asserts exactly one such reply.
-   The rAF-suspended live-stream test additionally proves the persisted
-   reply is non-empty. No assertion was weakened; the proof standard
-   ("exactly one persisted non-empty assistant response") is now
-   enforced on every path.
+4. **P1 — the run summary names every boundary honestly.** The old
+   `publishMs` (accepted→donePublished) was renamed `acceptToDoneMs`;
+   the summary now also carries `gateMs`, the orchestrator's measured
+   `ttftMs`, and aggregate published-event counters (`events`, `deltas`,
+   `firstDeltaMs`). The supplied v1.9.3 log's `publishMs=82178` invited
+   misreading it as socket latency; it never was one.
 
-4. **P1 — sub-10px UI typography is raised to the documented floors.**
-   The audited 62 `font-size` declarations at 6–9px are raised to the
-   UI/UX contract floors: dense secondary metadata ≥ 10px, essential
-   labels/states/errors ≥ 11px (topbar status, engine status, error
-   banners, Lab failure states), and interactive control text ≥ 12px
-   (Stop button, text buttons, secondary buttons, composer/textarea
-   input text). Nothing above the floors was changed — density is
-   preserved through hierarchy and layout, not microscopic text.
+5. **P0-A — the opt-in sanitized stream trace + the real-Windows
+   acceptance harness.** `src/stream-trace.ts` arms only on
+   `localStorage SHEYTAN_STREAM_TRACE=1`: every client boundary
+   (socket receive/attach/snapshot → fold → flush → DOM commit → run
+   end) recorded with monotonic timestamps, ephemeral sequence numbers
+   and LENGTHS ONLY (unit-pinned: content never enters the trace). The
+   zero-session spec attaches the dump to any failure.
+   `scripts/windows-live-answer-acceptance.mjs` runs the exact release
+   contract on a real Windows host: launch → send → real non-placeholder
+   text while Stop is visible → strictly longer DOM text while Stop
+   stays up → one persisted answer → reload → clean close.
+
+## Verification evidence (classes kept separate)
+
+* **Local, this release (Linux authoring host):** `npm ci`;
+  `npm run typecheck` green; `npm run lint` 0 warnings/0 errors;
+  `npm run test:units` 226/226 (incl. the new stream-trace suite);
+  `npm run test:release` 38/38; `node scripts/release-version.mjs
+  --check` green; clean `npm run build` + `npm run verify:web` green;
+  Go `build` clean; `go vet -tags headless ./internal/... ./cmd/...`
+  clean; `go test ./internal/... -tags headless -count=1` — 62 packages
+  ok, 0 FAIL; `go test -race -tags headless -count=1 ./internal/api
+  ./internal/agent ./internal/sessions ./internal/contextplan
+  ./internal/histref ./internal/runtime` — all six ok; fresh CMake
+  configure/build + native CTest 13/13; the browser E2E suite run to
+  completion locally: **40/40 passed** — agent 3, ai-systems 3, chat 5,
+  composer 3, lab 2, live-stream 3 (incl. rAF-suspended), model-first 6,
+  run-control 5, sessions 6, zero-session 4 (BOTH previously-failing
+  tests green: "deleting the final session … Send creates + runs" and
+  "reload after a zero-session Send", with the strengthened settled
+  Markdown assertions).
+* **Reproduction evidence:** the two zero-session failures reproduce
+  locally against the v1.9.3 baseline (3/4 failing) and pass with the
+  retargeted helper; the desktop root cause is proven from the pinned
+  Wails beta.16 sources plus the loopback upgrade test.
+* **CI:** the authoritative verdict for v1.9.4 is the Actions run that
+  carries this revision. v1.9.3's latest run (38069168867) FAILED and
+  is not a green baseline; no green-run claim is made for v1.9.4 until
+  that run exists.
+* **UNVERIFIED (honest):** the end-to-end Windows WebView2 interaction
+  (real desktop app, real compositor). This host cannot run it; the
+  shipped harness is the proof vehicle. The server-side transport
+  (loopback bind, discovery, upgrade, attach ack) IS proven by tests.
 
 ## Maintenance behavior (unchanged where not stated)
 
@@ -132,9 +145,16 @@ in the changelog; its maintenance behavior below carries forward.
   owned engine/server/background cleanup run through the existing
   deferred path.
 * **Frontend verification stack** — typecheck, oxlint (0 warnings/0
-  errors), the node unit suite (`npm run test:units`, 220/220), the
+  errors), the node unit suite (`npm run test:units`, 226/226), the
   release gates (`npm run test:release`) and the production build all
   run green on this release locally.
+* **Desktop activity transport (v1.9.4)** — the packaged desktop process
+  binds the API on a loopback-only ephemeral listener
+  (`internal/api/loopback.go`); the page discovers it via
+  `GET /api/ws-origin` (empty origin = same-origin, the browser/headless
+  contract). The WebSocket upgrade accepts the Wails page origin against
+  LOOPBACK request hosts only; nothing external is exposed and the
+  privacy posture is unchanged.
 * **Browser E2E** — the full Playwright suite runs in CI against the
   real headless server + real native engine + fixture GGUF; all
   visibility proofs observe real streamed content only.
@@ -157,18 +177,21 @@ in the changelog; its maintenance behavior below carries forward.
 
 ## Known boundaries (honest)
 
-* The v1.9.3 local verification sandbox proved: the race gate (the
-  authoritative failing command) green on all six packages; the full
-  headless Go suite green; `go vet ./...` green; the frontend gates
-  green; a clean native CMake configure/build/ctest green (13/13). A
-  local pass does NOT establish a green Actions run — the authoritative
-  CI verdict for v1.9.3 is the Actions run that carries this revision.
-* The desktop runtime smokes are wired for the CI environment (real
-  window handle + delivered WM_CLOSE on Windows; owned Xvfb + real app
-  pid + WM_DELETE_WINDOW on Linux) and were NOT executed in the v1.9.3
-  local sandbox (no Windows; no GTK4/WebKitGTK headers — the Wails
-  desktop binary cannot build there). Desktop-runtime evidence for
-  v1.9.2 and v1.9.3 is CI-bound until those jobs run green.
+* The v1.9.4 local verification sandbox proved: the frontend gates
+  (typecheck/lint/units/release/build), the Go build/vet, the targeted
+  Go suites (loopback transport + origin matrix; run-gate + strict
+  variant transactions), a clean native CMake configure/build/ctest,
+  and the browser E2E suite (results below). A local pass does NOT
+  establish a green Actions run — the authoritative CI verdict for
+  v1.9.4 is the Actions run that carries this revision.
+* The END-TO-END Windows WebView2 interaction was NOT executed in the
+  v1.9.4 local sandbox (no Windows host, no WebView2 runtime). The
+  desktop root cause is proven from the pinned Wails beta.16 sources
+  and the loopback transport is proven by Go tests; the desktop
+  user-journey proof for v1.9.4 is the shipped acceptance harness
+  (`scripts/windows-live-answer-acceptance.mjs`) run on a real Windows
+  host, and desktop-runtime evidence remains CI-bound until those jobs
+  run green.
 * The goal runner does not yet decompose steps into subtasks
   automatically (the delegation engine is implemented and tested; the
   integration is the first v1.9.x work item).

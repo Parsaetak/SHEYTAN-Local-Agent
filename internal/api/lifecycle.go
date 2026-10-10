@@ -12,6 +12,18 @@ func (s *Server) Close() {
 		return
 	}
 
+	// v1.9.4: drain the desktop loopback activity transport first —
+	// its sockets must not outlive the run registry they attach to.
+	s.closeLoopback()
+
+	// v1.9.4: drain the desktop loopback activity transport first —
+	// its sockets must not outlive the run registry they attach to.
+	s.closeLoopback()
+
+	// v1.9.4: drain the desktop loopback activity transport first —
+	// its sockets must not outlive the run registry they attach to.
+	s.closeLoopback()
+
 	// v1.2.3: stop an in-flight app-update staging download immediately —
 	// the .part file stays for a resumable retry next launch.
 	if fn := s.appUpdateCancel.Load(); fn != nil {

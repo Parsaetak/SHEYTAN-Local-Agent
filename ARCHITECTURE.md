@@ -165,6 +165,37 @@ monotonic per-run sequence and folds it into `runLive` BEFORE broadcast;
 WebSocket replay is snapshot-at-seq-N plus events > N (gapless,
 duplicate-free).
 
+**Desktop activity transport (v1.9.4):** packaged desktop builds serve
+the webview through the platform's resource-request interception, which
+carries HTTP only — WebSocket handshakes never reach the Go handler
+there (Windows WebView2 forwards just `http://wails.localhost`; Linux
+production serves the `wails://` custom scheme). The desktop process
+therefore ALSO serves the SAME API handler on a loopback-only ephemeral
+listener (`internal/api/loopback.go`); `GET /api/ws-origin` publishes
+the origin over the intercepted surface (empty = same-origin — the
+browser/headless contract), the client resolves it once and points ONLY
+the activity socket there, and the upgrade accepts the Wails page
+origin against loopback request hosts only. One handler, one
+`/ws/activity`, no second channel, nothing external exposed.
+
+**Engine/run coordination (v1.9.4):** an engine variant transaction
+(`updateEngineVariantTx`) consults the run gate (`LlamaServer.SetRunGate`
+— the API layer's `anyRunActive`) BEFORE anything happens: a RUNNING
+engine plus an active run fails closed (`ErrEngineBusyWithRun`) instead
+of tearing the serving engine out from under the generation. The AUTO
+probe records the refusal as a deferral, never a persisted bounded
+failure.
+
+**Run summary metrics (v1.9.4):** the settle summary carries
+`gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` plus aggregate
+published-event counters (`events`, `deltas`, `firstDeltaMs`) —
+durations are monotonic wall-clock, counts only; the mislabelled
+`publishMs` is retired. Client-side boundaries (socket queue delay,
+write time, browser receipt, DOM visibility) are observable ONLY through
+the opt-in test-only trace (`src/stream-trace.ts`,
+`localStorage SHEYTAN_STREAM_TRACE=1`; lengths only, never content,
+never in ordinary logs).
+
 **Run control (v1.7.4–v1.8.0):** pause requests land at safe boundaries
 (stream deltas, between tools, round tops) — the orchestrator returns a
 paused result; the checkpoint (durable, atomic, integrity-bounded) is

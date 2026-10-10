@@ -1,6 +1,39 @@
 import { expect, test, type Page } from "@playwright/test";
 import { startSheytan, type SheytanStack } from "./fixtures/sheytan-server";
 
+// v1.9.4 (P0-A): on ANY failure, attach the page's opt-in sanitized
+// stream-boundary trace (monotonic timestamps, sequence numbers and
+// LENGTHS only — never user content) to the test report. This is the
+// "compact sanitized test trace captured automatically on failure" the
+// release contract requires: it identifies the last-good/first-bad
+// boundary (socket receive → fold → flush → store → DOM) without ever
+// emitting run/session identifiers or captions into ordinary logs.
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) {
+    return;
+  }
+
+  try {
+    const trace = await page.evaluate(() => {
+      const dumper = (
+        window as unknown as Record<string, unknown>
+      ).__SHEYTAN_STREAM_TRACE_DUMP__;
+      return typeof dumper === "function"
+        ? (dumper as () => string)()
+        : "trace-disabled (SHEYTAN_STREAM_TRACE not armed)";
+    });
+
+    if (trace) {
+      testInfo.attach("stream-trace.json", {
+        body: String(trace),
+        contentType: "application/json",
+      });
+    }
+  } catch {
+    // The page may be gone (crash/close) — the trace is diagnostic only.
+  }
+});
+
 /**
  * zero-session.spec.ts — v1.8.4 (P0-C): THE ZERO-SESSION SEND CONTRACT.
  *
@@ -45,20 +78,41 @@ const composer = (page: Page) =>
   page.getByPlaceholder(/Message SHEYTAN|Describe what SHEYTAN/);
 
 // expectRealAssistantReply proves the SETTLED assistant reply is real
-// content: a .message-row.from-agent whose .message-content carries
-// non-empty visible text and NO presentation placeholder
-// ([data-stream-placeholder] marks the bubble's "Connecting…" / "…" arms
-// — never model output). v1.9.3: tests 1/3/4 previously accepted a
-// count-based proof whose row could be the placeholder-carrying
-// generation bubble (it also carries .message-row.from-agent) or an
-// empty persisted reply — the same loophole live-stream.spec.ts closed
-// in v1.9.1 and test 2 closed in v1.9.2.
+// content: a .message-row.from-agent whose text surface carries
+// non-empty visible text and NO presentation placeholder.
+//
+// v1.9.4 ROOT-CAUSE REPAIR of the v1.9.3 selector (both CI failures at
+// this helper were the selector, never the product — the failure
+// artifacts show the settled reply rendered with real content): the
+// v1.9.3 helper waited on `.message-row.from-agent .message-content`,
+// but `.message-content` exists ONLY on the live surfaces — the
+// generation bubble and the streaming safety-net bubble. A SETTLED
+// assistant message renders through MessageBubble → <Markdown> →
+// `div.message-markdown` (MessageStream.tsx), which never carries a
+// `.message-content` element, so the filtered locator could only ever
+// match during the finalising window (the bubble's last live content) —
+// a timing race that CI's Agent-mode test won once and both Chat tests
+// lost. Every other suite asserts settled replies through
+// `.message-row.from-agent .message-bubble` for exactly this reason.
+//
+// The v1.9.3 STRENGTH CONTRACT is preserved and tightened: the matched
+// row must (a) be a real from-agent message row, (b) carry the settled
+// Markdown text surface (`.message-markdown` — which ONLY the settled
+// MessageBubble renders, so the generation/streaming bubbles can never
+// satisfy this), and (c) contain non-whitespace text — asserted on the
+// markdown surface ITSELF (never the row: the avatar glyph and button
+// labels would otherwise satisfy the pattern against an empty reply).
+// The placeholder exclusion is kept belt-and-braces (a placeholder can
+// never appear in a settled row, and if it ever did the row is rejected).
 async function expectRealAssistantReply(page: Page, timeout = 60_000) {
-  const content = page
-    .locator(".message-row.from-agent .message-content")
+  const reply = page
+    .locator(".message-row.from-agent")
+    .filter({ has: page.locator(".message-markdown") })
     .filter({ hasNot: page.locator("[data-stream-placeholder]") })
+    .locator(".message-markdown")
     .first();
-  await expect(content).toHaveText(/\S/, { timeout });
+
+  await expect(reply).toHaveText(/\S/, { timeout });
 }
 
 // deleteEverySession removes sessions through the real UI until the

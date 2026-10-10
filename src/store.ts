@@ -29,7 +29,12 @@ import {
   resolveActiveForMode,
   resolveModeSwitchTarget,
 } from "./mode-sessions";
-import { activityWebSocketURL } from "./config";
+import { activityWebSocketURL, ensureActivityWsOrigin } from "./config";
+import {
+  recordRunEnd,
+  recordRunStart,
+  recordStreamTrace,
+} from "./stream-trace";
 import { resolveInitialView, viewModeBinding } from "./workspace";
 import {
   isLivePhase,
@@ -526,6 +531,178 @@ let enginePollConsumers = 0;
 
 let socket: WebSocket | null = null;
 
+// openActivitySocket creates and wires the activity WebSocket for one
+// session. v1.9.4: extracted verbatim from connectActivity so the connect
+// path can resolve the desktop loopback origin (see config.ts
+// ensureActivityWsOrigin) BEFORE the socket is constructed — the socket
+// URL itself is unchanged for every same-origin serving mode.
+function openActivitySocket(sessionId: string): void {
+  const ws = new WebSocket(activityWebSocketURL(sessionId));
+
+  socket = ws;
+
+  ws.onopen = () => {
+    if (socket !== ws || activitySessionId !== useRuntimeStore.getState().activeSessionId) {
+      return;
+    }
+
+    // v1.1.4: a successful (re)connection resets the backoff ladder.
+    reconnectAttempts = 0;
+
+    // v1.9.4 (P0-A): boundary evidence — the transport is open.
+    recordStreamTrace("ws_state", { state: "open" });
+
+    useRuntimeStore.setState({
+      connection: "connected",
+    });
+  };
+
+  ws.onmessage = (event) => {
+    if (socket !== ws || activitySessionId !== useRuntimeStore.getState().activeSessionId) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(event.data) as APIActivityEvent;
+
+      // v1.2.6 continuation: the attach acknowledgement — the server
+      // confirmed this socket is live and session-bound. Resolves the
+      // deterministic attach contract (never queued as activity).
+      if ((payload as Record<string, unknown>).type === "attached") {
+        recordStreamTrace("ws_state", { state: "attached" });
+        settleActivityAttach();
+        return;
+      }
+
+      // v1.2.6 continuation: the AUTHORITATIVE RUN SNAPSHOT — sent on
+      // every attachment (mid-run reconnect included). Replays the
+      // cumulative response/reasoning snapshots and the terminal state
+      // without waiting for a future token.
+      if ((payload as Record<string, unknown>).type === "run_snapshot") {
+        // v1.9.4 (P0-A): snapshot boundary — kind, wire seq and snapshot
+        // lengths only (never content).
+        recordStreamTrace("ws_frame", {
+          kind: "run_snapshot",
+          wireSeq:
+            typeof (payload as Record<string, unknown>).sequence === "number"
+              ? ((payload as Record<string, unknown>).sequence as number)
+              : undefined,
+          contentChars:
+            typeof (payload as Record<string, unknown>).latestResponse ===
+            "string"
+              ? ((payload as Record<string, unknown>).latestResponse as string)
+                  .length
+              : 0,
+          reasoningChars:
+            typeof (payload as Record<string, unknown>).latestReasoning ===
+            "string"
+              ? ((payload as Record<string, unknown>).latestReasoning as string)
+                  .length
+              : 0,
+        });
+        handleRunSnapshot(payload as unknown as Record<string, unknown>);
+        return;
+      }
+
+      // Stale-run filter: drop drains of a replaced run and
+      // duplicate/replayed sequences before they reach the pipeline.
+      if (isStaleRunEvent(payload as Record<string, unknown>)) {
+        return;
+      }
+
+      const activity = normalizeActivity(payload);
+
+      // v1.9.4 (P0-A): receive boundary — canonical kind, wire seq and
+      // caption LENGTH only (never the caption itself).
+      recordStreamTrace("ws_frame", {
+        kind: activity.type,
+        wireSeq:
+          typeof payload.seq === "number" ? payload.seq : undefined,
+        captionChars:
+          typeof activity.data.caption === "string"
+            ? (activity.data.caption as string).length
+            : 0,
+        queueDepth: pendingActivity.length,
+      });
+
+      // v1.8.1 SINGLE-FRAME STREAMING: stream-critical content
+      // (response/reasoning) folds into the streaming accumulator NOW —
+      // visible on the next rendering frame, ONE boundary instead of
+      // two. The event still joins the timeline batch below; the
+      // fast-path ledger makes the batch flush skip its conversation
+      // processing (no double handling). Everything else — status,
+      // tools, done/error/abort — keeps the existing batching.
+      streamFastPath.deliver(
+        activity.id,
+        activity.type,
+        activity.data.caption,
+      );
+
+      queueActivity(activity);
+    } catch {
+      // Ignore malformed activity frames.
+    }
+  };
+
+  ws.onerror = () => {
+    if (socket !== ws || activitySessionId !== useRuntimeStore.getState().activeSessionId) {
+      return;
+    }
+
+    recordStreamTrace("ws_state", { state: "error" });
+
+    useRuntimeStore.setState({
+      connection: "error",
+    });
+  };
+
+  ws.onclose = () => {
+    // The socket died — release anyone waiting on the deterministic
+    // attach contract FIRST, unconditionally: the deferred belongs to
+    // whichever socket was current, and a new connectActivity() always
+    // arms a fresh one (failActivityAttach is a no-op when already
+    // settled).
+    failActivityAttach();
+
+    if (socket !== ws || activitySessionId !== useRuntimeStore.getState().activeSessionId) {
+      return;
+    }
+
+    socket = null;
+
+    useRuntimeStore.setState({
+      connection: "disconnected",
+    });
+
+    // v1.1.4: auto-reconnect while the session is still active. Without
+    // this, ANY mid-run drop (backend restart, transient network blip)
+    // permanently killed event delivery — `running` could never clear.
+    if (reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
+      return;
+    }
+
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempts,
+      RECONNECT_MAX_DELAY_MS,
+    );
+
+    reconnectAttempts += 1;
+
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+
+      const current = useRuntimeStore.getState();
+
+      if (
+        current.activeSessionId &&
+        current.activeSessionId === activitySessionId
+      ) {
+        current.connectActivity();
+      }
+    }, delay);
+  };
+}
+
 // v1.2.6 continuation: the DETERMINISTIC ATTACH CONTRACT.
 //
 // POST completion must never imply the live transport was attached. The
@@ -828,6 +1005,20 @@ function flushStreaming(): void {
 
   const current = useRuntimeStore.getState().streaming;
 
+  // v1.9.4 (P0-A): the flush boundary — the LENGTHS being committed to
+  // the store (never the text). The merged lengths identify whether a
+  // flush actually advanced the visible snapshot.
+  recordStreamTrace("accumulator_flush", {
+    contentChars: (update.content !== null
+      ? update.content
+      : (current?.content ?? "")
+    ).length,
+    reasoningChars: (update.reasoning !== null
+      ? update.reasoning
+      : (current?.reasoning ?? "")
+    ).length,
+  });
+
   useRuntimeStore.setState({
     streaming: mergeSnapshot(current, update),
   });
@@ -890,6 +1081,10 @@ function queueStreamingContent(snapshot: string): void {
 
   captureRunBaselineIfNeeded();
   applyResponseSnapshot(streamAccumulator, snapshot);
+
+  // v1.9.4 (P0-A): fast-path fold boundary (length only).
+  recordStreamTrace("fastpath_fold", { contentChars: snapshot.length });
+
   scheduleStreamingFlush();
 }
 
@@ -899,6 +1094,12 @@ function queueStreamingReasoning(snapshot: string): void {
 
   captureRunBaselineIfNeeded();
   applyReasoningSnapshot(streamAccumulator, snapshot);
+
+  // v1.9.4 (P0-A): fast-path fold boundary (length only).
+  recordStreamTrace("fastpath_fold", {
+    reasoningChars: snapshot.length,
+  });
+
   scheduleStreamingFlush();
 }
 
@@ -1232,6 +1433,16 @@ async function finaliseRun(sessionId: string): Promise<void> {
           ? "aborted"
           : (runOutcome ?? "aborted"),
   });
+
+  // v1.9.4 (P0-A): close the client-side run window with the settled
+  // phase (trace-only; no product behavior).
+  recordRunEnd(
+    runOutcome === "done"
+      ? "complete"
+      : runOutcome === "lost"
+        ? "aborted"
+        : (runOutcome ?? "aborted"),
+  );
 
   runOutcome = null;
   runAssistantBaseline = null;
@@ -2870,6 +3081,9 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // authoritative post-run refresh).
     invalidateSessionContext();
 
+    // v1.9.4 (P0-A): anchor the client-side run window (trace-only).
+    recordRunStart();
+
     // v1.8.8 (the E2E reload-persistence race repair): the run-startup
     // state becomes visible HERE — before the transport work below, not
     // after it. run() previously kept `running:false` across the attach
@@ -3406,130 +3620,20 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // resolved by the server's first `attached` frame (see ws.onmessage).
     beginActivityAttach();
 
-    const ws = new WebSocket(activityWebSocketURL(sessionId));
-
-    socket = ws;
-
-    ws.onopen = () => {
-      if (socket !== ws || activitySessionId !== get().activeSessionId) {
+    // v1.9.4 (P0 — the desktop live-answer transport): resolve the
+    // activity socket origin ONCE (desktop loopback vs same-origin) and
+    // then open the socket. The bookkeeping above ran synchronously, so
+    // concurrent callers dedupe on activitySessionId/socket state; the
+    // attach deferred below bounds any discovery delay (one same-origin
+    // HTTP GET, typically sub-millisecond on the desktop).
+    void ensureActivityWsOrigin().then(() => {
+      // A newer connect attempt (or a disconnect) superseded this one.
+      if (socket !== null || activitySessionId !== sessionId) {
         return;
       }
 
-      // v1.1.4: a successful (re)connection resets the backoff ladder.
-      reconnectAttempts = 0;
-
-      set({
-        connection: "connected",
-      });
-    };
-
-    ws.onmessage = (event) => {
-      if (socket !== ws || activitySessionId !== get().activeSessionId) {
-        return;
-      }
-
-      try {
-        const payload = JSON.parse(event.data) as APIActivityEvent;
-
-        // v1.2.6 continuation: the attach acknowledgement — the server
-        // confirmed this socket is live and session-bound. Resolves the
-        // deterministic attach contract (never queued as activity).
-        if ((payload as Record<string, unknown>).type === "attached") {
-          settleActivityAttach();
-          return;
-        }
-
-        // v1.2.6 continuation: the AUTHORITATIVE RUN SNAPSHOT — sent on
-        // every attachment (mid-run reconnect included). Replays the
-        // cumulative response/reasoning snapshots and the terminal state
-        // without waiting for a future token.
-        if ((payload as Record<string, unknown>).type === "run_snapshot") {
-          handleRunSnapshot(payload as unknown as Record<string, unknown>);
-          return;
-        }
-
-        // Stale-run filter: drop drains of a replaced run and
-        // duplicate/replayed sequences before they reach the pipeline.
-        if (isStaleRunEvent(payload as Record<string, unknown>)) {
-          return;
-        }
-
-        const activity = normalizeActivity(payload);
-
-        // v1.8.1 SINGLE-FRAME STREAMING: stream-critical content
-        // (response/reasoning) folds into the streaming accumulator NOW —
-        // visible on the next rendering frame, ONE boundary instead of
-        // two. The event still joins the timeline batch below; the
-        // fast-path ledger makes the batch flush skip its conversation
-        // processing (no double handling). Everything else — status,
-        // tools, done/error/abort — keeps the existing batching.
-        streamFastPath.deliver(
-          activity.id,
-          activity.type,
-          activity.data.caption,
-        );
-
-        queueActivity(activity);
-      } catch {
-        // Ignore malformed activity frames.
-      }
-    };
-
-    ws.onerror = () => {
-      if (socket !== ws || activitySessionId !== get().activeSessionId) {
-        return;
-      }
-
-      set({
-        connection: "error",
-      });
-    };
-
-    ws.onclose = () => {
-      // The socket died — release anyone waiting on the deterministic
-      // attach contract FIRST, unconditionally: the deferred belongs to
-      // whichever socket was current, and a new connectActivity() always
-      // arms a fresh one (failActivityAttach is a no-op when already
-      // settled).
-      failActivityAttach();
-
-      if (socket !== ws || activitySessionId !== get().activeSessionId) {
-        return;
-      }
-
-      socket = null;
-
-      set({
-        connection: "disconnected",
-      });
-
-      // v1.1.4: auto-reconnect while the session is still active. Without
-      // this, ANY mid-run drop (backend restart, transient network blip)
-      // permanently killed event delivery — `running` could never clear.
-      if (reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
-        return;
-      }
-
-      const delay = Math.min(
-        RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempts,
-        RECONNECT_MAX_DELAY_MS,
-      );
-
-      reconnectAttempts += 1;
-
-      reconnectTimer = window.setTimeout(() => {
-        reconnectTimer = null;
-
-        const current = useRuntimeStore.getState();
-
-        if (
-          current.activeSessionId &&
-          current.activeSessionId === activitySessionId
-        ) {
-          current.connectActivity();
-        }
-      }, delay);
-    };
+      openActivitySocket(sessionId);
+    });
   },
 
   disconnectActivity: () => {

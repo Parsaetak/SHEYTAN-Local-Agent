@@ -46,6 +46,21 @@ movement happens in this file together with the evidence pointer.
 
 ---
 
+## v1.9.4 — reliability release (2026-10-10) — NO scope movement
+
+v1.9.4 advances NO v1.9 scope: the automatic goal-to-subtask fan-out, the
+protected-evaluation anti-hack guard and the MCP runtime-registry wiring
+remain FUTURE exactly as bounded below (docs alone are never evidence).
+The release repairs reliability only: the desktop activity-transport
+root cause (the packaged builds' activity WebSocket was unreachable —
+now loopback-served by the same authority), the settled-reply E2E proof
+selector, an engine-transaction/run coordination gate, honest run
+metrics, an opt-in sanitized stream trace and the real-Windows
+acceptance harness. Evidence: `changelog.md` v1.9.4,
+`worklog.md` (v1.9.4 session).
+
+---
+
 ## v1.9 — AI System Builder + long-horizon agentic engineering — **CURRENT (partial; boundary below)**
 
 v1.9 turns the runtime into the first real **AI System Builder** layer and

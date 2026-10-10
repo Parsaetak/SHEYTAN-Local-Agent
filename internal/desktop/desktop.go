@@ -48,6 +48,23 @@ func Run(cfg *config.Config) int {
 	}
 	defer srv.Close()
 
+	// v1.9.4 (P0 — the desktop live-answer transport): the webview's
+	// resource-request interception carries HTTP only (Windows WebView2
+	// forwards just http://wails.localhost into the Go handler; Linux
+	// production serves through the wails:// custom scheme), so the
+	// activity WebSocket could never reach the backend in packaged builds —
+	// the proven root cause of "the answer appears only after Stop". The
+	// SAME API handler (one authority, one /ws/activity endpoint) now also
+	// serves on a loopback-only ephemeral listener; the page discovers the
+	// origin via GET /api/ws-origin over the intercepted HTTP surface and
+	// points the activity socket at it. Local-only (127.0.0.1), ephemeral
+	// port, origin-checked upgrade — the privacy posture is unchanged.
+	if _, lbErr := srv.StartLoopback(); lbErr != nil {
+		// Honest, non-fatal: the intercepted HTTP surface (chat, history,
+		// abort) keeps working; only live event delivery would degrade.
+		fmt.Println("desktop: loopback activity transport unavailable:", lbErr)
+	}
+
 	if err := srv.EnsureSetup(); err != nil {
 		fmt.Println("desktop: setup:", err)
 		return 1

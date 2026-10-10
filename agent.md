@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.3 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.4 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,15 +7,58 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.9.3 — the Governor race-gate root cause with a
-pinned CPU policy contract (P0), the honest prefill-parity contract
-(P0), and the closed zero-session proof standard + UI microtext floors
-(P1), on the v1.9.0 feature surface.** Version identity is exactly
-`1.9.3` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.9.2
+**Current release: v1.9.4 — the desktop live-answer transport root
+cause (P0: the activity WebSocket was UNREACHABLE in packaged desktop
+builds — Wails v3 beta.16 resource-request interception carries HTTP
+only — repaired with a loopback transport for the SAME API authority),
+the settled-reply proof repair (P0: both zero-session E2E failures were
+a selector defect — settled rows render `.message-markdown`, never
+`.message-content`), the engine/run coordination gate (P1), the
+`publishMs`→`acceptToDoneMs` metric clarification (P1), the opt-in
+sanitized stream trace (P0-A) and the real-Windows acceptance harness.
+Version identity is exactly `1.9.4` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.9.3
 current-release claims exist outside `changelog.md`.
 
-**WHAT v1.9.3 CHANGED (the regression-sensitive surfaces):**
+**WHAT v1.9.4 CHANGED (the regression-sensitive surfaces):**
+
+1. **Desktop loopback activity transport** (`internal/api/loopback.go`,
+   `src/config.ts`, `src/store.ts`, `internal/api/ws.go`): the desktop
+   process binds the EXISTING API handler on 127.0.0.1:0;
+   `GET /api/ws-origin` returns the origin ("" = same-origin);
+   `connectActivity` resolves it once via `ensureActivityWsOrigin()` and
+   opens the socket through `openActivitySocket`. `allowedOrigin`
+   accepts ONLY the exact Wails page origin (http/wails +
+   `wails.localhost`) against LOOPBACK request hosts. Never broaden the
+   origin check, never add a second streaming channel, never serve the
+   socket from a second handler. The regression pins live in
+   `internal/api/loopback_v194_test.go` (including a REAL WebSocket
+   upgrade with the Wails origin receiving `attached`).
+
+2. **Engine/run coordination gate** (`internal/llm/llama.go`
+   `SetRunGate`/`ErrEngineBusyWithRun`, wired in `internal/api`
+   `New`): `updateEngineVariantTx` refuses BEFORE anything happens when
+   the engine is RUNNING and a run is active. The AUTO probe treats the
+   refusal as a DEFERRAL (`internal/llm/variant_auto.go`) — never a
+   persisted bounded failure. Do not move the gate after asset
+   resolution and do not persist deferrals into gpu-probe state.
+
+3. **Settled-reply proof selector** (`e2e/zero-session.spec.ts`
+   `expectRealAssistantReply`): settled assistant replies render
+   `.message-markdown` (MessageBubble → `<Markdown>`); `.message-content`
+   exists ONLY on the live bubbles. Any future settled-reply assertion
+   must target the markdown surface; never accept placeholder rows.
+
+4. **Stream trace** (`src/stream-trace.ts`): opt-in via
+   `localStorage SHEYTAN_STREAM_TRACE=1`, lengths only, bounded ring,
+   `window.__SHEYTAN_STREAM_TRACE_DUMP__` exposed ONLY when enabled.
+   The zero-session spec attaches it on failure. Keep the disabled path
+   a strict no-op and keep content OUT of the trace.
+
+5. **Run summary metrics** (`internal/api/server.go` settle):
+   `gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` +
+   `events`/`deltas`/`firstDeltaMs`. `publishMs` is retired — do not
+   reintroduce it.
 
 1. **Governor CPU policy contract** (`internal/governor/governor.go`,
    pinned by tests in BOTH directions): the envelope's CPU-reduction

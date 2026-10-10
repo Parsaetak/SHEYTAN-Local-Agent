@@ -21,6 +21,16 @@ var upgrader = websocket.Upgrader{
 // loopback origins commonly used by the local development UI.
 //
 // No wildcard origin is accepted.
+//
+// v1.9.4 (P0): the desktop shell's own page is also accepted. Packaged
+// desktop builds serve the page through the webview's resource-request
+// interception — origin http://wails.localhost (Windows WebView2) or
+// wails://wails.localhost (Linux/WebKit custom scheme) — while the
+// activity WebSocket rides the v1.9.4 loopback transport
+// (http://127.0.0.1:PORT, see loopback.go). That page origin against a
+// LOOPBACK request host is the local desktop application itself; it is
+// never accepted against a non-loopback host, and no other origin is
+// broadened.
 func allowedOrigin(origin, host string) bool {
 	origin = strings.TrimSpace(origin)
 
@@ -41,6 +51,18 @@ func allowedOrigin(origin, host string) bool {
 	if requestHost != "" && originHost == requestHost {
 		return true
 	}
+
+	// v1.9.4: the Wails desktop shell page (the exact production origin —
+	// host wails.localhost with no port, http or the custom wails scheme)
+	// reaching the loopback activity transport.
+	if isLoopbackHost(requestHost) && originHost == "wails.localhost" {
+		switch strings.ToLower(u.Scheme) {
+		case "http", "https", "wails":
+			return true
+		}
+	}
+
+
 
 	// Local development frontends.
 	switch originHost {

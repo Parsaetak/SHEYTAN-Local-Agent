@@ -57,6 +57,17 @@ type runTimeline struct {
 	gateReady     time.Time // engine gate released (engine ready / failed)
 	persistedAt   time.Time // assistant reply appended to the session
 	donePublished time.Time // done/complete activity published to the hub
+
+	// v1.9.4: aggregate PUBLISHED-EVENT counters (counts only — never
+	// captions) so the ordinary run summary distinguishes "nothing
+	// streamed" from "streamed but not delivered": events counts
+	// everything stamped through the ONE publisher; deltas counts
+	// response/reasoning snapshots; firstDeltaAt is the wall-clock of the
+	// FIRST content-bearing snapshot (the server-side anchor the opt-in
+	// test trace correlates against).
+	events       int       // published activity count (aggregate)
+	deltas       int       // response/reasoning snapshot count (aggregate)
+	firstDeltaAt time.Time // first content-bearing snapshot published
 }
 
 // runRegistry is the bounded session → outcome-ring store. Safe for

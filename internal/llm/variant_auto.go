@@ -50,6 +50,7 @@ import (
         "bytes"
         "context"
         "encoding/json"
+        "errors"
         "fmt"
         "io"
         "net/http"
@@ -401,6 +402,27 @@ func (s *LlamaServer) AutoProvisionVulkanIfWorthy(ctx context.Context, identity 
         }
 
         if err != nil {
+                // v1.9.4: a run-coordination refusal is a TEMPORARY
+                // condition (a run became active inside the candidate
+                // window), never an execution failure of the Vulkan
+                // candidate on this hardware — it must NOT be persisted as
+                // a bounded failed probe (that would permanently disable
+                // the AUTO candidate for this identity). The probe is
+                // skipped for this boot; a later boot with no active run
+                // may reconsider.
+                if errors.Is(err, ErrEngineBusyWithRun) {
+                        gpuEvent("gpuRollback", runID, tag,
+                                string(updater.VariantVulkan), "", "",
+                                "", "deferred",
+                                "a run became active during the candidate window — deferred for this boot, not a bounded failure")
+
+                        return GPUProbeOutcome{
+                                Skipped: true,
+                                Note: "AUTO Vulkan candidate deferred: " +
+                                        err.Error(),
+                        }
+                }
+
                 state.Reason = err.Error()
                 saveGPUProbeState(cfg, state)
                 gpuEvent("gpuRollback", runID, state.EngineTag, state.Variant, "", filepath.Base(state.Model), "", "failed", state.Reason)
