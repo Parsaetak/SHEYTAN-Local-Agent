@@ -165,26 +165,44 @@ monotonic per-run sequence and folds it into `runLive` BEFORE broadcast;
 WebSocket replay is snapshot-at-seq-N plus events > N (gapless,
 duplicate-free).
 
-**Desktop activity transport (v1.9.4):** packaged desktop builds serve
+**Desktop activity transport (v1.9.5):** packaged desktop builds serve
 the webview through the platform's resource-request interception, which
 carries HTTP only — WebSocket handshakes never reach the Go handler
 there (Windows WebView2 forwards just `http://wails.localhost`; Linux
 production serves the `wails://` custom scheme). The desktop process
-therefore ALSO serves the SAME API handler on a loopback-only ephemeral
-listener (`internal/api/loopback.go`); `GET /api/ws-origin` publishes
-the origin over the intercepted surface (empty = same-origin — the
-browser/headless contract), the client resolves it once and points ONLY
-the activity socket there, and the upgrade accepts the Wails page
-origin against loopback request hosts only. One handler, one
-`/ws/activity`, no second channel, nothing external exposed.
+therefore ALSO mounts the activity upgrade on a loopback-only ephemeral
+listener (`internal/api/loopback.go`) that serves EXACTLY ONE route —
+`/ws/activity`, the SAME `handleActivityWS` authority (the full REST
+surface is deliberately NOT reachable there; any other path is 404).
+Every upgrade requires a 256-bit cryptographically random per-server
+capability token (constant-time compared, delivered ONLY through
+`GET /api/ws-origin` over the intercepted surface, never logged), a
+non-empty Origin the existing authority accepts (an absent Origin can
+never bypass the loopback authentication) and the exact listener Host.
+`GET /api/ws-origin` publishes `{origin, token}` (empty = same-origin —
+the unchanged browser/headless contract, which has no token). The
+client validates strictly (`src/loopback-origin.ts`: exact normalized
+loopback http origin, canonical-form round trip), retries bounded on
+desktop pages, and degrades VISIBLY (persistent banner) when the
+transport cannot be discovered; desktop startup sequences `EnsureSetup`
+before the listener and treats a bind failure as a hard visible fault.
+One handler, one `/ws/activity`, no second channel, nothing else
+exposed.
 
-**Engine/run coordination (v1.9.4):** an engine variant transaction
-(`updateEngineVariantTx`) consults the run gate (`LlamaServer.SetRunGate`
-— the API layer's `anyRunActive`) BEFORE anything happens: a RUNNING
-engine plus an active run fails closed (`ErrEngineBusyWithRun`) instead
-of tearing the serving engine out from under the generation. The AUTO
-probe records the refusal as a deferral, never a persisted bounded
-failure.
+**Engine/run coordination (v1.9.5):** an engine variant transaction
+(`updateEngineVariantTx`) claims run-admission exclusivity FIRST through
+the `LlamaServer.SetAdmissionControl` seam (`llm.EngineAdmission`,
+implemented by the API server with claim + live-run verdict in ONE
+`runsMu` critical section — the same section run registration uses) and
+holds the claim across the whole transaction. A run registered before
+the claim makes the verdict live and the transaction fails closed
+(`ErrEngineBusyWithRun`); a run admitted while the claim is held is
+refused deterministically (HTTP 503, `errEngineMutationInProgress`,
+transcript restored). This closes the v1.9.4 check-then-act window
+across the minutes-long resolve → download → swap → verify → rollback
+path. The nil seam (tests/headless) preserves the historical
+destructive-boundary run gate (`SetRunGate`) alone. The AUTO probe
+records the refusal as a deferral, never a persisted bounded failure.
 
 **Run summary metrics (v1.9.4):** the settle summary carries
 `gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` plus aggregate

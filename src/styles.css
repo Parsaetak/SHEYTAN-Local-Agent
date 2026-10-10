@@ -7012,3 +7012,21 @@ body::before {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* v1.9.5 (P0): the desktop activity transport's degraded state is a
+   VISIBLE fault — a persistent, actionable banner, never a silent
+   broken core interaction. */
+.transport-degraded-banner {
+  flex: 0 0 auto;
+
+  margin: 8px 14px 0;
+  padding: 8px 12px;
+
+  border: 1px solid var(--yellow, #b8860b);
+  border-radius: var(--radius);
+  background: rgba(184, 134, 11, 0.08);
+
+  color: var(--text, #e8e2d6);
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -115,16 +115,22 @@ type GPUProbeState struct {
         At string `json:"at"`
 }
 
-// autoProbeSeq numbers probe runs for the diagnostics runId.
+// autoProbeSeq numbers probe attempts in the AUTO-probe diagnostics —
+// an ephemeral, identifier-free ordinal (v1.9.5 log contract: never a
+// runId/sessionId, never a per-event flood; one line per lifecycle
+// transition with counters/ordinals only).
 var autoProbeSeq atomic.Int64
 
 // gpuEvent emits one stable AUTO-probe lifecycle diagnostic (§22) with
 // the stable fields where available. Normal logs stay readable: one line
 // per lifecycle transition, secrets never included.
-func gpuEvent(event, runID, engineTag, variant, device, model, evidenceSource, verification, reason string) {
+// v1.9.5 LOG CONTRACT: the probe ordinal (`probe=%d`) is an ephemeral
+// per-process counter — never a runId/sessionId and never user content.
+// The identifier-shaped field the v1.9.4 line carried is gone.
+func gpuEvent(event string, probe int64, engineTag, variant, device, model, evidenceSource, verification, reason string) {
         logging.Default().Info("gpu",
-                "%s runId=%s engineTag=%s variant=%s device=%s model=%s evidenceSource=%s verification=%s reason=%s",
-                event, runID, engineTag, variant, device, model, evidenceSource, verification, reason)
+                "%s probe=%d engineTag=%s variant=%s device=%s model=%s evidenceSource=%s verification=%s reason=%s",
+                event, probe, engineTag, variant, device, model, evidenceSource, verification, reason)
 }
 
 // GPUProbeOutcome is the in-memory result of one AUTO candidate attempt.
@@ -229,15 +235,15 @@ type autoProbeEvidence struct {
 // offload line exists (the offload line is the stronger execution
 // evidence); it only means the device identity is attributed to the
 // engine log.
-func (s *LlamaServer) autoProbeVerify(runID string, ev *autoProbeEvidence) variantVerifyFunc {
+func (s *LlamaServer) autoProbeVerify(probe int64, ev *autoProbeEvidence) variantVerifyFunc {
         return func(cfg *config.Config, variant updater.AssetVariant, note string) (string, error) {
                 bin := updater.EngineBinaryPath(cfg)
 
-                gpuEvent("gpuDeviceEnumerationStarted", runID, updater.InstalledEngineTag(cfg), string(variant), "", "", "", "", "")
+                gpuEvent("gpuDeviceEnumerationStarted", probe, updater.InstalledEngineTag(cfg), string(variant), "", "", "", "", "")
 
                 devices, supported, err := enumerateEngineDevices(bin)
                 if err != nil {
-                        gpuEvent("gpuDeviceEnumerationFinished", runID, updater.InstalledEngineTag(cfg), string(variant), "", "", "", "failed", err.Error())
+                        gpuEvent("gpuDeviceEnumerationFinished", probe, updater.InstalledEngineTag(cfg), string(variant), "", "", "", "failed", err.Error())
                         return "", fmt.Errorf("AUTO candidate device enumeration failed: %w", err)
                 }
 
@@ -253,7 +259,7 @@ func (s *LlamaServer) autoProbeVerify(runID string, ev *autoProbeEvidence) varia
                 }
 
                 enumVerdict := fmt.Sprintf("supported=%v vulkanDevices=%d", supported, vulkanDevices)
-                gpuEvent("gpuDeviceEnumerationFinished", runID, updater.InstalledEngineTag(cfg), string(variant), deviceIdentity, "", "engine-enumeration", enumVerdict, "")
+                gpuEvent("gpuDeviceEnumerationFinished", probe, updater.InstalledEngineTag(cfg), string(variant), deviceIdentity, "", "engine-enumeration", enumVerdict, "")
 
                 if supported && vulkanDevices == 0 {
                         return "", fmt.Errorf(
@@ -265,8 +271,8 @@ func (s *LlamaServer) autoProbeVerify(runID string, ev *autoProbeEvidence) varia
                 // machine verified health + model).
                 model := s.LoadedModel()
 
-                gpuEvent("gpuCandidateStarted", runID, updater.InstalledEngineTag(cfg), string(variant), deviceIdentity, filepath.Base(model), "", "health-ready", note)
-                gpuEvent("gpuModelLoaded", runID, updater.InstalledEngineTag(cfg), string(variant), deviceIdentity, filepath.Base(model), "", "startup-state-machine", "")
+                gpuEvent("gpuCandidateStarted", probe, updater.InstalledEngineTag(cfg), string(variant), deviceIdentity, filepath.Base(model), "", "health-ready", note)
+                gpuEvent("gpuModelLoaded", probe, updater.InstalledEngineTag(cfg), string(variant), deviceIdentity, filepath.Base(model), "", "startup-state-machine", "")
 
                 // REAL bounded generation through the serving engine.
                 if gerr := probeServingGeneration(cfg); gerr != nil {
@@ -291,7 +297,7 @@ func (s *LlamaServer) autoProbeVerify(runID string, ev *autoProbeEvidence) varia
                 ev.Evidence = evidence
                 ev.EvidenceSource = source
 
-                gpuEvent("gpuExecutionEvidence", runID, updater.InstalledEngineTag(cfg), string(variant), deviceIdentity, filepath.Base(model), source, "verified", evidence)
+                gpuEvent("gpuExecutionEvidence", probe, updater.InstalledEngineTag(cfg), string(variant), deviceIdentity, filepath.Base(model), source, "verified", evidence)
 
                 return fmt.Sprintf(
                         "AUTO candidate execution verified: device %q, real generation succeeded, offload evidence %q",
@@ -356,7 +362,7 @@ func effectiveHost(cfg *config.Config) string {
 //      failed  state for the same identity → bounded skip (no transaction)
 //      anything else                        → ONE transaction
 func (s *LlamaServer) AutoProvisionVulkanIfWorthy(ctx context.Context, identity string) GPUProbeOutcome {
-        runID := fmt.Sprintf("gpuprobe-%d", autoProbeSeq.Add(1))
+        probe := autoProbeSeq.Add(1)
 
         cfg := s.src.Load()
         tag := updater.InstalledEngineTag(cfg)
@@ -370,27 +376,27 @@ func (s *LlamaServer) AutoProvisionVulkanIfWorthy(ctx context.Context, identity 
                 return GPUProbeOutcome{Skipped: true, Note: "the installed engine already carries the vulkan variant — reuse the existing evidence, never re-probe"}
         }
 
-        gpuEvent("gpuCandidateRequested", runID, tag, string(updater.VariantVulkan), "", filepath.Base(cfg.Model), "", "", "identity="+identity)
+        gpuEvent("gpuCandidateRequested", probe, tag, string(updater.VariantVulkan), "", filepath.Base(cfg.Model), "", "", "identity="+identity)
 
         // Bounded-state gates.
         if st, ok := LoadGPUProbeState(cfg); ok && st.Identity == identity {
                 switch st.Status {
                 case GPUProbeStatusVerified:
-                        gpuEvent("gpuCommit", runID, st.EngineTag, st.Variant, st.Device, st.Model, st.EvidenceSource, "reused", "verified state for the current hardware+engine identity — no new candidate transaction")
+                        gpuEvent("gpuCommit", probe, st.EngineTag, st.Variant, st.Device, st.Model, st.EvidenceSource, "reused", "verified state for the current hardware+engine identity — no new candidate transaction")
                         return GPUProbeOutcome{Skipped: true, State: &st, Note: "verified AUTO Vulkan state reused for the current identity"}
                 case GPUProbeStatusFailed:
-                        gpuEvent("gpuRollback", runID, st.EngineTag, st.Variant, "", "", "", "bounded-skip", "failed probe for the current hardware+engine identity: "+st.Reason)
+                        gpuEvent("gpuRollback", probe, st.EngineTag, st.Variant, "", "", "", "bounded-skip", "failed probe for the current hardware+engine identity: "+st.Reason)
                         return GPUProbeOutcome{Skipped: true, State: &st, Note: "previous AUTO Vulkan candidate failed for this identity — bounded, not retried: " + st.Reason}
                 }
         }
 
-        gpuEvent("gpuAssetResolved", runID, tag, string(updater.VariantVulkan), "", "", "", "", "resolving through the variant-aware release resolver (current tag preferred)")
+        gpuEvent("gpuAssetResolved", probe, tag, string(updater.VariantVulkan), "", "", "", "", "resolving through the variant-aware release resolver (current tag preferred)")
 
         // The evidence collector: filled ONCE by the verification hook inside
         // the transaction (one enumeration per probe — bounded).
         var evidence autoProbeEvidence
 
-        outcome, err := s.updateEngineVariantTx(ctx, updater.VariantVulkan, nil, s.autoProbeVerify(runID, &evidence))
+        outcome, err := s.updateEngineVariantTx(ctx, updater.VariantVulkan, nil, s.autoProbeVerify(probe, &evidence))
 
         state := GPUProbeState{
                 Status:    GPUProbeStatusFailed,
@@ -411,7 +417,7 @@ func (s *LlamaServer) AutoProvisionVulkanIfWorthy(ctx context.Context, identity 
                 // skipped for this boot; a later boot with no active run
                 // may reconsider.
                 if errors.Is(err, ErrEngineBusyWithRun) {
-                        gpuEvent("gpuRollback", runID, tag,
+                        gpuEvent("gpuRollback", probe, tag,
                                 string(updater.VariantVulkan), "", "",
                                 "", "deferred",
                                 "a run became active during the candidate window — deferred for this boot, not a bounded failure")
@@ -425,7 +431,7 @@ func (s *LlamaServer) AutoProvisionVulkanIfWorthy(ctx context.Context, identity 
 
                 state.Reason = err.Error()
                 saveGPUProbeState(cfg, state)
-                gpuEvent("gpuRollback", runID, state.EngineTag, state.Variant, "", filepath.Base(state.Model), "", "failed", state.Reason)
+                gpuEvent("gpuRollback", probe, state.EngineTag, state.Variant, "", filepath.Base(state.Model), "", "failed", state.Reason)
                 logging.Default().Warn("gpu",
                         "AUTO Vulkan candidate probe failed (bounded — will not retry for this hardware+engine identity): %v", err)
                 return GPUProbeOutcome{State: &state, Note: "AUTO Vulkan candidate failed: " + err.Error(), Err: err}
@@ -445,7 +451,7 @@ func (s *LlamaServer) AutoProvisionVulkanIfWorthy(ctx context.Context, identity 
         }
         saveGPUProbeState(cfg, state)
 
-        gpuEvent("gpuCommit", runID, state.EngineTag, state.Variant, state.Device, filepath.Base(state.Model), state.EvidenceSource, "verified", state.Reason)
+        gpuEvent("gpuCommit", probe, state.EngineTag, state.Variant, state.Device, filepath.Base(state.Model), state.EvidenceSource, "verified", state.Reason)
 
         logging.Default().Info("gpu",
                 "AUTO Vulkan candidate committed: device %q, offload evidence %q — GPU_VULKAN is now backed by runtime execution evidence",

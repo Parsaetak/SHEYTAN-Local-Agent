@@ -209,8 +209,9 @@ func (s *Server) updateSessionSummaryRolling(sess *sessions.Session, userMsg, as
 
 	logging.Default().Info(
 		"summary",
-		"session=%s version=%d objective=%t facts=%d decisions=%d files=%d",
-		updated.SessionID, updated.Version,
+		// v1.9.5 LOG CONTRACT: no session id in ordinary logs.
+		"objective updated: version=%d objective=%t facts=%d decisions=%d files=%d",
+		updated.Version,
 		updated.Objective != "",
 		len(updated.ImportantFacts), len(updated.KeyDecisions), len(updated.FilesAndArtifacts),
 	)
@@ -250,8 +251,8 @@ func (s *Server) writeAgentHandoff(sess *sessions.Session, task *agent.TaskState
 
 	logging.Default().Info(
 		"handoff",
-		"agent.md handoff updated at %s (session=%s outcome=%s files=%d commands=%d tests=%d)",
-		path, sess.ID, outcome, len(task.FilesChanged), len(task.CommandsRun), len(task.TestsRun),
+		"agent.md handoff updated at %s (outcome=%s files=%d commands=%d tests=%d)",
+		path, outcome, len(task.FilesChanged), len(task.CommandsRun), len(task.TestsRun),
 	)
 
 	return path, nil

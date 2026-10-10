@@ -9,6 +9,10 @@ import { memoryEvidenceLine } from "./memory-evidence";
 import { isLivePhase, PHASE_LABELS, type RunPhase } from "./run-phase";
 import { historySurfaceState } from "./history-surface";
 import { recordStreamTrace } from "./stream-trace";
+import {
+  activityTransportDegraded,
+  ensureActivityWsOrigin,
+} from "./config";
 
 const MAX_RENDERED_MESSAGES = 200;
 
@@ -703,6 +707,28 @@ function MessageStream() {
   const stickToBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
 
+  // v1.9.5 (P0): the desktop activity transport's degraded state is a
+  // VISIBLE fault, never a silent one — when the packaged desktop page
+  // cannot discover the loopback transport, live answer streaming is
+  // broken and the user must know instead of staring at a silent run.
+  const [transportDegraded, setTransportDegraded] = useState(
+    activityTransportDegraded,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void ensureActivityWsOrigin().then(() => {
+      if (!cancelled) {
+        setTransportDegraded(activityTransportDegraded);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // v1.4.0: ONE pure decision function (history-surface.ts) selects the
   // transcript surface state; the UI and the unit tests share it.
   const surface = historySurfaceState({
@@ -803,6 +829,13 @@ function MessageStream() {
 
   return (
     <div className="conversation-panel">
+      {transportDegraded ? (
+        <div className="transport-degraded-banner" role="alert">
+          Live answer streaming is unavailable in this window (the desktop
+          activity transport could not be reached). Answers may only appear
+          after a run completes — restart the application to repair it.
+        </div>
+      ) : null}
       <div
         className="conversation-stream"
         ref={streamRef}

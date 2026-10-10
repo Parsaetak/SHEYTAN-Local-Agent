@@ -1,18 +1,87 @@
-# UPDATE.md — v1.9.4 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.9.5 Release Notes & Maintenance Behavior
 
-**Release:** `v1.9.4` (canonical application version; single version
+**Release:** `v1.9.5` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 5bcd17b` (`v1.9.3`) · **Date:** 2026-10-10
-**Package:** `SHEYTAN-Local-Agent-v1.9.4-FINAL.zip` (complete repository tree)
+**Base:** `main @ 171f6b7` (`v1.9.4`) · **Date:** 2026-10-11
+**Package:** `SHEYTAN-Local-Agent-v1.9.5-FINAL.zip` (complete repository tree)
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
 behavior. The v1.9.0 feature surface (AI Systems, Goals, Approvals,
-bounded delegation, `repo_nav`) is unchanged in v1.9.4 and is documented
+bounded delegation, `repo_nav`) is unchanged in v1.9.5 and is documented
 in the changelog; its maintenance behavior below carries forward.
 
-## What v1.9.4 changes
+## What v1.9.5 changes
+
+1. **P0 — the failed v1.9.4 release attempt is repaired at its root and
+   the acceptance harness is a REAL gate.** Actions run `38090590263`
+   failed `npm run lint` at `scripts/windows-live-answer-acceptance.mjs`
+   (`Identifier 'sleep' has already been declared`), skipping every
+   downstream job. The harness itself also carried false-proof paths:
+   growth was accepted without Stop visibility/placeholder checks, a
+   settled Markdown row could substitute for growth, settlement counted
+   rows instead of asserting non-whitespace final text plus the persisted
+   user message, the trace was armed AFTER app modules loaded (the hook
+   was never installed), `ws` was an undeclared dependency, and the
+   "window close" was a forced `proc.kill()`. v1.9.5 rewrites the
+   harness to the ordered-evidence contract (sample A nonblank and
+   non-placeholder with Stop up → strictly larger sample B with Stop
+   still up → terminal settlement; any absence FAILS), arms the trace
+   via CDP `Page.addScriptToEvaluateOnNewDocument` before modules load,
+   drives the REAL window close (`taskkill` without `/F` — delivered
+   `WM_CLOSE`) with bounded exit, pins `ws` 8.18.3, and asserts the
+   trace artifact exists, captured the expected stages, and is
+   sanitized. The Windows CI job now RUNS it as a required gate with
+   the real packaged exe + the canonical fixture model + the real
+   native engine. First hosted execution happens on the next CI run —
+   UNVERIFIED from this repair environment (no Windows host here);
+   Linux CI green must never be read as a Windows desktop proof.
+
+2. **P0 — the v1.9.4 loopback transport is least-privilege and
+   authenticated.** The listener had served the ENTIRE API on
+   `127.0.0.1:0` with an Origin check that accepted an absent header.
+   v1.9.5 mounts exactly one route (`/ws/activity`, the SAME
+   `handleActivityWS` authority), requires a 256-bit per-server
+   capability token (constant-time compared, delivered only through
+   `GET /api/ws-origin` over the intercepted surface, never logged),
+   requires a non-empty accepted Origin and the exact listener Host,
+   refuses everything else with 404, and keeps the browser/headless
+   same-origin contract byte-identical. The frontend discovery validates
+   strictly (`src/loopback-origin.ts`: exact normalized loopback http
+   origin, canonical-form round trip — lookalike hosts, IP shorthand,
+   credentials, paths, non-http schemes refused), retries discovery a
+   bounded three times on desktop pages, and degrades VISIBLY (persistent
+   banner) instead of silently caching same-origin. Desktop startup
+   sequence: `EnsureSetup()` first; a transport failure exits non-zero
+   instead of launching broken. `Server.Close()` keeps exactly ONE
+   loopback drain (the v1.9.4 triple call removed), idempotent and
+   concurrency-safe. Pinned by `internal/api/loopback_v195_test.go` and
+   `src/loopback-origin.test.ts`.
+
+3. **P1 — the engine/run admission race is closed atomically.** The
+   v1.9.4 destructive-boundary check left a window during the
+   minutes-long variant transaction. v1.9.5 adds `llm.EngineAdmission`:
+   the transaction claims admission exclusivity first — atomically with
+   the live-run verdict under the same `runsMu` section registration
+   uses — and holds it across the whole transaction; new runs (and
+   resumes) receive the deterministic 503
+   (`errEngineMutationInProgress`) with the transcript restored, and a
+   run already live at claim time still refuses the transaction
+   (`ErrEngineBusyWithRun`). Nil seam preserves the historical behavior.
+   Pinned by `internal/llm/admission_v195_test.go` +
+   `internal/api/admission_v195_test.go`; race detector green on
+   `internal/api` and `internal/llm`.
+
+4. **P1 — ordinary application logs are identifier-free.** `runId=` /
+   `session=` fields are removed from every ordinary production log line
+   (`gpuEvent` now carries an ephemeral `probe=` ordinal; the settle
+   summary keeps only outcome + identifier-free durations/counters).
+   Correlation remains available through the bounded run-outcome
+   registry and the opt-in sanitized stream trace (still disabled by
+   default; lengths/kinds only).
+
+## What v1.9.4 changed (carried forward)
 
 1. **P0 — the Windows "answer appears only after Stop" defect is
    root-caused and repaired at the TRANSPORT layer.** The proven root
@@ -36,7 +105,7 @@ in the changelog; its maintenance behavior below carries forward.
    unchanged browser/headless contract); the client resolves it once
    and points ONLY the activity socket there; the upgrade is
    origin-checked (the Wails page origin against loopback request hosts
-   only — no wildcard). Pinned by `internal/api/loopback_v194_test.go`
+   only — no wildcard). Pinned (v1.9.5 contract) by `internal/api/loopback_v195_test.go`
    including a REAL WebSocket upgrade through the loopback with the
    Wails page origin receiving the `attached` acknowledgement.
 
@@ -84,7 +153,41 @@ in the changelog; its maintenance behavior below carries forward.
 
 ## Verification evidence (classes kept separate)
 
-* **Local, this release (Linux authoring host):** `npm ci`;
+* **Local, v1.9.5 release session (Linux authoring host):** `npm ci`
+  clean from lockfile (now including the pinned `ws` dev dependency);
+  `npm run typecheck` green; `npm run lint` 0 warnings/0 errors (the
+  v1.9.4 CI blocker reproduced first, then fixed); `npm run test:units`
+  236/236 (incl. the new `loopback-origin` suite); `npm run test:release`
+  38/38; `node scripts/release-version.mjs --check` green at 1.9.5;
+  clean `npm run build` + `npm run verify:web` green (tracked
+  `web/static` synchronized after the version bump); Go `build -tags
+  headless` clean; `go vet -tags headless ./internal/... ./cmd/...`
+  clean; `go test -tags headless -count=1 ./internal/...` — all packages
+  ok; `go test -race -tags headless -count=1` on api/llm/agent/sessions/
+  runtime/englease — all ok (the two coordination packages changed by
+  the admission fix included).
+* **UNVERIFIED in the v1.9.5 session (hosted CI executes them; no local
+  evidence exists and none is claimed):** the Windows desktop UI
+  acceptance gate (no Windows host in this environment — the harness and
+  its CI wiring ship runnable and unexecuted), the native C++ CTest
+  suite (no cmake here; no native source was modified by v1.9.5), the
+  full browser E2E with real generation (no provisioned engine binary
+  here; no E2E-relevant product path changed in v1.9.5 beyond the
+  acceptance harness itself), and the packaged-Windows transport matrix
+  on real hardware.
+* **Reproduction evidence (v1.9.4, carried):** the two zero-session
+  failures reproduce locally against the v1.9.3 baseline and pass with
+  the retargeted helper; the desktop root cause is proven from the
+  pinned Wails beta.16 sources plus the loopback upgrade tests.
+* **CI:** the authoritative verdict for v1.9.5 is the Actions run that
+  carries this revision. v1.9.4's run (38090590263) FAILED at lint and
+  is not a green baseline; no green-run claim is made for v1.9.5 until
+  that run exists. Local green is not CI green; Linux green is not
+  Windows green.
+
+## Verification evidence — v1.9.4 (carried forward)
+
+* **Local, that release (Linux authoring host):** `npm ci`;
   `npm run typecheck` green; `npm run lint` 0 warnings/0 errors;
   `npm run test:units` 226/226 (incl. the new stream-trace suite);
   `npm run test:release` 38/38; `node scripts/release-version.mjs

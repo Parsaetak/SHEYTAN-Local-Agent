@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.4 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.5 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,18 +7,21 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.9.4 — the desktop live-answer transport root
-cause (P0: the activity WebSocket was UNREACHABLE in packaged desktop
-builds — Wails v3 beta.16 resource-request interception carries HTTP
-only — repaired with a loopback transport for the SAME API authority),
-the settled-reply proof repair (P0: both zero-session E2E failures were
-a selector defect — settled rows render `.message-markdown`, never
-`.message-content`), the engine/run coordination gate (P1), the
-`publishMs`→`acceptToDoneMs` metric clarification (P1), the opt-in
-sanitized stream trace (P0-A) and the real-Windows acceptance harness.
-Version identity is exactly `1.9.4` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.9.3
-current-release claims exist outside `changelog.md`.
+**Current release: v1.9.5 — the v1.9.4 release-attempt repair: the
+acceptance harness false-proof paths removed and the harness wired as a
+REQUIRED Windows CI gate (P0), the loopback activity transport made
+least-privilege and authenticated (P0: exactly one route —
+`/ws/activity` — plus a per-server 256-bit capability token, strict
+origin/host validation, visible desktop degradation on discovery
+failure, `EnsureSetup` before the listener, single idempotent
+`closeLoopback`), the engine/run admission TOCTOU closed atomically
+(P1: the `llm.EngineAdmission` seam, deterministic 503 refusal with
+transcript restore, race-detector green), and the tree-wide
+identifier-free ordinary-log contract enforced (P1: `runId=`/`session=`
+removed from every production log line; `gpuEvent` carries an ephemeral
+`probe=` ordinal). Version identity is exactly `1.9.5` everywhere
+(canonical gate: `node scripts/release-version.mjs --check`). No stale
+1.9.4 current-release claims exist outside `changelog.md`.
 
 **WHAT v1.9.4 CHANGED (the regression-sensitive surfaces):**
 
@@ -32,7 +35,7 @@ current-release claims exist outside `changelog.md`.
    `wails.localhost`) against LOOPBACK request hosts. Never broaden the
    origin check, never add a second streaming channel, never serve the
    socket from a second handler. The regression pins live in
-   `internal/api/loopback_v194_test.go` (including a REAL WebSocket
+   `internal/api/loopback_v195_test.go` (including a REAL WebSocket
    upgrade with the Wails origin receiving `attached`).
 
 2. **Engine/run coordination gate** (`internal/llm/llama.go`

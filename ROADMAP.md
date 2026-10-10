@@ -46,6 +46,24 @@ movement happens in this file together with the evidence pointer.
 
 ---
 
+## v1.9.5 — hardening release (2026-10-11) — NO scope movement
+
+v1.9.5 advances NO v1.9 scope: the automatic goal-to-subtask fan-out,
+the protected-evaluation anti-hack guard and the MCP runtime-registry
+wiring remain FUTURE WORK. v1.9.5 repairs the failed v1.9.4 release
+attempt (the CI lint blocker and the acceptance harness's false-proof
+paths), closes the v1.9.4 loopback transport's least-privilege and
+authentication gaps (single-route listener + per-server capability
+token + strict origin/host validation + visible desktop degradation),
+makes the engine/run admission coordination atomic (the EngineAdmission
+seam), and enforces the identifier-free ordinary-log contract tree-wide.
+Every change ships with a focused regression test; the Windows desktop
+UI acceptance gate is wired into CI as a required step and its first
+hosted execution is explicitly UNVERIFIED from the authoring
+environment. Evidence: `changelog.md` v1.9.5, `worklog.md` (v1.9.5
+session), `internal/api/loopback_v195_test.go`,
+`internal/{api,llm}/admission_v195_test.go`, `src/loopback-origin.test.ts`.
+
 ## v1.9.4 — reliability release (2026-10-10) — NO scope movement
 
 v1.9.4 advances NO v1.9 scope: the automatic goal-to-subtask fan-out, the

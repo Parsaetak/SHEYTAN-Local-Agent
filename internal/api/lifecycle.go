@@ -14,14 +14,9 @@ func (s *Server) Close() {
 
 	// v1.9.4: drain the desktop loopback activity transport first —
 	// its sockets must not outlive the run registry they attach to.
-	s.closeLoopback()
-
-	// v1.9.4: drain the desktop loopback activity transport first —
-	// its sockets must not outlive the run registry they attach to.
-	s.closeLoopback()
-
-	// v1.9.4: drain the desktop loopback activity transport first —
-	// its sockets must not outlive the run registry they attach to.
+	// v1.9.5: exactly ONE ownership cleanup call — closeLoopback is
+	// idempotent (the first caller takes the handle), so repeated
+	// calls are harmless, but the ownership contract is stated once.
 	s.closeLoopback()
 
 	// v1.2.3: stop an in-flight app-update staging download immediately —

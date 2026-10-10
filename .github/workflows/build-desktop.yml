@@ -865,6 +865,89 @@ jobs:
 
           Write-Host "Desktop RUNTIME SMOKE passed: process-start + real top-level window + delivered WM_CLOSE + normal-path exit (code 0) + backend/runtime init (GUI-interaction proof remains the Browser E2E boundary)."
 
+      # v1.9.5 (P0): the REAL Windows live-answer acceptance gate — the
+      # exact user journey, executed against the actual packaged desktop
+      # binary (Wails/WebView2) with a REAL native-engine generation over
+      # the canonical fixture model: ready composer → send → ORDERED
+      # live-growth evidence (non-placeholder text visible while Stop is
+      # up, then strictly longer with Stop still up) → exactly one
+      # persisted assistant reply + one user message → reload keeps the
+      # SAME session active → a second full cycle → real WM_CLOSE exit.
+      # The harness exits non-zero on ANY unmet assertion; a skipped or
+      # unavailable run is NEVER a pass. This is the gate the Linux
+      # Chromium E2E cannot be (the packaged Windows transport surface).
+      - name: Windows live-answer acceptance (real desktop UI, real generation)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Invoke-Gate {
+            param([scriptblock]$Command, [string]$Label)
+            & $Command
+            if ($LASTEXITCODE -ne 0) {
+              throw "[gate] $Label failed with exit code $LASTEXITCODE."
+            }
+          }
+
+          $exe = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
+          if (-not (Test-Path $exe)) {
+            throw "acceptance: the desktop executable was not produced."
+          }
+
+          $engineBin = Join-Path (Get-Location) "native\engine\build\shtn-engine-host.exe"
+          if (-not (Test-Path $engineBin)) {
+            throw "acceptance: the native engine host (shtn-engine-host.exe) was not built — the real-generation gate cannot run."
+          }
+
+          Invoke-Gate { python --version } "python availability"
+
+          # The canonical fixture generator (the same writer the browser
+          # E2E uses — one source of truth) produces the wide-context GGUF
+          # the native engine really executes.
+          Invoke-Gate { python -m pip install --quiet numpy } "numpy install"
+          Invoke-Gate { python -c "import numpy; print('fixture-generator python OK:', __import__('sys').version)" } "numpy verification"
+
+          $accDir = Join-Path $env:RUNNER_TEMP "sheytan-acceptance"
+          if (Test-Path $accDir) {
+            Remove-Item $accDir -Recurse -Force
+          }
+          $dataDir = Join-Path $accDir "data"
+          $modelsDir = Join-Path $dataDir "models"
+          $sessionsDir = Join-Path $dataDir "sessions"
+          New-Item -ItemType Directory -Force -Path $modelsDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $sessionsDir | Out-Null
+
+          Invoke-Gate { python e2e/make-e2e-model.py (Join-Path $modelsDir "e2e-wide.gguf") } "fixture model generation"
+
+          if (-not (Test-Path (Join-Path $modelsDir "e2e-wide.gguf"))) {
+            throw "acceptance: the fixture model file was not produced."
+          }
+
+          # The desktop app's own config (the SAME shape the E2E stack
+          # writes): native engine backend, the fixture model selected.
+          $config = @{
+            dataDir          = $dataDir -replace '\\', '/'
+            modelsDir        = $modelsDir -replace '\\', '/'
+            sessionsDir      = $sessionsDir -replace '\\', '/'
+            host             = "127.0.0.1"
+            port             = 0
+            provider         = "local"
+            model            = "e2e-wide.gguf"
+            engineBackend    = "native"
+            nativeEnginePath = $engineBin -replace '\\', '/'
+            llamaAutoStart   = $false
+            updateSchedule   = "off"
+          }
+          $config | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $dataDir "config.json") -Encoding utf8
+
+          $env:SHEYTAN_ACCEPTANCE_EXE = (Resolve-Path $exe).Path
+          $env:SHEYTAN_DATA_DIR = $dataDir
+
+          Write-Host "Launching the Windows live-answer acceptance harness (real WebView2 desktop app, real native-engine generation)..."
+          Invoke-Gate { node scripts/windows-live-answer-acceptance.mjs } "windows-live-answer-acceptance"
+
+          Write-Host "Windows live-answer acceptance PASSED: ordered live-growth evidence + settlement + same-session reload + repeatability + real window close."
+
       - name: Prepare Windows portable package
         shell: pwsh
         run: |

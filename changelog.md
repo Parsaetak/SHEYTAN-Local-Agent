@@ -11,6 +11,153 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.9.5 — 2026-10-11 — the false-proof acceptance harness repair (P0) + the least-privilege desktop transport (P0) + the atomic engine/run admission (P1) + the tree-wide identifier-free log contract (P1)
+
+Focus: repair the failed v1.9.4 release attempt (Actions run
+`38090590263`: `npm run lint` failed at
+`scripts/windows-live-answer-acceptance.mjs:67` — `Identifier 'sleep'
+has already been declared`, fail-fast shell skipped every downstream
+job), then audit the v1.9.4 diff as untrusted new code. The audit
+confirmed the reported defects against source, reproduced them, and this
+release repairs all of them with focused regression tests. No claim
+below is made without the matching evidence produced in this session;
+evidence that this environment could not produce is labelled UNVERIFIED
+and stays gated in CI.
+
+1. **P0 — the Windows acceptance harness was a false-proof generator;
+   it is now a real, strict gate.** Reproduced the exact lint failure
+   (duplicate `const sleep`), then repaired the harness semantics:
+   (a) single `sleep`; (b) the growth contract now requires ORDERED
+   evidence — sample A with nonblank, non-placeholder live text AND the
+   Stop button visible, then a strictly longer sample B with Stop STILL
+   visible and content STILL non-placeholder — and removes BOTH
+   false-positive paths (growth accepted after completion; settled
+   Markdown accepted as a growth substitute); (c) settlement requires
+   visible non-whitespace final Markdown text, no placeholder anywhere,
+   exactly one persisted assistant reply AND the expected persisted user
+   message; (d) the reload proof uses the REAL session-selection
+   contract (`AgentSidebar` `data-session-id` active row) instead of
+   inferring from row counts; (e) the real top-level window close is
+   exercised via `taskkill` WITHOUT `/F` (delivered `WM_CLOSE`), the
+   process must exit within a bounded deadline, a timeout is a FAILURE,
+   and forced kill happens only after the failure is recorded;
+   (f) the stream trace is armed BEFORE app modules load (CDP
+   `Page.addScriptToEvaluateOnNewDocument` seeds localStorage, then
+   reload) — the v1.9.4 path wrote localStorage after module load and
+   passed a process env var the page module never read, so the hook was
+   never installed; the harness now FAILS on `trace-hook-not-installed`
+   or a trace missing the expected boundary stages, and validates the
+   artifact is sanitized; (g) `ws` is a pinned declared dev dependency
+   (8.18.3 + lockfile) — a clean `npm ci` provisions it, no manual step.
+2. **P0 — the harness is now wired as a REQUIRED Windows CI gate.**
+   The v1.9.4 script was never executed by any workflow. The Windows job
+   now builds the exe, builds the native engine (CMake), generates the
+   canonical wide-context fixture (`e2e/make-e2e-model.py`, the same
+   writer the browser E2E uses), writes the desktop config and runs
+   `scripts/windows-live-answer-acceptance.mjs` under `Invoke-Gate` —
+   real packaged WebView2 app, real native-engine generation, real
+   streaming. Status: WIRED, first execution on the next hosted Windows
+   run — UNVERIFIED from this repair environment (no Windows host
+   available here); a green Linux run must never be read as a Windows
+   desktop proof.
+3. **P0 — the loopback activity transport is least-privilege and
+   authenticated.** The v1.9.4 listener served `s.Handler()` — the
+   ENTIRE API — on `127.0.0.1:0`, exposing session/run/engine/updater
+   REST endpoints to any local process that discovered or scanned the
+   port, and authenticated nothing beyond an Origin header (which
+   `ws.go` accepted as absent). v1.9.5: the listener mounts EXACTLY ONE
+   route (`/ws/activity` — the SAME `handleActivityWS` authority, no
+   second handler); every upgrade requires (i) a 256-bit cryptographically
+   random per-server capability token (constant-time compare), delivered
+   ONLY through the trusted intercepted discovery surface
+   (`GET /api/ws-origin` now returns `{origin, token}`, token only when
+   an origin exists and never logged), (ii) a non-empty Origin the
+   existing authority accepts — an absent Origin can never bypass the
+   loopback authentication, (iii) a Host header equal to the listener
+   address, and (iv) no forwarding headers. Everything else is 404.
+   The browser/headless same-origin contract is unchanged (no token
+   exists in that mode). Regression: `internal/api/loopback_v195_test.go`
+   (least-privilege surface walk, full guard matrix, real upgrade with
+   token+origin receiving `attached`, idempotent + concurrent Close).
+4. **P0 — discovery-side hardening (`src/config.ts` + new
+   `src/loopback-origin.ts`).** The v1.9.4 `startsWith("http://127.0.0.1")`
+   prefix match accepted lookalike origins. v1.9.5 parses with `URL` and
+   accepts ONLY an exact normalized `http:` loopback origin (host exactly
+   `127.0.0.1` or `localhost`, explicit valid port, no credentials, no
+   path/query/fragment) with a canonical-form round trip (IP shorthand
+   such as `127.1` is refused). Discovery on a desktop page origin is
+   retried a bounded three times and, if the transport is still absent,
+   the page enters an explicit, visible degraded state
+   (`activityTransportDegraded` + a persistent banner in MessageStream)
+   instead of silently caching the same-origin fallback forever; the
+   browser/headless empty-origin verdict is still accepted immediately.
+   Regression: `src/loopback-origin.test.ts` (every refusal class).
+5. **P0 — lifecycle and startup ownership.** `Server.Close()` contained
+   three consecutive `s.closeLoopback()` calls (a v1.9.4 merge artifact);
+   exactly one ownership call remains and `closeLoopback` is
+   idempotent/concurrency-safe (pinned by test). Desktop startup now
+   runs `EnsureSetup()` BEFORE `StartLoopback()`, and a transport bind
+   failure is a HARD, VISIBLE fault — the desktop shell exits non-zero
+   instead of silently launching an app whose core interaction is
+   broken. `server.go` also installed the run gate TWICE (duplicate
+   v1.9.4 block) — one installation remains, now alongside the
+   admission seam.
+6. **P1 — the engine/run admission TOCTOU is closed atomically.** The
+   v1.9.4 gate was checked once at the destructive boundary of
+   `updateEngineVariantTx`; a run accepted during the minutes-long
+   transaction (resolve → download → swap → verify → rollback) still
+   lost its serving engine. v1.9.5 adds the `llm.EngineAdmission` seam:
+   the transaction claims run-admission exclusivity FIRST — atomically
+   with the live-run verdict, under the same `runsMu` critical section
+   run registration uses — and holds the claim for the whole
+   transaction. A run either registers before the claim (the claim's
+   verdict sees it and the transaction refuses with
+   `ErrEngineBusyWithRun`) or its admission observes the claim and is
+   refused deterministically (HTTP 503,
+   `errEngineMutationInProgress`) with the persisted transcript
+   restored (no dangling user message). Run admission and resume both
+   honour the claim; the nil seam (tests/headless) preserves the exact
+   v1.9.4 behavior. No deadlock (runsMu is a leaf lock; the transaction
+   holds switchMu + the engine lease without ever calling admission
+   back). Regressions: `internal/llm/admission_v195_test.go`,
+   `internal/api/admission_v195_test.go`; `go test -race` green on
+   `internal/api` and `internal/llm`.
+7. **P1 — ordinary logs are identifier-free.** `gpuEvent()` printed
+   `runId=%s` on every AUTO-probe diagnostic, and the run settle
+   summary, pause/resume/edit-transaction and history lines carried
+   `runId=`/`session=` fields tree-wide (`internal/api/server.go`,
+   `runcontrol.go`, `history.go`, `edittx.go`,
+   `internal/llm/variant_auto.go`). All removed: one concise
+   state transition or actionable failure per line; durations and
+   counters (identifier-free) remain; the AUTO-probe ordinal is an
+   ephemeral per-process counter (`probe=%d`). The prompt/reply text,
+   per-token events and secrets were already absent and stay absent;
+   the opt-in sanitized trace (`src/stream-trace.ts`) remains the ONLY
+   detailed surface and is still disabled by default.
+8. **P1 — metric semantics verified honest.** `acceptToDoneMs` is
+   acceptedAt → terminal-published (never a WebSocket network latency);
+   the summary names every boundary it measures and explicitly documents
+   that client-side boundaries live only in the opt-in trace. GPU
+   claims remain execution-evidence-gated (enumeration alone never
+   claims execution); the AUTO probe still treats a refused transaction
+   as a deferral, never a persisted bounded failure.
+
+Verification (this session, local): `npm ci` clean; `npm run typecheck`,
+`npm run lint` (0 warnings, 0 errors), `npm run test:units` (236/236),
+`npm run test:release` (38/38), `npm run build` + `npm run
+verify:web` (tracked `web/static` synchronized), `go build -tags
+headless ./internal/... ./cmd/...`, `go vet -tags headless ./internal/
+./cmd/...`, `go test -tags headless -count=1 ./internal/...` (all
+packages), `go test -race -tags headless -count=1` on api/llm/agent/
+sessions/runtime/englease. UNVERIFIED here (hosted CI runs them):
+Windows desktop UI acceptance (no Windows host in this environment),
+the native C++ CTest suite (no cmake in this environment; no native
+code was modified), the full browser E2E with real generation (no
+provisioned engine binary here; no e2e-relevant code path was changed
+by this release beyond the harness itself).
+
+---
+
 ## v1.9.4 — 2026-10-10 — the desktop live-answer transport root cause (P0) + the settled-reply proof repair (P0) + the engine/run coordination gate (P1)
 
 Focus: root-cause and repair the persistent user-reported Windows defect

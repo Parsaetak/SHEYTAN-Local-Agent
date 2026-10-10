@@ -1,10 +1,112 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.9.4
+Current release:  v1.9.5
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
 `UPDATE.md`, the future in `ROADMAP.md`.
+
+---
+Task ID: 1 (v1.9.5 session)
+Agent: v1.9.5 engineering session
+Task: v1.9.5 — repair the failed v1.9.4 release attempt (Actions run
+38090590263, lint blocker at scripts/windows-live-answer-acceptance.mjs),
+audit the v1.9.4 diff as untrusted new code, repair every reproduced
+P0/P1 (harness false-proof paths, loopback transport exposure, engine/run
+admission TOCTOU, identifier-bearing ordinary logs), and ship the
+complete verified source ZIP
+
+Work Log:
+- Baseline: HEAD `171f6b7` (v1.9.4) == live origin/main (re-fetched and
+  compared during the session — the checkout was the tip, not a stale
+  clone). GitHub REST API rate-limited (unauthenticated): the Actions
+  run logs were not fetchable, so the documented lint failure was
+  REPRODUCED LOCALLY instead (exact oxlint error at :67/:136).
+- Reproduced and confirmed against source: duplicate `const sleep`;
+  growth contract accepted completion-time samples and settled rows as
+  substitutes; OBSERVE_SETTLED counted rows; proc.kill() masquerading as
+  window close; trace armed after module load (hook never installed) +
+  a process env var the page never read; `ws` undeclared; the harness
+  referenced by NO workflow; loopback.go serving the ENTIRE API on
+  127.0.0.1:0 with no authentication; ws.go accepting an absent Origin;
+  config.ts startsWith prefix origin matching; triple closeLoopback in
+  Close(); StartLoopback before EnsureSetup with a non-fatal bind
+  failure; duplicate SetRunGate installation; updateEngineVariantTx
+  single-check TOCTOU; gpuEvent printing `runId=`; runId/session fields
+  in ordinary logs across server.go, runcontrol.go, history.go,
+  edittx.go.
+- IMPLEMENT (P0): rewrote the acceptance harness to the ordered-evidence
+  contract (sample A nonblank+non-placeholder+Stop up -> strictly larger
+  sample B with Stop still up -> terminal settlement; any absence
+  FAILS; settlement asserts non-whitespace final Markdown, no
+  placeholder, exactly one assistant reply AND the expected user
+  message; reload proven via the sidebar `data-session-id` active-row
+  contract; real WM_CLOSE via taskkill without /F with bounded exit and
+  failure-only forced cleanup; trace armed via CDP
+  addScriptToEvaluateOnNewDocument BEFORE modules load, hook presence +
+  expected stages + sanitization asserted; `ws` pinned 8.18.3 +
+  lockfile). Wired the harness as a REQUIRED step of the Windows CI job
+  (real packaged exe + native engine built by CMake + canonical
+  e2e/make-e2e-model.py fixture + desktop config), after the existing
+  runtime smoke.
+- IMPLEMENT (P0, transport): loopback listener narrowed to EXACTLY ONE
+  route (/ws/activity -> the SAME handleActivityWS); 256-bit
+  crypto/rand per-server capability token, constant-time compared,
+  required on every upgrade, delivered only via GET /api/ws-origin
+  ({origin, token}; token only with an origin; never logged); absent
+  Origin refused on the loopback path (no bypass); Host must equal the
+  listener address; forwarding headers refused; everything else 404.
+  src/loopback-origin.ts: strict URL-parse validation (exact normalized
+  loopback http origin, canonical-form round trip refusing 127.1-style
+  shorthand), bounded 3-attempt discovery retry on desktop pages with
+  an explicit visible degraded state (activityTransportDegraded +
+  persistent MessageStream banner); desktop.go sequences EnsureSetup
+  BEFORE StartLoopback and treats a bind failure as a hard non-zero
+  exit; lifecycle.go keeps exactly ONE idempotent closeLoopback (test
+  pins concurrent Close); duplicate SetRunGate removed.
+- IMPLEMENT (P1, admission): llm.EngineAdmission seam — the transaction
+  claims admission exclusivity first, atomically with the live-run
+  verdict under the API server's runsMu (the same section registration
+  uses), and holds it across the whole transaction; runs admitted under
+  a claim get the deterministic 503 (errEngineMutationInProgress) with
+  the persisted transcript restored (preMutationMessages snapshot); a
+  run live at claim time still refuses the transaction
+  (ErrEngineBusyWithRun); resume honours the claim; nil seam preserves
+  the historical behavior; runsMu stays a leaf lock (no deadlock).
+- IMPLEMENT (P1, logs): gpuEvent now logs an ephemeral probe ordinal
+  (probe=%d) — no runId; runId=/session= removed from every ordinary
+  production log line tree-wide (settle summary, pause/resume/edit-tx,
+  history); durations/counters kept; format-arg consistency verified by
+  go vet.
+- TESTS: internal/api/loopback_v195_test.go (least-privilege surface
+  walk, guard matrix incl. no-token/bad-token/absent-Origin/foreign-
+  Origin, real upgrade with token+origin receiving `attached`,
+  idempotent+concurrent Close, no token without loopback);
+  internal/llm/admission_v195_test.go +
+  internal/api/admission_v195_test.go (claim lifecycle, live-run
+  refusal, refusal 503 with unchanged transcript, claim-not-taken-when-
+  live); src/loopback-origin.test.ts (accept/refuse matrix incl.
+  lookalikes, schemes, ports, credentials, paths, IP shorthand).
+
+Stage Summary:
+- v1.9.5 verified locally: npm ci clean; typecheck green; lint 0/0
+  (the CI blocker fixed, no rule disables); test:units 236/236 (incl.
+  the new loopback-origin suite); test:release 38/38; release-version
+  --check green at 1.9.5 (package.json -> config.go / build/config.yml /
+  SIGNATURE); npm run build + verify:web green (tracked web/static
+  synchronized AFTER the version bump); go build/vet/test (headless,
+  -count=1) green on ./internal/... + ./cmd/...; go test -race green on
+  api/llm/agent/sessions/runtime/englease.
+- UNVERIFIED here, executed by hosted CI: Windows desktop UI acceptance
+  (no Windows host in the authoring environment — the gate is wired,
+  runnable and unexecuted), native C++ CTest (no cmake here; no native
+  source modified), the full browser E2E with real generation (no
+  provisioned engine binary here; no E2E product path changed by
+  v1.9.5 beyond the harness).
+- Honest boundaries: no push/PR/tag/release; no remote main change; no
+  permissions widened; GPU claims still execution-evidence-gated; the
+  AUTO probe still records refusals as deferrals, never persisted
+  failures.
 
 ---
 Task ID: 1 (v1.9.4 session)

@@ -252,9 +252,11 @@ func (s *Server) quarantineEditTx(runID string, reason string) {
 	}
 
 	logging.Default().Error("run",
-		"edit transaction QUARANTINED (fail closed): runId=%s reason=%q — the record is at %s; "+
+		// v1.9.5 LOG CONTRACT: no runId in ordinary logs; the quarantine
+		// record path (not an identifier) is the actionable locator.
+		"edit transaction QUARANTINED (fail closed): reason=%q — the record is at %s; "+
 			"the paused checkpoint and transcript were left untouched, the edit was neither completed nor rolled back",
-		runID, reason, dst)
+		reason, dst)
 }
 
 // lastUserMessageContent returns the transcript's last user message
@@ -329,8 +331,8 @@ func (s *Server) recoverOneEditTx(rec *editTxRecord) {
 			case userNow == rec.NewUserMessage:
 				if _, err := s.store.EditLastUserMessage(rec.SessionID, rec.OldUserMessage); err != nil {
 					logger.Error("run",
-						"edit recovery could not restore the transcript (checkpoint already consumed): runId=%s: %v",
-						rec.RunID, err)
+						"edit recovery could not restore the transcript (checkpoint already consumed): %v",
+						err)
 					return // leave the journal for the next boot — do not guess
 				}
 			case userNow != rec.OldUserMessage:
@@ -409,14 +411,14 @@ func (s *Server) convergeEditTx(rec *editTxRecord, ck *pausedRunRecord, revision
 
 	if err := s.savePausedRecord(ck); err != nil {
 		logger.Error("run",
-			"edit recovery could not rewrite the checkpoint for runId=%s: %v — the journal is kept for the next boot",
-			rec.RunID, err)
+			"edit recovery could not rewrite the checkpoint: %v — the journal is kept for the next boot",
+			err)
 		return // keep the journal; the next boot retries deterministically
 	}
 
 	s.deleteEditTx(rec.RunID)
 
 	logger.Info("run",
-		"edit recovery: runId=%s converged deterministically at revision %d (journal removed)",
-		rec.RunID, revision)
+		"edit recovery converged deterministically at revision %d (journal removed)",
+		revision)
 }

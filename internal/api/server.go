@@ -12,6 +12,7 @@ import (
         "os"
         "path/filepath"
         goruntime "runtime"
+        "slices"
         "sort"
         "strconv"
         "strings"
@@ -113,6 +114,12 @@ type Server struct {
         runsMu sync.Mutex
         runs   map[string]*runState
 
+        // v1.9.5 (P1): engine-mutation admission claim (guarded by runsMu).
+        // While true, new run admission is refused deterministically — the
+        // llm.EngineAdmission seam that closes the engine-transaction /
+        // run-admission TOCTOU. See BeginEngineMutation in selection.go.
+        engineMutation bool
+
         // v1.5.0 MODEL-FIRST: the backend-authoritative model-selection
         // state machine (selection.go). selectionMu guards the record;
         // calibrating is the single-slot gate for the bounded automatic
@@ -171,6 +178,7 @@ type Server struct {
         loopbackMu     sync.Mutex
         loopbackSrv    *http.Server
         loopbackOrigin string
+        loopbackToken  string
 
         // v1.6.0 P0 — THE STARTUP MAINTENANCE GATE (maintenance.go).
         // One authoritative coordinator owns the startup decision
@@ -662,14 +670,14 @@ func New(cfg *config.Config) (*Server, error) {
         // RUNNING engine while a run is active — the caller-side
         // eligibility check happens once, before a transaction that can
         // run for many minutes; the destructive boundary re-checks here.
+        // v1.9.5 (P1): install the ADMISSION seam as well — it makes the
+        // check-then-act window between the transaction's gate check and
+        // its destructive boundary airtight (see llm.EngineAdmission):
+        // while a transaction holds the mutation claim, new run admission
+        // is refused deterministically, so no accepted run can lose its
+        // serving engine across candidate/update/rollback.
         s.llama.SetRunGate(s.anyRunActive)
-
-        // v1.9.4 (P1): install the run-coordination seam on the engine
-        // lifecycle owner. An engine variant transaction must never stop a
-        // RUNNING engine while a run is active — the caller-side
-        // eligibility check happens once, before a transaction that can
-        // run for many minutes; the destructive boundary re-checks here.
-        s.llama.SetRunGate(s.anyRunActive)
+        s.llama.SetAdmissionControl(s)
 
         // v1.1.3: the engine event bus fans authoritative state transitions
         // to every WebSocket as they happen.
@@ -1930,6 +1938,18 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 return
         }
 
+        // v1.9.5 (P1): deterministic admission refusal while an engine
+        // variant transaction holds the mutation claim. This early check
+        // keeps the friendly contract (no user message is ever persisted
+        // for a refused run); the AIRTIGHT check below re-evaluates the
+        // same runsMu-guarded claim inside the registration critical
+        // section, so the check-then-act window is closed regardless of
+        // timing.
+        if s.llama != nil && s.llama.EngineMutationActive() {
+                writeErr(w, http.StatusServiceUnavailable, errEngineMutationInProgress)
+                return
+        }
+
         // v1.9.0: the AI System binding is resolved ONCE, here — before
         // the run goroutine starts and before the response is written.
         // Explicit request systemId wins (404 when missing — an honest,
@@ -1939,18 +1959,18 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         // refuses to run over a configuration object.
         var aiSnap *aisystem.Snapshot
         if s.stack != nil && s.stack.Systems != nil {
-        	if body.SystemID != "" {
-        		sys, sysErr := s.stack.Systems.Get(body.SystemID)
-        		if sysErr != nil {
-        			writeErr(w, http.StatusNotFound, fmt.Errorf("ai system %q not found", body.SystemID))
-        			return
-        		}
-        		snap := sys.Snapshot()
-        		aiSnap = &snap
-        	} else if sys, sysErr := s.stack.Systems.Active(); sysErr == nil {
-        		snap := sys.Snapshot()
-        		aiSnap = &snap
-        	}
+                if body.SystemID != "" {
+                        sys, sysErr := s.stack.Systems.Get(body.SystemID)
+                        if sysErr != nil {
+                                writeErr(w, http.StatusNotFound, fmt.Errorf("ai system %q not found", body.SystemID))
+                                return
+                        }
+                        snap := sys.Snapshot()
+                        aiSnap = &snap
+                } else if sys, sysErr := s.stack.Systems.Active(); sysErr == nil {
+                        snap := sys.Snapshot()
+                        aiSnap = &snap
+                }
         }
 
         // v1.2.8: resolve the attached history references. Self-references
@@ -1988,6 +2008,13 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         logging.Default().Warn("api", "persist history refs: %v", err)
                 }
         }
+
+        // v1.9.5 (P1): transcript snapshot taken before THIS request
+        // mutates session messages. If the airtight admission check below
+        // refuses the run (a claim taken between the early check and this
+        // point), the snapshot restores the persisted transcript exactly —
+        // a refused run never leaves a dangling user message behind.
+        preMutationMessages := slices.Clone(sess.Messages)
 
         // Regenerate: drop trailing assistant output so the previous user
         // turn re-runs; the message body is optional in that case.
@@ -2330,6 +2357,35 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
         s.runsMu.Lock()
 
+        // v1.9.5 (P1): the AIRTIGHT admission check — the same runsMu
+        // critical section that registers the run also evaluates the
+        // engine-mutation claim, making claim and registration mutually
+        // exclusive by construction (see BeginEngineMutation). On refusal
+        // the pre-mutation transcript snapshot is restored so the rejected
+        // turn leaves no dangling user message, and the caller receives
+        // the deterministic 503.
+        if s.engineMutation {
+                s.runsMu.Unlock()
+
+                // The run never starts: release the context handles the
+                // accepted path would have owned (vet: no leaked timer).
+                cancel()
+                budgetCancel()
+
+                sess.Messages = preMutationMessages
+
+                if err := s.store.SaveMessagesKeepContext(sess); err != nil {
+                        logging.Default().Warn(
+                                "api",
+                                "rollback transcript after admission refusal: %v",
+                                err,
+                        )
+                }
+
+                writeErr(w, http.StatusServiceUnavailable, errEngineMutationInProgress)
+                return
+        }
+
         // There can be only one active run per session. Cancel the previous run
         // before replacing its state.
         if old, ok := s.runs[sess.ID]; ok {
@@ -2451,8 +2507,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         // existing run-summary contract.
                         logging.Default().Info(
                                 "run",
-                                "runId=%s session=%s outcome=%s gateMs=%d ttftMs=%d persistMs=%d acceptToDoneMs=%d totalMs=%d replyChars=%d events=%d deltas=%d firstDeltaMs=%d",
-                                runID, sess.ID, result,
+                                // v1.9.5 LOG CONTRACT: no runId/session in
+                                // ordinary logs — outcome + identifier-free
+                                // durations/counters only.
+                                "run settled: outcome=%s gateMs=%d ttftMs=%d persistMs=%d acceptToDoneMs=%d totalMs=%d replyChars=%d events=%d deltas=%d firstDeltaMs=%d",
+                                result,
                                 ms(tl.acceptedAt, tl.gateReady),
                                 runTiming.TTFTMs,
                                 ms(tl.gateReady, tl.persistedAt),
@@ -2489,8 +2548,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
                                 logging.Default().Error(
                                         "run",
-                                        "runId=%s internal panic recovered — run settled as error, app stays alive (crash report: %s): %v",
-                                        runID, path, r,
+                                        // v1.9.5 LOG CONTRACT: no runId in ordinary logs.
+                                        "internal panic recovered — run settled as error, app stays alive (crash report: %s): %v",
+                                        path, r,
                                 )
 
                                 settle(
@@ -2518,8 +2578,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                                 // the durable checkpoint stay — resume and
                                 // reconnect continue from exactly here.
                                 logging.Default().Info("run",
-                                        "runId=%s paused: checkpoint kept, hub left open, session=%s",
-                                        runID, sess.ID)
+                                        "run paused: checkpoint kept, hub left open")
                                 return
                         }
 
@@ -2825,8 +2884,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                         }))
 
                         logging.Default().Info("run",
-                                "runId=%s session=%s paused at a safe boundary (toolState=%s draftChars=%d)",
-                                runID, sess.ID, res.PauseToolState, len(res.Text))
+                                // v1.9.5 LOG CONTRACT: no runId/session in ordinary logs.
+                                "run paused at a safe boundary (toolState=%s draftChars=%d)",
+                                res.PauseToolState, len(res.Text))
 
                         return
                 }
@@ -2965,7 +3025,7 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
                                 rs.hub.close()
                                 s.deletePausedRecord(rs.live.runID)
 
-                                logging.Default().Info("run", "paused run stopped: runId=%s session=%s", rs.live.runID, body.SessionID)
+                                logging.Default().Info("run", "paused run stopped")
 
                                 rs.ctrlMu.Unlock()
 

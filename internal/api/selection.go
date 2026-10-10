@@ -194,6 +194,59 @@ func (s *Server) anyRunActive() bool {
 	return len(s.runs) > 0
 }
 
+// BeginEngineMutation / EndEngineMutation implement the llm.EngineAdmission
+// seam (v1.9.5, P1): the ONE coordination point that closes the
+// engine-transaction / run-admission TOCTOU.
+//
+// The claim and the run-registry read happen inside ONE runsMu critical
+// section, and run admission reads the same runsMu-guarded flag inside
+// ITS registration critical section. The two operations are therefore
+// linearized: a run either registers before the claim (the claim's live
+// verdict sees it and the transaction refuses), or after (its admission
+// observes the claim and is refused). No accepted run can lose its
+// serving engine across a candidate/update/rollback transaction.
+//
+// Lock discipline: runsMu is a leaf lock here — no runtime call, no
+// engine call, no blocking work happens under it, so the transaction
+// (holding switchMu + the engine lease) cannot deadlock with admission.
+func (s *Server) BeginEngineMutation() bool {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+
+	live := len(s.runs) > 0
+
+	if !live {
+		s.engineMutation = true
+	}
+
+	return live
+}
+
+// EndEngineMutation releases the admission claim taken by
+// BeginEngineMutation.
+func (s *Server) EndEngineMutation() {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+
+	s.engineMutation = false
+}
+
+// engineMutationActive reports the runsMu-guarded claim flag for the
+// fast, user-friendly pre-checks (the airtight check lives inside the
+// admission critical sections).
+func (s *Server) engineMutationActive() bool {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+
+	return s.engineMutation
+}
+
+// errEngineMutationInProgress is the deterministic user-visible refusal
+// while an engine variant transaction is in flight.
+var errEngineMutationInProgress = fmt.Errorf(
+	"engine maintenance in progress — new runs are deferred until the engine transaction settles; retry shortly",
+)
+
 // selectModelRequestBody is the POST /api/models/select body.
 type selectModelRequestBody struct {
 	// Model is the model name or absolute path (required).

@@ -195,6 +195,17 @@ type LlamaServer struct {
         // check-then-act across that whole window. Guarded by mu.
         runGate func() bool
 
+        // admission (v1.9.5) is the run-ADMISSION half of the same
+        // coordination: while an engine-mutation claim is held, new run
+        // admission is refused by the API layer, closing the TOCTOU
+        // window between the destructive-boundary check and the stop.
+        // Guarded by mu.
+        admission EngineAdmission
+
+        // mutationClaimed (v1.9.5) mirrors an held admission claim for
+        // the advisory EngineMutationActive signal. Guarded by mu.
+        mutationClaimed bool
+
 
 
         // subs receive every state transition (never blocked; slow subscribers
@@ -314,6 +325,50 @@ func (s *LlamaServer) SetRunGate(gate func() bool) {
         defer s.mu.Unlock()
 
         s.runGate = gate
+}
+
+// EngineAdmission (v1.9.5, P1) is the admission-control half of the
+// engine/run coordination. It closes the check-then-act window between
+// the transaction's destructive-boundary gate check and the Stop() that
+// follows it: while a transaction holds the mutation claim, run
+// admission is refused deterministically, so a run accepted before the
+// claim is visible to the claim's atomic `live` verdict, and a run
+// admitted after the claim never exists. Implementations must make
+// BeginEngineMutation and run registration linearizable (the API server
+// takes both under the same runsMu critical section).
+//
+// The returned `live` verdict is the authoritative "a run is already
+// active" answer for the destructive boundary: when true the caller
+// must NOT take the claim and must refuse the transaction.
+type EngineAdmission interface {
+        // BeginEngineMutation atomically (with respect to run admission)
+        // records the engine-mutation claim and reports whether a run is
+        // already live. When live is true no claim was taken.
+        BeginEngineMutation() (live bool)
+        // EndEngineMutation releases a claim taken by a successful
+        // BeginEngineMutation. Never called when live was true.
+        EndEngineMutation()
+}
+
+// SetAdmissionControl installs the admission-control seam. nil (tests
+// without an API layer) preserves the historical behavior: the
+// destructive-boundary run gate alone.
+func (s *LlamaServer) SetAdmissionControl(a EngineAdmission) {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        s.admission = a
+}
+
+// EngineMutationActive reports whether an engine-mutation claim is
+// currently held — the fast advisory signal admission pre-checks use
+// for a deterministic early refusal. The airtight coordination remains
+// the BeginEngineMutation critical section itself.
+func (s *LlamaServer) EngineMutationActive() bool {
+        s.mu.Lock()
+        defer s.mu.Unlock()
+
+        return s.mutationClaimed
 }
 
 // runActiveNow reports the installed gate's verdict under mu. A nil gate
@@ -3070,9 +3125,45 @@ func (s *LlamaServer) updateEngineVariantTx(
         // the explicit user path surfaces the conflict. A non-running
         // engine is not a disruption — the transaction proceeds and
         // startLocked() owns the boot.
+        //
+        // v1.9.5 ADMISSION CLAIM: when the API layer's admission control
+        // is installed, the transaction claims run-admission exclusivity
+        // FIRST — atomically with the live-run verdict, in the same
+        // critical section admission registers runs under — and holds it
+        // for the WHOLE transaction (resolve → download → stop → install
+        // → verify → rollback). This closes the v1.9.4 TOCTOU: a run
+        // either registers before the claim (the claim's live verdict
+        // sees it; the transaction refuses) or its admission observes the
+        // claim and is refused deterministically (HTTP 503,
+        // errEngineMutationInProgress). Without the seam (nil — tests,
+        // headless), the v1.9.4 single destructive-boundary check applies
+        // unchanged.
         wasRunning := s.IsRunning()
 
-        if wasRunning && s.runActiveNow() {
+        s.mu.Lock()
+        admission := s.admission
+        s.mu.Unlock()
+
+        if admission != nil {
+                if live := admission.BeginEngineMutation(); live {
+                        logging.Default().Warn("updater",
+                                "engine variant transaction refused: a run is active — the serving engine is never stopped under a live generation")
+
+                        return "", ErrEngineBusyWithRun
+                }
+
+                s.mu.Lock()
+                s.mutationClaimed = true
+                s.mu.Unlock()
+
+                defer func() {
+                        s.mu.Lock()
+                        s.mutationClaimed = false
+                        s.mu.Unlock()
+
+                        admission.EndEngineMutation()
+                }()
+        } else if wasRunning && s.runActiveNow() {
                 logging.Default().Warn("updater",
                         "engine variant transaction refused: a run is active — the serving engine is never stopped under a live generation")
 
