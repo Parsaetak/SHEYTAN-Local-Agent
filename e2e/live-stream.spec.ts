@@ -323,4 +323,11 @@ test("the run streams and settles while live even with requestAnimationFrame sus
 
   const assistantRows = page.locator(".message-row.from-agent");
   expect(await assistantRows.count(), "exactly one assistant message").toBe(1);
+
+  // v1.9.3: the persisted reply must be REAL content (non-empty, never
+  // the presentation placeholder) — the same contract the other paths
+  // enforce; settlement without the frame callback proves nothing about
+  // the reply's substance by itself.
+  const finalText = (await assistantRows.last().textContent()) ?? "";
+  expect(finalText.trim().length, "final reply non-empty").toBeGreaterThan(0);
 });

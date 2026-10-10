@@ -474,6 +474,22 @@ belongs to the monitor (unchanged). The Governor adds the TIME dimension:
 sustained-duration tracking per level and bounded rolling signals (EWMA,
 30-sample ring) so one noisy sample never flips policy.
 
+**CPU policy contract (v1.9.3, pinned in code and tested in both
+directions):** the envelope's CPU-reduction branch fires only on a
+SUSTAINED rolling signal — the series must hold at least
+`cpuWarmupSamples` (3) folded observations AND its average must sit at
+or above `CPUReduceAbove`. A lone high sample — including the very
+first sample ever folded, whose EWMA equals the raw value — never flips
+the envelope; a genuinely sustained high load (~45 s at the shipped 15 s
+cadence) still reduces background work and tool concurrency. The folded
+sample count is carried on `ResourceState.CPUSamples` and stated in the
+reduction reason. The CPU seam itself stays the ONE platform sampler
+(`governor.CPULoadPlatform`); `Governor.SetCPUSampler` exists so
+integration tests can pin a deterministic fact (or an honest unknown)
+instead of the host's real load — a pressure-contract test that folds
+the platform seam folds the host's real load with it (the exact
+mechanism of the v1.9.2 race-gate failure, Actions run 38035650428).
+
 ## Envelope
 
 The envelope states what the runtime may do NOW: `admitHeavyweight`,

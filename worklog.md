@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.9.2
+Current release:  v1.9.3
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
@@ -870,6 +870,112 @@ Stage Summary:
   the CI verdict for this revision is pending by construction (no local
   run may claim it).
 - Deliverable: download/SHEYTAN-Local-Agent-v1.9.1-FINAL.zip (complete
+  reproducible source tree; exclusions per the release contract; ZIP
+  audit recorded in this entry).
+
+---
+
+## v1.9.3 session (2026-10-10) — the Governor race-gate root cause (reproduced on real load), the honest prefill-parity contract, the closed zero-session proof standard, the UI microtext floors
+
+Authoritative starting point: Actions run 38035650428 (v1.9.2, HEAD
+e5e1b79) — job 114165397477: the Go race gate
+(`go test -race -tags headless -count=1 ./internal/api ./internal/agent
+./internal/sessions ./internal/contextplan ./internal/histref
+./internal/runtime`) failed `TestGovernorEndpointServesComposedSelfModel`
+(internal/api/governor_test.go:93) with
+`ok-pressure envelope class = live, want none`; agent, sessions,
+contextplan, histref and runtime passed; Windows/Linux/publish jobs were
+skipped behind the audit gate. Local HEAD verified identical: e5e1b79.
+
+Work Log:
+- Environment: cloned the repo at the authoritative HEAD; Go 1.26.1
+  (matches the workflow's GO_VERSION "1.26"); cmake 4.4.4 (native
+  engine); npm ci for the frontend toolchain.
+- REPRODUCTION (true, not simulated): `governor.CPULoadPlatform` on
+  Linux reads /proc/loadavg load1 normalized by cores. Spinning 4 busy
+  loops on the 2-core verification host drove the real 1-minute loadavg
+  to 2.87 (≈143% of core capacity) and the ORIGINAL v1.9.2 code failed
+  the exact test with the exact CI signature
+  (`governor_test.go:93: ok-pressure envelope class = live, want none`).
+  Mechanism confirmed: runtime.StartGovernor wires the platform CPU seam
+  into the governor the API test folds samples into; the test folded ONE
+  OK-pressure RAM sample; rollingSeries.observe sets its FIRST EWMA
+  sample equal to the raw value; one high first sample crossed
+  CPUReduceAbove (85) and envelopeLocked flipped the class to `live`.
+- FIX (internal/governor/governor.go): pinned the CPU policy contract in
+  code — the envelope's CPU-reduction branch requires a SUSTAINED
+  rolling signal (≥ cpuWarmupSamples = 3 folded samples AND average ≥
+  CPUReduceAbove); the folded sample count rides the new
+  ResourceState.CPUSamples and the reduction reason names the sample
+  count. A lone spike (including the first sample ever folded) can no
+  longer flip the envelope; sustained high load (~45 s at the 15 s
+  cadence) still reduces background/concurrency. Added the
+  mutex-guarded `Governor.SetCPUSampler` seam (production keeps
+  CPULoadPlatform as the ONE platform sampler).
+- TEST DETERMINISM (internal/api/governor_test.go): the OK-pressure
+  wire-contract test now pins the CPU seam to an honest unknown before
+  folding its sample — host load cannot leak into the pressure contract.
+- POLICY TESTS (internal/governor/governor_test.go):
+  TestSustainedCPUHigherThanThresholdReduces now folds a genuinely
+  sustained signal (3 samples — its name means it); NEW
+  TestLoneCPUSpikeDoesNotFlipEnvelope pins both directions (one high
+  sample → class none; the same load sustained past the warm-up floor →
+  class live).
+- FIX VERIFICATION under real load: the fixed code passed the exact
+  failing test with the host at 96–218% measured load (loadavg 1.92–4.35
+  on 2 cores). The race gate command then ran GREEN on all six packages
+  (api 102s under -race, agent, sessions, contextplan, histref,
+  runtime). go vet ./... green; the full ./internal/... -tags headless
+  suite green.
+- NATIVE PARITY HONESTY (native/engine/tests/test_prefill_parity.cpp):
+  the v1.9.2 header claimed per-position logits parity but the test
+  compared only the full prompt's FINAL logits (the span path projects
+  only span-final logits by design). The v1.9.3 gate proves and claims:
+  per-position logits through the chunk=1 span cadence (bit-for-bit at
+  all 20 fixture positions), final-token logits for chunks 3/7/16, full
+  KV bytes identical across every chunking AND the serial run,
+  chunk-boundary invariance of the final logits, edge/error bounds,
+  mixed prefill→decode continuity; tied output explicitly NOT claimed
+  (every shipped fixture carries output.weight); cancellation documented
+  as the between-chunks generate-loop contract. CMakeLists.txt and
+  forward.h comments aligned. Clean native configure/build/ctest:
+  13/13 passed locally.
+- ZERO-SESSION PROOF STANDARD (e2e/zero-session.spec.ts): the three
+  tests v1.9.2 did not cover used count-based assertions that the
+  placeholder-carrying generation bubble (it also carries
+  .message-row.from-agent) or an empty persisted reply could satisfy;
+  all now prove the settled reply is REAL content via
+  expectRealAssistantReply (non-empty .message-content, no
+  [data-stream-placeholder] descendant). e2e/live-stream.spec.ts: the
+  rAF-suspended test additionally proves the persisted reply non-empty.
+  No assertion weakened anywhere.
+- UI MICROTEXT FLOORS (src/styles.css): all 62 font-size declarations at
+  6–9px raised to the documented floors — dense secondary metadata ≥
+  10px; essential labels/states/errors ≥ 11px (topbar status, engine
+  status, error banner, Lab inline error/failure, automation form
+  error); interactive control text ≥ 12px (Stop button, text/secondary
+  buttons, composer + Lab/Automation textareas). No healthy size
+  touched. The audited min-width conflict was re-examined: the ≤1050px
+  breakpoint already releases body min-width to 0 and the native window
+  clamps at MinWidth 1024 (desktop.go), so the layout contract holds;
+  no structural layout change was made.
+- VERSION/DOCS: package.json bumped to 1.9.3 and
+  scripts/release-version.mjs repaired config.go, build/config.yml and
+  SIGNATURE (--check green); README.md, UPDATE.md (v1.9.3 notes),
+  changelog.md (v1.9.3 entry), ARCHITECTURE.md (the CPU policy
+  contract), agent.md (v1.9.3 handoff), ROADMAP.md unchanged (future
+  work only), this worklog entry.
+- LOCAL EVIDENCE BOUNDARY (honest): verified locally — race gate green
+  (all six packages), full headless Go suite green, go vet green,
+  frontend typecheck/lint (0/0)/units (220/220)/build/release gates
+  green, clean native CMake configure/build/ctest 13/13, the
+  reproduction pair (original fails / fixed passes under real load).
+  NOT verified locally — a green Actions run (local pass does not
+  establish CI), the Windows/Linux desktop runtime smokes (no Windows;
+  no GTK4/WebKitGTK in the sandbox), the full Playwright browser E2E
+  suite (CI-bound). The authoritative v1.9.3 verdict is the Actions run
+  that carries this revision.
+- Deliverable: download/SHEYTAN-Local-Agent-v1.9.3-FINAL.zip (complete
   reproducible source tree; exclusions per the release contract; ZIP
   audit recorded in this entry).
 

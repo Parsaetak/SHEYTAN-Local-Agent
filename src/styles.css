@@ -314,7 +314,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.16em;
 
@@ -332,7 +332,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.14em;
 
@@ -345,7 +345,7 @@ textarea:focus-visible {
   color: rgba(255, 32, 32, 0.62);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.14em;
 
@@ -458,7 +458,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.18em;
   line-height: 1.3;
@@ -641,7 +641,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
 }
@@ -652,7 +652,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.1em;
   line-height: 1.8;
@@ -674,7 +674,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.09em;
 
@@ -915,7 +915,7 @@ textarea:focus-visible {
   background: rgba(255, 32, 32, 0.025);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.13em;
   line-height: 1;
@@ -938,7 +938,7 @@ textarea:focus-visible {
 
   cursor: pointer;
 
-  font-size: 9px;
+  font-size: 12px;
 
   transition:
     color 160ms ease,
@@ -1044,7 +1044,7 @@ textarea:focus-visible {
   cursor: pointer;
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: 0.1em;
 
@@ -1127,7 +1127,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.7;
 }
 
@@ -1194,7 +1194,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
 
@@ -1251,7 +1251,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.08em;
 
@@ -1301,7 +1301,7 @@ textarea:focus-visible {
 .engine-status strong {
   color: var(--text-soft);
 
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -1309,7 +1309,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -1325,7 +1325,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.08em;
 }
@@ -1334,7 +1334,7 @@ textarea:focus-visible {
   color: var(--text-soft);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
 
   overflow-wrap: anywhere;
@@ -1382,7 +1382,7 @@ textarea:focus-visible {
 
   background: transparent;
 
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.65;
 }
 
@@ -1406,7 +1406,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
 }
@@ -1422,7 +1422,7 @@ textarea:focus-visible {
   cursor: pointer;
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.08em;
 
@@ -1492,7 +1492,7 @@ textarea:focus-visible {
   background: rgba(255, 32, 32, 0.045);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.6;
 
   overflow-wrap: anywhere;
@@ -1673,7 +1673,7 @@ textarea:focus-visible {
 
   color: currentColor;
 
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1.4;
 
@@ -1685,7 +1685,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
 }
@@ -1708,7 +1708,7 @@ textarea:focus-visible {
   background: rgba(255, 255, 255, 0.018);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 800;
 }
 
@@ -1729,7 +1729,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 6px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.07em;
 
@@ -1781,7 +1781,7 @@ textarea:focus-visible {
   border-radius: 999px;
 
   font-family: var(--font-mono);
-  font-size: 6px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.06em;
 
@@ -1871,7 +1871,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.08em;
 
@@ -1892,7 +1892,7 @@ textarea:focus-visible {
 
   padding: 8px 9px;
 
-  font-size: 8px;
+  font-size: 12px;
   line-height: 1.5;
 
   transition:
@@ -1955,7 +1955,7 @@ textarea:focus-visible {
 
   color: var(--text-soft);
 
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.65;
 
   overflow-wrap: anywhere;
@@ -2013,7 +2013,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.07em;
 
@@ -2026,7 +2026,7 @@ textarea:focus-visible {
   color: var(--text-soft);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1.5;
 
@@ -2052,7 +2052,7 @@ textarea:focus-visible {
   color: #ffaaa6;
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.6;
 
   overflow-wrap: anywhere;
@@ -2114,7 +2114,7 @@ textarea:focus-visible {
   color: var(--text-soft);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   line-height: 1.5;
 
   overflow-wrap: anywhere;
@@ -2153,7 +2153,7 @@ textarea:focus-visible {
   color: var(--text-soft);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1.55;
 
@@ -2165,7 +2165,7 @@ textarea:focus-visible {
 
   color: var(--text-soft);
 
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -2174,7 +2174,7 @@ textarea:focus-visible {
   flex: 0 0 auto;
 
   font-family: var(--font-mono);
-  font-size: 6px;
+  font-size: 11px;
   font-weight: 850;
   letter-spacing: 0.07em;
 
@@ -2199,7 +2199,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 6px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
 
@@ -2224,7 +2224,7 @@ textarea:focus-visible {
   background: rgba(0, 0, 0, 0.36);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   line-height: 1.65;
 
   white-space: pre-wrap;
@@ -2237,7 +2237,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.07em;
   line-height: 1.7;
@@ -2281,7 +2281,7 @@ textarea:focus-visible {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   line-height: 1.7;
 }
 
@@ -3220,7 +3220,7 @@ body::before {
 
 .perf-cell-label {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3983,7 +3983,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: none;
 }
@@ -5140,7 +5140,7 @@ body::before {
 
 .history-hit-mode {
   flex: none;
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.08em;
   padding: 1px 6px;
   border-radius: 999px;
@@ -5715,7 +5715,7 @@ body::before {
 
   color: currentColor;
 
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1.4;
 
@@ -5732,7 +5732,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
 
   letter-spacing: 0.04em;
@@ -5765,7 +5765,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 6px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.07em;
 
@@ -5805,7 +5805,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
 
   letter-spacing: 0.04em;
@@ -5920,7 +5920,7 @@ body::before {
   background: rgba(255, 255, 255, 0.018);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 800;
 }
 
@@ -5954,7 +5954,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.08em;
 
@@ -5976,7 +5976,7 @@ body::before {
 
   padding: 8px 9px;
 
-  font-size: 8px;
+  font-size: 12px;
   line-height: 1.5;
 
   transition:
@@ -6031,7 +6031,7 @@ body::before {
   background: rgba(255, 32, 32, 0.045);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.6;
 
   overflow-wrap: anywhere;
@@ -6103,7 +6103,7 @@ body::before {
 
   background: rgba(255, 255, 255, 0.014);
 
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.65;
 
   white-space: pre-wrap;
@@ -6179,7 +6179,7 @@ body::before {
 
   padding: 0 12px;
 
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .aut-danger:hover:not(:disabled) {
@@ -6199,7 +6199,7 @@ body::before {
 
   color: var(--text-muted);
 
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.7;
 
   text-align: center;
@@ -6328,7 +6328,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 700;
 
   letter-spacing: 0.05em;
@@ -6340,7 +6340,7 @@ body::before {
   cursor: pointer;
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.08em;
 
@@ -6365,7 +6365,7 @@ body::before {
   color: var(--text-soft);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.6;
 
   white-space: pre-wrap;
@@ -6387,7 +6387,7 @@ body::before {
   background: rgba(255, 32, 32, 0.045);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.6;
 
   overflow-wrap: anywhere;
@@ -6455,7 +6455,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
 
   letter-spacing: 0.04em;
 }
@@ -6532,7 +6532,7 @@ body::before {
   background: rgba(255, 255, 255, 0.014);
 
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
 }
 
@@ -6589,7 +6589,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
 
   letter-spacing: 0.03em;
 
@@ -6655,7 +6655,7 @@ body::before {
   color: var(--text-muted);
 
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 10px;
 
   letter-spacing: 0.03em;
 
@@ -6877,7 +6877,7 @@ body::before {
   background: #0a0b10;
 
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.55;
 }
 

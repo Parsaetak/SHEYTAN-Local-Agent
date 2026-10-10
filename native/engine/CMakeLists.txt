@@ -160,10 +160,13 @@ if(SHTN_BUILD_TESTS)
         SHTN_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     add_test(NAME generate COMMAND test_generate)
 
-    # v1.9.2: the batched-prefill parity gate — prefill_span's last-token
-    # logits and the full KV cache must match the serial token() path
-    # bit-for-bit (same ops, same order — the resolved weight table only
-    # removes per-row name resolution, never changes numerics).
+    # v1.9.2: the batched-prefill parity gate — v1.9.3 claims corrected to
+    # exactly what is proven: per-position logits parity through the
+    # chunk=1 span cadence (every token is a span-final token there),
+    # final-token logits for the production chunk sizes, full KV bytes
+    # identical across every chunking AND the serial path, edge/error
+    # bounds, and mixed prefill→decode continuity. Tied output is NOT
+    # claimed (no shipped fixture is tied).
     add_executable(test_prefill_parity tests/test_prefill_parity.cpp)
     target_link_libraries(test_prefill_parity PRIVATE shtn_engine)
     target_compile_definitions(test_prefill_parity PRIVATE

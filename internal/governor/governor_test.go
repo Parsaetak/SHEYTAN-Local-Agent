@@ -320,7 +320,12 @@ func TestSustainedCPUHigherThanThresholdReduces(t *testing.T) {
         th := DefaultThresholds()
         g := New(th, func() (float64, bool) { return 95, true }, nil, clk.Now)
 
-        g.Observe(sample(32*int64(gib), 0.5, preflight.PressureOK))
+        // v1.9.3 contract: the CPU branch requires a SUSTAINED rolling
+        // signal — fold cpuWarmupSamples consecutive measured samples (the
+        // name says sustained; the fold count now means it).
+        for i := 0; i < cpuWarmupSamples; i++ {
+                g.Observe(sample(32*int64(gib), 0.5, preflight.PressureOK))
+        }
         env := g.Envelope()
 
         if !env.ReduceBackground || !env.ReduceToolConcurrency {
@@ -333,12 +338,49 @@ func TestSustainedCPUHigherThanThresholdReduces(t *testing.T) {
 
         found := false
         for _, r := range env.Reasons {
-                if len(r) > 4 && r[:4] == "roll" || contains(r, "rolling CPU load") {
+                if contains(r, "rolling CPU load") {
                         found = true
                 }
         }
         if !found {
                 t.Fatalf("the CPU reason must be stated, got %v", env.Reasons)
+        }
+}
+
+// TestLoneCPUSpikeDoesNotFlipEnvelope pins BOTH halves of the v1.9.3 CPU
+// policy contract: one high measured sample (including the FIRST sample
+// ever folded, whose EWMA equals the raw value) must NOT flip the
+// envelope, and a genuinely sustained high load MUST.
+func TestLoneCPUSpikeDoesNotFlipEnvelope(t *testing.T) {
+        clk := newFakeClock(time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC))
+        th := DefaultThresholds()
+        g := New(th, func() (float64, bool) { return 99, true }, nil, clk.Now)
+
+        // ONE sample: the rolling series holds a lone observation — the
+        // envelope must stay class none at ok pressure.
+        g.Observe(sample(32*int64(gib), 0.5, preflight.PressureOK))
+        env := g.Envelope()
+
+        if env.AdjustmentClass != AdjustNone {
+                t.Fatalf("a lone CPU spike flipped the envelope: class = %q, want none", env.AdjustmentClass)
+        }
+
+        if env.ReduceBackground || env.ReduceToolConcurrency {
+                t.Fatal("a lone CPU spike must not reduce background or tool concurrency")
+        }
+
+        // The same load SUSTAINED past the warm-up floor: policy engages.
+        for i := 1; i < cpuWarmupSamples; i++ {
+                g.Observe(sample(32*int64(gib), 0.5, preflight.PressureOK))
+        }
+        env = g.Envelope()
+
+        if env.AdjustmentClass != AdjustLive {
+                t.Fatalf("sustained CPU load class = %q, want live", env.AdjustmentClass)
+        }
+
+        if !env.ReduceBackground || !env.ReduceToolConcurrency {
+                t.Fatal("sustained CPU load must reduce background and tool concurrency")
         }
 }
 

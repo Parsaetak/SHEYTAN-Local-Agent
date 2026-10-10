@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.2 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.3 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,14 +7,48 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.9.2 — the measured live-stream/TTFT engine repair
-(P0), the desktop window-close lifecycle fix (P0), and the zero-session
-live-surface fix (P1), on the v1.9.0 feature surface.** Version identity
-is exactly `1.9.2` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.9.1
+**Current release: v1.9.3 — the Governor race-gate root cause with a
+pinned CPU policy contract (P0), the honest prefill-parity contract
+(P0), and the closed zero-session proof standard + UI microtext floors
+(P1), on the v1.9.0 feature surface.** Version identity is exactly
+`1.9.3` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.9.2
 current-release claims exist outside `changelog.md`.
 
-**WHAT v1.9.2 CHANGED (the regression-sensitive surfaces):**
+**WHAT v1.9.3 CHANGED (the regression-sensitive surfaces):**
+
+1. **Governor CPU policy contract** (`internal/governor/governor.go`,
+   pinned by tests in BOTH directions): the envelope's CPU-reduction
+   branch requires a SUSTAINED rolling signal — ≥ `cpuWarmupSamples` (3)
+   folded samples AND rolling average ≥ `CPUReduceAbove`. A lone spike
+   (including the FIRST sample ever folded, whose EWMA equals the raw
+   value) never flips the envelope; sustained high load still reduces
+   background/concurrency. The folded sample count rides
+   `ResourceState.CPUSamples`. `Governor.SetCPUSampler` is a TEST seam —
+   production keeps `governor.CPULoadPlatform` (ONE platform sampler);
+   integration tests that assert a pressure contract MUST pin the seam
+   (unknown or low CPU) or they will fold the host's real load again
+   (the exact run 38035650428 failure mode).
+2. **Native prefill parity gate** (`tests/test_prefill_parity.cpp`): the
+   claims now match the proof exactly — per-position logits through the
+   chunk=1 span cadence, final-token logits for chunks 3/7/16, full KV
+   bytes across every chunking AND the serial run, edge/error bounds,
+   mixed prefill→decode; tied output NOT claimed (no shipped fixture is
+   tied). Any change to the layer math MUST keep that gate bit-exact or
+   be a deliberate, documented numerics change.
+3. **Zero-session / live-stream E2E contracts**: EVERY zero-session test
+   now proves the settled assistant reply is real content (non-empty
+   `.message-content`, no `[data-stream-placeholder]` descendant) via
+   `expectRealAssistantReply`; the count-based row assertions alone are
+   NOT sufficient (the generation bubble also carries
+   `.message-row.from-agent`). Keep that helper on any new transcript
+   test.
+4. **UI typography floors** (`src/styles.css`): no `font-size` below
+   10px (metadata floor), errors/essential states ≥ 11px, interactive
+   control text ≥ 12px. Do not reintroduce sub-10px text; density comes
+   from hierarchy and layout, not microscopic type.
+
+**WHAT v1.9.2 CHANGED (carried forward):**
 
 1. **Native engine forward path** (`native/engine/src/forward.h/.cpp`,
    `generate.cpp`, `tensor.h/.cpp`): the forward pass runs on a RESOLVED
@@ -23,10 +57,11 @@ current-release claims exist outside `changelog.md`.
    (16-token chunks, last-token-only logits, cancel cadence 16). Measured
    19.08 → 3.66 ms/token (5.2×). `Forward::token()` public semantics are
    UNCHANGED. Bit-for-bit parity is pinned by `tests/test_prefill_parity.cpp`
-   (last-token logits + FULL KV bytes, chunk sizes 1/3/7/16) — any change
-   to the layer math MUST keep that gate bit-exact or be a deliberate,
-   documented numerics change. The native CMake build now DEFAULTS to
-   Release when no build type is given.
+   (per-position logits via the chunk=1 cadence, last-token logits for
+   the production chunk sizes, FULL KV bytes across every chunking) — any
+   change to the layer math MUST keep that gate bit-exact or be a
+   deliberate, documented numerics change. The native CMake build now
+   DEFAULTS to Release when no build type is given.
 2. **Desktop shell** (`internal/desktop/desktop.go`): the main window binds
    `events.Common.WindowClosing` → `app.Quit()` (wails v3.0.0-beta.16
    swallows webview-window closes on both platforms — verified in the

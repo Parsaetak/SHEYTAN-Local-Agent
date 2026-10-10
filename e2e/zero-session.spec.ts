@@ -44,6 +44,23 @@ test.beforeEach(async ({ page }) => {
 const composer = (page: Page) =>
   page.getByPlaceholder(/Message SHEYTAN|Describe what SHEYTAN/);
 
+// expectRealAssistantReply proves the SETTLED assistant reply is real
+// content: a .message-row.from-agent whose .message-content carries
+// non-empty visible text and NO presentation placeholder
+// ([data-stream-placeholder] marks the bubble's "Connecting…" / "…" arms
+// — never model output). v1.9.3: tests 1/3/4 previously accepted a
+// count-based proof whose row could be the placeholder-carrying
+// generation bubble (it also carries .message-row.from-agent) or an
+// empty persisted reply — the same loophole live-stream.spec.ts closed
+// in v1.9.1 and test 2 closed in v1.9.2.
+async function expectRealAssistantReply(page: Page, timeout = 60_000) {
+  const content = page
+    .locator(".message-row.from-agent .message-content")
+    .filter({ hasNot: page.locator("[data-stream-placeholder]") })
+    .first();
+  await expect(content).toHaveText(/\S/, { timeout });
+}
+
 // deleteEverySession removes sessions through the real UI until the
 // sidebar shows none, then verifies the zero-session surface.
 async function deleteEverySession(page: Page) {
@@ -102,10 +119,13 @@ test("deleting the final session leaves a usable zero-session state, and Send cr
   // The run executes and settles honestly: the composer unlocks (or
   // never locked — the fixture engine can finish fast) and exactly one
   // assistant reply carries the answer. Never a stuck live phase.
+  // v1.9.3: the reply must be REAL content — the row locator alone can
+  // match the placeholder-carrying generation bubble.
   await expect(composer(page)).toBeEnabled({ timeout: 120_000 });
   await expect(page.locator(".message-row.from-agent")).toHaveCount(1, {
     timeout: 60_000,
   });
+  await expectRealAssistantReply(page);
 });
 
 test("Send with zero sessions streams text visibly BEFORE completion (Chat)", async ({
@@ -242,7 +262,14 @@ test("Agent mode: zero-session Send creates an AGENT session (mode-parameterised
     }),
   ).toBeVisible({ timeout: 20_000 });
 
+  // v1.9.3: the settled AGENT reply must be exactly one row of REAL
+  // content (non-empty, never the presentation placeholder) — the
+  // composer unlock alone is not a response proof.
   await expect(composer(page)).toBeEnabled({ timeout: 120_000 });
+  await expect(page.locator(".message-row.from-agent")).toHaveCount(1, {
+    timeout: 60_000,
+  });
+  await expectRealAssistantReply(page);
 });
 
 test("reload after a zero-session Send: the created session persists and stays active", async ({
@@ -296,4 +323,7 @@ test("reload after a zero-session Send: the created session persists and stays a
   await expect(page.locator(".message-row.from-agent")).toHaveCount(1, {
     timeout: 30_000,
   });
+  // v1.9.3: the RELOADED reply is durable state — prove it survived as
+  // real content, not an empty or placeholder-carrying row.
+  await expectRealAssistantReply(page);
 });

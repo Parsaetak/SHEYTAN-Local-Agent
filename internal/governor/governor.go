@@ -1,6 +1,21 @@
 // governor.go — v1.8.0 ADAPTIVE RUNTIME INTELLIGENCE: the ONE runtime
 // policy authority.
 //
+// v1.9.3 CPU POLICY CONTRACT (pinned, tested in BOTH directions):
+//
+//   - the CPU-reduction branch of the envelope fires only on a SUSTAINED
+//     rolling signal: >= cpuWarmupSamples folded samples (warm-up floor)
+//     AND a rolling average >= CPUReduceAbove. A lone high sample —
+//     including the very first sample, whose EWMA equals the raw value —
+//     NEVER flips the envelope. This keeps the documented "one noisy
+//     sample never drives policy" promise true in code and keeps
+//     integration tests independent of the host's real load (the
+//     v1.9.2 race-gate failure was exactly a runner's first high CPU
+//     sample leaking into an OK-pressure wire contract).
+//   - a real sustained high load still reduces background/concurrency
+//     (>= 3 consecutive measured samples), matching the sustained-
+//     pressure philosophy of the RAM branches.
+//
 // THE R&D DIRECTION (2026-09): SHEYTAN continuously understands its machine
 // and adapts runtime behavior while preserving host responsiveness. v1.8
 // turns the existing measurement/protection infrastructure into a real
@@ -107,6 +122,16 @@ type ResourceState struct {
         CPULoadPercent float64 `json:"cpuLoadPercent,omitempty"`
         CPULoadKnown   bool    `json:"cpuLoadKnown,omitempty"`
         CPURollingAvg  float64 `json:"cpuRollingAvg,omitempty"`
+
+        // CPUSamples is how many CPU samples the rolling series has folded.
+        // Policy reads it as the warm-up floor: until the series holds
+        // cpuWarmupSamples observations, the rolling average is not a rolling
+        // signal yet (a lone sample IS the average) and the CPU branch of the
+        // envelope must not fire. This is the code-level guarantee behind the
+        // "one noisy sample never drives policy" contract — including the
+        // first sample ever folded (the v1.9.3 race-gate fix: a CI runner's
+        // real load must not leak into an OK-pressure contract).
+        CPUSamples int `json:"cpuSamples,omitempty"`
 
         // Level is the accepted pressure level (the monitor's hysteresis-
         // protected classification — the Governor never re-classifies).
@@ -288,6 +313,28 @@ func (g *Governor) SetInferenceSource(fn InferenceSource) {
         g.mu.Unlock()
 }
 
+// SetCPUSampler replaces the injected CPU seam (v1.9.3). The production
+// wiring (runtime.StartGovernor) keeps governor.CPULoadPlatform — the ONE
+// platform sampler. The seam exists so integration tests can pin a
+// deterministic CPU fact (or an honest unknown) instead of the host's real
+// load — a CI runner's measured load must never leak into a policy
+// contract that is not about the host (the exact run 38035650428 /
+// job 114165397477 failure mode). Guarded by the same mutex as Observe.
+func (g *Governor) SetCPUSampler(fn CPUSampler) {
+        g.mu.Lock()
+        g.cpu = fn
+        g.mu.Unlock()
+}
+
+// cpuWarmupSamples is the v1.9.3 CPU warm-up floor: the rolling series
+// must hold at least this many folded observations before the CPU branch
+// of the envelope may fire. Three samples at the shipped 15s monitor
+// cadence ≈ 45s of measured load — the same sustained-pressure philosophy
+// as the RAM branches (SustainedWarning), and the code-level guarantee
+// that one noisy sample (including the first sample ever folded, whose
+// EWMA equals the raw value) never flips the envelope.
+const cpuWarmupSamples = 3
+
 // New builds a Governor on top of the EXISTING live monitor's samples.
 // cpu and engine are injected seams (nil = facts stay unknown — never
 // guessed). now may be nil for the real clock.
@@ -356,6 +403,7 @@ func (g *Governor) Observe(s preflight.Sample) ResourceState {
                 st.Unknowns = append(st.Unknowns, "CPU load not measurable on this platform")
         }
         st.CPURollingAvg = g.cpuRolling.average()
+        st.CPUSamples = g.cpuRolling.len()
 
         // Engine facts: read from the injected source (the engine lifecycle
         // owner), never probed by the Governor.
@@ -658,14 +706,22 @@ func envelopeLocked(st ResourceState, th Thresholds) Envelope {
                         fmt.Sprintf("critical pressure sustained for %s - protection path owns active runs (cooperative cancellation); all new heavyweight work refused", roundedSustained(st.Sustained)))
         }
 
-        if st.CPULoadKnown && st.CPURollingAvg >= th.CPUReduceAbove {
+        // v1.9.3 policy pin (the CPU contract): the reduction fires only on
+        // a SUSTAINED rolling signal — the series must hold at least
+        // cpuWarmupSamples folded observations AND its average must sit
+        // above the threshold. A lone spike (or a high FIRST sample, whose
+        // EWMA equals the raw value) never flips the envelope by itself; a
+        // genuinely sustained high load (>= 3 samples, ~45s at the shipped
+        // 15s cadence) still reduces background/concurrency.
+        if st.CPULoadKnown && st.CPUSamples >= cpuWarmupSamples &&
+                st.CPURollingAvg >= th.CPUReduceAbove {
                 env.ReduceBackground = true
                 env.ReduceToolConcurrency = true
                 if env.AdjustmentClass == AdjustNone {
                         env.AdjustmentClass = AdjustLive
                 }
                 env.Reasons = append(env.Reasons,
-                        fmt.Sprintf("rolling CPU load %.0f%% above %.0f%% - background concurrency reduced", st.CPURollingAvg, th.CPUReduceAbove))
+                        fmt.Sprintf("rolling CPU load %.0f%% above %.0f%% sustained over %d samples - background concurrency reduced", st.CPURollingAvg, th.CPUReduceAbove, st.CPUSamples))
         }
 
         // v1.8.6 — the CURRENT inference workload is accounted for: when

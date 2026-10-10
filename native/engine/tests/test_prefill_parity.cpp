@@ -1,24 +1,49 @@
-// test_prefill_parity.cpp — v1.9.2 batched-prefill PARITY GATE.
+// test_prefill_parity.cpp — v1.9.2 batched-prefill PARITY GATE (v1.9.3
+// claims corrected to exactly what is proven).
 //
 // The v1.9.2 prefill fast path (Forward::prefill_span + the resolved
-// weight table) must be numerically IDENTICAL to the serial token() path:
+// weight table) must be numerically IDENTICAL to the serial token() path.
+// prefill_span projects vocabulary logits ONLY for a span's last token by
+// design (intermediate prompt logits are never consumed; skipping the
+// output projection IS the optimization), so per-position parity is
+// proven the honest way:
 //
-//   1. per-position logits: prefill_span and token() produce BIT-FOR-BIT
-//      identical vocabulary logits at every prompt position (the logits
-//      at position i depend on the full hidden-state chain of positions
-//      [0, i] — matching logits at every position pins the whole chain);
-//   2. full KV bytes: after both paths, EVERY layer's K and V cache
-//      words (fp16 bits) for every written position are identical;
-//   3. arbitrary chunk boundaries: the generate loop calls prefill_span
-//      repeatedly at ITS chosen boundaries — parity must hold for chunk
-//      sizes 1, 3, 7 and 16 (the last is the production cadence);
-//   4. edge cases: empty span (OK, no-op), null span with count > 0
+//   1. PER-POSITION LOGITS (chunk=1 cadence): with chunk size 1 every
+//      token IS a span-final token, so the span path produces logits at
+//      EVERY position — compared BIT-FOR-BIT against the serial token()
+//      logits at every position. The generate loop legitimately runs
+//      chunk=1 (its chosen boundaries), and matching logits at position i
+//      pins the whole hidden-state chain [0, i] feeding that projection.
+//   2. FINAL-TOKEN LOGITS for chunk 3/7/16 (the production cadences):
+//      the last span's projected logits match the serial final logits
+//      bit-for-bit.
+//   3. CHUNK-BOUNDARY INVARIANCE: the full KV cache (every layer's K and
+//      V words for every written position) AND the final logits are
+//      IDENTICAL across all chunkings (1/3/7/16) — where the prompt is
+//      split never changes the state.
+//   4. FULL KV BYTES: after both paths, EVERY layer's K and V cache
+//      words (fp16 bits) for every written position are identical (this
+//      pins the per-position layer math for ALL positions, including the
+//      ones whose logits the span path never projects).
+//   5. EDGE CASES: empty span (OK, no-op), null span with count > 0
 //      (INVALID_ARG), out-of-vocabulary token (INVALID_ARG), position
 //      overflow (CONTEXT_OVERFLOW), last-token logits with a null buffer
-//      (INVALID_ARG);
-//   5. decode continuity: after a prefill_span prefill, a token()-style
+//      (INVALID_ARG).
+//   6. DECODE CONTINUITY: after a prefill_span prefill, a token()-style
 //      decode step at the next position produces the same logits as a
 //      pure token() run (the production generate loop mixes both paths).
+//
+// CANCELLATION: prefill_span takes no cancellation parameter by contract
+// — the generate loop observes cancellation BETWEEN bounded chunks (the
+// documented 16-token cadence; see generate.cpp). A partial prefill (a
+// span boundary anywhere) followed by continuation is exactly a chunked
+// run — covered by the chunk matrix above, including chunk boundaries at
+// arbitrary positions.
+//
+// TIED OUTPUT: the parity matrix runs on tiny-llama-f32.gguf, which
+// carries a REAL output.weight (untied) — the tied path (token_embd as
+// the projection, llama.h output_tied) is NOT exercised by this fixture
+// and is NOT claimed here. Every shipped fixture is untied.
 //
 // Everything runs on the REAL fixture model (tiny-llama-f32.gguf, the
 // same artifact test_forward pins against the Python reference).
@@ -84,23 +109,38 @@ bool run_serial(fwd::Forward& f, const std::vector<uint32_t>& ids,
     return true;
 }
 
-// run_spans advances `f` through ids in `chunk`-sized prefill_span calls,
-// capturing the last span's final-token logits. When capture_all is set,
-// a token() call at each position runs INSTEAD for comparison purposes —
-// not used here; the span path captures only final logits.
+// run_spans advances `f` through ids in `chunk`-sized prefill_span calls.
+// The FINAL span's last-token logits land in last_logits. When
+// capture_span_logits is set, EVERY span runs with with_last_logits=true
+// and each span's projected logits are appended to span_logits (for
+// chunk=1 that is exactly one logits row per prompt position — the
+// per-position proof through the span path).
 bool run_spans(fwd::Forward& f, const std::vector<uint32_t>& ids,
-               uint64_t pos, uint32_t chunk, std::vector<float>& last_logits,
+               uint64_t pos, uint32_t chunk, bool capture_span_logits,
+               std::vector<float>& last_logits,
+               std::vector<std::vector<float>>& span_logits,
                std::string& error) {
     last_logits.assign(f.hyper().vocab_size, 0.0f);
+    span_logits.clear();
     uint32_t i = 0;
     while (i < ids.size()) {
         const uint32_t n =
             chunk < ids.size() - i ? chunk : static_cast<uint32_t>(ids.size() - i);
         const bool last = (i + n == ids.size());
-        if (f.prefill_span(ids.data() + i, n, pos + i, last,
-                           last ? last_logits.data() : nullptr,
-                           error) != SHTN_OK) {
-            return false;
+        const bool want = last || capture_span_logits;
+        if (want) {
+            std::vector<float> row(f.hyper().vocab_size, 0.0f);
+            if (f.prefill_span(ids.data() + i, n, pos + i, true,
+                               row.data(), error) != SHTN_OK) {
+                return false;
+            }
+            span_logits.emplace_back(row.begin(), row.end());
+            if (last) last_logits = row;
+        } else {
+            if (f.prefill_span(ids.data() + i, n, pos + i, false,
+                               nullptr, error) != SHTN_OK) {
+                return false;
+            }
         }
         i += n;
     }
@@ -150,32 +190,66 @@ int main() {
         ids.push_back(4 + (i % (h.vocab_size - 4)));
     }
 
-    // --- 1+2+3: serial vs span parity (logits every position, KV bytes) ---
-    for (uint32_t chunk : {1u, 3u, 7u, 16u}) {
-        fwd::Forward serial;
-        CHECK(serial.init(ld.model.weights(), h, 0, ld.error) == SHTN_OK);
-        std::vector<std::vector<float>> serial_logits;
-        CHECK(run_serial(serial, ids, 0, serial_logits, ld.error));
+    // --- 1-4: serial vs span parity across the chunk matrix --------------
+    // Reference: the serial per-position logits (the token() authority).
+    fwd::Forward serial;
+    CHECK(serial.init(ld.model.weights(), h, 0, ld.error) == SHTN_OK);
+    std::vector<std::vector<float>> serial_logits;
+    CHECK(run_serial(serial, ids, 0, serial_logits, ld.error));
+    CHECK(serial_logits.size() == ids.size());
 
+    std::vector<uint16_t> kv_reference;
+    std::vector<float> logits_reference;
+
+    for (uint32_t chunk : {1u, 3u, 7u, 16u}) {
         fwd::Forward spanned;
         CHECK(spanned.init(ld.model.weights(), h, 0, ld.error) == SHTN_OK);
         std::vector<float> last_logits;
-        CHECK(run_spans(spanned, ids, 0, chunk, last_logits, ld.error));
+        std::vector<std::vector<float>> span_logits;
+        CHECK(run_spans(spanned, ids, 0, chunk, /*capture_span_logits*/
+                        chunk == 1u,
+                        last_logits, span_logits, ld.error));
 
-        CHECK(serial_logits.size() == ids.size());
-        for (uint32_t v = 0; v < h.vocab_size; ++v) {
-            CHECK(last_logits[v] == serial_logits.back()[v]);
+        CHECK(spanned.cache().used_positions() == ids.size());
+
+        // (1) chunk=1: the span path projects logits at EVERY position —
+        // bit-for-bit against the serial per-position logits.
+        if (chunk == 1u) {
+            CHECK(span_logits.size() == ids.size());
+            for (uint32_t p = 0; p < ids.size(); ++p) {
+                for (uint32_t v = 0; v < h.vocab_size; ++v) {
+                    CHECK(span_logits[p][v] == serial_logits[p][v]);
+                }
+            }
+        } else {
+            // (2) chunk 3/7/16: the span path projects the final token —
+            // bit-for-bit against the serial final logits.
+            CHECK(span_logits.size() == 1);
+            for (uint32_t v = 0; v < h.vocab_size; ++v) {
+                CHECK(last_logits[v] == serial_logits.back()[v]);
+            }
         }
 
-        // Full KV state equality (all layers, all written positions).
-        const std::vector<uint16_t> kv_serial = kv_bytes(serial);
+        // (3)+(4) full KV state equality (all layers, all written
+        // positions) — identical across every chunking AND the serial run.
         const std::vector<uint16_t> kv_span = kv_bytes(spanned);
-        CHECK(kv_serial.size() == kv_span.size());
-        CHECK(kv_serial == kv_span);
-        CHECK(spanned.cache().used_positions() == ids.size());
+        CHECK(kv_span.size() > 0);
+        if (kv_reference.empty()) {
+            kv_reference = kv_span;
+            logits_reference = last_logits;
+        } else {
+            CHECK(kv_span == kv_reference);
+            for (uint32_t v = 0; v < h.vocab_size; ++v) {
+                CHECK(last_logits[v] == logits_reference[v]);
+            }
+        }
     }
 
-    // --- 4: edge cases ------------------------------------------------------
+    // The serial run's KV must equal the span path's KV too (the same
+    // observable cache state from either path).
+    CHECK(kv_bytes(serial) == kv_reference);
+
+    // --- 5: edge cases ------------------------------------------------------
     {
         fwd::Forward f;
         CHECK(f.init(ld.model.weights(), h, 0, ld.error) == SHTN_OK);
@@ -196,12 +270,14 @@ int main() {
               SHTN_ERR_CONTEXT_OVERFLOW);
     }
 
-    // --- 5: mixed production path (span prefill → token() decode step) ------
+    // --- 6: mixed production path (span prefill → token() decode step) ------
     {
         fwd::Forward spanned;
         CHECK(spanned.init(ld.model.weights(), h, 0, ld.error) == SHTN_OK);
         std::vector<float> last_logits;
-        CHECK(run_spans(spanned, ids, 0, 16, last_logits, ld.error));
+        std::vector<std::vector<float>> span_logits;
+        CHECK(run_spans(spanned, ids, 0, 16, false, last_logits,
+                        span_logits, ld.error));
 
         // Continue with a serial decode step at the next position.
         std::vector<float> decode_logits(h.vocab_size);

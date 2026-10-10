@@ -11,6 +11,69 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.9.3 — 2026-10-10 — the Governor race-gate root cause + the honest prefill-parity contract + the closed zero-session proof standard (P0/P1)
+
+Focus: repair the authoritative v1.9.2 CI failure — Actions run
+`38035650428` (job `114165397477`: the Go race gate failed
+`TestGovernorEndpointServesComposedSelfModel` with
+`ok-pressure envelope class = live, want none` while frontend/release
+gates and the other five race packages passed) — by reproducing the
+failure on a real host under real generated load, pinning the CPU policy
+contract in code, and making the integration test independent of host
+load. Also corrects the native prefill parity gate's claims to exactly
+what is proven (and strengthens the proof), closes the remaining
+zero-session placeholder loophole, and raises sub-10px UI typography to
+the documented floors.
+
+1. **P0 — Governor race gate: root cause reproduced, policy pinned,
+   tests deterministic.** `runtime.StartGovernor` wires the production
+   platform CPU seam (`governor.CPULoadPlatform`) into the governor the
+   API test folds samples into; the test folded ONE OK-pressure RAM
+   sample, the seam folded the runner's REAL load with it, and the first
+   EWMA sample (equal to the raw value) crossed `CPUReduceAbove` — one
+   high first sample flipped the envelope to `live`, contradicting the
+   documented "one noisy sample never drives policy" promise.
+   Reproduction: the original v1.9.2 code under real host load
+   (loadavg 2.87 on 2 cores) fails with the exact CI signature; the fix
+   passes under 96–218% measured load. The fix: (a) the CPU-reduction
+   branch requires a SUSTAINED rolling signal — ≥ `cpuWarmupSamples` (3)
+   folded samples AND average ≥ `CPUReduceAbove` — so a lone spike never
+   flips the envelope while sustained high load still reduces
+   background/concurrency; the sample count rides
+   `ResourceState.CPUSamples` and the reduction reason; (b) a
+   mutex-guarded `Governor.SetCPUSampler` seam lets the API test pin an
+   honest unknown CPU (production wiring keeps `CPULoadPlatform`); (c)
+   `TestSustainedCPUHigherThanThresholdReduces` folds a genuinely
+   sustained signal and the new `TestLoneCPUSpikeDoesNotFlipEnvelope`
+   pins both directions. No production sampling disabled, no race
+   coverage removed, no expected value flipped.
+
+2. **P0 — native prefill parity: claims corrected, proof strengthened.**
+   The v1.9.2 gate claimed per-position logits parity but compared only
+   the full prompt's final logits (the span path projects only
+   span-final logits by design). The v1.9.3 gate proves per-position
+   logits through the chunk=1 span cadence (bit-for-bit at every
+   fixture position), final-token logits for chunks 3/7/16, full KV
+   bytes identical across every chunking AND the serial run, chunk-
+   boundary invariance, edge/error bounds, and mixed prefill→decode
+   continuity; tied output is explicitly not claimed (no shipped fixture
+   is tied). Clean native configure/build/ctest: 13/13.
+
+3. **P1 — zero-session E2E: every test now proves the settled reply is
+   real content** (non-empty `.message-content`, no
+   `[data-stream-placeholder]` descendant); the count-based assertions
+   could previously be satisfied by the placeholder-carrying generation
+   bubble or an empty persisted reply. The rAF-suspended live-stream
+   test additionally proves the persisted reply is non-empty. No
+   assertion weakened.
+
+4. **P1 — UI/UX: all 62 sub-10px `font-size` declarations raised to the
+   documented floors** (metadata ≥ 10px, essential
+   labels/states/errors ≥ 11px, interactive control text ≥ 12px); no
+   healthy size touched.
+
+---
+
 ## v1.9.2 — 2026-10-10 — the measured live-stream/TTFT engine repair (P0) + the desktop window-close lifecycle fix (P0) + the zero-session live-surface fix (P1)
 
 Focus: repair the authoritative v1.9.1 CI failures — Actions run

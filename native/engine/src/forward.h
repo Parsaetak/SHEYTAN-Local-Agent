@@ -122,8 +122,10 @@ public:
     //
     // The generate loop calls this in bounded chunks (cancellation stays
     // observed at the documented cadence between chunks). Numerical
-    // parity with token() is pinned by test_prefill_parity (last-token
-    // logits and full KV bytes must match bit-for-bit).
+    // parity with token() is pinned by test_prefill_parity: per-position
+    // logits through the chunk=1 span cadence (every token is a
+    // span-final token there), last-token logits for the production
+    // chunk sizes, and full KV bytes — all bit-for-bit.
     int32_t prefill_span(const uint32_t* ids, uint32_t count, uint64_t pos,
                          bool with_last_logits, float* logits_out,
                          std::string& error);
