@@ -17,7 +17,7 @@ func init() {
 	// on machines without GTK/WebKit development libraries.
 	//
 	// Desktop builds (no headless tag) route through main_other.go /
-	// main_windows.go and launch the native Wails window instead.
+	// main_windows.go and launch the native Qt desktop host instead.
 	runDefault = func() int {
 		cfg, err := config.Load(config.DefaultPath())
 		if err != nil {

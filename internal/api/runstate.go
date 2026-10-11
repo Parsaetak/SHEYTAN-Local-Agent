@@ -450,6 +450,22 @@ func (l *runLive) confirmResumed() {
         l.pausedWhy = ""
 }
 
+// revertResumingLocked (v1.10.1) returns a run whose resume was REFUSED
+// before the generation started (server shutting down) to the settled
+// paused state — the durable checkpoint still exists, so the run must stay
+// honestly paused and resumable. The caller holds ctrlMu; the live mutex
+// is taken here (same nesting as the other confirm* callers).
+func (l *runLive) revertResumingLocked() {
+        l.mu.Lock()
+        defer l.mu.Unlock()
+
+        if l.terminalOutcome != "" || l.phase != "resuming" {
+                return
+        }
+
+        l.phase = "paused"
+}
+
 // isPaused reports the authoritative paused/pausing state.
 func (l *runLive) isPaused() bool {
         l.mu.Lock()

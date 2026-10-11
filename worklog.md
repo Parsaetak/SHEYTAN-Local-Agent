@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.10.0
+Current release:  v1.10.1
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
@@ -1625,3 +1625,82 @@ Stage Summary:
 - The stale worklog header ("Current release: v1.9.5") — a v1.9.6
   reconciliation miss — is fixed; this file now states the truth for
   v1.10.0.
+
+
+---
+
+## Session — v1.10.1: full Qt/QML migration + v1.10.0 failure repair (2026-10-11)
+
+Scope: the run `38152579695` P0 repairs, the R&D Phase 2 Qt migration,
+the complete Wails removal, the canonical test entrypoint, version 1.10.1.
+
+Work Log:
+- Live inspection: HEAD `c9494dc` (`v1.10.0`) confirmed on `main`; run
+  `38152579695` (failure) job evidence read: Windows `internal/api`
+  teardown failure in `TestWebSocketSeesTerminalErrorNotSilence`,
+  Linux desktop-runtime-smoke 1x1-window failure.
+- Root cause A (Windows): the WS test returned at the terminal error
+  frame while the run goroutine's deferred cleanup (TrackRunEnd →
+  registry release → hub close) was still executing; on Windows,
+  t.TempDir's RemoveAll raced it ("directory is not empty"). Repair:
+  (a) the test now waits for the authoritative outcome AND the run
+  registry release (bounded poll over existing seams); (b)
+  `Server.Close` JOINS all run goroutines (bounded) and refuses new
+  run/resume registrations after shutdown began (`closing` flag +
+  runWG, ordering made total under runsMu).
+- Root cause B (Linux): the Wails/GTK window never mapped under
+  Xvfb+Openbox (1x1). Resolved by migration, not another workaround.
+- Qt Phase 2 implemented: `internal/localipc` (per-user UDS + SO_PEERCRED
+  / named pipe + current-user DACL + client-SID check, keyed versioned
+  handshake, stale-endpoint recovery, bounded framing, structured
+  errors, clean idempotent stop) + `ui/qt` (CMake, Qt 6.8.2, CoreClient
+  HTTP+RFC6455 over QLocalSocket, Main.qml chat UI) + `internal/desktop`
+  launcher rewrite. The existing api.Server handlers serve the channel —
+  no policy duplicated in C++.
+- Wails removal: imports/module requirement/transitive graph gone
+  (CI asserts absence), loopback activity transport retired,
+  `/api/ws-origin` answers same-origin unconditionally,
+  build/config.yml rewritten, CDP harness replaced by the QtTest
+  acceptance suite.
+- Tests: `internal/localipc` suite (9 tests: handshake happy/403/401,
+  real API tunneling, malformed request resilience, oversized-header
+  bound, stale-endpoint recovery, foreign-uid denial, idempotent stop);
+  `ui/qt/tests/tst_acceptance.cpp` (QtTest: real QML + real core + real
+  fixture engine: handshake → session → send → ordered live growth with
+  Stop → exactly one settle → exactly one persisted assistant reply →
+  reload persistence → repeat send); `scripts/qt-desktop-smoke.sh`
+  (G1-G5 Linux gates); teardown regression tests preserved unchanged.
+- CI: build-desktop.yml — Windows Qt build + windeployqt + Qt
+  acceptance; Linux Qt build + G1-G5 smoke + Qt acceptance; negative
+  Wails dependency gate; GTK/WebKitGTK deps removed; YAML validated.
+- Docs: changelog (canonical v1.10.1 entry), UPDATE, README,
+  ARCHITECTURE (Current for v1.10.1 + the Qt lifecycle truth),
+  ROADMAP baseline, agent handoff, native/engine README stack diagram.
+- Version identity: package.json 1.10.1 → release-version.mjs repaired
+  config.go/build/config.yml/SIGNATURE; --check green; codename gate
+  green.
+
+Verified on the session host (Linux x64, Debian trixie, Go 1.26.0,
+Qt 6.8.2, cmake 3.31.10, Xvfb): go build ./... (Linux + windows/amd64
+cross) clean; go vet ./... clean; go test ./... -count=1 PASS (exit 0,
+full suite); go test -race (six concurrency-heavy packages) PASS
+(exit 0); localipc suite PASS; the two previously-failing api tests
+PASS; Qt acceptance suite PASS; qt-desktop-smoke G1-G5 PASS (real
+1280x840 window, keyed handshake, core interaction, clean WM-close
+exit, no orphan, no leaked endpoint); release-version --check PASS;
+codename gate PASS.
+
+NOT RUN / NOT VERIFIED on the session host (honest boundary):
+Windows tests and packaging (no Windows host — Go windows/amd64
+cross-build is clean, Qt host is prepared for MSVC but unverified
+locally); native engine CTest locally (CI runs it; local disk/time
+budget went to the migration); the physical-Windows R&D Phase 1
+baseline (NOT MEASURED — no physical hardware; the engine default
+stays evidence-gated); a hosted-CI Actions verdict for this revision
+(no push performed from this session); remaining Qt surfaces beyond
+the chat/sessions core (documented, not claimed).
+
+Stage Summary:
+- v1.10.1 is code-complete on the session host. Primary deliverable:
+  `download/SHEYTAN-Local-Agent-v1.10.1-FINAL.zip` (source archive,
+  audited). Version identity 1.10.1 everywhere.

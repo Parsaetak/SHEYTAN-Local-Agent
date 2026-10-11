@@ -3,9 +3,9 @@
 This is the C++ side of the **SHEYTAN Native AI Engine architecture**:
 
 ```text
-React/TypeScript
+Qt Quick/QML host (ui/qt — the native desktop UI)
       ↓
-    Wails
+   Local IPC  (internal/localipc — per-user socket/pipe, keyed handshake)
       ↓
    Go Core  (internal/ — application + runtime engine)
       ↓

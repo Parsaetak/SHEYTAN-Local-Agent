@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Architecture Truth Table
 
-Current for **v1.9.2**. This document states the architecture that IS
+Current for **v1.10.1**. This document states the architecture that IS
 implemented and verified in this repository. Future R&D is NOT described as
 implemented; the roadmap (`ROADMAP.md`) owns the future. Historical
 release-specific architecture notes were consolidated at the end.
@@ -68,13 +68,32 @@ native `test_prefill_parity` gate across chunk sizes 1/3/7/16. The native
 CMake build defaults to the Release configuration when the caller does not
 choose one (an unflagged -O0 engine is not a supported inference build).
 
-**Desktop shell lifecycle (v1.9.2):** the native Wails window binds
-`events.Common.WindowClosing` to `app.Quit()` — verified against the
-`wails v3.0.0-beta.16` sources, where a webview window's platform close
-only emits the event and destroys the window while the application event
-loop keeps running with zero windows on both Windows and Linux. The
-single-window product therefore terminates its lifecycle on the visible
-close path, and the deferred `srv.Close()` cleanup runs.
+**Desktop shell lifecycle (v1.10.1 — Qt migration):** the Wails/WebView
+shell is REMOVED from the product. The desktop pair is the Go core
+executable (the ONE policy/orchestration authority, unchanged) plus a
+native Qt Quick/QML host (`ui/qt`) that acts as an IPC CLIENT over a
+secured per-user local channel (`internal/localipc`): a Unix domain
+socket with SO_PEERCRED uid verification on Linux/macOS, a named pipe
+with a current-user-only DACL plus a post-connect client-SID check on
+Windows, and a versioned keyed handshake (`sheytan-ipc/1`) in front of
+the EXISTING api.Server handlers. No TCP listener is opened on the
+desktop path; the embedded web frontend remains only as the documented
+headless/API serving mode. The launcher (`internal/desktop`) spawns the
+Qt host next to the core, hands it the endpoint + an ephemeral key
+through the environment, and terminates the whole lifecycle on child
+exit or signal. Closing the QML window ends the process through the
+normal Qt close path. Run-goroutine teardown is deterministic: every
+run spawn is tracked and `Server.Close` JOINS them (bounded) before
+releasing the runtime stack (the Windows `t.TempDir` "directory is not
+empty" teardown failure of run 38152579695). The former Wails loopback
+activity transport and its CDP acceptance harness are retired with the
+Wails dependency itself. Qt Phase 2 of the R&D plan is implemented at
+the chat/sessions/streaming/settings surface; remaining UI surfaces
+(AI Systems, Goals, Coding Lab, Net Search page, repository index,
+tasks/automations, downloads/diagnostics panels) are still served by
+the documented headless/web mode pending their Qt migration. The native
+C++ engine default remains evidence-gated exactly as before (physical
+Windows Phase 1 measurements are still NOT MEASURED).
 
 **Model capability cards (v1.8.1):** the GGUF header parser reads up to
 32 MiB of metadata (`ggufMetadataReadLimit`) — real Gemma-class tokenizer

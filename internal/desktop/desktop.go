@@ -1,98 +1,60 @@
 //go:build !headless
 
-// Package desktop provides the native cross-platform desktop shell.
+// Package desktop launches the native desktop application: the Go core
+// (ONE authority for policy, runs, sessions, tools, approvals) serving its
+// existing API surface over the secured local IPC channel, plus the native
+// Qt Quick/QML host process that consumes it as a CLIENT (v1.10.1 Qt
+// migration, R&D authority §6–§7).
+//
+// The former Wails/WebView shell is retired: no Wails import, no embedded
+// browser, no WebView2/WebKit, no loopback WebSocket transport on the
+// desktop path. The headless/API mode (headless build tag) keeps serving
+// the documented HTTP API for CI, containers and tooling.
 package desktop
 
 import (
+        "errors"
         "fmt"
-        "io/fs"
-        "net/http"
         "os"
-        "strings"
+        "os/exec"
+        "os/signal"
+        "path/filepath"
+        "runtime"
+        "syscall"
+        "time"
 
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+        "github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc"
         "github.com/Parsaetak/SHEYTAN-local-agent/internal/platform"
-        "github.com/Parsaetak/SHEYTAN-local-agent/web"
-        "github.com/wailsapp/wails/v3/pkg/application"
-        "github.com/wailsapp/wails/v3/pkg/events"
 )
 
-const (
-        defaultWidth  = 1440
-        defaultHeight = 900
-        minimumWidth  = 1024
-        minimumHeight = 680
-)
-
-// acceptanceCDPPort reads the TEST-ONLY WebView2 remote-debugging port
-// switch (v1.10.0, the Windows live-answer acceptance repair — run
-// 38135751846). It returns "" in every normal launch: nothing in the
-// product, the installers or the docs ever sets
-// SHEYTAN_ACCEPTANCE_CDP_PORT; only the acceptance harness does.
-//
-// WHY THIS EXISTS (derived from the pinned wails v3.0.0-beta.16 sources,
-// the exact failure signature of run 38135751846's "Windows live-answer
-// acceptance" step: ~60s harness stall, exit 1, after a green desktop
-// runtime smoke): the harness used to pass the CDP switch through the
-// WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS environment variable. Wails'
-// default pure-Go WebView2 loader
-// (internal/webview2/webviewloader, //go:build windows &&
-// !native_webview2loader) explicitly NEUTERS that channel:
-// preventEnvAndRegistryOverrides() runs at package init and executes
-// os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "") to pin the
-// environment against external overrides — so the harness's switch is
-// erased inside the app process BEFORE any WebView2 environment is
-// created. The debugging port never opens, the harness's bounded CDP
-// attach window (60s) times out, and the gate fails honestly. The
-// programmatic route — application.Options.Windows.AdditionalBrowserArgs
-// — is the one channel Wails composes itself and hands to
-// CreateCoreWebView2EnvironmentWithOptions; it survives the env pinning.
-//
-// TRUST BOUNDARY: this switch arms a WebView2 DevTools endpoint bound to
-// the local CDP port. It is inert unless the caller (the acceptance
-// harness on a test machine) explicitly exports the variable; the
-// production launchers never do. The harness documents the switch as
-// TEST-ONLY and never ships it.
-func acceptanceCDPPort() string {
-        port := strings.TrimSpace(os.Getenv("SHEYTAN_ACCEPTANCE_CDP_PORT"))
-
-        if port == "" {
-                return ""
-        }
-
-        // Minimal shape check: the value becomes part of a browser command
-        // line. Digits only, bounded length — a malformed value must fail
-        // the harness's CDP attach (port closed), never corrupt the args.
-        if len(port) > 5 {
-                return ""
-        }
-
-        for _, r := range port {
-                if r < '0' || r > '9' {
-                        return ""
-                }
-        }
-
-        return port
+// uiExecutableNames are the packaged Qt host binaries, resolved next to
+// the core executable (the install layout ships both side by side).
+var uiExecutableNames = map[string]string{
+        "windows": "sheytan-ui.exe",
+        "linux":   "sheytan-ui",
+        "darwin":  "sheytan-ui",
 }
 
-// Run starts the SHEYTAN native desktop application and blocks until the
-// desktop application exits.
+// uiSpawnTimeout bounds the wait for the Qt host process to attach its
+// IPC handshake. The UI may take longer on a cold machine — this is only
+// a liveness watchdog, not a gate on UI functionality.
+const uiSpawnTimeout = 0 // disabled: the launcher waits on the child unconditionally
+
+// Run starts the SHEYTAN desktop application and blocks until it exits.
 //
-// The React production assets and the Go API are served through a single
-// in-process HTTP handler owned by the Wails asset layer. No external browser,
-// localhost listener, or frontend server is required in production.
+// Launch order is deterministic: core up → IPC endpoint bound → UI child
+// spawned with the endpoint + ephemeral key → wait for either the child
+// exiting or a termination signal → clean core shutdown.
 func Run(cfg *config.Config) int {
         if cfg == nil {
                 fmt.Println("desktop: missing configuration")
                 return 1
         }
 
-        // v1.2.0: register the process AppUserModelID BEFORE the first window
-        // exists, so taskbar grouping, jump lists and notifications identify
-        // the app as Parsaetak.SHEYTAN-LA. On platforms without the concept
-        // this is an honest no-op.
+        // Taskbar/notification identity (no-op where the concept does not
+        // exist).
         _ = platform.SetAppUserModelID(config.AppUserModelID)
 
         srv, err := api.New(cfg)
@@ -107,108 +69,124 @@ func Run(cfg *config.Config) int {
                 return 1
         }
 
-        // v1.9.5 (P0 — sequencing + failure semantics): the loopback
-        // activity transport starts ONLY after the backend setup has
-        // succeeded, and a transport failure is a HARD, VISIBLE fault —
-        // the desktop shell exits non-zero instead of silently exposing
-        // an app whose core interaction (live streamed answers) is
-        // broken. v1.9.4 started the transport before setup and logged
-        // the failure as non-fatal, which let a broken transport launch.
-        if _, lbErr := srv.StartLoopback(); lbErr != nil {
-                fmt.Println("desktop: loopback activity transport unavailable:", lbErr)
-                return 1
-        }
-
-        staticFS, err := fs.Sub(web.StaticFS, "static")
-        if err != nil {
-                fmt.Println("desktop: embedded frontend:", err)
-                return 1
-        }
-
-        assetHandler := application.AssetFileServerFS(staticFS)
-        apiHandler := srv.Handler()
-
-        appOpts := application.Options{
-                Name:        config.AppName,
-                Description: "SHEYTAN Local Agent",
-                Assets: application.AssetOptions{
-                        Handler: desktopHandler(assetHandler, apiHandler),
-                },
-        }
-
-        // v1.10.0 TEST-ONLY CDP switch — see acceptanceCDPPort. The
-        // programmatic AdditionalBrowserArgs channel is the one Wails
-        // composes itself and hands to CreateCoreWebView2EnvironmentWithOptions,
-        // so the switch survives the pure-Go loader's env-var pinning that
-        // erased the harness's WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS value
-        // (the run 38135751846 acceptance failure mechanism).
-        if port := acceptanceCDPPort(); port != "" {
-                appOpts.Windows = application.WindowsOptions{
-                        AdditionalBrowserArgs: []string{
-                                "--remote-debugging-port=" + port,
-                        },
+        // The ONE local channel to the Qt host. A transport failure is a HARD,
+        // VISIBLE fault: the desktop exits non-zero instead of launching a UI
+        // that cannot reach the core (same failure semantics as v1.9.5).
+        // SHEYTAN_IPC_KEY presets the ephemeral key (acceptance/dev harnesses
+        // only — the production launcher generates one and never logs it).
+        key := os.Getenv(localipc.EnvKey)
+        if key == "" {
+                key, err = localipc.NewKey()
+                if err != nil {
+                        fmt.Println("desktop: ipc key:", err)
+                        return 1
                 }
         }
 
-        app := application.New(appOpts)
+        ipc, err := localipc.Serve(srv, cfg, key)
+        if err != nil {
+                fmt.Println("desktop: local IPC unavailable:", err)
+                return 1
+        }
+        defer ipc.Stop()
 
-        window := app.Window.NewWithOptions(application.WebviewWindowOptions{
-                Name:             "main-window",
-                Title:            config.AppShortName + " — " + config.AppDescription,
-                Width:            defaultWidth,
-                Height:           defaultHeight,
-                MinWidth:         minimumWidth,
-                MinHeight:        minimumHeight,
-                BackgroundColour: application.NewRGB(18, 18, 20),
-                URL:              "/",
-                Hidden:           false,
-                DisableResize:    false,
-        })
-
-        window.Center()
-        window.Show()
-
-        // v1.9.2 (P0 — verified against the wails v3.0.0-beta.16 sources):
-        // a webview window's WM_CLOSE (Windows) / GTK close-request (Linux)
-        // only EMITS the platform WindowClosing event and destroys the
-        // window — the application event loop keeps running with zero
-        // windows. On Windows only the hidden "__wails_hidden_mainthread"
-        // window's WM_CLOSE/WM_DESTROY triggers globalApplication.Quit()
-        // (application_windows.go), and no quit-on-last-window logic exists
-        // for webview windows on either platform. Without this binding,
-        // closing the main window leaves a zombie process with the backend
-        // still running and the deferred srv.Close() never executing —
-        // measured as the authoritative Actions 37869632400 Windows smoke
-        // failure (process survived CloseMainWindow + 15s).
-        //
-        // SHEYTAN-LA is a single-window application with no tray:
-        // closing the main window MUST terminate the lifecycle so
-        // app.Run() returns and the deferred cleanup runs.
-        window.OnWindowEvent(events.Common.WindowClosing,
-                func(*application.WindowEvent) {
-                        app.Quit()
-                })
-
-        if err := app.Run(); err != nil {
-                fmt.Println("desktop: application:", err)
+        uiPath, err := uiExecutable()
+        if err != nil {
+                fmt.Println("desktop:", err)
                 return 1
         }
 
-        return 0
+        fmt.Printf("%s v%s (Qt desktop)\n", config.AppName, config.AppVersion)
+        fmt.Printf("  core endpoint: %s\n", ipc.Endpoint())
+
+        // SHEYTAN_UI_EXECUTABLE=none keeps the core serving WITHOUT spawning a
+        // UI (acceptance harnesses that host the QML in-process). A refusal to
+        // spawn is still fatal on every normal launch — only the explicit
+        // "none" sentinel disables the child.
+        if uiPath == "none" {
+                <-make(chan struct{}) // block: serve until terminated
+                return 0
+        }
+
+        cmd := exec.Command(uiPath)
+        cmd.Env = append(os.Environ(),
+                localipc.EnvEndpoint+"="+ipc.Endpoint(),
+                localipc.EnvKey+"="+key,
+        )
+        // The UI's stdout/stderr flow into the core's log streams so a QML
+        // error is visible in the packaged runtime log.
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+
+        if err := cmd.Start(); err != nil {
+                fmt.Println("desktop: launch Qt host:", err)
+                return 1
+        }
+
+        // Termination signals: stop the child, then the core, then exit.
+        sigCh := make(chan os.Signal, 2)
+        signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+        childDone := make(chan error, 1)
+        go func() {
+                childDone <- cmd.Wait()
+        }()
+
+        exitCode := 0
+        select {
+        case err := <-childDone:
+                if err != nil {
+                        var ee *exec.ExitError
+                        if errors.As(err, &ee) {
+                                exitCode = ee.ExitCode()
+                        } else {
+                                fmt.Println("desktop: ui wait:", err)
+                                exitCode = 1
+                        }
+                }
+        case sig := <-sigCh:
+                fmt.Println("desktop: signal", sig, "— stopping ui and core")
+                _ = cmd.Process.Signal(syscall.SIGTERM)
+                select {
+                case <-childDone:
+                case <-time.After(5 * time.Second):
+                        _ = cmd.Process.Kill()
+                        <-childDone
+                }
+                exitCode = 0
+        }
+
+        return exitCode
 }
 
-// desktopHandler routes application API traffic to the Go backend and all
-// other traffic to Wails' embedded asset server.
-//
-// Keeping both paths in one handler makes the production executable fully
-// self-contained while preserving the existing REST and WebSocket API
-// contract used by the React frontend.
-func desktopHandler(assetHandler http.Handler, apiHandler http.Handler) http.Handler {
-        mux := http.NewServeMux()
+// uiExecutable resolves the packaged Qt host next to the running core.
+func uiExecutable() (string, error) {
+        self, err := os.Executable()
+        if err != nil {
+                return "", fmt.Errorf("resolve core executable: %w", err)
+        }
 
-        mux.Handle("/api/", apiHandler)
-        mux.Handle("/ws/", apiHandler)
-        mux.Handle("/", assetHandler)
+        name := uiExecutableNames[runtime.GOOS]
+        if name == "" {
+                return "", fmt.Errorf("no Qt host binary name for %s", runtime.GOOS)
+        }
 
-        return mux
+        path := filepath.Join(filepath.Dir(self), name)
+        if st, statErr := os.Stat(path); statErr == nil && !st.IsDir() {
+                return path, nil
+        }
+
+        // Explicit override keeps local runs testable before packaging; the
+        // "none" sentinel is handled by the caller (no-spawn serving mode).
+        if alt := os.Getenv("SHEYTAN_UI_EXECUTABLE"); alt != "" {
+                if alt == "none" {
+                        return "none", nil
+                }
+                if st, statErr := os.Stat(alt); statErr == nil && !st.IsDir() {
+                        return alt, nil
+                }
+                return "", fmt.Errorf("SHEYTAN_UI_EXECUTABLE=%s does not exist", alt)
+        }
+
+        return "", fmt.Errorf("Qt host %s not found next to the core (%s) — set SHEYTAN_UI_EXECUTABLE for development runs", name, filepath.Dir(self))
 }

@@ -787,7 +787,34 @@ func (s *Server) handleRunResume(w http.ResponseWriter, r *http.Request) {
 
         logging.Default().Info("run", "resume: revision=%d", body.Revision)
 
-        go s.runResumed(rs, rec, resumedCtx, resumedCancel)
+        // v1.10.1: join bookkeeping for the resumed run. The Add happens
+        // under runsMu against the same closing flag Close stores before
+        // its own runsMu critical section, so the ordering is total: either
+        // this section runs first (Close's Wait covers the resumed goroutine)
+        // or Close's ran first (the resume is refused — the process is
+        // shutting down and no generation may start).
+        s.runsMu.Lock()
+        if s.closing.Load() {
+                s.runsMu.Unlock()
+                resumedCancel()
+
+                // Leave the state machine honest: the resume never started,
+                // so the run stays PAUSED and resumable in the next session.
+                rs.ctrlMu.Lock()
+                rs.live.revertResumingLocked()
+                rs.ctrlMu.Unlock()
+
+                writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("server is shutting down; the run stays paused and resumable"))
+                return
+        }
+        s.runWG.Add(1)
+        s.runsMu.Unlock()
+
+        go func() {
+                defer s.runWG.Done()
+
+                s.runResumed(rs, rec, resumedCtx, resumedCancel)
+        }()
 
         writeJSON(w, map[string]any{
                 "ok":       true,
@@ -939,7 +966,6 @@ func (s *Server) recoverPausedRun(rec *pausedRunRecord) *runState {
 // abort racing the spawn window still reaches the fresh generation.
 func (s *Server) runResumed(rs *runState, rec *pausedRunRecord, ctx context.Context, cancel context.CancelFunc) {
         defer cancel()
-
         sess, err := s.store.Get(rec.SessionID)
         if err != nil {
                 rs.live.settleTerminal("error", "resume failed: session unavailable", false, "", "")

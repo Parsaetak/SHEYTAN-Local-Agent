@@ -1,25 +1,70 @@
-# UPDATE.md — v1.10.0 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.1 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.0` (canonical application version; single version
+**Release:** `v1.10.1` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 33884e1` (`v1.9.6`) · **Date:** 2026-10-11
-**Package:** `SHEYTAN-Local-Agent-v1.10.0-FINAL.zip` (complete repository tree)
+**Base:** `main @ c9494dc` (`v1.10.0`) · **Date:** 2026-10-11
+**Package:** `SHEYTAN-Local-Agent-v1.10.1-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.0 is the FIRST release of the R&D architecture cycle: it
-removes the two demonstrated v1.9.6 CI failure classes at their roots so
-both platform desktop gates can genuinely execute, closes the standing
-UpdateEngineNow admission-seam gap, records the honest Phase 0 baseline,
-and defines the Qt/IPC seam for the next cycle. The shipped production UI
-remains the Wails shell; Qt is the documented Phase 2 target, not a
-half-built replacement.
+behavior. v1.10.1 completes the R&D Phase 2 UI decision: the desktop UI
+is now the native Qt Quick/QML host over a secured per-user IPC channel,
+Wails is removed from the product and the dependency graph, and the two
+run-`38152579695` failures are repaired at their roots. The R&D Phase 1
+engine gate is honestly untouched: the physical-Windows warm-TTFT /
+native-vs-managed comparison remains NOT MEASURED in this release (no
+physical hardware was available), and the native C++ engine default
+stays evidence-gated.
 
-## What v1.10.0 changes
+## What v1.10.1 changes
+
+1. **P0 — Windows test teardown repaired (run `38152579695`,
+   `TestWebSocketSeesTerminalErrorNotSilence`).** The test returned at
+   the terminal error frame while the run goroutine's deferred cleanup
+   was still writing inside the data dir; on Windows `t.TempDir`'s
+   RemoveAll then failed with "The directory is not empty" and failed
+   the whole `internal/api` package (~91 s in, blocking every later
+   Windows gate). The deterministic repair: the test waits on the
+   authoritative outcome and on the run registry RELEASING the session
+   entry before teardown, and `Server.Close` JOINS every run goroutine
+   (bounded) before releasing the runtime stack; new run/resume
+   registrations are refused once shutdown has begun. No assertion was
+   weakened and no deadline was inflated.
+2. **P0 — Linux GUI smoke repaired by the Qt migration itself (run
+   `38152579695`).** The Wails 1x1-window failure is not reproducible in
+   the new stack: the Qt desktop smoke under Xvfb proves a real visible
+   top-level window with plausible geometry owned by the UI pid (the
+   exact assertion class the Wails shell failed), keyed IPC handshake,
+   real core interaction and a clean WM_DELETE_WINDOW shutdown.
+3. **The desktop UI is now native Qt Quick/QML** (`ui/qt`) consuming the
+   UNCHANGED Go core over `internal/localipc` (per-user Unix socket /
+   named pipe, SO_PEERCRED or current-user DACL + client-SID checks,
+   versioned keyed handshake, bounded framing, structured errors). The
+   shipped Qt surfaces: sessions, chat, live streaming with Stop,
+   settlement/persistence/reload, repeat send, composer lock/unlock,
+   error/empty/connecting states. The remaining UI surfaces continue to
+   be served by the documented headless/browser mode until their Qt
+   migration lands (tracked as future work; not claimed done).
+4. **Wails is removed** from the product, build, dependency graph and
+   current-product docs; the module graph is asserted Wails-free in CI.
+   Historical release records that mention Wails remain (deleting them
+   would falsify release history); no Wails code or dependency remains.
+5. **One canonical test entrypoint:** scripts/verify-all.mjs (CI-called,
+   fail-fast, honest NOT RUN reporting). The Windows CDP live-answer
+   harness is replaced by the QtTest acceptance suite running the real
+   QML UI against the real core.
+
+## v1.10.0 notes (superseded where they describe the Wails shell)
+
+The v1.10.0 sections below describe the v1.10.0 release as it shipped;
+statements about the Wails desktop shell, its CDP acceptance switch and
+the Openbox smoke are now historical (that release is still v1.10.0 in
+the canonical history), and the current maintenance behavior for those
+areas is the one described above.
 
 1. **P0 — the Windows live-answer acceptance failure is repaired at its
    root: the CDP test switch could never reach WebView2.** The

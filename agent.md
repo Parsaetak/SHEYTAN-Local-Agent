@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.0 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.1 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,40 +7,52 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.0 — the FIRST release of the R&D architecture
-cycle.** The production UI remains the Wails shell; Qt is the documented
-Phase 2 target, not a shipped replacement. v1.10.0 repairs both v1.9.6
-CI failure classes at their roots and closes the standing admission-seam
-gap: (P0) the Windows live-answer acceptance now works because the
-TEST-ONLY CDP switch travels through
-`application.Options.Windows.AdditionalBrowserArgs`
-(`internal/desktop/desktop.go` reads `SHEYTAN_ACCEPTANCE_CDP_PORT`) —
-the old `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` channel is pinned to the
-empty string at package init by Wails' default pure-Go WebView2 loader
-(`webviewloader.preventEnvAndRegistryOverrides`), which was the
-authoritative run `38135751846` failure mechanism; (P0) the Linux Xvfb
-smoke step now installs and owns a real lightweight WM (`openbox`),
-because v1.9.6's X11 evidence shows the GTK4 top-level created but never
-mapped under bare Xvfb — the gate itself is unchanged; (P0)
-`UpdateEngineNow` (same-tag/scheduled update) now takes the SAME
-destructive-boundary admission claim as the variant transaction
-(`internal/llm/admission_updatenow_v1100_test.go` pins it; the v1.9.6
-boundary pins in `admission_boundary_v196_test.go` stay unchanged). The
+**Current release: v1.10.1 — the Qt Phase 2 migration + the run
+`38152579695` failure repair.** The production desktop UI is the native
+Qt Quick/QML host (`ui/qt`), an IPC CLIENT of the unchanged Go core over
+`internal/localipc` (per-user Unix socket / named pipe, transport-level
+identity checks, versioned keyed handshake `sheytan-ipc/1`, bounded
+framing). Wails is REMOVED — from the product, the build
+(`build/config.yml`), the module graph (go.mod/go.sum; CI asserts the
+absence) and the current-product docs; historical release records that
+name Wails stay (deleting them would falsify history). The shipped Qt
+surfaces are sessions/chat/live-streaming-with-Stop/settlement-
+persistence-reload/repeat-send and the core states; the remaining UI
+surfaces (AI Systems, Goals, Coding Lab, Net Search page, repository
+index, tasks/automations, downloads/diagnostics) are still served by the
+documented headless/browser mode until their Qt migration lands — they
+are NOT claimed done. Run teardown is deterministic: run spawns are
+tracked and `Server.Close` joins them (bounded) before releasing the
+stack; new run/resume registrations are refused once shutdown began.
+The ONE canonical test entrypoint is scripts/verify-all.mjs (CI calls
+it). The Phase 1 engine gate is UNCHANGED: the physical-Windows
+warm-TTFT/native-vs-managed baseline is NOT MEASURED (no physical
+hardware), so the native C++ engine default stays evidence-gated and
+the managed llama.cpp path remains the default backend. The Windows
+TEST-ONLY CDP acceptance switch is retired with the Wails shell; the
+live-answer gate is now the Qt acceptance suite (real QML UI + real
+core) on both platforms. The former loopback activity transport is
+retired; /api/ws-origin now answers same-origin unconditionally for the
+headless/browser mode. Version identity is exactly `1.10.1` everywhere
+(canonical gate: `node scripts/release-version.mjs --check`).
+
 R&D decision
 (`Parsaetak/Contents` → `Research-and-Development` →
 `SHEYTAN-LA-2026-10-11.md`) remains the direction authority: Go stays
 the single orchestration authority; C++ owns numerical inference; the
-native-engine DEFAULT promotion is NOT flipped in v1.10.0 — the
+native-engine DEFAULT promotion is NOT flipped in v1.10.1 — the
 blocking evidence is the physical-Windows warm-TTFT comparison against
 managed llama.cpp (checklist in ROADMAP.md); the Phase 0 baseline lives
 in `baselines/perf-hosted-ci-v1.10.0.json` + `worklog.md` (hosted-CI
 labeled, NOT-MEASURED honesty per metric); the Qt/IPC seam is DEFINED in
-ARCHITECTURE.md (documentation only, nothing ships). Version identity is
-exactly `1.10.0` everywhere (canonical gate:
+ARCHITECTURE.md (implemented at the chat/sessions surface, not yet at
+every panel). Version identity is
+exactly `1.10.1` everywhere (canonical gate:
 `node scripts/release-version.mjs --check`). No stale 1.9.6
 current-release claims exist outside `changelog.md`.
 
-**WHAT v1.10.0 CHANGED (the regression-sensitive surfaces):**
+**WHAT v1.10.0 CHANGED (the v1.10.0 regression-sensitive surfaces; all
+still current):**
 
 1. **The variant transaction order** (`internal/llm/llama.go`,
    `updateEngineVariantTx`): early live-run refusal (no claim) →

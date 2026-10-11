@@ -11,6 +11,80 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.1 — 2026-10-11 — the FULL Qt/QML migration + the v1.10.0 failure repair (P0): Wails removed from the product and dependency graph, the Go core + native Qt host desktop pair over a secured per-user IPC channel, deterministic run teardown, the canonical test entrypoint
+
+Focus: repair the two demonstrated v1.10.0 run-`38152579695` failures at
+the root (Windows test teardown, Linux GUI smoke), migrate the desktop
+UI to native Qt Quick/QML per the R&D authority's Phase 2 (with the
+Phase 1 engine gate honestly untouched — the physical-Windows baseline
+remains NOT MEASURED and the native-engine default stays evidence-gated),
+and remove Wails and its WebView transport from the product, the build,
+the dependency graph and the current-product documentation.
+
+1. **P0 — Windows test teardown (`TestWebSocketSeesTerminalErrorNotSilence`,
+   run `38152579695`).** The test returned at the terminal error frame,
+   but the run goroutine's deferred cleanup (memory-manager run-end
+   bookkeeping, registry release, hub close) runs AFTER that frame; on
+   Windows, `t.TempDir`'s `RemoveAll` raced that still-writing cleanup and
+   failed with "The directory is not empty", failing the whole
+   `internal/api` package. Root-cause repair, two legs: (a) the test now
+   waits on the authoritative outcome AND on the run registry RELEASING
+   the session entry (the last disk-writing step of the cleanup) before
+   teardown — bounded polling over existing seams, no sleep, no deadline
+   inflation, no changed assertion; (b) `Server.Close` now JOINS every
+   run goroutine (bounded) before releasing the runtime stack, and new
+   run/resume registrations are refused once shutdown has begun — the
+   cleanup order is deterministic for every caller, not just the test.
+2. **P0 — Linux GUI smoke (run `38152579695`).** The Wails window stayed
+   1x1 under Xvfb+Openbox and no renderer/WebKit env workaround repaired
+   it. Instead of a fourth Wails hypothesis, the UI is now the native Qt
+   Quick/QML host: under the same Xvfb conditions the smoke proves a REAL
+   visible 1280x840 top-level window owned by the UI pid, a typed keyed
+   IPC handshake, real core interaction, a real WM_DELETE_WINDOW close
+   request and a clean zero-status shutdown (scripts/qt-desktop-smoke.sh,
+   gates G1-G5).
+3. **Qt Phase 2 migration (R&D authority, §7-§8).** `ui/qt`: a
+   QQmlApplicationEngine UI (sessions list, chat transcript, cumulative
+   live streaming with Stop, settlement → persistence reload, repeat
+   send, composer lock/unlock, error/empty/connecting states) over
+   `CoreClient` — HTTP/1.1 + RFC6455 WebSocket framing over QLocalSocket,
+   bounded headers/bodies/frames, request deadlines. `internal/localipc`:
+   the ONE secured local channel — per-user endpoint (XDG runtime dir +
+   0700 directory + 0600 socket; per-user named pipe on Windows with a
+   current-user DACL + client-SID verification), SO_PEERCRED uid checks,
+   stale-endpoint recovery, live-endpoint protection, an ephemeral
+   128-bit handshake key (env-passed, never logged), structured bounded
+   error responses. The Go core serves the EXISTING handlers through the
+   channel — no session/run/tool/memory/approval policy is reimplemented
+   in C++, and the Qt host is a client, never a second authority.
+   `internal/desktop`: the launcher binds the channel, spawns the Qt
+   host with endpoint+key, and joins lifecycle on child exit/signals.
+4. **Wails removal.** Every Wails import, the module requirement and its
+   whole transitive graph are gone from go.mod/go.sum (CI now asserts the
+   ABSENCE); `internal/desktop` is the new launcher boundary; the Wails
+   loopback activity transport and its discovery endpoint are retired
+   (the endpoint now answers same-origin unconditionally for the
+   documented headless/browser mode); build/config.yml no longer carries
+   the wails3 task runner; scripts/windows-live-answer-acceptance.mjs is
+   replaced by the QtTest acceptance suite. Retained historical mentions
+   exist only where deleting them would falsify release history
+   (changelog.md/worklog.md release records).
+5. **The canonical test entrypoint.** scripts/verify-all.mjs runs every
+   applicable suite (release contracts, frontend units, go vet/build/
+   headless/full/race, CTest, Qt configure/build/acceptance) with
+   fail-fast exit codes, preserved output, and honest NOT RUN reporting
+   for genuinely absent toolchains (--release mode fails on them).
+6. **Windows/Linux CI (build-desktop.yml).** Windows builds the Qt host
+   with the official Qt 6.8.2 MSVC toolchain, deploys it QML-aware with
+   windeployqt next to the core, and replaces the CDP harness with the
+   Qt acceptance suite against the packaged core; the runtime smoke
+   asserts the Qt child's real window. Linux installs the Qt runtime
+   deps (the GTK4/WebKitGTK stack is gone), builds the host, and runs
+   the G1-G5 smoke plus the acceptance suite under Xvfb.
+7. **Versioning.** package.json 1.10.1 (canonical), SIGNATURE,
+   build/config.yml, internal/config AppVersion and the workflow identity
+   all say 1.10.1 (`release-version.mjs --check` green).
+
 ## v1.10.0 — 2026-10-11 — the FIRST R&D-cycle release: both v1.9.6 CI failure classes repaired at the root (P0), the UpdateEngineNow admission-seam gap closed (P0), the evidence-gated Phase 1 decision + the honest Phase 0 baseline + the Qt/IPC seam (P1)
 
 Focus: deliver the first release of the R&D architecture cycle

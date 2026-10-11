@@ -9,7 +9,7 @@ import (
 
 func init() {
 	// On Linux and other non-Windows platforms, launch the same native
-	// Wails desktop application instead of falling back to CLI-only mode.
+	// Qt desktop host instead of falling back to CLI-only mode.
 	runDefault = func() int {
 		cfg, err := config.Load(config.DefaultPath())
 		if err != nil {

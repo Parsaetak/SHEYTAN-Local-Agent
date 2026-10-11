@@ -86,3 +86,17 @@ func isLoopbackHost(host string) bool {
 		host == "localhost" ||
 		host == "127.0.0.1"
 }
+
+// handleWSOrigin answers the activity-transport discovery probe (v1.9.4
+// contract, v1.10.1 revision): the loopback transport was the Wails
+// desktop page's channel and is retired with Wails itself. The native Qt
+// host consumes the local IPC channel instead and never calls this
+// endpoint; every remaining serving mode (browser/headless/dev) streams
+// the activity WebSocket over its OWN origin, so the authoritative answer
+// is always the empty origin.
+func (s *Server) handleWSOrigin(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{
+		"origin": "",
+		"token":  "",
+	})
+}

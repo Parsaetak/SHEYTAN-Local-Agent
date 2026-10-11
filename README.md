@@ -5,7 +5,7 @@
 > The model proposes. The tools execute. The laboratory verifies.
 > SHEYTAN measures the machine, governs the runtime and verifies the work.
 
-SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built around Go, React/TypeScript, Wails v3, managed llama.cpp inference, a native C++ engine path, controlled tools, isolated coding workspaces, Net Search, memory, recall, objective verification — and a Runtime Governor that continuously understands the machine and governs runtime policy while keeping the host responsive.
+SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built around a Go core (the single authority for runs, tools, sessions, memory, approvals and policy), a native Qt Quick/QML desktop UI that consumes that core over a secured per-user local IPC channel, managed llama.cpp inference, a native C++ engine path, controlled tools, isolated coding workspaces, Net Search, memory, recall, objective verification — and a Runtime Governor that continuously understands the machine and governs runtime policy while keeping the host responsive.
 
 **SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
 

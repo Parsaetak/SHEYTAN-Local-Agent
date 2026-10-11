@@ -249,7 +249,7 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 		"llama.cpp",
 		"The ggml authors",
 		"gorilla/websocket",
-		"github.com/wailsapp/wails/v3",
+		"Qt 6 (Core/Gui/Quick/QML/QuickControls2/Test)",
 		"react-markdown",
 		"How to determine the license of a file",
 	} {

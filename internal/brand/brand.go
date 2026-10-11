@@ -242,8 +242,8 @@ archives.
 | Component | License | Where it lives |
 |---|---|---|
 | llama.cpp (downloaded engine) | MIT | fetched at runtime into the managed bin directory — never committed |
-| Wails v3 | MIT | build-time Go dependency |
-| React, Zustand, react-markdown, remark/rehype stack | MIT | build-time frontend dependencies |
+| Qt 6 (Core/Gui/Quick/QML/QuickControls2/Test) | LGPL-3.0 | dynamically linked by the native Qt desktop host (ui/qt) |
+| React, Zustand, react-markdown, remark/rehype stack | MIT | build-time frontend dependencies (headless/browser serving mode) |
 | gorilla/websocket | BSD-style | build-time Go dependency |
 | chromedp + cdproto | MIT | build-time Go dependency |
 | bild, xdg, winres, go-isatty, nfnt/resize, gobwas/* | MIT / BSD-style / ISC-style (per package) | build-time Go dependencies |
@@ -254,7 +254,6 @@ archives.
 
 | Package | License | Copyright |
 |---|---|---|
-| github.com/wailsapp/wails/v3 | MIT | Copyright (c) 2018-Present Lea Anthony |
 | github.com/gorilla/websocket | BSD-style | Copyright (c) 2013 The Gorilla WebSocket Authors |
 | github.com/chromedp/chromedp, github.com/chromedp/cdproto | MIT | Copyright (c) 2016-2025 Kenneth Shaw |
 | github.com/anthonynsimon/bild | MIT | Copyright (c) 2016-2024 Anthony Simon |

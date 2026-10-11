@@ -19,7 +19,7 @@ Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
 ## Shipped baseline (compact)
 
-**v1.8.8 is the shipped baseline; release evidence is in changelog.md.**
+**v1.10.1 is the shipped baseline; release evidence is in changelog.md.**
 
 v1.8 delivered, with per-release evidence in `changelog.md`: the adaptive
 runtime (task classification, tier system, context planning), the staged
@@ -127,22 +127,30 @@ the ONE installer authority. RISK: numerical drift — mitigated by the
 mandatory parity gates; scope creep — mitigated by the phase gate (no
 new features until targets).
 
-**Phase 2 — Qt (C++/QML) shell over the unchanged Go core.** The IPC
-seam is now DEFINED (ARCHITECTURE.md, "The Qt/IPC seam"): secured local
-socket/pipe for control + streaming with the loopback capability-token
-auth discipline, versioned coarse-grained message shapes mirroring the
-HTTP/WS surface; shared memory / zero-copy only where profiling
-demonstrates a payload-size gain. The Go API remains the ONLY
-authority — the shell must not grow a second run registry, session
-store, tool registry, downloader, scheduler or policy authority. GATE:
-packaged Windows AND Linux launch/interaction/close proof through the
-same smoke-class gates the Wails shell has; no shell migration without
-it. DEPENDENCY: Phase 1 (the inference path the shell renders must be
-settled first); Qt deployment/packaging evidence (QML modules, plugins,
-runtime — per the pinned Qt 6.12 deployment documentation). RISK: Qt
-learning/packaging cost — mitigated by starting with a thin shell;
-IPC latency — mitigated by measuring the typed boundary early with the
-Phase 0 harness.
+**Phase 2 — Qt (C++/QML) shell over the unchanged Go core.**
+v1.10.1 STATUS: IMPLEMENTED at the chat/sessions surface — the Wails
+shell is removed and the shipped desktop pair is the Go core + the
+native Qt Quick/QML host (`ui/qt`) over `internal/localipc` (per-user
+Unix socket / named pipe, transport-level identity checks, versioned
+keyed handshake, bounded framing). Linux proof on the session host:
+real visible window + keyed handshake + real core interaction + clean
+WM_DELETE_WINDOW close (scripts/qt-desktop-smoke.sh G1-G5) and the
+QtTest live-answer acceptance (real QML + real core). Windows CI is
+wired to the same gates (Qt 6.8.2 MSVC build + windeployqt + Qt
+acceptance + windowed runtime smoke) and remains NOT VERIFIED until a
+green hosted run exists. NOT YET migrated to Qt: AI Systems, Goals,
+Coding Lab, Net Search page, repository index, tasks/automations,
+downloads/diagnostics panels — those surfaces remain on the documented
+headless/browser mode; the migration is FUTURE work and is not claimed
+done. The Go API remains the ONLY authority — the shell grows no second
+run registry, session store, tool registry, downloader, scheduler or
+policy authority. DEPENDENCY: Phase 1 (the inference path the shell
+renders must be settled first); Qt deployment/packaging evidence
+(Qt 6.8.2 pinned; QML-aware deployment via the official CMake deploy
+script / windeployqt). RISK: Qt learning/packaging cost — mitigated by
+the thin shell; IPC latency — to be measured with the Phase 0 harness
+(shared memory / zero-copy only where profiling demonstrates a
+payload-size gain).
 
 **Phase 3 — measured refinements + optional WinUI 3.** Only if
 Windows-specific measurements justify a second shell; C# never becomes

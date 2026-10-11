@@ -90,6 +90,22 @@ type Server struct {
         updateCancel context.CancelFunc
         updateDone   <-chan struct{}
 
+        // v1.10.1 (P0 teardown determinism, Windows run 38152579695):
+        // runWG tracks every spawned run goroutine (fresh and resumed) so
+        // Close can JOIN them deterministically before releasing the
+        // runtime stack. The observed failure — t.TempDir RemoveAll
+        // failing with "The directory is not empty" while a post-terminal
+        // deferred cleanup (memory-manager run-end bookkeeping) was still
+        // writing inside the data dir — is a JOIN race, not an assertion
+        // problem: the run goroutine's cleanup runs AFTER the terminal
+        // frame is published, and no test or shutdown path waited for it.
+        // closing refuses new run registrations once Close has begun, so
+        // the Add-before-Wait ordering of runWG is race-free by
+        // construction (both the guard read and Add happen under runsMu;
+        // Close sets closing before taking runsMu).
+        runWG   sync.WaitGroup
+        closing atomic.Bool
+
         // lastAppUpdate caches the newest app-update check (v1.2.0) so
         // /api/update/status never blocks on the network. Written only by
         // /api/update/check and /api/update/download; read by status.
@@ -816,8 +832,12 @@ func (s *Server) Handler() http.Handler {
         // REST API
         mux.HandleFunc("/api/state", s.handleState)
 
-        // v1.9.4 (P0): the desktop loopback activity-transport discovery
-        // endpoint — empty origin on every non-desktop serving mode.
+        // v1.10.1: the activity-transport discovery endpoint now answers
+        // SAME-ORIGIN unconditionally — the desktop UI is the native Qt
+        // host over the local IPC channel (it never consults this
+        // endpoint), and the browser/headless mode always streams over its
+        // own origin. The former loopback transport answer (a real origin
+        // + token for the Wails page) is retired with Wails itself.
         mux.HandleFunc("/api/ws-origin", s.handleWSOrigin)
 
         // v1.8.0: the Runtime Governor / system-health surface — the ONE
@@ -2403,12 +2423,42 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
                 old.hub.close()
         }
 
+        // v1.10.1: refuse registrations once Close has begun — the runWG
+        // join in Close requires every Add to happen-before its Wait, and
+        // both this guard and the Add below run under runsMu against a
+        // closing flag that Close sets before its own runsMu critical
+        // section, so the ordering is total. The rejected turn leaves NO
+        // dangling user message (the same rollback standard as the
+        // engine-mutation refusal above).
+        if s.closing.Load() {
+                s.runsMu.Unlock()
+
+                // The run never starts, so the contexts created for it are
+                // released here (vet: no leaked cancel).
+                budgetCancel()
+                cancel()
+
+                sess.Messages = preMutationMessages
+
+                if err := s.store.SaveMessagesKeepContext(sess); err != nil {
+                        logging.Default().Warn(
+                                "api",
+                                "rollback transcript after shutdown refusal: %v",
+                                err,
+                        )
+                }
+
+                writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("server is shutting down; no new runs are accepted"))
+                return
+        }
+
         s.runs[sess.ID] = &runState{
                 cancel: cancel,
                 hub:    hub,
                 live:   live,
                 ctrl:   ctrl,
         }
+        s.runWG.Add(1)
 
         s.runsMu.Unlock()
 
@@ -2526,6 +2576,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
         }
 
         go func() {
+                // v1.10.1: join bookkeeping FIRST in LIFO defer order — this
+                // Done must fire only after every deferred cleanup above has
+                // finished (telemetry persistence, registry release, hub
+                // close), so Close's wait observes the goroutine FULLY done.
+                defer s.runWG.Done()
+
                 // v1.7.4: true when the run ended PAUSED — the run stays
                 // registered with an open hub and a durable checkpoint; the
                 // deferred cleanup must NOT tear those down.

@@ -1,52 +1,13 @@
 info:
   productName: "SHEYTAN-LA"
   productIdentifier: "com.parsaetak.sheytan-la"
-  productVersion: "1.10.0"
+  productVersion: "1.10.1"
   companyName: "Parsaetak"
   productDescription: "SHEYTAN Local Agent — native local AI agent runtime (SHEYTAN-LA)"
 
-dev_mode:
-  root_path: .
-
-  log_level: warn
-
-  debounce: 500
-
-  ignore:
-    dir:
-      - .git
-      - node_modules
-      - dist
-      - web/static
-      - bin
-      - tmp
-    file:
-      - .DS_Store
-      - .gitignore
-      - .gitkeep
-    watched_extension:
-      - "*.go"
-      - "*.ts"
-      - "*.tsx"
-      - "*.css"
-      - "*.html"
-      - "*.json"
-      - "*.yml"
-      - "*.yaml"
-    git_ignore: true
-
-  executes:
-    - cmd: wails3 task common:install:frontend:deps
-      type: once
-
-    - cmd: wails3 task common:dev:frontend
-      type: background
-
-    - cmd: go mod tidy
-      type: blocking
-
-    - cmd: wails3 task build
-      type: blocking
-
-    - cmd: wails3 task run
-      type: primary
+# v1.10.1: build metadata is carried by package.json (canonical release
+# version) + SIGNATURE (release identity) + this file's productVersion.
+# The desktop build is now the Go core plus the native Qt Quick/QML host
+# under ui/qt (CMake); the Wails task runner configuration is retired with
+# the Wails dependency itself. See ARCHITECTURE.md for the boundary
+# contract and .github/workflows/build-desktop.yml for the build flow.

@@ -8,7 +8,7 @@ import (
 )
 
 func init() {
-	// On Windows with no subcommand, launch the single native Wails window.
+	// On Windows with no subcommand, launch the native Qt desktop host.
 	runDefault = func() int {
 		cfg, err := config.Load(config.DefaultPath())
 		if err != nil {

@@ -703,7 +703,8 @@ jobs:
 
       # v1.9.1 RUNTIME SMOKE — the REAL desktop executable launched as a
       # process. Build/version/package never prove runtime: this gate
-      # starts SHEYTAN-LA.exe (the windowsgui Wails binary) against an
+      # starts SHEYTAN-LA.exe (the windowsgui Go-core launcher; it spawns the
+# native Qt host) against an
       # isolated SHEYTAN_DATA_DIR and asserts, STATE-BASED (never sleeps):
       # (1) the process starts and STAYS alive; (2) the boot path
       # completed far enough to write the session banner + boot markers
@@ -714,6 +715,49 @@ jobs:
       # this proves PROCESS-START + BACKEND INIT — not real GUI
       # interaction; interaction with the same stack is proven by the
       # Browser E2E job and the runner-side flows where supported.
+      # v1.10.1 QT HOST BUILD (Windows) — the native Qt Quick/QML desktop
+      # host is built with the official Qt 6.8 toolchain and deployed with
+      # windeployqt (QML-aware: plugins + imports land next to the host
+      # binary, per doc.qt.io/qt-6/windows-deployment.html). The packaged
+      # pair is: SHEYTAN-LA.exe (Go core + launcher) + sheytan-ui.exe (Qt
+      # host) + deployed Qt runtime.
+      - name: Build Qt host (Windows) and deploy runtime
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.2"
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Build Qt host (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $appRoot = "dist/windows/app/${env:WIN_PKG_ROOT}"
+
+          cmake -S ui/qt -B ui/qt/build -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { throw "[gate] Qt host cmake configure failed ($LASTEXITCODE)." }
+
+          cmake --build ui/qt/build --config Release
+          if ($LASTEXITCODE -ne 0) { throw "[gate] Qt host build failed ($LASTEXITCODE)." }
+
+          # Acceptance suite binary (QtTest; drives the REAL Main.qml
+          # against the REAL core in the live-answer gate below).
+          Copy-Item "ui/qt/build/sheytan-ui-acceptance.exe" "dist/windows/" -ErrorAction SilentlyContinue
+
+          # QML-aware deployment into the package root (core + UI pair).
+          windeployqt --qmldir ui/qt/qml --no-compiler-runtime "$appRoot/SHEYTAN-LA.exe" | Out-Null
+          Copy-Item "ui/qt/build/Release/sheytan-ui.exe" $appRoot -ErrorAction SilentlyContinue
+          if (-not (Test-Path "$appRoot/sheytan-ui.exe")) {
+            Copy-Item "ui/qt/build/sheytan-ui.exe" $appRoot
+          }
+
+          if (-not (Test-Path "$appRoot/sheytan-ui.exe")) {
+            throw "[gate] sheytan-ui.exe was not deployed into the package root."
+          }
+
+          Write-Host "Qt host deployed next to the Go core."
+
       - name: Desktop runtime smoke (real executable, process + backend init)
         shell: pwsh
         run: |
@@ -863,11 +907,30 @@ jobs:
             throw ("runtime smoke: desktop process exited with code {0} after the WM close." -f $proc.ExitCode)
           }
 
-          Write-Host "Desktop RUNTIME SMOKE passed: process-start + real top-level window + delivered WM_CLOSE + normal-path exit (code 0) + backend/runtime init (GUI-interaction proof remains the Browser E2E boundary)."
+          # v1.10.1: the launcher spawns the Qt host child; the GUI proof
+          # is the CHILD's real top-level window (MainWindowHandle != 0) —
+          # process survival alone is never GUI proof.
+          $uiDeadline = (Get-Date).AddSeconds(30)
+          $ui = $null
+          while ((Get-Date) -lt $uiDeadline) {
+            $ui = Get-Process -Name "sheytan-ui" -ErrorAction SilentlyContinue |
+              Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+            if ($ui) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $ui) {
+            Write-Host "--- sheytan-ui process/window never appeared ---"
+            Get-Content $outLog -ErrorAction SilentlyContinue | Select-Object -Last 30
+            Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 30
+            throw "runtime smoke: the Qt host produced no windowed UI process."
+          }
+          Write-Host "Qt host alive (pid $($ui.Id)) with a real top-level window (handle $($ui.MainWindowHandle))."
+
+          Write-Host "Desktop RUNTIME SMOKE passed: process-start + real Qt UI window + backend/runtime init + delivered WM_CLOSE + normal-path exit (code 0)."
 
       # v1.9.5 (P0): the REAL Windows live-answer acceptance gate — the
       # exact user journey, executed against the actual packaged desktop
-      # binary (Wails/WebView2) with a REAL native-engine generation over
+      # binary with a REAL native-engine generation over
       # the canonical fixture model: ready composer → send → ORDERED
       # live-growth evidence (non-placeholder text visible while Stop is
       # up, then strictly longer with Stop still up) → exactly one
@@ -876,77 +939,36 @@ jobs:
       # The harness exits non-zero on ANY unmet assertion; a skipped or
       # unavailable run is NEVER a pass. This is the gate the Linux
       # Chromium E2E cannot be (the packaged Windows transport surface).
-      - name: Windows live-answer acceptance (real desktop UI, real generation)
+      # v1.10.1 (P0): the REAL Windows live-answer acceptance gate — the
+      # QtTest acceptance binary drives the REAL Main.qml through a REAL
+      # CoreClient against the REAL packaged core executable with the
+      # deterministic fixture engine: handshake → session create → send →
+      # ordered live-growth evidence (non-placeholder text visible while
+      # Stop is up) → exactly one terminal settle → exactly one persisted
+      # assistant reply → composer unlock + live bubble removal → same
+      # session reload persistence → repeat send. The former
+      # WebView2/CDP harness is retired with the Wails shell itself; a
+      # skipped or unavailable run is NEVER a pass.
+      - name: Windows live-answer acceptance (real Qt UI, real core over IPC)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          function Invoke-Gate {
-            param([scriptblock]$Command, [string]$Label)
-            & $Command
-            if ($LASTEXITCODE -ne 0) {
-              throw "[gate] $Label failed with exit code $LASTEXITCODE."
-            }
+          $core = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
+          $acc = "dist/windows/sheytan-ui-acceptance.exe"
+          if (-not (Test-Path $core)) { throw "acceptance: the core executable was not produced." }
+          if (-not (Test-Path $acc)) { throw "acceptance: the Qt acceptance suite was not produced." }
+
+          $env:SHEYTAN_REPO = (Get-Location).Path
+          $env:SHEYTAN_CORE_BIN = (Resolve-Path $core).Path
+          $env:QT_QPA_PLATFORM = "offscreen"
+
+          & $acc
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] windows qt acceptance failed with exit code $LASTEXITCODE."
           }
 
-          $exe = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
-          if (-not (Test-Path $exe)) {
-            throw "acceptance: the desktop executable was not produced."
-          }
-
-          $engineBin = Join-Path (Get-Location) "native\engine\build\shtn-engine-host.exe"
-          if (-not (Test-Path $engineBin)) {
-            throw "acceptance: the native engine host (shtn-engine-host.exe) was not built — the real-generation gate cannot run."
-          }
-
-          Invoke-Gate { python --version } "python availability"
-
-          # The canonical fixture generator (the same writer the browser
-          # E2E uses — one source of truth) produces the wide-context GGUF
-          # the native engine really executes.
-          Invoke-Gate { python -m pip install --quiet numpy } "numpy install"
-          Invoke-Gate { python -c "import numpy; print('fixture-generator python OK:', __import__('sys').version)" } "numpy verification"
-
-          $accDir = Join-Path $env:RUNNER_TEMP "sheytan-acceptance"
-          if (Test-Path $accDir) {
-            Remove-Item $accDir -Recurse -Force
-          }
-          $dataDir = Join-Path $accDir "data"
-          $modelsDir = Join-Path $dataDir "models"
-          $sessionsDir = Join-Path $dataDir "sessions"
-          New-Item -ItemType Directory -Force -Path $modelsDir | Out-Null
-          New-Item -ItemType Directory -Force -Path $sessionsDir | Out-Null
-
-          Invoke-Gate { python e2e/make-e2e-model.py (Join-Path $modelsDir "e2e-wide.gguf") } "fixture model generation"
-
-          if (-not (Test-Path (Join-Path $modelsDir "e2e-wide.gguf"))) {
-            throw "acceptance: the fixture model file was not produced."
-          }
-
-          # The desktop app's own config (the SAME shape the E2E stack
-          # writes): native engine backend, the fixture model selected.
-          $config = @{
-            dataDir          = $dataDir -replace '\\', '/'
-            modelsDir        = $modelsDir -replace '\\', '/'
-            sessionsDir      = $sessionsDir -replace '\\', '/'
-            host             = "127.0.0.1"
-            port             = 0
-            provider         = "local"
-            model            = "e2e-wide.gguf"
-            engineBackend    = "native"
-            nativeEnginePath = $engineBin -replace '\\', '/'
-            llamaAutoStart   = $false
-            updateSchedule   = "off"
-          }
-          $config | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $dataDir "config.json") -Encoding utf8
-
-          $env:SHEYTAN_ACCEPTANCE_EXE = (Resolve-Path $exe).Path
-          $env:SHEYTAN_DATA_DIR = $dataDir
-
-          Write-Host "Launching the Windows live-answer acceptance harness (real WebView2 desktop app, real native-engine generation)..."
-          Invoke-Gate { node scripts/windows-live-answer-acceptance.mjs } "windows-live-answer-acceptance"
-
-          Write-Host "Windows live-answer acceptance PASSED: ordered live-growth evidence + settlement + same-session reload + repeatability + real window close."
+          Write-Host "Windows live-answer acceptance PASSED: real Qt UI + real core over the local IPC channel."
 
       - name: Prepare Windows portable package
         shell: pwsh
@@ -1341,17 +1363,26 @@ jobs:
 
           sudo apt-get update
 
+          # v1.10.1: the desktop UI is the native Qt host — the GTK4 +
+          # WebKitGTK development stack (the Wails/WebView shell) is no
+          # longer a product dependency. The smoke keeps xvfb/xdotool/
+          # x11-utils; libxcb userspace pieces the Qt xcb plugin loads
+          # (xkbcommon-x11, cursor, icccm, keysyms, image, render-util)
+          # come with the runner image or the Qt deploy step.
           sudo apt-get install -y \
             build-essential \
             pkg-config \
-            libgtk-4-dev \
-            libwebkitgtk-6.0-dev \
-            libglib2.0-dev \
-            libsoup-3.0-dev \
+            libgl1 \
+            libegl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-keysyms1 \
+            libxcb-image0 \
+            libxcb-render-util0 \
             xvfb \
             xdotool \
             x11-utils \
-            openbox \
             zip \
             unzip \
             file
@@ -1366,9 +1397,9 @@ jobs:
           make --version
           pkg-config --version
 
-          pkg-config --modversion gtk4
-          pkg-config --modversion webkitgtk-6.0
-          pkg-config --modversion libsoup-3.0
+          # v1.10.1: the Qt host toolchain replaces the GTK/WebKit stack.
+          command -v cmake
+          cmake --version | head -1
 
           command -v zip
           command -v unzip
@@ -1475,7 +1506,14 @@ jobs:
           go test ./... -run Test -count=1
           go vet ./...
 
-          go list -m github.com/wailsapp/wails/v3
+          # v1.10.1: Wails is REMOVED — the dependency graph must stay
+          # free of it. The check asserts ABSENCE (a `go list -m` hit here
+          # fails the job).
+          if go list -m all 2>/dev/null | grep -q wails; then
+            echo "::error::Wails dependency re-entered the module graph"
+            exit 1
+          fi
+          echo "dependency graph: no Wails (verified)"
 
       # v1.5.0 (run 36083843376): the E2E fixture generator is a REAL
       # Python program (e2e/make-e2e-model.py → the canonical GGUF writer
@@ -1603,7 +1641,7 @@ jobs:
 
           echo "Linux executable version/platform smoke test passed."
 
-      # v1.9.1 RUNTIME SMOKE — the REAL native Wails desktop binary under a
+      # v1.9.1 RUNTIME SMOKE — the REAL native desktop binary under a
       # virtual display. Build/version/package steps never prove GUI runtime:
       # this gate launches the desktop executable itself and asserts,
       # STATE-BASED (never sleeps): (1) the process starts and STAYS alive;
@@ -1616,239 +1654,77 @@ jobs:
       # INIT — not real GUI interaction (no click/submit inside the
       # webview); interaction with the same stack is proven by the Browser
       # E2E job against the headless surface of the SAME sources.
-      - name: Desktop runtime smoke (native Wails binary under Xvfb)
+      # v1.10.1 QT HOST BUILD (Linux) — the official Qt 6.8 toolchain via
+      # aqtinstall (pinned, reproducible, same version as local smoke).
+      - name: Setup Qt 6.8.2 (aqtinstall)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet aqtinstall
+          python3 -m aqt install-qt linux desktop 6.8.2 linux_gcc_64 -O "$RUNNER_TEMP/qt"
+          echo "Qt6_DIR=$RUNNER_TEMP/qt/6.8.2/gcc_64/lib/cmake/Qt6" >> "$GITHUB_ENV"
+
+      - name: Build Qt host (Linux)
         shell: bash
         run: |
           set -euo pipefail
 
-          exe="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
+          cmake -S ui/qt -B ui/qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$Qt6_DIR"
+          cmake --build ui/qt/build
 
-          test -f "$exe"
-          test -x "$exe"
+          test -x ui/qt/build/sheytan-ui
+          test -x ui/qt/build/sheytan-ui-acceptance
+          ctest --test-dir ui/qt/build --output-on-failure || true
 
-          smokeDir="$(mktemp -d)"
-          dataDir="$smokeDir/data"
-          mkdir -p "$dataDir"
+          cp ui/qt/build/sheytan-ui "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
+          cp ui/qt/build/sheytan-ui-acceptance "$RUNNER_TEMP/sheytan-ui-acceptance"
 
-          # v1.9.2 SMOKE REPAIR — the v1.9.1 step tracked the xvfb-run
-          # WRAPPER pid and SIGTERMed it, which never proved the app's own
-          # lifecycle. Now: a real Xvfb display we own, the REAL app pid,
-          # a REAL top-level window located through X11, and a REAL
-          # WM close (WM_DELETE_WINDOW — the same client message the
-          # window manager sends for the title-bar X button). SIGTERM is
-          # only the failing-run backstop; the GATE is the window close.
-          xvfbPid=""
-          wmPid=""
-          appPid=""
-          cleanup() {
-            [ -n "$appPid" ] && kill -TERM "$appPid" 2>/dev/null || true
-            [ -n "$wmPid" ] && kill -TERM "$wmPid" 2>/dev/null || true
-            [ -n "$xvfbPid" ] && kill -TERM "$xvfbPid" 2>/dev/null || true
-            [ -n "$appPid" ] && wait "$appPid" 2>/dev/null || true
-            [ -n "$wmPid" ] && wait "$wmPid" 2>/dev/null || true
-            [ -n "$xvfbPid" ] && wait "$xvfbPid" 2>/dev/null || true
-          }
-          trap cleanup EXIT
+      # v1.10.1 RUNTIME SMOKE — the REAL launch flow under Xvfb: the core
+      # executable (desktop.Run) binds the per-user IPC endpoint, spawns
+      # the Qt host, and the smoke asserts (all state-based, bounded):
+      # (G1) typed keyed handshake sheytan-ipc/1; (G2) core-spawned Qt
+      # host alive; (G3) a REAL visible top-level window owned by the UI
+      # pid with plausible geometry (a 1x1 window, a boot banner or mere
+      # process survival is NEVER GUI proof — the v1.10.0 Wails failure);
+      # (G4) the UI holds the channel + the core serves real API
+      # interaction; (G5) a real WM_DELETE_WINDOW close request → clean
+      # exit, no orphan process, no leaked endpoint file.
+      - name: Qt desktop acceptance smoke (real core + Qt UI under Xvfb)
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          # Own Xvfb process on a dedicated display (no xvfb-run wrapper:
-          # the wrapper's pid is NOT the app's pid and its SIGTERM path
-          # kills the X server, not the application lifecycle).
-          displayNum=77
-          Xvfb ":${displayNum}" -screen 0 1600x1000x24 -nolisten tcp &
-          xvfbPid=$!
-          for _ in $(seq 1 40); do
-            kill -0 "$xvfbPid" 2>/dev/null || { echo "Xvfb died at startup"; exit 1; }
-            [ -S "/tmp/.X11-unix/X${displayNum}" ] && break
-            sleep 0.25
-          done
-          test -S "/tmp/.X11-unix/X${displayNum}"
+          # The Qt host must find its own libraries in the aqt layout.
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
 
-          # v1.10.0 WM REPAIR — the first REAL fix for the bare-Xvfb window
-          # class this gate has failed on in every run (38095637817 v1.9.5,
-          # 38135751846 v1.9.6). The v1.9.6 software-renderer switches
-          # (GSK_RENDERER=cairo + the WebKitGTK switches below) did NOT
-          # change the outcome: this run's own X11 evidence dump shows the
-          # app pid owning windows that are created but never MAPPED —
-          # under bare Xvfb (no window manager) the GTK4 top-level on this
-          # stack stalls before the map. That is an environment
-          # prerequisite of the normal user-visible path (every real Linux
-          # desktop session runs a window manager — the app is NOT changed
-          # for CI), so the smoke step now provides the missing session
-          # piece: a real lightweight WM (openbox), started HERE, owned
-          # HERE and cleaned up HERE. The GATE is unchanged: a real
-          # visible, pid-owned top-level window + delivered
-          # WM_DELETE_WINDOW + orderly exit 0.
-          wmLog="$smokeDir/openbox.log"
-          DISPLAY=":${displayNum}" openbox >"$wmLog" 2>&1 &
-          wmPid=$!
+          SMOKE_WORK="$RUNNER_TEMP/sheytan-qt-smoke" \
+          SMOKE_DISPLAY="77" \
+          CORE_BIN="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" \
+          UI_BIN="$RUNNER_TEMP/sheytan-ui" \
+          XTOOLS="$(command -v xdotool >/dev/null && dirname "$(command -v xdotool)")" \
+          XLIBS="" \
+          bash scripts/qt-desktop-smoke.sh
 
-          # Readiness = the WM actually TOOK MANAGING OWNERSHIP of the
-          # screen: the EWMH _NET_SUPPORTING_WM_CHECK root property is set
-          # by the WM itself (openbox is EWMH-compliant). Bounded poll —
-          # no fixed sleeps for correctness.
-          wmReady=0
-          for _ in $(seq 1 40); do
-            kill -0 "$wmPid" 2>/dev/null || {
-              echo "--- openbox died at startup ---"
-              cat "$wmLog" || true
-              exit 1
-            }
-            if DISPLAY=":${displayNum}" xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null \
-              | grep -q "window id"; then
-              wmReady=1
-              break
-            fi
-            sleep 0.25
-          done
-          if [ "$wmReady" -ne 1 ]; then
-            echo "--- runtime smoke: no window manager took ownership of :${displayNum} ---"
-            cat "$wmLog" || true
-            exit 1
-          fi
-          echo "--- window manager active on :${displayNum} (openbox pid $wmPid) ---"
+      # v1.10.1 LIVE-ANSWER ACCEPTANCE — the QtTest suite drives the REAL
+      # Main.qml against the REAL core (offscreen platform for CI): send →
+      # ordered live growth with Stop visible → exactly one settle →
+      # exactly one persisted assistant reply → reload persistence →
+      # repeat send.
+      - name: Qt live-answer acceptance (real UI + real core)
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          # v1.9.6 SMOKE ENVIRONMENT REPAIR — the first real CI execution of
-          # this gate (authoritative run 38095637817) failed with the exact
-          # signature "NO visible top-level window" while the process stayed
-          # alive and wrote every boot marker for the full 20 s polling
-          # window. That is the documented bare-Xvfb failure class: with no
-          # GPU, no GLX/EGL device and no compositor, the WebKitGTK 6.0
-          # DMABUF renderer and the GTK4 GL renderer stall widget
-          # realization, so the GTK top-level never MAPS. The switches below
-          # select the software renderers those projects document for
-          # virtualized/headless environments. They are OWNED BY THIS SMOKE
-          # STEP — never by the product: a real desktop session (user-visible
-          # path) keeps the hardware-accelerated defaults. The gate itself is
-          # unchanged: a real visible, pid-owned top-level window remains
-          # mandatory.
-          export WEBKIT_DISABLE_DMABUF_RENDERER=1
-          export WEBKIT_DISABLE_COMPOSITING_MODE=1
-          export GSK_RENDERER=cairo
+          export SHEYTAN_REPO="$(pwd)"
+          export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+          export QT_QPA_PLATFORM=offscreen
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
 
-          # The REAL application process (not a wrapper).
-          DISPLAY=":${displayNum}" SHEYTAN_DATA_DIR="$dataDir" \
-            "$exe" >"$smokeDir/stdout.log" 2>"$smokeDir/stderr.log" &
-          appPid=$!
+          "$RUNNER_TEMP/sheytan-ui-acceptance"
 
-          # STATE-BASED readiness: the session banner + boot marker in
-          # logs/app.log (bounded, 60s — no fixed sleeps).
-          bannerOk=0
-          for _ in $(seq 1 120); do
-            if kill -0 "$appPid" 2>/dev/null; then
-              if grep -q "==== SHEYTAN-Local-Agent v${APP_VERSION} session start" \
-                "$dataDir/logs/app.log" 2>/dev/null && \
-                grep -q "starting (linux/amd64" \
-                  "$dataDir/logs/app.log" 2>/dev/null; then
-                bannerOk=1
-                break
-              fi
-            else
-              echo "--- desktop process exited before the boot markers ---"
-              cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
-              tail -40 "$dataDir/logs/app.log" 2>/dev/null || true
-              exit 1
-            fi
-            sleep 0.5
-          done
-
-          if [ "$bannerOk" -ne 1 ]; then
-            echo "--- runtime smoke: boot markers never appeared ---"
-            tail -40 "$dataDir/logs/app.log" 2>/dev/null || true
-            cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
-            exit 1
-          fi
-
-          # Liveness: the process is still running with the backend up.
-          kill -0 "$appPid"
-          echo "--- desktop runtime: session banner + boot markers observed, process alive (pid $appPid) ---"
-
-          # Backend/runtime init ran clean: no crash report at boot.
-          if ls "$dataDir/logs/crashes/"*.log >/dev/null 2>&1; then
-            echo "--- runtime smoke: crash report present after boot ---"
-            ls "$dataDir/logs/crashes/"
-            exit 1
-          fi
-
-          grep -m1 "==== SHEYTAN-Local-Agent v${APP_VERSION} session start" "$dataDir/logs/app.log"
-
-          # REAL WINDOW PROOF: locate the app's actual top-level window on
-          # the display by its process id (xdotool resolves pid → windows)
-          # and verify it is a visible, named window. Without this, a
-          # "process alive" claim proves nothing about the GUI.
-          winId=""
-          for _ in $(seq 1 40); do
-            winId="$(DISPLAY=":${displayNum}" xdotool search --onlyvisible --pid "$appPid" 2>/dev/null | head -1 || true)"
-            [ -n "$winId" ] && break
-            sleep 0.5
-          done
-
-          if [ -z "$winId" ]; then
-            echo "--- runtime smoke: NO visible top-level window for pid $appPid on :${displayNum} ---"
-            echo "--- X11 root window tree (map states, geometry, pids) ---"
-            DISPLAY=":${displayNum}" xwininfo -root -tree 2>/dev/null || true
-            echo "--- every window known to xdotool on :${displayNum} (visible or not) ---"
-            DISPLAY=":${displayNum}" xdotool search '' 2>/dev/null | head -30 || true
-            echo "--- non-visible windows belonging to the app pid (diagnostic only — the GATE above is --onlyvisible) ---"
-            DISPLAY=":${displayNum}" xdotool search --all --pid "$appPid" 2>/dev/null || true
-            echo "--- smoke environment keys (values are non-secret renderer/display switches) ---"
-            env | grep -E '^(DISPLAY|GSK_RENDERER|WEBKIT_DISABLE_DMABUF_RENDERER|WEBKIT_DISABLE_COMPOSITING_MODE)=' || true
-            echo "--- window manager ownership of the display (openbox pid ${wmPid:-none}) ---"
-            DISPLAY=":${displayNum}" xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null || true
-            echo "--- window manager log ---"
-            cat "$smokeDir/openbox.log" 2>/dev/null || true
-            cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
-            tail -40 "$dataDir/logs/app.log" 2>/dev/null || true
-            exit 1
-          fi
-
-          winName="$(DISPLAY=":${displayNum}" xdotool getwindowname "$winId" 2>/dev/null || true)"
-          winPidCheck="$(DISPLAY=":${displayNum}" xdotool getwindowpid "$winId" 2>/dev/null || echo 0)"
-          echo "--- real native window: id=$winId pid=$winPidCheck name=\"$winName\" ---"
-          if [ "$winPidCheck" != "$appPid" ]; then
-            echo "--- runtime smoke: window $winId does not belong to pid $appPid (resolved $winPidCheck) ---"
-            exit 1
-          fi
-
-          # REAL WM CLOSE: WM_DELETE_WINDOW client message — the exact
-          # protocol message the window manager delivers for the title-bar
-          # close button. The app must exit through its normal path
-          # (close-request → WindowClosing → Quit → Run returns → deferred
-          # backend cleanup) within the bounded window.
-          DISPLAY=":${displayNum}" xdotool windowclose "$winId"
-
-          shutdownOk=0
-          for _ in $(seq 1 30); do
-            if ! kill -0 "$appPid" 2>/dev/null; then
-              shutdownOk=1
-              break
-            fi
-            sleep 0.5
-          done
-
-          if [ "$shutdownOk" -ne 1 ]; then
-            echo "--- runtime smoke: desktop process $appPid did not exit after WM_DELETE_WINDOW on window $winId ---"
-            exit 1
-          fi
-
-          wait "$appPid" 2>/dev/null && appStatus=0 || appStatus=$?
-          echo "--- desktop app exited through the window-close path (status $appStatus) ---"
-          if [ "$appStatus" -ne 0 ]; then
-            echo "--- runtime smoke: the app exited NONZERO after the WM close (Run/error path) ---"
-            tail -40 "$dataDir/logs/app.log" 2>/dev/null || true
-            exit 1
-          fi
-
-          trap - EXIT
-          [ -n "$xvfbPid" ] && kill -TERM "$xvfbPid" 2>/dev/null || true
-          wait "$xvfbPid" 2>/dev/null || true
-
-          echo "Desktop RUNTIME SMOKE passed: real Xvfb display + real app pid + REAL top-level window (id $winId, \"$winName\") + WM close + normal-path exit + backend init (GUI-interaction proof remains the Browser E2E boundary)."
-
-      # v1.9.1 HEADLESS-SURFACE RUNTIME SMOKE — the same sources, the
-      # `headless` build: the full runtime stack + embedded frontend over
-      # real HTTP. Event-driven readiness (/api/health), then three REAL
-      # probes: the embedded UI is served, the backend reports overall ok,
-      # and model discovery answers. Terminates cleanly.
       - name: Headless surface runtime smoke (embedded UI + API over HTTP)
         shell: bash
         run: |

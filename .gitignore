@@ -74,3 +74,6 @@ Thumbs.db
 # per-run stacks, traces and screenshots)
 /e2e/.build/
 /e2e/.artifacts/
+
+# v1.10.1: the Qt host's local CMake build tree (CI builds it fresh).
+ui/qt/build/
