@@ -218,9 +218,11 @@ deferral, never a persisted bounded failure. Pins:
 destructive window; begin/end balance; mid-download registration
 refused at the boundary; nil-seam boundary re-check),
 `internal/{api,llm}/admission_v195_test.go` (non-destructive exits
-never claim; deterministic 503 with transcript restore). Known
-limitation (v1.10.0 gate item): `UpdateEngineNow` does not yet
-participate in the claim seam.
+never claim; deterministic 503 with transcript restore). v1.10.0: the
+seam is COMPLETE — `UpdateEngineNow` (the same-tag/scheduled update
+transaction) now takes the same boundary claim with the same balance
+discipline and the same deferral semantics; pins:
+`internal/llm/admission_updatenow_v1100_test.go`.
 
 **Strategic direction (R&D 2026-10-11, authoritative:
 `Parsaetak/Contents` → `Research-and-Development` →
@@ -228,16 +230,54 @@ participate in the claim seam.
 authority (run lifecycle, sessions, tools, memory, Governor, evidence).
 C++ owns numerical inference — the existing `native/engine` path is the
 promotion target under capability/parity gates, with managed llama.cpp
-as the automatic honest fallback; the default is NOT flipped until the
-evidence gate is met (v1.10.0 Phase 1). Qt (C++/QML) is the primary UI
-target for the next major cycle over a typed, coarse-grained IPC
-boundary (secured local socket/pipe first; shared memory only where
-profiling proves a gain); WinUI 3 remains an optional future
-Windows-only shell and C# is never the orchestrator. The first vertical
-slice ships in v1.9.6: `internal/perf` + `cmd/shtn-perf` — the R&D §10
-measurement framework with honest NOT-MEASURED semantics, nearest-rank
-P50/P95, host/model/method/limitation metadata, hosted-CI labeling and
-targets reported as measured gaps.
+as the automatic honest fallback; the default is NOT flipped in v1.10.0
+(the blocking evidence is the physical-Windows warm-TTFT comparison
+against managed llama.cpp; see ROADMAP.md for the gate checklist). Qt
+(C++/QML) is the primary UI target for the next major cycle over a
+typed, coarse-grained IPC boundary (defined below); WinUI 3 remains an
+optional future Windows-only shell and C# is never the orchestrator.
+The R&D §10 measurement framework ships as `internal/perf` +
+`cmd/shtn-perf` (honest NOT-MEASURED semantics, nearest-rank P50/P95,
+host/model/method/limitation metadata, hosted-CI labeling, targets
+reported as measured gaps); the v1.10.0 baseline artifact is
+`baselines/perf-hosted-ci-v1.10.0.json`.
+
+**The Qt/IPC seam (v1.10.0 — DEFINED, not shipped).** The contract a
+future Qt (C++/QML) shell will use to talk to the UNCHANGED Go core.
+Nothing in v1.10.0 implements it; no Qt code ships; the Wails shell
+remains the production UI. The seam is specified now so the Phase 2
+shell can be built without inventing a second authority:
+
+- **Transport:** ONE secured local transport per concern — a local
+  socket / named pipe for control (typed request/response) and
+  streaming (server-pushed events), bound to the loopback only, no
+  arbitrary host binding, no unauthenticated local API. It reuses the
+  v1.9.5 loopback capability-token discipline (crypto/rand 256-bit
+  token, minted per server, delivered only through an authenticated
+  discovery surface, constant-time compare, never logged) — the SAME
+  discipline, not a second copy of the authority.
+- **Messages:** typed, coarse-grained, versioned (an explicit
+  `v` field on every envelope; additive evolution only; a shell that
+  speaks an unsupported version degrades visibly, never silently).
+  Message shapes mirror the existing HTTP/WS surface (`/api/*` +
+  `/ws/activity` semantics) so the Go core serves both without forking
+  its policy: run lifecycle, session selection, engine state, Governor
+  reads, evidence — the shell renders, the core decides.
+- **Payload economics:** streaming deltas stay small and typed;
+  shared-memory / zero-copy is a LATER, evidence-gated addition — only
+  where the Phase 0 harness (`internal/perf`) demonstrates a
+  payload-size win on real hardware. No speculative zero-copy.
+- **Authority:** the Go core remains the ONLY run registry, session
+  store, tool registry, scheduler, policy and evidence authority. The
+  Qt shell is a VIEW: it holds no second engine manager, no second run
+  registry, no copied Governor, no local policy. The model proposes;
+  the tools execute; the laboratory verifies — unchanged.
+- **NOT ready (honest):** no Qt shell code, no IPC server, no message
+  schemas in code, no packaging/deployment work (Qt deploy requires
+  shipping QML modules/plugins — evaluated at Phase 2), no Windows
+  measurements of the seam, no shared-memory design beyond the
+  profiling gate above. The v1.10.0 deliverable is THIS definition
+  only.
 
 **Run summary metrics (v1.9.4):** the settle summary carries
 `gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` plus aggregate

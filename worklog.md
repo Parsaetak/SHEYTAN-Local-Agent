@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.9.5
+Current release:  v1.10.0
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
@@ -1525,3 +1525,103 @@ Stage Summary:
   performance numbers are UNVERIFIED locally by construction; the
   authoritative verdict is the Actions run carrying this revision (no
   push/tag was performed from this session).
+
+## v1.10.0 session (2026-10-11) — the FIRST R&D-cycle release: the Windows CDP transport repair, the Linux WM repair, the UpdateEngineNow admission seam, the evidence-gated Phase 1 decision, the honest Phase 0 baseline, the Qt/IPC seam definition
+
+Task: open the R&D engineering cycle. Deliver v1.10.0 against the
+authoritative failing run `38135751846` (v1.9.6, commit `33884e1`,
+FAILURE — Source & frontend audit SUCCEEDED 2m58s; Windows x64 FAILED
+13m57s at `Windows live-answer acceptance` AFTER a green desktop runtime
+smoke; Linux x64 FAILED 10m47s at `Desktop runtime smoke (native Wails
+binary under Xvfb)`; Publish skipped). Per-job/per-step conclusions were
+pulled live from the GitHub API; the log payloads are not retrievable
+unauthenticated (HTTP 403), so the failure mechanisms are DERIVED from
+source + step-level timing, labeled as derivations throughout.
+
+ROOT CAUSE 1 (Windows, derived and source-proven): the acceptance
+harness's CDP switch traveled through `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`,
+but the pinned wails v3.0.0-beta.16 pure-Go WebView2 loader
+(`internal/webview2/webviewloader`, `windows && !native_webview2loader`)
+runs `preventEnvAndRegistryOverrides()` at package init and pins that
+variable to "" (`os.Setenv`) — the switch was erased before any WebView2
+environment existed, the CDP endpoint never opened, and the harness
+consumed its full bounded 60 s attach window (matching the ~75 s step
+total: ~15–25 s numpy/fixture prep + 60 s + cleanup). Fix: the desktop
+shell forwards the TEST-ONLY `SHEYTAN_ACCEPTANCE_CDP_PORT` through
+`application.Options.Windows.AdditionalBrowserArgs` (the channel Wails
+composes itself into `CreateCoreWebView2EnvironmentWithOptions`); the
+harness sets exactly that variable; digits-only shape check; sanitized
+length-only CDP-timeout diagnostics. Windows build + vet verified by
+cross-compilation (`GOOS=windows go build/vet ./internal/desktop/`).
+
+ROOT CAUSE 2 (Linux, evidence-classified): both v1.9.5 and v1.9.6 failed
+the same gate identically DESPITE the v1.9.6 renderer switches, and the
+v1.9.6 dump shows the app pid owning created-but-unmapped windows — the
+GTK4 top-level does not map under bare Xvfb without a window manager on
+this runner stack. Fix: the smoke step installs and starts `openbox`,
+proves WM ownership via the EWMH `_NET_SUPPORTING_WM_CHECK` root
+property (bounded poll), cleans it up in the existing trap, and the
+failure dump gains WM-ownership evidence. Gate unchanged; product
+unchanged for CI. NOT reproduced locally (no GTK4/WebKitGTK dev headers
+and no root in this container) — labeled a derivation from this run's
+own evidence.
+
+ADMISSION SEAM (P0): `UpdateEngineNow` now takes the same
+destructive-boundary claim as the variant transaction: early advisory
+refusal (no claim) → claim atomically with the live verdict before the
+first destructive step → balanced release on every exit → nil-seam
+boundary re-check. Pins: `internal/llm/admission_updatenow_v1100_test.go`
+(five deterministic pins: claim held across the destructive window
+observed from the claim seam itself — running at Begin, StateReady at
+End; begin/end balance; live-at-boundary refusal keeps the engine
+serving; early refusal consults the gate exactly once; nil-seam
+re-check consults exactly twice). All v1.9.6/v1.9.5 pins green
+unchanged (9/9 in the focused run).
+
+R&D PHASE 1 (promotion decision): native C++ CTest 13/13 locally
+(clean cmake 4.4.4 configure + build; `test_prefill_parity` green =
+bit-for-bit prefill/KV parity; forward/generate/tokenizer/tensor
+suites green). `NativeBackendEnabled` keeps native as an explicit
+opt-in; managed llama.cpp remains the default. The default flip is
+BLOCKED on specific evidence: the warm-TTFT comparison native vs
+managed llama.cpp on physical Windows target hardware (R&D Phase 0
+measurement contract). Decision recorded in UPDATE.md / ROADMAP.md /
+native/engine/README.md.
+
+R&D PHASE 0 (baseline): `baselines/perf-hosted-ci-v1.10.0.json`
+captured via the shipped `cmd/shtn-perf` (hostedCI=true, code SHA
+33884e1 + v1.10.0 working tree): cold_start_to_interactive_ms P50/P95
+1.4 (api.New + EnsureSetup boundary), idle/peak memory 16.5 MB
+(server-only RSS posture); engine_ready / warm_ttft /
+stream_chunk_to_visible / stream_duration / tool_round_trip /
+file_output_overhead NOT MEASURED with per-metric reasons. Targets
+remain targets.
+
+QT/IPC SEAM: defined in ARCHITECTURE.md (typed coarse-grained local
+boundary, versioned message shapes, capability-token auth reusing the
+loopback discipline, no second authority, shared memory only on
+profiled wins, explicit NOT-ready list). No Qt code ships.
+
+REGRESSION (local, exact commands in this session's transcript):
+frontend `npm run typecheck` clean; `npm run lint` 0 findings;
+`npm run test:units` 236/236; `npm run test:release` 38/38;
+`npm run build` + `npm run verify:web` green (bundle rebuilt at the
+canonical 1.10.0 identity); native cmake+ctest 13/13; Go focused
+admission suites 9/9; `go vet` clean on touched packages; Windows
+cross-build of the repaired shell clean. UNVERIFIED locally: the two
+desktop gates (no Windows host; no GTK headers), the full browser-E2E
+matrix, the physical-hardware baseline, and any Actions verdict for
+this revision (no push performed from this session).
+
+Stage Summary:
+- v1.10.0 is code-complete on the session host with a minimal diff:
+  `internal/desktop/desktop.go` (CDP seam), `scripts/windows-live-answer-acceptance.mjs`
+  (transport + diagnostics), `.github/workflows/build-desktop.yml`
+  (openbox install + WM-owned smoke), `internal/llm/llama.go`
+  (UpdateEngineNow seam), `internal/llm/admission_updatenow_v1100_test.go`
+  (pins), `baselines/perf-hosted-ci-v1.10.0.json` (baseline), docs
+  (UPDATE/changelog/README/ARCHITECTURE/ROADMAP/agent/worklog/native
+  README), canonical version 1.10.0 everywhere.
+- The stale worklog header ("Current release: v1.9.5") — a v1.9.6
+  reconciliation miss — is fixed; this file now states the truth for
+  v1.10.0.

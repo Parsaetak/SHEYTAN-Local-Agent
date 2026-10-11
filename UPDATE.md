@@ -1,151 +1,201 @@
-# UPDATE.md — v1.9.6 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.0 Release Notes & Maintenance Behavior
 
-**Release:** `v1.9.6` (canonical application version; single version
+**Release:** `v1.10.0` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 070a059` (`v1.9.5`) · **Date:** 2026-10-11
-**Package:** `SHEYTAN-Local-Agent-v1.9.6-FINAL.zip` (complete repository tree)
+**Base:** `main @ 33884e1` (`v1.9.6`) · **Date:** 2026-10-11
+**Package:** `SHEYTAN-Local-Agent-v1.10.0-FINAL.zip` (complete repository tree)
+**R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
+`SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
+its source repository).
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. The v1.9.0 feature surface (AI Systems, Goals, Approvals,
-bounded delegation, `repo_nav`) is unchanged in v1.9.6 and is documented
-in the changelog; its maintenance behavior below carries forward.
+behavior. v1.10.0 is the FIRST release of the R&D architecture cycle: it
+removes the two demonstrated v1.9.6 CI failure classes at their roots so
+both platform desktop gates can genuinely execute, closes the standing
+UpdateEngineNow admission-seam gap, records the honest Phase 0 baseline,
+and defines the Qt/IPC seam for the next cycle. The shipped production UI
+remains the Wails shell; Qt is the documented Phase 2 target, not a
+half-built replacement.
 
-**v1.9.6 is the FINAL planned v1.9.x maintenance release.** The next
-release is v1.10.0 — the first release of the R&D architecture cycle
-documented below. No v1.9.7 is planned or implied.
+## What v1.10.0 changes
 
-## What v1.9.6 changes
+1. **P0 — the Windows live-answer acceptance failure is repaired at its
+   root: the CDP test switch could never reach WebView2.** The
+   authoritative run `38135751846` ("v1.9.6" #120) failed the
+   `Windows live-answer acceptance` step (~75 s: ~15–25 s preparation +
+   the harness's full bounded 60 s CDP attach window, exit 1) AFTER a
+   green desktop runtime smoke — the first time this gate ever executed
+   (every earlier release failed upstream). Root cause, derived from the
+   pinned wails v3.0.0-beta.16 sources (the CI log payload itself is not
+   retrievable unauthenticated): the harness passed the WebView2 remote
+   debugging switch through the `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+   environment variable, but Wails' default pure-Go WebView2 loader
+   (`internal/webview2/webviewloader`, build tag `windows &&
+   !native_webview2loader`) runs `preventEnvAndRegistryOverrides()` at
+   package init and executes
+   `os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")` — the switch
+   was erased inside the app process BEFORE any WebView2 environment was
+   created. The CDP endpoint never opened; the harness failed honestly.
+   The repair routes the switch through the one channel Wails composes
+   itself and hands to `CreateCoreWebView2EnvironmentWithOptions`:
+   `application.Options.Windows.AdditionalBrowserArgs`. The desktop shell
+   reads `SHEYTAN_ACCEPTANCE_CDP_PORT` (digits-only, bounded shape check)
+   and forwards `--remote-debugging-port=<port>` programmatically
+   (`internal/desktop/desktop.go`, `acceptanceCDPPort`); the harness sets
+   exactly that variable. The switch stays TEST-ONLY: production
+   launchers never set it, production builds never expose a debugging
+   endpoint. The harness's CDP-timeout failure now carries a sanitized
+   diagnostic (process liveness + output BYTE LENGTHS only, never
+   content). The gate's ordered-evidence contract is unchanged.
 
-1. **P0 — the Windows "engine maintenance in progress" 503 regression is
-   repaired at its root (the admission claim placement).** In v1.9.5 the
-   engine-mutation admission claim was taken at TRANSACTION START of the
-   variant transaction. On windows/amd64 the background AUTO Vulkan
-   bootstrap (an optimization spawned at every app start, after the
-   maintenance gate) was fully eligible in ordinary postures — AUTO
-   profile default, GPU offload default, a detected GPU, online, a
-   selected model — and its transaction held the claim across the whole
-   NETWORK resolve/download phase (minutes). Every chat typed in that
-   window was refused with HTTP 503
-   `engine maintenance in progress — new runs are deferred until the
-   engine transaction settles; retry shortly`. This is exactly the
-   authoritative run `38095637817` Windows failure
-   (`TestLocalGemmaHiChatCompletes`,
-   `TestLocalChatSurvivesUnreadableModelCard`), and it was a REAL
-   product defect, not a test accident. v1.9.6 moves the claim to the
-   DESTRUCTIVE BOUNDARY of the transaction (stop → swap → start →
-   verify → rollback/commit): the network phases are claim-free (runs
-   are admitted and served by the current engine while the archive
-   downloads), the transaction refuses ITSELF at the boundary when a run
-   is live (the AUTO probe records a deferral, never a bounded
-   failure), and the claim still closes the check-then-act window
-   atomically for the seconds the swap actually needs. Non-destructive
-   exits (invalid variant, unsupported variant, already-installed no-op,
-   early live-run refusal) never touch admission. A pure download
-   failure no longer bounces a running engine. The two local-chat E2E
-   fixtures pin an explicit CPU profile so the unrelated AUTO GPU
-   bootstrap is never a hidden dependency of the pinned chat contract.
+2. **P0 — the Linux desktop runtime smoke gains the missing session
+   piece: a real window manager, owned by the smoke step.** Both v1.9.5
+   (`38095637817`) and v1.9.6 (`38135751846`) failed the same gate:
+   `NO visible top-level window` while the process stayed alive with all
+   boot markers — and v1.9.6's own X11 evidence dump shows the app pid
+   owning windows that are created but never MAPPED. The v1.9.6
+   software-renderer switches (`WEBKIT_DISABLE_DMABUF_RENDERER=1`,
+   `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `GSK_RENDERER=cairo`) did not
+   change the outcome: under bare Xvfb (no window manager) the GTK4
+   top-level on this runner stack stalls before the map. That is an
+   environment prerequisite of the normal user-visible path — every real
+   Linux desktop session runs a WM — so the smoke step now installs
+   (`openbox` added to the dependency step) and starts a real lightweight
+   WM on its own display, waits for the EWMH `_NET_SUPPORTING_WM_CHECK`
+   root property (the WM's own ownership signal — bounded poll, no
+   sleeps), and cleans it up with the same trap discipline as Xvfb. The
+   gate is UNCHANGED: a real visible, pid-owned top-level window, delivered
+   `WM_DELETE_WINDOW`, normal-path exit 0, plus the full failure-path
+   X11 diagnostics (tree, map states, pids, WM ownership evidence, app
+   log tail). No product change was made for CI; no gate was weakened;
+   discovery still requires `--onlyvisible` and pid ownership.
 
-2. **P0 — the Linux desktop runtime smoke is re-configured for the
-   bare-Xvfb environment it actually runs in.** Run `38095637817` was
-   the gate's first real execution (earlier releases were skipped behind
-   upstream failures) and failed with `NO visible top-level window` while
-   the process stayed alive and wrote every boot marker — the documented
-   signature of the WebKitGTK 6.0 DMABUF renderer / GTK4 GL renderer
-   stalling under Xvfb (no GPU, no GLX/EGL device, no compositor). The
-   smoke step now owns the documented software-renderer environment for
-   that class of host (`WEBKIT_DISABLE_DMABUF_RENDERER=1`,
-   `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `GSK_RENDERER=cairo`); the gate
-   itself is unchanged (a real visible, pid-owned top-level window,
-   WM_DELETE_WINDOW delivery, normal-path exit 0) and now dumps the X11
-   root window tree and environment keys on failure. Product behavior on
-   real desktops is untouched.
+3. **P0 — the standing admission-seam gap is closed: UpdateEngineNow now
+   participates in the SAME destructive-boundary claim seam.** The
+   same-tag/scheduled engine-update transaction (`LlamaServer.UpdateEngineNow`)
+   stopped the engine without the run-admission claim the v1.9.6 variant
+   transaction takes — a run could be admitted onto an engine about to
+   be stopped. v1.10.0 wires the SAME primitives: the same early advisory
+   refusal (a run active at entry refuses before anything happens; no
+   claim is taken), the same boundary claim taken atomically with the
+   live-run verdict immediately before the first destructive step (the
+   stop), the same balance-on-every-exit discipline (released exactly
+   once on every path), and the same nil-seam boundary re-check for
+   hosts without an admission authority. Refusals are deferrals
+   (temporary), never persisted bounded failures. No second claim
+   mechanism, no second authority: `BeginEngineMutation` /
+   `EndEngineMutation` and `EngineMutationActive` remain the only seam.
+   Five deterministic pins in `internal/llm/admission_updatenow_v1100_test.go`
+   mirror the v1.9.6 boundary pins (claim held across the destructive
+   window, balance, live refusal keeps the engine serving, early refusal,
+   nil-seam re-check); the v1.9.6 pins and the v1.9.5 pins stay green
+   unchanged.
 
-3. **P1 — the R&D architecture direction is adopted and the first
-   vertical slice ships.** The authoritative decision
-   (`Parsaetak/Contents`, branch `Research-and-Development`,
-   `SHEYTAN-LA-2026-10-11.md`): Go remains the single
-   policy/orchestration authority (run lifecycle, sessions, tools,
-   memory, Governor, evidence); C++ owns numerical inference (the
-   existing `native/engine` becomes the promotion target under
-   capability/parity gates, with managed llama.cpp as the automatic
-   honest fallback); Qt (C++/QML) is the primary UI target for the next
-   major cycle over a typed, coarse-grained IPC boundary; WinUI 3
-   remains an optional future Windows-only shell. v1.9.6 implements the
-   R&D Phase 0 slice: `internal/perf` + `cmd/shtn-perf`, the
-   reproducible measurement baseline framework (machine-readable JSON +
-   concise report, nearest-rank P50/P95, host/model/method/limitation
-   metadata, hosted-CI labeling, NOT-MEASURED honesty for every metric
-   without a real sample). No target is claimed as met.
+4. **P1 — R&D Phase 1 (native C++ engine promotion): the evidence-gated
+   first step; the production default is NOT flipped.** The promotion
+   mechanism is exercised through its real contract: the native engine's
+   CTest suites — including bit-for-bit prefill/KV parity — pass
+   (13/13, local Linux session), the browser E2E stack runs the native
+   engine end-to-end with the canonical fixture model, and
+   `NativeBackendEnabled` selects native-first with managed llama.cpp
+   automatic fallback for unsupported models/capabilities or verified
+   failure. The R&D Phase 0 measurement contract additionally requires
+   the warm-TTFT comparison against managed llama.cpp on physical target
+   hardware; that sample does not exist yet (no physical Windows host in
+   this session — the honest posture is recorded in the baseline
+   artifact). Per the R&D decision rule, promotion by default therefore
+   does NOT ship in v1.10.0: native remains an explicit opt-in
+   (`engineBackend: "native"`), managed llama.cpp remains the default,
+   and the promotion gate checklist with its specific blocking evidence
+   is documented in ROADMAP.md. Promotion never happens by filename or
+   device detection; the fallback stays automatic and honest.
 
-4. **P1 — engine/run coordination keeps ONE authority; the same
-   guarantees, a tighter window.** The API server remains the only run
-   registry; `BeginEngineMutation`/`EndEngineMutation` remain the only
-   claim primitives; the claim is mirrored by the same
-   `EngineMutationActive` advisory signal the `/api/run` pre-checks
-   read. Refused runs still leave no dangling transcript message and no
-   live run/session lock (pinned by `internal/api/admission_v195_test.go`).
+5. **P1 — R&D Phase 0 (measurement baseline) recorded, honestly.**
+   `baselines/perf-hosted-ci-v1.10.0.json` + the report in `worklog.md`
+   capture the shipped `internal/perf` + `cmd/shtn-perf` envelope on the
+   hosted Linux CI-class host: `cold_start_to_interactive_ms` and
+   idle/peak process memory MEASURED; `engine_ready_ms`, `warm_ttft_ms`,
+   `stream_chunk_to_visible_ms`, `stream_duration_ms`,
+   `tool_round_trip_ms`, `file_output_overhead_ms` NOT MEASURED (no
+   serving llama-server binary, no physical hardware, no desktop shell
+   in this posture — each marker carries its specific reason). Hosted-CI
+   numbers are labeled hosted-CI; no R&D target is claimed as met.
 
-5. **Carried forward from v1.9.5 (unchanged in v1.9.6):** the
-   least-privilege desktop activity transport — one Go API authority,
-   one `/ws/activity` endpoint, loopback-only ephemeral listener,
-   capability token delivered only through the same-origin discovery
-   path, strict origin/host checks, degraded-streaming UI reporting on
-   discovery failure; the opt-in sanitized stream trace (lengths only);
-   the Windows live-answer acceptance harness as a REQUIRED CI gate
-   (ordered live growth with Stop visible, deterministic multi-chunk
-   fixture, settlement, one persisted reply, same-session reload, real
-   window close); identifier-free ordinary logs.
+6. **P1 — the Qt/IPC seam for the next cycle is DEFINED (documentation
+   only; nothing ships).** The typed, coarse-grained boundary between a
+   future Qt (C++/QML) shell and the unchanged Go core is specified in
+   ARCHITECTURE.md: one secured local transport for control + streaming
+   (the loopback capability-token discipline, reused, not copied as a
+   second authority), versioned message shapes, least-privilege auth,
+   no unauthenticated local API, no arbitrary host binding; shared
+   memory / zero-copy only where the Phase 0 harness proves a
+   payload-size win. Exactly what is and is NOT ready is listed there.
+   No Qt code ships in v1.10.0; the Wails shell remains the production
+   UI.
+
+7. **Carried forward (unchanged):** the v1.9.5 loopback activity
+   transport and capability token (single route, ephemeral, loopback
+   only, token on the same-origin discovery path only, strict
+   origin/host validation, visible degraded-streaming reporting); the
+   opt-in sanitized stream trace (lengths only); the Windows live-answer
+   acceptance as a REQUIRED gate (ordered live growth with Stop visible,
+   deterministic multi-chunk fixture, settlement with exactly one
+   persisted reply, same-session reload, real window close); the v1.9.6
+   admission claim placement at the variant transaction's destructive
+   boundary; identifier-free ordinary logs (no `runId=` / `session=`
+   reintroduction).
 
 ## Current measured baseline (honest)
 
-Recorded on the v1.9.6 authoring host (hosted Linux CI-class VM — NOT
-physical consumer hardware; run `go run ./cmd/shtn-perf` on a real
-target host for the physical baseline):
+Recorded in this session (hosted Linux CI-class container — NOT physical
+consumer hardware; artifact:
+`baselines/perf-hosted-ci-v1.10.0.json`, method + limitations embedded):
 
-* `cold_start_to_interactive_ms`: measured (api.New + EnsureSetup
-  boundary; the GUI shell adds its own window cost — that boundary is
-  the Windows live-answer acceptance surface).
-* `idle_memory_mb` / `peak_memory_mb`: measured (process RSS/VmHWM,
-  server-only posture; excludes the WebView process).
-* `engine_ready_ms`, `warm_ttft_ms`, `stream_duration_ms`:
-  NOT MEASURED in this session — no serving llama-server binary and no
-  real model on the authoring host; the runner labels them honestly
-  instead of inventing numbers.
-* `stream_chunk_to_visible_ms`: NOT MEASURED — the token→visible-DOM
-  boundary requires the real desktop shell (Windows live-answer
-  acceptance surface).
+* `cold_start_to_interactive_ms`: MEASURED — 1.4 ms (api.New +
+  EnsureSetup boundary on the hosted host; the GUI shell adds its own
+  window cost, measured by the desktop acceptance surface). Target
+  < 800 ms is met on THIS host only — not a product-wide claim.
+* `idle_memory_mb` / `peak_memory_mb`: MEASURED — 16.5 MB (process
+  RSS/VmHWM, server-only posture; excludes the WebView process). The
+  < 80 MB preference is met on THIS host only.
+* `engine_ready_ms`, `warm_ttft_ms`, `stream_duration_ms`: NOT MEASURED
+  — no serving llama-server binary and no real model on this host.
+* `stream_chunk_to_visible_ms`: NOT MEASURED — requires the real desktop
+  shell (the Windows live-answer acceptance surface).
 * `tool_round_trip_ms`, `file_output_overhead_ms`: NOT MEASURED — no
   agent tool round executed by the perf runner.
 
-R&D §4 targets (<0.8 s cold start, <16 ms token→visible, <80 MB idle,
-warm TTFT at or better than managed llama.cpp) are recorded as TARGETS
-with measured gaps — never as achievements. Native C++ engine
-promotion: NOT flipped in v1.9.6; the existing capability/parity gates
-are the v1.10.0 Phase 1 promotion gate (see ROADMAP.md).
+R&D §4 targets remain TARGETS. The native-engine warm-TTFT comparison
+(native vs managed llama.cpp on physical Windows hardware) is the
+specific blocking evidence for the Phase 1 default promotion.
 
 ## Verification evidence (classes kept separate)
 
-* **Local, v1.9.6 release session (Linux authoring host):** canonical
+* **Local, v1.10.0 release session (Linux hosted container):** canonical
   version gate green (`node scripts/release-version.mjs --check` at
-  1.9.6); Go `build -tags headless ./internal/... ./cmd/... .` clean;
-  `go test ./internal/... -tags headless -count=1` all packages ok; the
-  two authoritative Windows-regression tests pass with `-count=5`
-  (determinism proof); the focused admission/rungate/variant/runtime
-  transaction suites pass (including the revised v1.9.6 boundary pins
-  and the full archive-seam runtime choreography); `go vet` clean on
-  touched packages; `internal/perf` unit suite green; frontend
-  typecheck/lint/unit/release results and the C++ native build/ctest
-  results recorded in `worklog.md`.
-* **UNVERIFIED in the v1.9.6 session (hosted CI executes them; no local
-  evidence exists and none is claimed):** the Windows live-answer
-  acceptance (no Windows host here), the Linux native window smoke
-  (no GTK4/WebKitGTK headers and no root here), the packaged
-  browser-E2E matrix, and the physical-hardware performance baseline.
-* **CI:** the authoritative verdict for v1.9.6 is the Actions run that
-  carries this revision. v1.9.5's run (38095637817) FAILED both
-  platform jobs and is not a green baseline; no green-run claim is made
-  for v1.9.6 until that run exists. Local green is not CI green; Linux
-  green is not Windows green; hosted-CI numbers are not physical
-  benchmarks.
+  1.10.0); frontend `typecheck` / `lint` (0 findings) / `test:units`
+  (236/236) / `test:release` (38/38) / clean `build` /
+  `verify:web` green; native C++ clean cmake configure + build with
+  `ctest --output-on-failure` 13/13 (including bit-for-bit prefill
+  parity); `go test ./internal/llm/ -run 'TestUpdateNow|TestAdmission|TestNilGate'
+  -count=1` 9/9 (the four new v1.10.0 pins + the v1.9.6/v1.9.5 pins
+  unchanged); `GOOS=windows go build/vet ./internal/desktop/` clean (the
+  repaired shell compiles for Windows); `go vet ./internal/desktop/`
+  clean (headless); `cmd/shtn-perf` baseline captured. Exact commands
+  and results are recorded in `worklog.md`.
+* **UNVERIFIED in this session (honestly):** the Windows desktop smoke +
+  live-answer acceptance on real Windows (no Windows host here — the fix
+  is derived from the pinned wails sources and the step timing), the
+  Linux Xvfb window smoke (no GTK4/WebKitGTK headers and no root in this
+  container — the WM repair follows this run's own X11 evidence class),
+  the full packaged browser-E2E matrix, and the physical-hardware
+  baseline. Local green is not CI green; Linux green is not Windows
+  green; hosted-CI numbers are not physical benchmarks.
+* **CI:** this session does NOT push and therefore has NO Actions run
+  for v1.10.0. The authoritative verdict is the first Actions run that
+  carries this revision; until it exists, no green-run claim is made for
+  v1.10.0. The v1.9.6 run (`38135751846`) is a FAILED baseline for both
+  platform jobs and is cited only as the failure evidence this release
+  repairs.

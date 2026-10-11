@@ -63,8 +63,19 @@ if (!exe || !existsSync(exe)) {
 }
 
 // CDP debugging port (test-only). Free port chosen by the OS to avoid
-// collisions; WebView2 accepts --remote-debugging-port via the
-// WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS environment variable.
+// collisions.
+//
+// v1.10.0 TRANSPORT REPAIR (run 38135751846): the switch NO LONGER
+// travels through WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS. Wails v3's
+// default pure-Go WebView2 loader pins that environment variable to the
+// empty string at package init (webviewloader.preventEnvAndRegistryOverrides),
+// so the value was erased inside the app process before any WebView2
+// environment existed — the CDP endpoint never opened and this harness
+// burned its full bounded attach window (the authoritative failure).
+// The desktop shell now forwards SHEYTAN_ACCEPTANCE_CDP_PORT into the
+// programmatic application.Options.Windows.AdditionalBrowserArgs (the
+// one channel Wails composes itself) — see internal/desktop/desktop.go.
+// The switch stays TEST-ONLY: production launches never set it.
 const cdpPort = process.env.SHEYTAN_ACCEPTANCE_CDP_PORT ?? "9223";
 
 const artifactsDir = resolve(here, "../e2e/.artifacts/windows-acceptance");
@@ -85,7 +96,7 @@ const PROMPT =
   "acceptance stream test: list the numbers from 1 to 40, one per line";
 
 // Minimal CDP-over-WebSocket client (dependency: the declared `ws` package).
-async function connectCDP(port, attemptsMs = 60000) {
+async function connectCDP(port, attemptsMs = 60000, stdout = null) {
   const { default: WebSocket } = await import("ws");
 
   const end = deadline(attemptsMs);
@@ -137,7 +148,30 @@ async function connectCDP(port, attemptsMs = 60000) {
     await sleep(250);
   }
 
-  throw new Error("CDP endpoint never appeared");
+  // v1.10.0: the bounded attach window closing is a DIAGNOSABLE failure.
+  // The dump carries process liveness and output LENGTHS only (never
+  // content), so the failure distinguishes "app died before WebView2
+  // booted" from "WebView2 booted without the debugging endpoint".
+  let outLen = -1;
+  if (stdout && typeof stdout.reduce === "function") {
+    outLen = stdout.reduce((n, d) => n + d.length, 0);
+  }
+
+  const appAlive = (() => {
+    try {
+      return process.kill(proc.pid, 0);
+    } catch {
+      return false;
+    }
+  })();
+
+  throw new Error(
+    `CDP endpoint never appeared on 127.0.0.1:${port} within the bounded ` +
+      `attach window (app pid ${proc?.pid ?? "?"}, alive=${appAlive}, ` +
+      `outputBytes=${outLen}). Verify the desktop shell received ` +
+      `SHEYTAN_ACCEPTANCE_CDP_PORT and forwarded --remote-debugging-port ` +
+      `into WebView2 (internal/desktop/desktop.go acceptanceCDPPort).`,
+  );
 }
 
 async function evalJS(cdp, expression, awaitPromise = true) {
@@ -357,7 +391,10 @@ async function main() {
   const proc = spawn(exe, [], {
     env: {
       ...process.env,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdpPort}`,
+      // TEST-ONLY CDP switch consumed by the desktop shell (see
+      // internal/desktop/desktop.go — forwarded into the programmatic
+      // WebView2 additional-browser-args channel).
+      SHEYTAN_ACCEPTANCE_CDP_PORT: cdpPort,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -372,8 +409,12 @@ async function main() {
     exitCode = 1;
   };
 
+  // connectCDP's timeout diagnostic reads the captured output lengths —
+  // keep the buffers visible to it (sanitized: lengths only, never content).
+  const stdoutRef = stdout;
+
   try {
-    const cdp = await connectCDP(Number(cdpPort));
+    const cdp = await connectCDP(Number(cdpPort), 60000, stdoutRef);
     log("CDP attached:", cdp.targetUrl);
 
     // 0. Arm the opt-in stream trace BEFORE app modules load: seed

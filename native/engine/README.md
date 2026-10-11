@@ -22,13 +22,17 @@ backend, with managed llama.cpp as the automatic honest fallback. The
 runtime mechanism already exists (`NativeBackendEnabled` selects
 native-first in `internal/api/selection.go`, falling back to llama on
 unsupported models/capabilities or verified failure) — but the DEFAULT
-is NOT flipped in v1.9.6. Promotion to preferred/primary happens only
-when the v1.10.0 Phase 1 evidence gate is met: full supported-model /
-request / streaming / cancellation / sampling coverage, bit-for-bit
-prefill/KV parity on real hardware, and TTFT at or better than managed
-llama.cpp on the committed Phase 0 baseline (`internal/perf` +
-`cmd/shtn-perf`). Until then this engine is an ALTERNATIVE backend with
-proven parity tests — never described as primary in docs or claims.
+is NOT flipped in v1.10.0 (and was not flipped in v1.9.6). v1.10.0
+evidence status: the CTest suites pass 13/13 on the hosted Linux CI-class
+host (including bit-for-bit prefill/KV parity), and the browser E2E
+stack exercises this engine end-to-end with the canonical fixture model.
+The REMAINING gate for the default flip is specific: the warm-TTFT
+comparison against managed llama.cpp on physical Windows target
+hardware through the committed Phase 0 harness (`internal/perf` +
+`cmd/shtn-perf`), alongside the full supported-model / request /
+streaming / cancellation / sampling coverage evidence. Until that
+evidence exists this engine is an ALTERNATIVE backend with proven
+parity tests — never described as primary in docs or claims.
 
 ## Status (read literally — ARCHITECTURE.md Part III truth standard)
 

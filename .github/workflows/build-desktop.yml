@@ -1351,6 +1351,7 @@ jobs:
             xvfb \
             xdotool \
             x11-utils \
+            openbox \
             zip \
             unzip \
             file
@@ -1637,11 +1638,14 @@ jobs:
           # window manager sends for the title-bar X button). SIGTERM is
           # only the failing-run backstop; the GATE is the window close.
           xvfbPid=""
+          wmPid=""
           appPid=""
           cleanup() {
             [ -n "$appPid" ] && kill -TERM "$appPid" 2>/dev/null || true
+            [ -n "$wmPid" ] && kill -TERM "$wmPid" 2>/dev/null || true
             [ -n "$xvfbPid" ] && kill -TERM "$xvfbPid" 2>/dev/null || true
             [ -n "$appPid" ] && wait "$appPid" 2>/dev/null || true
+            [ -n "$wmPid" ] && wait "$wmPid" 2>/dev/null || true
             [ -n "$xvfbPid" ] && wait "$xvfbPid" 2>/dev/null || true
           }
           trap cleanup EXIT
@@ -1658,6 +1662,50 @@ jobs:
             sleep 0.25
           done
           test -S "/tmp/.X11-unix/X${displayNum}"
+
+          # v1.10.0 WM REPAIR — the first REAL fix for the bare-Xvfb window
+          # class this gate has failed on in every run (38095637817 v1.9.5,
+          # 38135751846 v1.9.6). The v1.9.6 software-renderer switches
+          # (GSK_RENDERER=cairo + the WebKitGTK switches below) did NOT
+          # change the outcome: this run's own X11 evidence dump shows the
+          # app pid owning windows that are created but never MAPPED —
+          # under bare Xvfb (no window manager) the GTK4 top-level on this
+          # stack stalls before the map. That is an environment
+          # prerequisite of the normal user-visible path (every real Linux
+          # desktop session runs a window manager — the app is NOT changed
+          # for CI), so the smoke step now provides the missing session
+          # piece: a real lightweight WM (openbox), started HERE, owned
+          # HERE and cleaned up HERE. The GATE is unchanged: a real
+          # visible, pid-owned top-level window + delivered
+          # WM_DELETE_WINDOW + orderly exit 0.
+          wmLog="$smokeDir/openbox.log"
+          DISPLAY=":${displayNum}" openbox >"$wmLog" 2>&1 &
+          wmPid=$!
+
+          # Readiness = the WM actually TOOK MANAGING OWNERSHIP of the
+          # screen: the EWMH _NET_SUPPORTING_WM_CHECK root property is set
+          # by the WM itself (openbox is EWMH-compliant). Bounded poll —
+          # no fixed sleeps for correctness.
+          wmReady=0
+          for _ in $(seq 1 40); do
+            kill -0 "$wmPid" 2>/dev/null || {
+              echo "--- openbox died at startup ---"
+              cat "$wmLog" || true
+              exit 1
+            }
+            if DISPLAY=":${displayNum}" xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null \
+              | grep -q "window id"; then
+              wmReady=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$wmReady" -ne 1 ]; then
+            echo "--- runtime smoke: no window manager took ownership of :${displayNum} ---"
+            cat "$wmLog" || true
+            exit 1
+          fi
+          echo "--- window manager active on :${displayNum} (openbox pid $wmPid) ---"
 
           # v1.9.6 SMOKE ENVIRONMENT REPAIR — the first real CI execution of
           # this gate (authoritative run 38095637817) failed with the exact
@@ -1744,6 +1792,10 @@ jobs:
             DISPLAY=":${displayNum}" xdotool search --all --pid "$appPid" 2>/dev/null || true
             echo "--- smoke environment keys (values are non-secret renderer/display switches) ---"
             env | grep -E '^(DISPLAY|GSK_RENDERER|WEBKIT_DISABLE_DMABUF_RENDERER|WEBKIT_DISABLE_COMPOSITING_MODE)=' || true
+            echo "--- window manager ownership of the display (openbox pid ${wmPid:-none}) ---"
+            DISPLAY=":${displayNum}" xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null || true
+            echo "--- window manager log ---"
+            cat "$smokeDir/openbox.log" 2>/dev/null || true
             cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
             tail -40 "$dataDir/logs/app.log" 2>/dev/null || true
             exit 1

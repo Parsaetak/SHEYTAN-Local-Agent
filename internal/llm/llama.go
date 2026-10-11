@@ -2865,6 +2865,71 @@ func (s *LlamaServer) UpdateEngineNow(
 
         defer lease.Release()
 
+        // v1.10.0 RUN-COORDINATION — EARLY advisory refusal (no claim
+        // taken), the SAME semantics the variant transaction has had since
+        // v1.9.4/v1.9.6: a run registered right now refuses the update
+        // before ANYTHING happens — before the lifecycle stop, before the
+        // install window, before any state transition. The registry read
+        // is read-only here so this fast path can never leak a claim.
+        if s.runActiveNow() {
+                logging.Default().Warn("updater",
+                        "engine update refused: a run is active — the serving engine is never stopped under a live generation")
+
+                return "", ErrEngineBusyWithRun
+        }
+
+        // v1.10.0 ADMISSION CLAIM — AT THE DESTRUCTIVE BOUNDARY. This
+        // closes the standing v1.9.6 admission-seam gap: UpdateEngineNow
+        // (the same-tag/scheduled update transaction) stopped the engine
+        // WITHOUT the run-admission claim the variant transaction takes,
+        // so a run could be admitted onto an engine that was about to be
+        // stopped (or was down for the install window) instead of being
+        // refused deterministically (HTTP 503, errEngineMutationInProgress).
+        // The SAME claim primitives, the SAME balance-on-every-exit
+        // discipline and the SAME live-verdict refusal semantics as
+        // updateEngineVariantTx: the claim is taken atomically with the
+        // live-run verdict here — immediately before the first destructive
+        // step (the stop) — and released exactly once on every exit path.
+        // Unlike the variant transaction there is NO claim-free download
+        // window to protect: this transaction's install phase runs with
+        // the engine already stopped, so the claim correctly spans the
+        // whole window in which the product cannot serve. Callers treat
+        // the refusal as a deferral (the AUTO probe pattern): a temporary
+        // condition, never persisted as a bounded failure.
+        s.mu.Lock()
+        admission := s.admission
+        s.mu.Unlock()
+
+        if admission != nil {
+                if live := admission.BeginEngineMutation(); live {
+                        logging.Default().Warn("updater",
+                                "engine update refused at its destructive boundary: a run is active — the serving engine is never stopped under a live generation")
+
+                        return "", ErrEngineBusyWithRun
+                }
+
+                s.mu.Lock()
+                s.mutationClaimed = true
+                s.mu.Unlock()
+
+                defer func() {
+                        s.mu.Lock()
+                        s.mutationClaimed = false
+                        s.mu.Unlock()
+
+                        admission.EndEngineMutation()
+                }()
+        } else if s.runActiveNow() {
+                // Historical seam (no admission authority — some tests,
+                // headless): the destructive-boundary re-check alone closes
+                // the between-checks registration race, exactly as the
+                // variant transaction's nil-seam path does.
+                logging.Default().Warn("updater",
+                        "engine update refused at its destructive boundary: a run is active — the serving engine is never stopped under a live generation")
+
+                return "", ErrEngineBusyWithRun
+        }
+
         wasRunning := s.IsRunning()
 
         s.mu.Lock()

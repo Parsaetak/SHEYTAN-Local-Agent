@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.6 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.0 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,41 +7,40 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.9.6 — the FINAL planned 1.9.x maintenance release
-(the next release is v1.10.0; no v1.9.7 is planned).** It repairs both
-authoritative v1.9.5 CI failures at their roots: (P0) the Windows
-admission-hostage 503 regression — the v1.9.5 engine-mutation claim was
-taken at TRANSACTION START, so the background AUTO Vulkan bootstrap held
-run admission across its network resolve/download phase on windows/amd64
-(Linux was immune: `VariantSupported(Vulkan)` is false there); the claim
-now lives AT THE DESTRUCTIVE BOUNDARY (stop → swap → start → verify →
-rollback/commit) with the pre-boundary phases claim-free and an
-unconditional early advisory live-run refusal — the destructive-window
-pins are `internal/llm/admission_boundary_v196_test.go`, and the two
-local-chat E2E fixtures pin an explicit CPU profile so the unrelated
-probe is out of the pinned contract; (P0) the Linux desktop smoke — the
-smoke step now owns the documented bare-Xvfb software-renderer
-environment (`WEBKIT_DISABLE_DMABUF_RENDERER=1`,
-`WEBKIT_DISABLE_COMPOSITING_MODE=1`, `GSK_RENDERER=cairo`) and dumps the
-X11 tree on failure; the gate itself is unchanged and stays REQUIRED.
-It also adopts the R&D architecture decision
+**Current release: v1.10.0 — the FIRST release of the R&D architecture
+cycle.** The production UI remains the Wails shell; Qt is the documented
+Phase 2 target, not a shipped replacement. v1.10.0 repairs both v1.9.6
+CI failure classes at their roots and closes the standing admission-seam
+gap: (P0) the Windows live-answer acceptance now works because the
+TEST-ONLY CDP switch travels through
+`application.Options.Windows.AdditionalBrowserArgs`
+(`internal/desktop/desktop.go` reads `SHEYTAN_ACCEPTANCE_CDP_PORT`) —
+the old `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` channel is pinned to the
+empty string at package init by Wails' default pure-Go WebView2 loader
+(`webviewloader.preventEnvAndRegistryOverrides`), which was the
+authoritative run `38135751846` failure mechanism; (P0) the Linux Xvfb
+smoke step now installs and owns a real lightweight WM (`openbox`),
+because v1.9.6's X11 evidence shows the GTK4 top-level created but never
+mapped under bare Xvfb — the gate itself is unchanged; (P0)
+`UpdateEngineNow` (same-tag/scheduled update) now takes the SAME
+destructive-boundary admission claim as the variant transaction
+(`internal/llm/admission_updatenow_v1100_test.go` pins it; the v1.9.6
+boundary pins in `admission_boundary_v196_test.go` stay unchanged). The
+R&D decision
 (`Parsaetak/Contents` → `Research-and-Development` →
-`SHEYTAN-LA-2026-10-11.md`): Go stays the single orchestration
-authority; C++ owns numerical inference (promotion gated on
-capability/parity evidence — the default is NOT flipped); Qt (C++/QML)
-is the primary UI target for v1.10+; the first vertical slice is the
-measurement baseline framework (`internal/perf` + `cmd/shtn-perf`,
-honest NOT-MEASURED semantics, targets reported as gaps). Version
-identity is exactly `1.9.6` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.9.5
+`SHEYTAN-LA-2026-10-11.md`) remains the direction authority: Go stays
+the single orchestration authority; C++ owns numerical inference; the
+native-engine DEFAULT promotion is NOT flipped in v1.10.0 — the
+blocking evidence is the physical-Windows warm-TTFT comparison against
+managed llama.cpp (checklist in ROADMAP.md); the Phase 0 baseline lives
+in `baselines/perf-hosted-ci-v1.10.0.json` + `worklog.md` (hosted-CI
+labeled, NOT-MEASURED honesty per metric); the Qt/IPC seam is DEFINED in
+ARCHITECTURE.md (documentation only, nothing ships). Version identity is
+exactly `1.10.0` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.9.6
 current-release claims exist outside `changelog.md`.
 
-**KNOWN LIMITATION (honest, v1.10.0 gate item):** `UpdateEngineNow`
-(same-tag/scheduled update transaction) does not yet participate in the
-admission claim seam — only the variant transaction does. Do not assume
-the scheduled updater's later passes are run-admission-coordinated.
-
-**WHAT v1.9.6 CHANGED (the regression-sensitive surfaces):**
+**WHAT v1.10.0 CHANGED (the regression-sensitive surfaces):**
 
 1. **The variant transaction order** (`internal/llm/llama.go`,
    `updateEngineVariantTx`): early live-run refusal (no claim) →
@@ -100,6 +99,25 @@ the scheduled updater's later passes are run-admission-coordinated.
    `gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` +
    `events`/`deltas`/`firstDeltaMs`. `publishMs` is retired — do not
    reintroduce it.
+
+7. **The TEST-ONLY WebView2 CDP seam** (`internal/desktop/desktop.go`,
+   `acceptanceCDPPort` + the `WindowsOptions.AdditionalBrowserArgs`
+   forward): the acceptance harness's CDP switch
+   (`SHEYTAN_ACCEPTANCE_CDP_PORT`) MUST travel this programmatic
+   channel — never `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, which the
+   Wails pure-Go loader pins to "" at package init. Keep the switch
+   digits-only, bounded, inert when unset, and keep production launchers
+   from ever setting it. Pins: none in Go (env-gated); the harness
+   (`scripts/windows-live-answer-acceptance.mjs`) documents the
+   mechanism and its sanitized CDP-timeout diagnostic.
+
+8. **The UpdateEngineNow admission seam** (`internal/llm/llama.go`,
+   `UpdateEngineNow`): early advisory refusal → boundary claim (same
+   primitives as `updateEngineVariantTx`) → stop/install/start under the
+   claim → balanced release on every exit. Pins:
+   `internal/llm/admission_updatenow_v1100_test.go` — keep the
+   begin/end balance and the "refusal never stops a serving engine"
+   guarantees when touching this transaction.
 
 1. **Governor CPU policy contract** (`internal/governor/governor.go`,
    pinned by tests in BOTH directions): the envelope's CPU-reduction

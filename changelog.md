@@ -11,6 +11,82 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.0 — 2026-10-11 — the FIRST R&D-cycle release: both v1.9.6 CI failure classes repaired at the root (P0), the UpdateEngineNow admission-seam gap closed (P0), the evidence-gated Phase 1 decision + the honest Phase 0 baseline + the Qt/IPC seam (P1)
+
+Focus: deliver the first release of the R&D architecture cycle
+(`Parsaetak/Contents` → `Research-and-Development` →
+`SHEYTAN-LA-2026-10-11.md`, unchanged in its source repository) by
+removing the two demonstrated v1.9.6 CI failures so both platform
+desktop gates can genuinely finish, completing the admission seam the
+v1.9.6 release documented as standing, and taking the honest
+measurement/evidence steps of R&D Phases 0 and 1. The production UI
+remains the Wails shell; Qt is the documented Phase 2 target. No
+v1.9.7 exists or is implied.
+
+1. **P0 — Windows live-answer acceptance: the CDP test switch never
+   reached WebView2 (run `38135751846`).** The step failed after a green
+   desktop runtime smoke with the timing signature of the harness's full
+   bounded 60 s CDP attach window (~75 s step total). Root cause derived
+   from the pinned wails v3.0.0-beta.16 sources: the default pure-Go
+   WebView2 loader pins `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` to the
+   empty string at package init (`webviewloader.preventEnvAndRegistryOverrides`),
+   erasing the harness's environment-variable switch before any WebView2
+   environment existed. Repair: the desktop shell now forwards the
+   TEST-ONLY `SHEYTAN_ACCEPTANCE_CDP_PORT` into the programmatic
+   `application.Options.Windows.AdditionalBrowserArgs`
+   (`internal/desktop/desktop.go`) — the one channel Wails composes
+   itself — and the harness sets exactly that variable. Shape-checked
+   (digits, bounded), inert in production, sanitized length-only failure
+   diagnostics. Gate contract unchanged.
+
+2. **P0 — Linux desktop runtime smoke: a real window manager, owned by
+   the smoke step.** v1.9.6's own X11 evidence (created-but-unmapped
+   windows owned by the app pid; both v1.9.5 and v1.9.6 failing
+   identically despite the renderer switches) classifies the failure as
+   the GTK4 top-level not mapping under bare Xvfb without a WM. The
+   smoke step now installs and runs `openbox` on its display, proves WM
+   ownership through the EWMH `_NET_SUPPORTING_WM_CHECK` root property
+   (bounded poll), and cleans it up with the existing trap. Gate
+   unchanged (visible pid-owned window, WM_DELETE_WINDOW, exit 0, full
+   failure diagnostics). Product unchanged for CI; no gate weakened.
+
+3. **P0 — UpdateEngineNow joins the destructive-boundary admission seam.**
+   The same-tag/scheduled update transaction previously stopped the
+   engine without the run-admission claim. v1.10.0 applies the same
+   early advisory refusal, the same boundary claim (atomically with the
+   live verdict, before the first destructive step), the same
+   balance-on-every-exit release, and the same nil-seam boundary
+   re-check; refusals are deferrals, never persisted bounded failures.
+   One authority unchanged: `BeginEngineMutation`/`EndEngineMutation` +
+   `EngineMutationActive`. Pinned by
+   `internal/llm/admission_updatenow_v1100_test.go` (five deterministic
+   pins); the v1.9.6 and v1.9.5 pins stay green unchanged.
+
+4. **P1 — R&D Phase 1 (native promotion) decided by evidence: NOT
+   flipped.** Native C++ CTest 13/13 locally including bit-for-bit
+   prefill/KV parity; the native engine is exercised end-to-end by the
+   browser E2E stack; `NativeBackendEnabled` keeps native as an explicit
+   opt-in with managed llama.cpp automatic fallback. The blocking
+   evidence for the default flip is specific: the warm-TTFT comparison
+   against managed llama.cpp on physical Windows target hardware, per
+   the R&D measurement contract. Checklist in ROADMAP.md.
+
+5. **P1 — R&D Phase 0 baseline recorded honestly.**
+   `baselines/perf-hosted-ci-v1.10.0.json`: cold start + idle/peak
+   memory measured on the hosted host; engine-ready / warm-TTFT /
+   stream-to-visible / tool / file metrics NOT MEASURED with per-metric
+   reasons. Hosted-CI labeled; targets remain targets.
+
+6. **P1 — the Qt/IPC seam is defined (documentation only).** ARCHITECTURE.md
+   now specifies the typed, coarse-grained, versioned local boundary for
+   the future Qt shell: secured local socket/pipe, the loopback
+   capability-token auth discipline (reused, never duplicated as a
+   second authority), no unauthenticated local API, shared memory only
+   where profiling proves a win, and an explicit NOT-ready list. No Qt
+   code ships in v1.10.0.
+
+---
+
 ## v1.9.6 — 2026-10-11 — the FINAL 1.9.x maintenance release: the Windows admission-hostage regression (P0), the Linux native-window smoke repair (P0), the R&D alignment + the measurement baseline (P1)
 
 Focus: deliver the last planned v1.9.x release as a trustworthy bridge

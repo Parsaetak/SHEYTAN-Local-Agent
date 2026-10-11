@@ -72,43 +72,67 @@ Evidence: `changelog.md` v1.9.6, `worklog.md` (v1.9.6 session),
 `internal/updater/install.go` (`DownloadEngineArchiveStaged`),
 `internal/perf/`, `cmd/shtn-perf/`.
 
-## v1.10.0 — the R&D migration plan (phases, gates, dependencies, risks)
+## v1.10.0 — the R&D migration plan (phases, gates, dependencies, risks) — v1.10.0 DELIVERED the first slice
 
 Authoritative source: `SHEYTAN-LA-2026-10-11.md` (§8 migration roadmap,
 §9 risks, §10 measurement framework). This section is the executable
-plan; NO phase below is started until its entry gate is met in this
+plan; NO phase below advances until its entry gate is met in this
 repository.
 
-**Phase 0 — measurement baseline (STARTED in v1.9.6).**
-Instrument: `internal/perf` + `cmd/shtn-perf` (shipped). Remaining:
-capture the physical Windows baseline on real consumer hardware (cold
-start to interactive, warm TTFT, streaming latency, idle/peak memory,
-tool round-trip, file output overhead) with the host/model/quantization
-metadata the envelope requires; hosted-CI numbers stay labeled
-hosted-CI. GATE: a committed physical baseline artifact; every
-subsequent change must beat or explain its delta against it.
-DEPENDENCY: a real Windows host + a serving engine binary + a real
-model. RISK: VM-vs-physical divergence — mitigated by the envelope's
-hosted-CI label and limitation fields.
+**v1.10.0 delivery status (read literally):** the standing
+UpdateEngineNow admission-seam item is CLOSED (the same-tag/scheduled
+transaction now takes the same destructive-boundary claim; pins:
+`internal/llm/admission_updatenow_v1100_test.go`). Phase 0 recorded its
+first committed artifact (`baselines/perf-hosted-ci-v1.10.0.json`,
+hosted-CI labeled). Phase 1 collected evidence but did NOT flip the
+default (below). The Qt/IPC seam is DEFINED in ARCHITECTURE.md —
+documentation only, nothing ships.
+
+**Phase 0 — measurement baseline (IN PROGRESS).**
+Instrument: `internal/perf` + `cmd/shtn-perf` (shipped). Done: the
+hosted-CI posture captured (cold start, idle/peak memory measured;
+generation-path metrics honestly NOT MEASURED with per-metric reasons).
+Remaining: capture the physical Windows baseline on real consumer
+hardware (cold start to interactive, warm TTFT, streaming latency,
+idle/peak memory, tool round-trip, file output overhead) with the
+host/model/quantization metadata the envelope requires; hosted-CI
+numbers stay labeled hosted-CI. GATE: a committed physical baseline
+artifact; every subsequent change must beat or explain its delta
+against it. DEPENDENCY: a real Windows host + a serving engine binary +
+a real model. RISK: VM-vs-physical divergence — mitigated by the
+envelope's hosted-CI label and limitation fields.
 
 **Phase 1 — promote the native C++ engine to the preferred backend
 where evidence proves it.** The promotion MECHANISM exists today
 (`NativeBackendEnabled` selects native-first with managed llama.cpp as
-the automatic fallback — see `internal/api/selection.go`); v1.9.6 does
-NOT flip the default. GATE: full supported-model/request/streaming/
-cancellation/sampling coverage plus bit-for-bit prefill/KV parity
-(existing CTest parity suites) green on real hardware, TTFT at or
-better than managed llama.cpp on the Phase 0 baseline, and real
-generation + first-token visibility + cancellation + error-recovery
-proven through the runtime contract. DEPENDENCY: Phase 0 numbers;
-the engine lease/manifest authority stays the ONE installer authority.
-RISK: numerical drift — mitigated by the mandatory parity gates; scope
-creep — mitigated by the phase gate (no new features until targets).
+the automatic fallback — see `internal/api/selection.go`); v1.10.0 does
+NOT flip the default. Evidence collected in v1.10.0: native C++ CTest
+13/13 on the hosted Linux CI-class host including bit-for-bit
+prefill/KV parity; the browser E2E stack exercises the native engine
+end-to-end with the canonical fixture model. REMAINING GATE (all items
+required before the default flip, in this order):
 
-**Phase 2 — Qt (C++/QML) shell over the unchanged Go core.** First
-evaluate a secured local socket/pipe IPC for control + streaming
-(`QLocalSocket`-class transport); shared memory / zero-copy only where
-profiling demonstrates a payload-size gain. The Go API remains the ONLY
+1. warm TTFT at or better than managed llama.cpp, measured on physical
+   Windows target hardware through the Phase 0 harness (the SAME host,
+   model, quantization and context for both backends, nearest-rank
+   P50/P95 recorded in the envelope);
+2. full supported-model/request/streaming/cancellation/sampling
+   coverage green through the runtime contract on that host;
+3. real generation with first-token visibility, cancellation and error
+   recovery proven on the packaged desktop path;
+4. the committed physical Phase 0 baseline artifact for reference.
+
+DEPENDENCY: Phase 0 numbers; the engine lease/manifest authority stays
+the ONE installer authority. RISK: numerical drift — mitigated by the
+mandatory parity gates; scope creep — mitigated by the phase gate (no
+new features until targets).
+
+**Phase 2 — Qt (C++/QML) shell over the unchanged Go core.** The IPC
+seam is now DEFINED (ARCHITECTURE.md, "The Qt/IPC seam"): secured local
+socket/pipe for control + streaming with the loopback capability-token
+auth discipline, versioned coarse-grained message shapes mirroring the
+HTTP/WS surface; shared memory / zero-copy only where profiling
+demonstrates a payload-size gain. The Go API remains the ONLY
 authority — the shell must not grow a second run registry, session
 store, tool registry, downloader, scheduler or policy authority. GATE:
 packaged Windows AND Linux launch/interaction/close proof through the
@@ -128,12 +152,6 @@ reproduced win the Qt path cannot reach.
 **Phase 4 — multi-OS polish.** Linux and macOS stay first-class under
 the Qt shell; the same performance discipline applies everywhere.
 GATE: per-OS baselines recorded with the same envelope.
-
-**Standing v1.10.0 gate item (from the v1.9.6 audit):** wire
-`UpdateEngineNow` (same-tag/scheduled update transaction) into the same
-destructive-boundary admission claim the variant transaction uses —
-today only the variant transaction participates, and the scheduled
-updater's later passes are not run-admission-coordinated.
 
 ## v1.9.5 — hardening release (2026-10-11) — NO scope movement
 
