@@ -1,19 +1,21 @@
 package llm
 
-// admission_v195_test.go — v1.9.5 (P1): the engine-mutation ADMISSION
-// seam, pinned deterministically (no engine binary, no network):
+// admission_v195_test.go — v1.9.5 (P1), revised v1.9.6: the engine-mutation
+// ADMISSION seam, pinned deterministically (no engine binary, no network):
 //
-//   1. a transaction under an installed admission control TAKES the
-//      claim for the whole transaction window (resolve → … → rollback)
-//      and releases it exactly once on every exit path;
-//   2. the claim's `live` verdict is the destructive-boundary authority:
-//      a run active at claim time refuses the transaction with
-//      ErrEngineBusyWithRun and NEVER takes or releases a claim — the
-//      engine is untouched;
+//   1. NON-DESTRUCTIVE exits never touch admission: eligibility walks, the
+//      already-installed no-op and the early live-run refusal take and
+//      release NO claim (v1.9.6 moved the claim to the destructive
+//      boundary — the network/download phases must never hold run
+//      admission hostage); the destructive-boundary claim itself is pinned
+//      in admission_boundary_v196_test.go;
+//   2. the early registry refusal: a run active BEFORE the transaction
+//      refuses it with ErrEngineBusyWithRun and NEVER takes or releases a
+//      claim — the engine is untouched;
 //   3. EngineMutationActive mirrors the held claim (the advisory signal
 //      the API admission pre-checks read);
-//   4. the historical nil-seam behavior (no admission control) is
-//      preserved exactly: the destructive-boundary run gate alone.
+//   4. the historical nil-seam behavior is preserved: the
+//      destructive-boundary run gate alone.
 
 import (
 	"context"
@@ -50,53 +52,54 @@ func (f *fakeAdmission) EndEngineMutation() {
 	f.claimed.Store(false)
 }
 
-func TestAdmissionClaimHeldForWholeTransaction(t *testing.T) {
+func TestAdmissionNonDestructiveExitsNeverClaim(t *testing.T) {
 	s := newGateTestServer(t)
 
 	fa := &fakeAdmission{}
 	s.SetAdmissionControl(fa)
 
 	// Offline no-op transaction (fresh server, CPU variant already
-	// installed) — the claim must be visible DURING the transaction and
-	// released after it settles.
-	fa.claimed.Store(false)
-	claimSeenDuring := false
-
-	// Observe the claim from "outside" while the transaction runs: the
-	// no-op path is too fast to sample from another goroutine
-	// deterministically, so observe the seam's own mirror instead —
-	// EngineMutationActive is served from mutationClaimed, which the
-	// transaction sets exactly between Begin and End.
-	s.SetRunGate(nil)
-
+	// installed): the no-op is a NON-DESTRUCTIVE exit — nothing is
+	// stopped, swapped or started, so no run-admission claim may be
+	// taken for it (the v1.9.6 boundary contract; the pre-v1.9.6
+	// claim-at-start placement held the claim across the whole
+	// transaction window including the network phases).
 	_, err := s.updateEngineVariantTx(context.Background(), updater.VariantCPU, nil, nil)
 	if err != nil {
 		t.Fatalf("offline no-op transaction: %v", err)
 	}
 
-	if fa.begins.Load() != 1 {
-		t.Fatalf("BeginEngineMutation called %d times, want 1", fa.begins.Load())
+	if fa.begins.Load() != 0 {
+		t.Fatalf("BeginEngineMutation called %d times, want 0 (non-destructive exit never claims)", fa.begins.Load())
 	}
-	if fa.ends.Load() != 1 {
-		t.Fatalf("EndEngineMutation called %d times, want exactly 1 (released on the success path)", fa.ends.Load())
+	if fa.ends.Load() != 0 {
+		t.Fatalf("EndEngineMutation called %d times, want 0 (nothing to release)", fa.ends.Load())
 	}
 	if fa.claimed.Load() {
-		t.Fatal("claim still held after the transaction returned")
+		t.Fatal("claim held after a non-destructive exit")
 	}
 	if s.EngineMutationActive() {
-		t.Fatal("EngineMutationActive must be false after the transaction released the claim")
+		t.Fatal("EngineMutationActive must be false after a non-destructive exit")
 	}
-	_ = claimSeenDuring
 }
 
 func TestAdmissionLiveRunRefusesAndNeverClaims(t *testing.T) {
 	s := newGateTestServer(t)
 
 	// The serving engine is RUNNING: the coordination point is live.
+	// v1.9.6: the run-active refusal is the EARLY registry check (the
+	// same registry the admission claim reads), consulted read-only —
+	// the transaction is refused before anything happens and the
+	// admission seam is never engaged.
 	s.setState(StateRunning)
 
+	consulted := 0
+	s.SetRunGate(func() bool {
+		consulted++
+		return true
+	})
+
 	fa := &fakeAdmission{}
-	fa.liveAtBegin.Store(true)
 	s.SetAdmissionControl(fa)
 
 	_, err := s.updateEngineVariantTx(context.Background(), updater.VariantCPU, nil, nil)
@@ -104,8 +107,11 @@ func TestAdmissionLiveRunRefusesAndNeverClaims(t *testing.T) {
 		t.Fatalf("err = %v, want ErrEngineBusyWithRun", err)
 	}
 
-	if fa.begins.Load() != 1 {
-		t.Fatalf("BeginEngineMutation called %d times, want 1", fa.begins.Load())
+	if consulted != 1 {
+		t.Fatalf("run gate consulted %d times, want exactly 1 (early refusal)", consulted)
+	}
+	if fa.begins.Load() != 0 {
+		t.Fatalf("BeginEngineMutation called %d times, want 0 (refusal never claims)", fa.begins.Load())
 	}
 	if fa.ends.Load() != 0 {
 		t.Fatal("EndEngineMutation must NOT be called when no claim was taken")

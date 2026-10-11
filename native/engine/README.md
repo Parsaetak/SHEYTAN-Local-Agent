@@ -14,6 +14,22 @@ SHEYTAN Native API  (internal/native/engine — supervised host + IPC)
 C++ Native Engine   (THIS tree — the supervised heavy-compute/AI execution engine)
 ```
 
+## Promotion status (R&D 2026-10-11 — read literally)
+
+The R&D decision (`Parsaetak/Contents` → `Research-and-Development` →
+`SHEYTAN-LA-2026-10-11.md`) names THIS tree the future PRIMARY inference
+backend, with managed llama.cpp as the automatic honest fallback. The
+runtime mechanism already exists (`NativeBackendEnabled` selects
+native-first in `internal/api/selection.go`, falling back to llama on
+unsupported models/capabilities or verified failure) — but the DEFAULT
+is NOT flipped in v1.9.6. Promotion to preferred/primary happens only
+when the v1.10.0 Phase 1 evidence gate is met: full supported-model /
+request / streaming / cancellation / sampling coverage, bit-for-bit
+prefill/KV parity on real hardware, and TTFT at or better than managed
+llama.cpp on the committed Phase 0 baseline (`internal/perf` +
+`cmd/shtn-perf`). Until then this engine is an ALTERNATIVE backend with
+proven parity tests — never described as primary in docs or claims.
+
 ## Status (read literally — ARCHITECTURE.md Part III truth standard)
 
 **IMPLEMENTED + TESTED in Phase 1:**

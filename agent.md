@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.5 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.9.6 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,58 +7,96 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.9.5 — the v1.9.4 release-attempt repair: the
-acceptance harness false-proof paths removed and the harness wired as a
-REQUIRED Windows CI gate (P0), the loopback activity transport made
-least-privilege and authenticated (P0: exactly one route —
-`/ws/activity` — plus a per-server 256-bit capability token, strict
-origin/host validation, visible desktop degradation on discovery
-failure, `EnsureSetup` before the listener, single idempotent
-`closeLoopback`), the engine/run admission TOCTOU closed atomically
-(P1: the `llm.EngineAdmission` seam, deterministic 503 refusal with
-transcript restore, race-detector green), and the tree-wide
-identifier-free ordinary-log contract enforced (P1: `runId=`/`session=`
-removed from every production log line; `gpuEvent` carries an ephemeral
-`probe=` ordinal). Version identity is exactly `1.9.5` everywhere
-(canonical gate: `node scripts/release-version.mjs --check`). No stale
-1.9.4 current-release claims exist outside `changelog.md`.
+**Current release: v1.9.6 — the FINAL planned 1.9.x maintenance release
+(the next release is v1.10.0; no v1.9.7 is planned).** It repairs both
+authoritative v1.9.5 CI failures at their roots: (P0) the Windows
+admission-hostage 503 regression — the v1.9.5 engine-mutation claim was
+taken at TRANSACTION START, so the background AUTO Vulkan bootstrap held
+run admission across its network resolve/download phase on windows/amd64
+(Linux was immune: `VariantSupported(Vulkan)` is false there); the claim
+now lives AT THE DESTRUCTIVE BOUNDARY (stop → swap → start → verify →
+rollback/commit) with the pre-boundary phases claim-free and an
+unconditional early advisory live-run refusal — the destructive-window
+pins are `internal/llm/admission_boundary_v196_test.go`, and the two
+local-chat E2E fixtures pin an explicit CPU profile so the unrelated
+probe is out of the pinned contract; (P0) the Linux desktop smoke — the
+smoke step now owns the documented bare-Xvfb software-renderer
+environment (`WEBKIT_DISABLE_DMABUF_RENDERER=1`,
+`WEBKIT_DISABLE_COMPOSITING_MODE=1`, `GSK_RENDERER=cairo`) and dumps the
+X11 tree on failure; the gate itself is unchanged and stays REQUIRED.
+It also adopts the R&D architecture decision
+(`Parsaetak/Contents` → `Research-and-Development` →
+`SHEYTAN-LA-2026-10-11.md`): Go stays the single orchestration
+authority; C++ owns numerical inference (promotion gated on
+capability/parity evidence — the default is NOT flipped); Qt (C++/QML)
+is the primary UI target for v1.10+; the first vertical slice is the
+measurement baseline framework (`internal/perf` + `cmd/shtn-perf`,
+honest NOT-MEASURED semantics, targets reported as gaps). Version
+identity is exactly `1.9.6` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.9.5
+current-release claims exist outside `changelog.md`.
 
-**WHAT v1.9.4 CHANGED (the regression-sensitive surfaces):**
+**KNOWN LIMITATION (honest, v1.10.0 gate item):** `UpdateEngineNow`
+(same-tag/scheduled update transaction) does not yet participate in the
+admission claim seam — only the variant transaction does. Do not assume
+the scheduled updater's later passes are run-admission-coordinated.
 
-1. **Desktop loopback activity transport** (`internal/api/loopback.go`,
-   `src/config.ts`, `src/store.ts`, `internal/api/ws.go`): the desktop
-   process binds the EXISTING API handler on 127.0.0.1:0;
-   `GET /api/ws-origin` returns the origin ("" = same-origin);
-   `connectActivity` resolves it once via `ensureActivityWsOrigin()` and
-   opens the socket through `openActivitySocket`. `allowedOrigin`
-   accepts ONLY the exact Wails page origin (http/wails +
-   `wails.localhost`) against LOOPBACK request hosts. Never broaden the
-   origin check, never add a second streaming channel, never serve the
-   socket from a second handler. The regression pins live in
-   `internal/api/loopback_v195_test.go` (including a REAL WebSocket
-   upgrade with the Wails origin receiving `attached`).
+**WHAT v1.9.6 CHANGED (the regression-sensitive surfaces):**
 
-2. **Engine/run coordination gate** (`internal/llm/llama.go`
-   `SetRunGate`/`ErrEngineBusyWithRun`, wired in `internal/api`
-   `New`): `updateEngineVariantTx` refuses BEFORE anything happens when
-   the engine is RUNNING and a run is active. The AUTO probe treats the
-   refusal as a DEFERRAL (`internal/llm/variant_auto.go`) — never a
-   persisted bounded failure. Do not move the gate after asset
-   resolution and do not persist deferrals into gpu-probe state.
+1. **The variant transaction order** (`internal/llm/llama.go`,
+   `updateEngineVariantTx`): early live-run refusal (no claim) →
+   validate/supported/no-op → tag resolve → CLAIM-FREE staged download
+   (`updater.DownloadEngineArchiveStaged` — non-destructive, no install
+   lease; the swap half keeps the full lease/lock discipline through
+   `InstallStagedFromArchiveDeferredWithVariant`) → DESTRUCTIVE
+   BOUNDARY (admission claim + live verdict, atomic) → fresh
+   `wasRunning` → stop → swap → start → verify → commit/rollback. The
+   claim MUST NOT move back before the boundary: doing so re-opens the
+   v1.9.5 regression (background probes holding run admission for
+   minutes). A download failure must NOT restart the engine (nothing
+   was stopped).
 
-3. **Settled-reply proof selector** (`e2e/zero-session.spec.ts`
+2. **Desktop loopback activity transport** (carried from v1.9.5,
+   unchanged; `internal/api/loopback.go`, `src/config.ts`,
+   `src/store.ts`, `internal/api/ws.go`): the desktop process binds the
+   EXISTING API handler on 127.0.0.1:0; `GET /api/ws-origin` returns the
+   origin ("" = same-origin); `connectActivity` resolves it once via
+   `ensureActivityWsOrigin()` and opens the socket through
+   `openActivitySocket`. `allowedOrigin` accepts ONLY the exact Wails
+   page origin (http/wails + `wails.localhost`) against LOOPBACK request
+   hosts. Never broaden the origin check, never add a second streaming
+   channel, never serve the socket from a second handler. The
+   regression pins live in `internal/api/loopback_v195_test.go`
+   (including a REAL WebSocket upgrade with the Wails origin receiving
+   `attached`).
+
+3. **Engine/run coordination (admission claim at the destructive
+   boundary)** (`internal/llm/llama.go` `SetRunGate`/`SetAdmissionControl`/
+   `ErrEngineBusyWithRun`, wired in `internal/api` `New`):
+   `updateEngineVariantTx` refuses on an active run TWICE — an early
+   read-only registry check before anything happens (no claim), and the
+   atomic check-and-claim at the DESTRUCTIVE boundary (a run registered
+   during the claim-free download window is seen by the live verdict).
+   The AUTO probe treats either refusal as a DEFERRAL
+   (`internal/llm/variant_auto.go`) — never a persisted bounded failure.
+   Do not move the claim before the boundary (that re-opens the v1.9.5
+   run-admission outage), do not skip the boundary claim (that re-opens
+   the check-then-act tear), and do not persist deferrals into gpu-probe
+   state.
+
+4. **Settled-reply proof selector** (`e2e/zero-session.spec.ts`
    `expectRealAssistantReply`): settled assistant replies render
    `.message-markdown` (MessageBubble → `<Markdown>`); `.message-content`
    exists ONLY on the live bubbles. Any future settled-reply assertion
    must target the markdown surface; never accept placeholder rows.
 
-4. **Stream trace** (`src/stream-trace.ts`): opt-in via
+5. **Stream trace** (`src/stream-trace.ts`): opt-in via
    `localStorage SHEYTAN_STREAM_TRACE=1`, lengths only, bounded ring,
    `window.__SHEYTAN_STREAM_TRACE_DUMP__` exposed ONLY when enabled.
    The zero-session spec attaches it on failure. Keep the disabled path
    a strict no-op and keep content OUT of the trace.
 
-5. **Run summary metrics** (`internal/api/server.go` settle):
+6. **Run summary metrics** (`internal/api/server.go` settle):
    `gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` +
    `events`/`deltas`/`firstDeltaMs`. `publishMs` is retired — do not
    reintroduce it.

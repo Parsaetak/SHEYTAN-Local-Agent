@@ -137,6 +137,15 @@ func newLocalEngineServer(t *testing.T) (*Server, *httptest.Server, string) {
         cfg.Provider = config.ProviderLocal
         cfg.LlamaAutoStart = false // the run gate owns the cold start
         cfg.UpdateSchedule = "off"
+        // v1.9.6: an EXPLICIT CPU profile keeps the unrelated background AUTO
+        // Vulkan bootstrap out of this fixture (the probe is eligible on
+        // windows/amd64 — GPU detected, online, model resolvable — and its
+        // transaction would otherwise race this test with real network
+        // work). This regression pins the local fake-engine chat path on the
+        // CPU posture; the AUTO GPU candidate has its own bounded-state
+        // harness (variant_auto_v172_test.go) and must never be a hidden
+        // dependency of an unrelated E2E.
+        cfg.Accelerator = "cpu"
         cfg.LlamaBinPath = exe
         cfg.LlamaHost = "127.0.0.1"
         cfg.LlamaPort = v181FreePort(t)
@@ -384,6 +393,10 @@ func TestLocalChatSurvivesUnreadableModelCard(t *testing.T) {
 	cfg.Provider = config.ProviderLocal
 	cfg.LlamaAutoStart = false
 	cfg.UpdateSchedule = "off"
+	// v1.9.6: explicit CPU — same fixture-boundary rule as
+	// newLocalEngineServer: the unrelated background AUTO Vulkan probe
+	// must never race this regression with real network work.
+	cfg.Accelerator = "cpu"
 	cfg.LlamaBinPath = exe
 	cfg.LlamaHost = "127.0.0.1"
 	cfg.LlamaPort = v181FreePort(t)

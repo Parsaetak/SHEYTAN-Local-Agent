@@ -3112,58 +3112,15 @@ func (s *LlamaServer) updateEngineVariantTx(
 
         defer lease.Release()
 
-        // v1.9.4 RUN-COORDINATION GATE — the DESTRUCTIVE boundary. The
-        // caller-side eligibility checks (AUTO probe, explicit variant
-        // request) evaluate "no run is active" ONCE, before a transaction
-        // that can run for many minutes (resolve → download → swap →
-        // verify → rollback). A run accepted inside that window would
-        // otherwise have its serving engine stopped underneath it. Fail
-        // closed instead: the transaction is refused before ANYTHING
+        // v1.9.4 RUN-COORDINATION — EARLY advisory refusal (no claim taken):
+        // a run registered RIGHT NOW refuses the transaction before ANYTHING
         // happens — no variant validation walk, no asset resolution, no
-        // stop — the engine keeps serving, and the bounded AUTO probe
-        // records the refusal as a DEFERRAL (never a bounded failure);
-        // the explicit user path surfaces the conflict. A non-running
-        // engine is not a disruption — the transaction proceeds and
-        // startLocked() owns the boot.
-        //
-        // v1.9.5 ADMISSION CLAIM: when the API layer's admission control
-        // is installed, the transaction claims run-admission exclusivity
-        // FIRST — atomically with the live-run verdict, in the same
-        // critical section admission registers runs under — and holds it
-        // for the WHOLE transaction (resolve → download → stop → install
-        // → verify → rollback). This closes the v1.9.4 TOCTOU: a run
-        // either registers before the claim (the claim's live verdict
-        // sees it; the transaction refuses) or its admission observes the
-        // claim and is refused deterministically (HTTP 503,
-        // errEngineMutationInProgress). Without the seam (nil — tests,
-        // headless), the v1.9.4 single destructive-boundary check applies
-        // unchanged.
-        wasRunning := s.IsRunning()
-
-        s.mu.Lock()
-        admission := s.admission
-        s.mu.Unlock()
-
-        if admission != nil {
-                if live := admission.BeginEngineMutation(); live {
-                        logging.Default().Warn("updater",
-                                "engine variant transaction refused: a run is active — the serving engine is never stopped under a live generation")
-
-                        return "", ErrEngineBusyWithRun
-                }
-
-                s.mu.Lock()
-                s.mutationClaimed = true
-                s.mu.Unlock()
-
-                defer func() {
-                        s.mu.Lock()
-                        s.mutationClaimed = false
-                        s.mu.Unlock()
-
-                        admission.EndEngineMutation()
-                }()
-        } else if wasRunning && s.runActiveNow() {
+        // download, no stop. The registry read is the same authority the
+        // admission claim's live verdict uses (the API layer's run registry);
+        // it is consulted read-only here so this fast path can never leak a
+        // claim. v1.9.6: evaluated unconditionally (a registered run whose
+        // engine has not finished booting is exactly the tearing hazard too).
+        if s.runActiveNow() {
                 logging.Default().Warn("updater",
                         "engine variant transaction refused: a run is active — the serving engine is never stopped under a live generation")
 
@@ -3204,6 +3161,98 @@ func (s *LlamaServer) updateEngineVariantTx(
                 tag = resolved
         }
 
+        // v1.9.6 NON-DESTRUCTIVE DOWNLOAD PHASE — claim-free by design. The
+        // archive transfer (which can run for minutes on a real network)
+        // never stops the engine and never touches the live bin tree, so it
+        // must never hold the run-admission claim either: a user chat typed
+        // during the download is ADMITTED and served by the current engine,
+        // and the transaction below refuses itself at its destructive
+        // boundary (the AUTO probe records that as a DEFERRAL, never a
+        // bounded failure) instead of holding the product hostage with
+        // "engine maintenance in progress". The v1.9.5 regression class —
+        // every local-chat E2E on windows/amd64 503-ing behind the
+        // background AUTO Vulkan probe's claim — was exactly this window.
+        // The archive seam (tests) skips the transfer entirely.
+        s.mu.Lock()
+        seamArchive := s.testStagedArchive
+        s.mu.Unlock()
+
+        var staged *updater.StagedInstall
+
+        var stagedSwap func() (*updater.StagedInstall, error)
+
+        if seamArchive == "" {
+                archivePath, dlErr := updater.DownloadEngineArchiveStaged(ctx, cfg, tag, variant, onProgress)
+                if dlErr != nil {
+                        // Nothing was stopped and no live tree was touched —
+                        // the engine keeps serving; no last-known-good restart
+                        // is needed (the pre-v1.9.6 order bounced a running
+                        // engine for a pure download failure).
+                        return "", fmt.Errorf("install %s engine: %w", variant, dlErr)
+                }
+
+                defer func() { _ = os.Remove(archivePath) }()
+
+                stagedSwap = func() (*updater.StagedInstall, error) {
+                        return updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, archivePath)
+                }
+        } else {
+                stagedSwap = func() (*updater.StagedInstall, error) {
+                        return updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, seamArchive)
+                }
+        }
+
+        // v1.9.5/v1.9.6 ADMISSION CLAIM — AT THE DESTRUCTIVE BOUNDARY. The
+        // claim is taken HERE — atomically with the live-run verdict, in the
+        // same critical section the API registers runs under — and held for
+        // the actually-destructive window ONLY (stop → swap → start →
+        // verify → rollback/commit). The v1.9.5 placement (transaction
+        // start) made the claim span the non-destructive network phases and
+        // turned every background AUTO probe into a minutes-long
+        // run-admission outage on Windows; the TOCTOU it closes lives
+        // entirely inside the destructive window, so the narrower claim
+        // closes it identically: a run either registers before the boundary
+        // (the live verdict sees it; the transaction refuses — the download
+        // was the only cost) or its admission observes the claim and is
+        // refused deterministically (HTTP 503,
+        // errEngineMutationInProgress) for the seconds the swap needs.
+        // Without the seam (nil — tests, headless), the v1.9.4
+        // destructive-boundary run gate alone applies.
+        s.mu.Lock()
+        admission := s.admission
+        s.mu.Unlock()
+
+        if admission != nil {
+                if live := admission.BeginEngineMutation(); live {
+                        logging.Default().Warn("updater",
+                                "engine variant transaction refused at its destructive boundary: a run is active — the serving engine is never stopped under a live generation")
+
+                        return "", ErrEngineBusyWithRun
+                }
+
+                s.mu.Lock()
+                s.mutationClaimed = true
+                s.mu.Unlock()
+
+                defer func() {
+                        s.mu.Lock()
+                        s.mutationClaimed = false
+                        s.mu.Unlock()
+
+                        admission.EndEngineMutation()
+                }()
+        } else if s.runActiveNow() {
+                logging.Default().Warn("updater",
+                        "engine variant transaction refused at its destructive boundary: a run is active — the serving engine is never stopped under a live generation")
+
+                return "", ErrEngineBusyWithRun
+        }
+
+        // Destructive phase — the engine may be touched only now, under the
+        // claim. wasRunning is re-read HERE: the download window may have
+        // booted (or stopped) the engine since the transaction began.
+        wasRunning := s.IsRunning()
+
         s.mu.Lock()
         s.stopping = true
         s.mu.Unlock()
@@ -3228,7 +3277,7 @@ func (s *LlamaServer) updateEngineVariantTx(
         s.stopping = false
         s.mu.Unlock()
 
-        staged, err := s.runEngineInstallVariant(ctx, cfg, tag, variant, onProgress)
+        staged, err := stagedSwap()
         if err != nil {
                 logging.Default().Warn("updater",
                         "%s engine provisioning failed (%v) — restarting last-known-good engine", variant, err)

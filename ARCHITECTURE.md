@@ -189,20 +189,55 @@ before the listener and treats a bind failure as a hard visible fault.
 One handler, one `/ws/activity`, no second channel, nothing else
 exposed.
 
-**Engine/run coordination (v1.9.5):** an engine variant transaction
-(`updateEngineVariantTx`) claims run-admission exclusivity FIRST through
-the `LlamaServer.SetAdmissionControl` seam (`llm.EngineAdmission`,
+**Engine/run coordination (v1.9.5, revised v1.9.6 — claim at the
+destructive boundary):** an engine variant transaction
+(`updateEngineVariantTx`) refuses an active run at TWO points: an EARLY
+read-only registry check before anything happens (validate, no-op,
+resolve, download all stay claim-free — a run admitted there keeps its
+engine and the transaction defers at its boundary instead of holding
+the product hostage), and the DESTRUCTIVE BOUNDARY itself, where the
+`LlamaServer.SetAdmissionControl` seam (`llm.EngineAdmission`,
 implemented by the API server with claim + live-run verdict in ONE
-`runsMu` critical section — the same section run registration uses) and
-holds the claim across the whole transaction. A run registered before
-the claim makes the verdict live and the transaction fails closed
-(`ErrEngineBusyWithRun`); a run admitted while the claim is held is
-refused deterministically (HTTP 503, `errEngineMutationInProgress`,
-transcript restored). This closes the v1.9.4 check-then-act window
-across the minutes-long resolve → download → swap → verify → rollback
-path. The nil seam (tests/headless) preserves the historical
-destructive-boundary run gate (`SetRunGate`) alone. The AUTO probe
-records the refusal as a deferral, never a persisted bounded failure.
+`runsMu` critical section — the same section run registration uses)
+takes the admission claim atomically with the live verdict and holds it
+for the actually-destructive window only (stop → swap → start → verify
+→ rollback/commit). A run registered before the boundary makes the
+verdict live and the transaction fails closed (`ErrEngineBusyWithRun`);
+a run admitted while the claim is held is refused deterministically
+(HTTP 503, `errEngineMutationInProgress`, transcript restored). This
+closes the v1.9.4 check-then-act window with a refusal window of
+seconds instead of minutes. The staged download is split from the swap
+(`updater.DownloadEngineArchiveStaged` = the non-destructive half; the
+swap keeps the full install lease/lock discipline through
+`InstallStagedFromArchiveDeferredWithVariant`), and a pure download
+failure no longer bounces a running engine. The nil seam
+(tests/headless) preserves the historical destructive-boundary run gate
+(`SetRunGate`) alone. The AUTO probe records either refusal as a
+deferral, never a persisted bounded failure. Pins:
+`internal/llm/admission_boundary_v196_test.go` (claim held INSIDE the
+destructive window; begin/end balance; mid-download registration
+refused at the boundary; nil-seam boundary re-check),
+`internal/{api,llm}/admission_v195_test.go` (non-destructive exits
+never claim; deterministic 503 with transcript restore). Known
+limitation (v1.10.0 gate item): `UpdateEngineNow` does not yet
+participate in the claim seam.
+
+**Strategic direction (R&D 2026-10-11, authoritative:
+`Parsaetak/Contents` → `Research-and-Development` →
+`SHEYTAN-LA-2026-10-11.md`):** Go remains the ONE policy/orchestration
+authority (run lifecycle, sessions, tools, memory, Governor, evidence).
+C++ owns numerical inference — the existing `native/engine` path is the
+promotion target under capability/parity gates, with managed llama.cpp
+as the automatic honest fallback; the default is NOT flipped until the
+evidence gate is met (v1.10.0 Phase 1). Qt (C++/QML) is the primary UI
+target for the next major cycle over a typed, coarse-grained IPC
+boundary (secured local socket/pipe first; shared memory only where
+profiling proves a gain); WinUI 3 remains an optional future
+Windows-only shell and C# is never the orchestrator. The first vertical
+slice ships in v1.9.6: `internal/perf` + `cmd/shtn-perf` — the R&D §10
+measurement framework with honest NOT-MEASURED semantics, nearest-rank
+P50/P95, host/model/method/limitation metadata, hosted-CI labeling and
+targets reported as measured gaps.
 
 **Run summary metrics (v1.9.4):** the settle summary carries
 `gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` plus aggregate

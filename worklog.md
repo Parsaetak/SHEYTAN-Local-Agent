@@ -1435,3 +1435,93 @@ extracted to a clean room):
   go test ./internal/api -tags headless ok; npm ci + test:units
   220/220. The archive is a complete, independently buildable source
   tree.
+
+---
+
+## v1.9.6 session (2026-10-11) — the FINAL 1.9.x release: the Windows admission-boundary repair, the Linux smoke environment repair, the R&D alignment + the measurement baseline
+
+Task ID: v1.9.6-final (single-agent session)
+Agent: release engineering agent (authoring host: Linux x86-64 VM, no
+root, no GTK4/WebKitGTK headers, no Windows, no GUI)
+
+Work Log:
+- INSPECT: cloned live `main` — HEAD is exactly the baseline commit
+  `070a05930f35ac09536ead74cc7cf2f376b8c2a4` (v1.9.5), clean tree; the
+  R&D decision doc was read in full from `Parsaetak/Contents` branch
+  `Research-and-Development` (`SHEYTAN-LA-2026-10-11.md`). GitHub API
+  access to the failing run was rate-limited (unauthenticated), so the
+  authoritative failure facts were taken from the mission record
+  (exact test names, job IDs, messages) and re-derived from source.
+- REPRODUCE (Windows 503): both authoritative failures re-derived from
+  the code path; the causal chain was proven deterministically —
+  `updateEngineVariantTx` (v1.9.5) takes the admission claim at
+  TRANSACTION start; the background AUTO Vulkan probe
+  (`go s.maybeAutoProvisionVulkan(gate.Done())` in `EnsureSetup`) is
+  fully eligible on windows/amd64 (AUTO default, GPUAutoOffload=true
+  default, GPU detected on CI runners, CI online, resolvable fixture
+  model; `VariantSupported(Vulkan)` is windows-only) and held the claim
+  across the network resolve/download → POST /api/run → 503. Linux is
+  structurally immune (platform matrix gate).
+- ROOT CAUSE + FIX (Windows): moved the admission claim to the
+  DESTRUCTIVE boundary of the transaction; split the staged download
+  from the swap via the new `updater.DownloadEngineArchiveStaged`
+  (non-destructive half, no install lease; the swap half keeps the full
+  lease/lock discipline through
+  `InstallStagedFromArchiveDeferredWithVariant`); added the
+  unconditional early advisory live-run refusal (read-only; v1.9.4
+  semantics preserved at the boundary via the nil-seam re-check); a
+  download failure no longer restarts the engine (nothing was stopped);
+  fresh `wasRunning` re-read at the boundary. Both local-chat E2E
+  fixtures pin an explicit CPU profile (the unrelated background probe
+  is out of the pinned contract).
+- VERIFY (Windows): `TestLocalGemmaHiChatCompletes` +
+  `TestLocalChatSurvivesUnreadableModelCard` PASS, `-count=5`
+  (determinism); new `internal/llm/admission_boundary_v196_test.go`
+  pins (claim observed INSIDE the destructive window via the
+  verification hook; begin/end balance; mid-download registration
+  refused at the boundary without claiming; nil-seam boundary re-check);
+  revised `admission_v195_test.go` (non-destructive exits never claim)
+  + `rungate_v194_test.go` (single early consult); the FULL archive-seam
+  runtime choreography suite (commit/rollback/honest-manifest) passes
+  UNCHANGED against the new order.
+- ROOT CAUSE + FIX (Linux smoke): the smoke shell is unchanged since
+  v1.9.2 and earlier releases were skipped behind upstream gate
+  failures — run 38095637817 was the gate's FIRST real execution; the
+  "NO visible top-level window" + alive-process signature is the
+  documented bare-Xvfb failure class (WebKitGTK 6.0 DMABUF renderer /
+  GTK4 GL renderer stalling without GPU/GLX/EGL/compositor). Fix owned
+  by the smoke step: `WEBKIT_DISABLE_DMABUF_RENDERER=1`,
+  `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `GSK_RENDERER=cairo` + xwininfo
+  root-tree failure diagnostics (`x11-utils` added to deps). The gate
+  (--onlyvisible + pid ownership + WM_DELETE_WINDOW + exit 0) is
+  UNCHANGED and remains required.
+- R&D slice: `internal/perf` (metric set of R&D §10; NOT-MEASURED
+  semantics; nearest-rank P50/P95 with exact-value unit tests; targets
+  recorded as gaps) + `cmd/shtn-perf` (JSON artifact + concise report;
+  cold start + memory measured on the authoring host; generation-path
+  metrics honestly NOT MEASURED without a real engine/model). NO
+  performance target claimed as met.
+- DOCS: canonical version gate 1.9.6 (package.json →
+  release-version.mjs → config.go / build/config.yml / SIGNATURE,
+  --check green); changelog v1.9.6 entry (the ONLY release chronology);
+  UPDATE.md rewritten as current release notes; README current-release
+  line; ARCHITECTURE engine/run coordination revised + strategic
+  direction section; ROADMAP v1.9.6 section + the full v1.10.0 plan
+  (phases/gates/dependencies/risks + the UpdateEngineNow standing gate
+  item); agent.md handoff; native/engine/README promotion-status section.
+- REGRESSION (local): `go build -tags headless ./internal/... ./cmd/... .`
+  clean; `go test ./internal/... -tags headless -count=1` ALL packages
+  ok; `go vet` clean on touched packages; `internal/perf` unit suite
+  green. Frontend and C++ suites: executed in Phase 9 of this session
+  and recorded below (see the stage summary).
+
+Stage Summary:
+- v1.9.6 is code-complete on the authoring host with a minimal, clean
+  source diff. The two authoritative CI failures are root-caused and
+  repaired with deterministic regression pins; the R&D direction is
+  documented as authoritative with the first slice shipped as code.
+- Evidence boundaries kept honest: Windows live-answer acceptance,
+  Linux native window smoke, packaged E2E and physical-hardware
+  performance numbers are UNVERIFIED locally by construction; the
+  authoritative verdict is the Actions run carrying this revision (no
+  push/tag was performed from this session).

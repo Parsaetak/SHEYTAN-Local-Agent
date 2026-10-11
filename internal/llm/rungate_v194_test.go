@@ -106,11 +106,15 @@ func TestVariantTransactionProceedsWhenGateClear(t *testing.T) {
         s := newGateTestServer(t)
 
         // Engine NOT running (fresh server) — the coordination gate is not a
-        // disruption; the transaction reaches the offline no-op path (the
-        // default install already carries the CPU variant).
+        // disruption. v1.9.6: the gate is consulted exactly ONCE, by the
+        // early advisory check (a registered run whose engine has not
+        // finished booting is a tearing hazard too); the verdict false lets
+        // the transaction reach the offline no-op path (the default install
+        // already carries the CPU variant).
+        consulted := 0
         s.SetRunGate(func() bool {
-                t.Fatal("the gate must not be consulted for a non-running engine")
-                return true
+                consulted++
+                return false
         })
 
         note, err := s.updateEngineVariantTx(
@@ -126,5 +130,9 @@ func TestVariantTransactionProceedsWhenGateClear(t *testing.T) {
 
         if note == "" {
                 t.Fatal("the no-op must report honestly")
+        }
+
+        if consulted != 1 {
+                t.Fatalf("gate consulted %d times, want exactly 1 (early advisory check)", consulted)
         }
 }

@@ -46,6 +46,95 @@ movement happens in this file together with the evidence pointer.
 
 ---
 
+## v1.9.6 — the FINAL 1.9.x maintenance release (2026-10-11) — the R&D direction adopted, NO premature scope movement
+
+v1.9.6 advances NO v1.9 scope: the automatic goal-to-subtask fan-out,
+the protected-evaluation anti-hack guard and the MCP runtime-registry
+wiring remain FUTURE WORK. v1.9.6 repairs the two authoritative
+v1.9.5 CI failures at their roots — the Windows admission-hostage 503
+regression (the engine-mutation claim now lives at the DESTRUCTIVE
+boundary of the variant transaction; network/download phases are
+claim-free; pinned by `internal/llm/admission_boundary_v196_test.go`)
+and the Linux native-window smoke (the documented bare-Xvfb
+software-renderer configuration, owned by the smoke step; the gate is
+unchanged) — and adopts the R&D architecture decision
+(`Parsaetak/Contents` → `Research-and-Development` →
+`SHEYTAN-LA-2026-10-11.md`) as the direction for the next major cycle:
+Go stays the single orchestration authority, C++ owns numerical
+inference (promotion gated on capability/parity evidence — the default
+is NOT flipped in v1.9.6), Qt (C++/QML) is the primary UI target for
+v1.10+ over a typed coarse-grained IPC boundary. The first vertical
+slice ships as code: `internal/perf` + `cmd/shtn-perf`, the R&D Phase 0
+measurement baseline framework with honest NOT-MEASURED semantics.
+Evidence: `changelog.md` v1.9.6, `worklog.md` (v1.9.6 session),
+`internal/{api,llm}/admission_v195_test.go`,
+`internal/llm/admission_boundary_v196_test.go`,
+`internal/updater/install.go` (`DownloadEngineArchiveStaged`),
+`internal/perf/`, `cmd/shtn-perf/`.
+
+## v1.10.0 — the R&D migration plan (phases, gates, dependencies, risks)
+
+Authoritative source: `SHEYTAN-LA-2026-10-11.md` (§8 migration roadmap,
+§9 risks, §10 measurement framework). This section is the executable
+plan; NO phase below is started until its entry gate is met in this
+repository.
+
+**Phase 0 — measurement baseline (STARTED in v1.9.6).**
+Instrument: `internal/perf` + `cmd/shtn-perf` (shipped). Remaining:
+capture the physical Windows baseline on real consumer hardware (cold
+start to interactive, warm TTFT, streaming latency, idle/peak memory,
+tool round-trip, file output overhead) with the host/model/quantization
+metadata the envelope requires; hosted-CI numbers stay labeled
+hosted-CI. GATE: a committed physical baseline artifact; every
+subsequent change must beat or explain its delta against it.
+DEPENDENCY: a real Windows host + a serving engine binary + a real
+model. RISK: VM-vs-physical divergence — mitigated by the envelope's
+hosted-CI label and limitation fields.
+
+**Phase 1 — promote the native C++ engine to the preferred backend
+where evidence proves it.** The promotion MECHANISM exists today
+(`NativeBackendEnabled` selects native-first with managed llama.cpp as
+the automatic fallback — see `internal/api/selection.go`); v1.9.6 does
+NOT flip the default. GATE: full supported-model/request/streaming/
+cancellation/sampling coverage plus bit-for-bit prefill/KV parity
+(existing CTest parity suites) green on real hardware, TTFT at or
+better than managed llama.cpp on the Phase 0 baseline, and real
+generation + first-token visibility + cancellation + error-recovery
+proven through the runtime contract. DEPENDENCY: Phase 0 numbers;
+the engine lease/manifest authority stays the ONE installer authority.
+RISK: numerical drift — mitigated by the mandatory parity gates; scope
+creep — mitigated by the phase gate (no new features until targets).
+
+**Phase 2 — Qt (C++/QML) shell over the unchanged Go core.** First
+evaluate a secured local socket/pipe IPC for control + streaming
+(`QLocalSocket`-class transport); shared memory / zero-copy only where
+profiling demonstrates a payload-size gain. The Go API remains the ONLY
+authority — the shell must not grow a second run registry, session
+store, tool registry, downloader, scheduler or policy authority. GATE:
+packaged Windows AND Linux launch/interaction/close proof through the
+same smoke-class gates the Wails shell has; no shell migration without
+it. DEPENDENCY: Phase 1 (the inference path the shell renders must be
+settled first); Qt deployment/packaging evidence (QML modules, plugins,
+runtime — per the pinned Qt 6.12 deployment documentation). RISK: Qt
+learning/packaging cost — mitigated by starting with a thin shell;
+IPC latency — mitigated by measuring the typed boundary early with the
+Phase 0 harness.
+
+**Phase 3 — measured refinements + optional WinUI 3.** Only if
+Windows-specific measurements justify a second shell; C# never becomes
+the orchestrator. GATE: the Phase 0 harness shows a concrete,
+reproduced win the Qt path cannot reach.
+
+**Phase 4 — multi-OS polish.** Linux and macOS stay first-class under
+the Qt shell; the same performance discipline applies everywhere.
+GATE: per-OS baselines recorded with the same envelope.
+
+**Standing v1.10.0 gate item (from the v1.9.6 audit):** wire
+`UpdateEngineNow` (same-tag/scheduled update transaction) into the same
+destructive-boundary admission claim the variant transaction uses —
+today only the variant transaction participates, and the scheduled
+updater's later passes are not run-admission-coordinated.
+
 ## v1.9.5 — hardening release (2026-10-11) — NO scope movement
 
 v1.9.5 advances NO v1.9 scope: the automatic goal-to-subtask fan-out,

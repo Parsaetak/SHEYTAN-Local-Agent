@@ -11,6 +11,122 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.9.6 — 2026-10-11 — the FINAL 1.9.x maintenance release: the Windows admission-hostage regression (P0), the Linux native-window smoke repair (P0), the R&D alignment + the measurement baseline (P1)
+
+Focus: deliver the last planned v1.9.x release as a trustworthy bridge
+into v1.10.0. The authoritative failing run `38095637817` (commit
+`070a05930f35ac09536ead74cc7cf2f376b8c2a4`) failed BOTH platform jobs;
+this release root-causes and repairs both, adopts the R&D architecture
+decision (`Parsaetak/Contents` → `Research-and-Development` →
+`SHEYTAN-LA-2026-10-11.md` — Go orchestrator, C++ inference, Qt-primary
+UI for the next major cycle) as the documented direction, and ships the
+first honest vertical slice of that decision: the reproducible
+measurement baseline framework. The next release is v1.10.0; no v1.9.7
+is planned or implied.
+
+1. **P0 — the v1.9.5 Windows 503 regression: a background optimization
+   held run admission hostage for minutes.** Both authoritative Windows
+   failures (`TestLocalGemmaHiChatCompletes`,
+   `TestLocalChatSurvivesUnreadableModelCard`, POST `/api/run` → 503
+   "engine maintenance in progress") root-caused to the v1.9.5 admission
+   claim PLACEMENT, not to a test-only defect: the claim was taken at
+   TRANSACTION START of `updateEngineVariantTx`, so on windows/amd64 the
+   background AUTO Vulkan bootstrap (`go s.maybeAutoProvisionVulkan`,
+   spawned by `EnsureSetup` after the maintenance gate) — fully eligible
+   in the fixture posture (AUTO default, `GPUAutoOffload=true` default,
+   GPU detected on the runner, CI online, a resolvable model) — took the
+   claim and held it across the NETWORK resolve/download phase (minutes).
+   Every run admitted in that window was refused 503. Linux never saw it
+   because `VariantSupported(Vulkan)` is false there. This was a REAL
+   product defect, not a fixture accident: any Windows user with
+   AUTO + detected GPU + online got 503 on chats typed during a
+   background probe's download window. THE FIX (one authority preserved):
+   the admission claim now lives AT THE DESTRUCTIVE BOUNDARY of the
+   transaction (stop → swap → start → verify → rollback/commit); the
+   pre-boundary phases (validate, no-op, resolve, staged download) are
+   claim-free, with an unconditional early advisory live-run refusal
+   (read-only registry check, v1.9.4 semantics) preserved. The TOCTOU the
+   claim exists to close lives entirely inside the destructive window, so
+   the narrower claim closes it identically; the staged download was
+   split from the swap via the new `updater.DownloadEngineArchiveStaged`
+   (non-destructive half; the swap keeps the full install lease/lock
+   discipline through `InstallStagedFromArchiveDeferredWithVariant`). A
+   download failure no longer bounces a running engine. Deterministic
+   regression coverage: `internal/llm/admission_boundary_v196_test.go`
+   (claim held INSIDE the destructive window — observed from the
+   verification hook; begin/end balance; a run registered during the
+   claim-free download phase refuses AT the boundary without ever
+   claiming; nil-seam boundary re-check), revised pins in
+   `admission_v195_test.go` / `rungate_v194_test.go` (non-destructive
+   exits never claim; the early check is unconditional). The two
+   local-chat E2E fixtures now pin an explicit CPU profile — the honest
+   test boundary that keeps the unrelated AUTO GPU bootstrap out of the
+   pinned chat contract. Local evidence: both formerly-failing tests pass
+   `-count=5`; the full `internal/... -tags headless` suite passes.
+
+2. **P0 — the Linux desktop runtime smoke: the first REAL execution of
+   the gate exposed the missing headless-renderer configuration.** The
+   smoke step's shell was unchanged since v1.9.2, but earlier releases
+   were skipped behind upstream gate failures — run `38095637817` was the
+   gate's first actual execution, and it failed with "NO visible
+   top-level window for pid 21762 on :77" while the process stayed alive
+   and wrote every boot marker. That signature is the documented
+   bare-Xvfb failure class: with no GPU/GLX/EGL device and no compositor,
+   the WebKitGTK 6.0 DMABUF renderer and the GTK4 GL renderer stall
+   widget realization, so the GTK top-level never maps. THE FIX (test
+   environment, never the gate, never the product): the smoke step now
+   owns the documented software-renderer switches for virtualized
+   environments (`WEBKIT_DISABLE_DMABUF_RENDERER=1`,
+   `WEBKIT_DISABLE_COMPOSITING_MODE=1`, `GSK_RENDERER=cairo`) — owned by
+   the smoke step only; real desktop sessions keep hardware acceleration.
+   The gate itself is UNCHANGED (real visible, pid-owned window +
+   WM_DELETE_WINDOW + exit 0), and the failure path now dumps real X11
+   evidence (root window tree via xwininfo — `x11-utils` added to the
+   dependency step — plus every window xdotool can see and the smoke
+   environment keys) so the next run is conclusive either way. LOCAL
+   STATUS: UNVERIFIED — this authoring host has no GTK4/WebKitGTK
+   headers and no root; the gate executes in CI.
+
+3. **P1 — R&D alignment: the strategic direction is adopted and the
+   first vertical slice is real.** The R&D decision is authoritative for
+   direction: Go remains the ONE policy/orchestration authority;
+   C++ owns numerical inference (the existing `native/engine` path is
+   the promotion target — with managed llama.cpp as the honest fallback —
+   gated on capability/parity evidence, NOT flipped by default in this
+   patch); Qt (C++/QML) is the primary UI target for the next major
+   cycle with a typed coarse-grained IPC boundary; WinUI 3 stays an
+   optional Windows-only future shell. v1.9.6 ships the measured
+   baseline slice (R&D §8 Phase 0): `internal/perf` (the metric set of
+   R&D §10 with honest NOT-MEASURED semantics, nearest-rank P50/P95,
+   host/method/limitation metadata, targets reported as GAPS) +
+   `cmd/shtn-perf` (machine-readable JSON + concise report; cold start,
+   memory captured; generation-path metrics stay NOT MEASURED without a
+   real engine/model on the host). No performance TARGET is claimed as
+   met: the baseline records what this host measured and labels the
+   rest. The v1.10.0 migration plan (phases, gates, dependencies, risks)
+   is documented in `ROADMAP.md`.
+
+4. **P1 — known limitation recorded honestly:** `UpdateEngineNow` (the
+   same-tag/scheduled update transaction) does not yet participate in
+   the admission claim seam (pre-existing since v1.3.6; its startup
+   path is ordered before any engine/prewarm, but the scheduled loop's
+   later passes are not run-admission-coordinated). Wiring it to the
+   same destructive-boundary claim is a v1.10.0 Phase 0 gate item.
+
+Verification (v1.9.6 session, local Linux x86-64 authoring host, Go
+1.26, Node 24): `go build -tags headless ./internal/... ./cmd/... .`,
+the full `go test ./internal/... -tags headless -count=1`, the focused
+admission/rungate/variant/local-chat suites (the two authoritative
+failures pass `-count=5`), `go vet` on touched packages, the frontend
+typecheck/lint/unit/release suites, and the C++ native configure/build/
+ctest run recorded in `worklog.md`. CI verdicts (Windows live-answer
+acceptance, Linux native window smoke, packaged E2E) remain UNVERIFIED
+locally by construction — the authoritative verdict is the Actions run
+carrying this revision, and no green-run claim is made until it
+reports.
+
+---
+
 ## v1.9.5 — 2026-10-11 — the false-proof acceptance harness repair (P0) + the least-privilege desktop transport (P0) + the atomic engine/run admission (P1) + the tree-wide identifier-free log contract (P1)
 
 Focus: repair the failed v1.9.4 release attempt (Actions run

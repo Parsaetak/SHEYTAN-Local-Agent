@@ -362,6 +362,41 @@ func InstallStagedFromArchiveDeferredWithVariant(
 	return stageFromArchive(cfg, tag, archivePath, "archive://"+filepath.Base(archivePath), variant)
 }
 
+// DownloadEngineArchiveStaged is the NON-DESTRUCTIVE first half of the
+// staged install (v1.9.6): resolve the variant asset URL for the tag and
+// download the verified archive into the engine download staging area.
+// It performs NO swap, holds NO install lease, and never touches the
+// live bin tree — the caller owns the destructive continuation through
+// InstallStagedFromArchiveDeferredWithVariant after ITS run-coordination
+// boundary. Splitting the phases lets the variant transaction keep the
+// whole network window (which can run for minutes) free of the
+// run-admission claim: runs stay servable while the archive transfers,
+// and the claim covers only the actually-destructive window
+// (stop → swap → start → verify → commit/rollback). The download is
+// bounded, verified and resumable exactly as the bundled installer's
+// own first half. The caller owns the returned archive's cleanup.
+func DownloadEngineArchiveStaged(
+	ctx context.Context,
+	cfg *config.Config,
+	tag string,
+	variant AssetVariant,
+	onProgress func(downloader.Progress),
+) (string, error) {
+	url := AssetURLForVariant(tag, variant)
+	if url == "" {
+		return "", fmt.Errorf(
+			"no prebuilt llama.cpp %s engine asset for %s/%s — the %s backend variant is not served by upstream releases for this platform",
+			variant, runtime.GOOS, runtime.GOARCH, variant)
+	}
+
+	binDir := EngineBinDir(cfg)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return "", err
+	}
+
+	return downloadEngineArchiveStaged(ctx, url, tag, binDir, onProgress)
+}
+
 // StagedInstall is a validated engine package that has been atomically
 // swapped into the managed bin directory but NOT yet committed. Until
 // Commit() runs, the previous package remains recoverable in
